@@ -442,6 +442,9 @@ static int CmdScandump(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
   if (cursor == 0) {
     size_t hdrBytes = ComputeHeaderSize(*filter);
     auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
+    if (!hdrBuf) {
+      return RedisModule_ReplyWithError(ctx, "ERR allocation failure");
+    }
     SerializeHeader(*filter, hdrBuf);
     RedisModule_ReplyWithLongLong(ctx, 1);
     RedisModule_ReplyWithStringBuffer(ctx, hdrBuf, hdrBytes);

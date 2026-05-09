@@ -29,6 +29,13 @@ set_target_properties(redis_bloom PROPERTIES
   SUFFIX ".so"
 )
 
+# AddressSanitizer support
+option(ENABLE_ASAN "Build with AddressSanitizer" OFF)
+if(ENABLE_ASAN)
+  add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
+  add_link_options(-fsanitize=address)
+endif()
+
 # GTest-based unit tests
 option(BUILD_TESTS "Build unit tests" OFF)
 if(BUILD_TESTS)

@@ -41,7 +41,7 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   layer.bitsPerEntry_ = r.GetFloat();
   layer.totalBits_ = r.GetUint();
   layer.log2Bits_ = static_cast<uint8_t>(r.GetUint());
-  layer.dataSize_ = (layer.totalBits_ > 0) ? (layer.totalBits_ / 8) : 0;
+  layer.dataSize_ = (layer.totalBits_ > 0) ? ((layer.totalBits_ + 7) / 8) : 0;
   layer.use64Bit_ = HasFlag(filterFlags, BloomFlags::Use64Bit);
 
   auto [buf, bufLen] = r.GetBlob();
@@ -213,6 +213,7 @@ void AofRewriteBloom(RedisModuleIO* aof, RedisModuleString* key, void* value) {
 
   size_t hdrBytes = ComputeHeaderSize(*filter);
   auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
+  if (!hdrBuf) return;
   SerializeHeader(*filter, hdrBuf);
 
   RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, (long long)1, hdrBuf, hdrBytes);

@@ -104,7 +104,7 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
     layer.log2Bits_ = static_cast<uint8_t>(std::bit_width(layer.totalBits_) - 1);
   }
 
-  layer.dataSize_ = layer.totalBits_ / 8;
+  layer.dataSize_ = (layer.totalBits_ + 7) / 8;
   if (layer.dataSize_ == 0) return std::nullopt;
 
   layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));

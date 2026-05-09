@@ -143,6 +143,9 @@ ScalingBloomFilter* ScalingBloomFilter::FromRdbShell(RdbShell shell) {
   if (filter->layers_) {
     filter->layers_[0].bloom.~BloomLayer();
     RMFree(filter->layers_);
+    filter->layers_ = nullptr;
+    filter->numLayers_ = 0;
+    filter->layerCapacity_ = 0;
   }
   filter->layers_ = static_cast<FilterLayer*>(RMCalloc(shell.numLayers, sizeof(FilterLayer)));
   if (!filter->layers_) {
