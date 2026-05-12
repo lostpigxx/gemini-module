@@ -157,10 +157,13 @@ size_t SerializeHeader(const ScalingBloomFilter& filter, void* output) {
   return sizeof(WireFilterHeader) + filter.NumLayers() * sizeof(WireLayerMeta);
 }
 
+constexpr uint32_t kMaxLayers = 1024;
+
 ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   if (length < sizeof(WireFilterHeader)) return nullptr;
 
   const auto* hdr = static_cast<const WireFilterHeader*>(data);
+  if (hdr->numLayers == 0 || hdr->numLayers > kMaxLayers) return nullptr;
   size_t required = sizeof(WireFilterHeader) + hdr->numLayers * sizeof(WireLayerMeta);
   if (length < required) return nullptr;
 

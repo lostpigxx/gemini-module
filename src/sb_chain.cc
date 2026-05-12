@@ -23,7 +23,7 @@ ScalingBloomFilter::ScalingBloomFilter(uint64_t initialCapacity, double errorRat
 
 ScalingBloomFilter::~ScalingBloomFilter() {
   for (size_t i = 0; i < numLayers_; i++) {
-    layers_[i].bloom.~BloomLayer();
+    layers_[i].~FilterLayer();
   }
   if (layers_) RMFree(layers_);
 }
@@ -42,7 +42,9 @@ ScalingBloomFilter::ScalingBloomFilter(ScalingBloomFilter&& other) noexcept
 
 ScalingBloomFilter& ScalingBloomFilter::operator=(ScalingBloomFilter&& other) noexcept {
   if (this != &other) {
-    this->~ScalingBloomFilter();
+    for (size_t i = 0; i < numLayers_; i++)
+      layers_[i].~FilterLayer();
+    if (layers_) RMFree(layers_);
     layers_ = other.layers_;
     totalItems_ = other.totalItems_;
     numLayers_ = other.numLayers_;
@@ -93,10 +95,12 @@ bool ScalingBloomFilter::GrowIfNeeded() {
   if (top.itemCount < top.bloom.GetCapacity()) return true;
   if (HasFlag(flags_, BloomFlags::FixedSize)) return false;
 
-  // Almeida et al. (2007): each new layer doubles capacity and halves FP rate
-  uint64_t nextCap = top.bloom.GetCapacity() * expansionFactor_;
+  uint64_t prevCap = top.bloom.GetCapacity();
+  if (prevCap > UINT64_MAX / expansionFactor_) return false;
+  uint64_t nextCap = prevCap * expansionFactor_;
+  constexpr double kMinFpRate = 1e-15;
   double nextRate = top.bloom.GetFpRate() * kTighteningRatio;
-  return (nextRate > 0.0) && AppendLayer(nextCap, nextRate);
+  return (nextRate >= kMinFpRate) && AppendLayer(nextCap, nextRate);
 }
 
 // --- Public API ---
@@ -139,14 +143,7 @@ ScalingBloomFilter* ScalingBloomFilter::FromRdbShell(RdbShell shell) {
   auto* filter = static_cast<ScalingBloomFilter*>(RMAlloc(sizeof(ScalingBloomFilter)));
   if (!filter) return nullptr;
 
-  new (filter) ScalingBloomFilter(0, 0.01, BloomFlags::None, 2);
-  if (filter->layers_) {
-    filter->layers_[0].bloom.~BloomLayer();
-    RMFree(filter->layers_);
-    filter->layers_ = nullptr;
-    filter->numLayers_ = 0;
-    filter->layerCapacity_ = 0;
-  }
+  new (filter) ScalingBloomFilter(EmptyShellTag{});
   filter->layers_ = static_cast<FilterLayer*>(RMCalloc(shell.numLayers, sizeof(FilterLayer)));
   if (!filter->layers_) {
     filter->~ScalingBloomFilter();

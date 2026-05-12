@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <numbers>
@@ -15,14 +16,14 @@
 
 HashPair Hash32Policy::Compute(std::span<const std::byte> data) {
   auto* ptr = reinterpret_cast<const void*>(data.data());
-  auto len = static_cast<int>(data.size());
+  auto len = static_cast<int>(std::min(data.size(), static_cast<size_t>(INT_MAX)));
   uint32_t h1 = MurmurHash2(ptr, len, 0x9747b28c);
   return {h1, MurmurHash2(ptr, len, h1)};
 }
 
 HashPair Hash64Policy::Compute(std::span<const std::byte> data) {
   auto* ptr = reinterpret_cast<const void*>(data.data());
-  auto len = static_cast<int>(data.size());
+  auto len = static_cast<int>(std::min(data.size(), static_cast<size_t>(INT_MAX)));
   uint64_t h1 = MurmurHash64A(ptr, len, 0xc6a4a7935bd1e995ULL);
   return {h1, MurmurHash64A(ptr, len, h1)};
 }
@@ -100,6 +101,7 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
   }
 
   if (!HasFlag(flags, BloomFlags::NoRound)) {
+    if (layer.totalBits_ > (1ULL << 63)) return std::nullopt;
     layer.totalBits_ = std::bit_ceil(layer.totalBits_);
     layer.log2Bits_ = static_cast<uint8_t>(std::bit_width(layer.totalBits_) - 1);
   }

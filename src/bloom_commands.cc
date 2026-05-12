@@ -279,7 +279,7 @@ static int CmdInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   RedisModule_ReplyWithArray(ctx, count);
 
-  bool changed = false;
+  bool changed = (keyType == REDISMODULE_KEYTYPE_EMPTY);
   for (int i = 0; i < count; i++) {
     size_t len;
     const char* item = RedisModule_StringPtrLen(argv[opts.itemsStart + i], &len);
@@ -437,15 +437,20 @@ static int CmdScandump(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
     return RedisModule_ReplyWithError(ctx, "ERR cursor must be non-negative");
   }
 
-  RedisModule_ReplyWithArray(ctx, 2);
-
+  char* hdrBuf = nullptr;
+  size_t hdrBytes = 0;
   if (cursor == 0) {
-    size_t hdrBytes = ComputeHeaderSize(*filter);
-    auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
+    hdrBytes = ComputeHeaderSize(*filter);
+    hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
     if (!hdrBuf) {
       return RedisModule_ReplyWithError(ctx, "ERR allocation failure");
     }
     SerializeHeader(*filter, hdrBuf);
+  }
+
+  RedisModule_ReplyWithArray(ctx, 2);
+
+  if (cursor == 0) {
     RedisModule_ReplyWithLongLong(ctx, 1);
     RedisModule_ReplyWithStringBuffer(ctx, hdrBuf, hdrBytes);
     RMFree(hdrBuf);
@@ -503,8 +508,10 @@ static int CmdLoadchunk(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
       return RedisModule_ReplyWithError(ctx, "ERR cursor exceeds layer count");
     }
     auto& layer = filter->Layers()[idx];
-    size_t copyLen = std::min(dataLen, static_cast<size_t>(layer.bloom.GetDataSize()));
-    std::memcpy(layer.bloom.GetBitArray(), data, copyLen);
+    if (dataLen != static_cast<size_t>(layer.bloom.GetDataSize())) {
+      return RedisModule_ReplyWithError(ctx, "ERR data length mismatch for layer");
+    }
+    std::memcpy(layer.bloom.GetBitArray(), data, dataLen);
   }
 
   RedisModule_ReplicateVerbatim(ctx);

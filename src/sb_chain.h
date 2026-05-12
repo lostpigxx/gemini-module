@@ -65,6 +65,9 @@ public:
   void SetLayer(size_t index, FilterLayer&& layer);
 
 private:
+  struct EmptyShellTag {};
+  explicit ScalingBloomFilter(EmptyShellTag) {}
+
   HashPair ComputeHash(std::span<const std::byte> data) const;
   bool IsDuplicate(const HashPair& hp) const;
   bool GrowIfNeeded();
