@@ -36,13 +36,10 @@ if(ENABLE_ASAN)
   add_link_options(-fsanitize=address)
 endif()
 
-# GTest-based unit tests
-option(BUILD_TESTS "Build unit tests" OFF)
-if(BUILD_TESTS)
-  find_package(GTest REQUIRED)
-  enable_testing()
-
-  add_executable(bloom_filter_test
+# GTest-based unit tests (excluded from default build, built on demand via `make test`)
+find_package(GTest QUIET)
+if(GTest_FOUND)
+  add_executable(bloom_filter_test EXCLUDE_FROM_ALL
     test/bloom_filter_test.cc
     src/bloom_filter.cc
     src/murmur2.cc
@@ -55,7 +52,7 @@ if(BUILD_TESTS)
   target_link_libraries(bloom_filter_test PRIVATE GTest::gtest_main)
   target_compile_options(bloom_filter_test PRIVATE -Wall -Wextra -Wpedantic)
 
-  add_executable(sb_chain_test
+  add_executable(sb_chain_test EXCLUDE_FROM_ALL
     test/sb_chain_test.cc
     src/sb_chain.cc
     src/bloom_filter.cc
@@ -69,7 +66,9 @@ if(BUILD_TESTS)
   target_link_libraries(sb_chain_test PRIVATE GTest::gtest_main)
   target_compile_options(sb_chain_test PRIVATE -Wall -Wextra -Wpedantic)
 
-  include(GoogleTest)
-  gtest_discover_tests(bloom_filter_test)
-  gtest_discover_tests(sb_chain_test)
+  add_custom_target(test
+    COMMAND bloom_filter_test --gtest_color=yes
+    COMMAND sb_chain_test --gtest_color=yes
+    DEPENDS bloom_filter_test sb_chain_test
+  )
 endif()
