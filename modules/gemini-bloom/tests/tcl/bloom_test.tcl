@@ -185,7 +185,7 @@ if {$argc > 0} {
   set module_path [file normalize [lindex $argv 0]]
 } else {
   set script_dir [file dirname [file normalize [info script]]]
-  set module_path [file normalize "$script_dir/../../build/redis_bloom.so"]
+  set module_path [file normalize "$script_dir/../../../../build/redis_bloom.so"]
 }
 
 if {![file exists $module_path]} {
