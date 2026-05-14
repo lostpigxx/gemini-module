@@ -6,3 +6,5 @@ minikv/build*/
 __pycache__/
 *.pyc
 dump.rdb
+.clangd
+.codemate
