@@ -1,5 +1,4 @@
 #include "sb_chain.h"
-#include "bloom_rdb.h"
 #include "rm_alloc.h"
 
 #include <algorithm>
