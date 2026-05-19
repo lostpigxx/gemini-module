@@ -1,5 +1,6 @@
 #include "json_path.h"
 
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 
@@ -23,9 +24,14 @@ struct PathParser {
     int64_t val = 0;
     while (HasMore() && *pos >= '0' && *pos <= '9') {
       val = val * 10 + (*pos - '0');
+      if (val > static_cast<int64_t>(INT32_MAX) + 1) {
+        pos = start;
+        return false;
+      }
       pos++;
     }
     if (neg) val = -val;
+    if (val < INT32_MIN || val > INT32_MAX) { pos = start; return false; }
     out = static_cast<int32_t>(val);
     return true;
   }

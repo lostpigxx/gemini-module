@@ -194,18 +194,17 @@ static int CmdSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
         parent_path.segments.assign(segs.begin(), segs.end() - 1);
         parent_path.is_legacy = path.is_legacy;
         auto parent_matches = EvaluatePath(parent_path, existing);
-        bool created = false;
+        bool consumed = false;
         for (size_t i = 0; i < parent_matches.size(); i++) {
           auto* pm = parent_matches[i].value;
           if (pm && pm->IsObject()) {
-            auto* val_to_set = (i == parent_matches.size() - 1 && !created)
-                                  ? new_val : new_val->Clone();
+            auto* val_to_set = consumed ? new_val->Clone() : new_val;
             pm->ObjectSet(segs.back().key.c_str(),
                           static_cast<uint32_t>(segs.back().key.size()), val_to_set);
-            created = true;
+            consumed = true;
           }
         }
-        if (!created) {
+        if (!consumed) {
           JsonValue::Destroy(new_val);
           return RedisModule_ReplyWithNull(ctx);
         }
@@ -471,7 +470,6 @@ static int CmdArrIndex(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
   auto matches = EvaluatePath(path, root);
 
   auto FindIndex = [&](JsonValue* arr_val) -> long long {
-    if (!arr_val->IsArray()) return -2; // sentinel: not an array
     int32_t len = static_cast<int32_t>(arr_val->ArrayLen());
     int32_t s = static_cast<int32_t>(start_arg);
     int32_t e = stop_set ? static_cast<int32_t>(stop_arg) : len;
@@ -479,11 +477,9 @@ static int CmdArrIndex(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
     if (e < 0) e += len;
     if (s < 0) s = 0;
     if (e > len) e = len;
-    if (e == 0 && !stop_set) e = len;
     for (int32_t i = s; i < e; i++) {
-      if (i >= 0 && i < len && arr_val->ArrayGet(static_cast<uint32_t>(i))->DeepEqual(search_val)) {
-        JsonValue::Destroy(search_val);
-        search_val = nullptr;
+      if (i >= 0 && i < len &&
+          arr_val->ArrayGet(static_cast<uint32_t>(i))->DeepEqual(search_val)) {
         return i;
       }
     }
@@ -495,9 +491,12 @@ static int CmdArrIndex(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
       JsonValue::Destroy(search_val);
       return RedisModule_ReplyWithError(ctx, "ERR path does not exist");
     }
+    if (!matches[0].value->IsArray()) {
+      JsonValue::Destroy(search_val);
+      return RedisModule_ReplyWithError(ctx, "ERR path is not an array");
+    }
     long long idx = FindIndex(matches[0].value);
-    if (search_val) JsonValue::Destroy(search_val);
-    if (idx == -2) return RedisModule_ReplyWithError(ctx, "ERR path is not an array");
+    JsonValue::Destroy(search_val);
     return RedisModule_ReplyWithLongLong(ctx, idx);
   }
 
@@ -507,24 +506,9 @@ static int CmdArrIndex(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
       RedisModule_ReplyWithNull(ctx);
       continue;
     }
-    // Re-implement search per match since search_val might have been freed
-    int32_t len = static_cast<int32_t>(m.value->ArrayLen());
-    int32_t s = static_cast<int32_t>(start_arg);
-    int32_t e = stop_set ? static_cast<int32_t>(stop_arg) : len;
-    if (s < 0) s += len;
-    if (e < 0) e += len;
-    if (s < 0) s = 0;
-    if (e > len) e = len;
-    long long found = -1;
-    for (int32_t i = s; i < e && search_val; i++) {
-      if (i >= 0 && i < len && m.value->ArrayGet(static_cast<uint32_t>(i))->DeepEqual(search_val)) {
-        found = i;
-        break;
-      }
-    }
-    RedisModule_ReplyWithLongLong(ctx, found);
+    RedisModule_ReplyWithLongLong(ctx, FindIndex(m.value));
   }
-  if (search_val) JsonValue::Destroy(search_val);
+  JsonValue::Destroy(search_val);
   return REDISMODULE_OK;
 }
 
@@ -792,14 +776,11 @@ static int CmdStrAppend(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     auto* str_val = matches[0].value;
     auto existing = str_val->GetString();
     uint32_t new_len = static_cast<uint32_t>(existing.size() + append_sv.size());
-    auto* new_str = JsonValue::CreateString("", 0);
-    // Build concatenated string
     auto* buf = static_cast<char*>(RMAlloc(new_len + 1));
     std::memcpy(buf, existing.data(), existing.size());
     std::memcpy(buf + existing.size(), append_sv.data(), append_sv.size());
     buf[new_len] = '\0';
-    JsonValue::Destroy(new_str);
-    new_str = JsonValue::CreateString(buf, new_len);
+    auto* new_str = JsonValue::CreateString(buf, new_len);
     RMFree(buf);
 
     // Replace in parent
@@ -1274,18 +1255,17 @@ static int CmdMSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
             parent_path.segments.assign(segs.begin(), segs.end() - 1);
             parent_path.is_legacy = t.path.is_legacy;
             auto parent_matches = EvaluatePath(parent_path, existing);
-            bool created = false;
+            bool consumed = false;
             for (size_t j = 0; j < parent_matches.size(); j++) {
               auto* pm = parent_matches[j].value;
               if (pm && pm->IsObject()) {
-                auto* val = (j == parent_matches.size() - 1 && !created)
-                              ? t.value : t.value->Clone();
+                auto* val = consumed ? t.value->Clone() : t.value;
                 pm->ObjectSet(segs.back().key.c_str(),
                               static_cast<uint32_t>(segs.back().key.size()), val);
-                created = true;
+                consumed = true;
               }
             }
-            if (created) t.value = nullptr;
+            if (consumed) t.value = nullptr;
           }
         }
       }

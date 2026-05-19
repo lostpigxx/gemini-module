@@ -125,23 +125,19 @@ struct GrowBuf {
 
 static JsonValue* ParseValue(Parser& p);
 
-static JsonValue* ParseString(Parser& p, bool as_value = true) {
-  if (!p.Match('"')) { p.SetError("expected '\"'"); return nullptr; }
+struct StringKeyResult {
+  char* data;
+  size_t len;
+};
 
-  GrowBuf buf;
+static bool ParseStringContent(Parser& p, GrowBuf& buf) {
+  if (!p.Match('"')) { p.SetError("expected '\"'"); return false; }
 
   while (p.HasMore()) {
     char c = p.Advance();
-    if (c == '"') {
-      if (as_value) {
-        auto* v = JsonValue::CreateString(buf.data, static_cast<uint32_t>(buf.len));
-        return v;
-      }
-      buf.Push('\0');
-      return reinterpret_cast<JsonValue*>(buf.Release());
-    }
+    if (c == '"') return true;
     if (c == '\\') {
-      if (!p.HasMore()) { p.SetError("unexpected end in string escape"); return nullptr; }
+      if (!p.HasMore()) { p.SetError("unexpected end in string escape"); return false; }
       char esc = p.Advance();
       switch (esc) {
         case '"':  buf.Push('"'); break;
@@ -154,48 +150,50 @@ static JsonValue* ParseString(Parser& p, bool as_value = true) {
         case 't':  buf.Push('\t'); break;
         case 'u': {
           int cp = ParseHex4(p);
-          if (cp < 0) { p.SetError("invalid \\uXXXX escape"); return nullptr; }
+          if (cp < 0) { p.SetError("invalid \\uXXXX escape"); return false; }
           if (cp >= 0xD800 && cp <= 0xDBFF) {
             if (p.end - p.pos < 2 || p.pos[0] != '\\' || p.pos[1] != 'u') {
-              p.SetError("missing low surrogate"); return nullptr;
+              p.SetError("missing low surrogate"); return false;
             }
             p.pos += 2;
             int low = ParseHex4(p);
             if (low < 0xDC00 || low > 0xDFFF) {
-              p.SetError("invalid low surrogate"); return nullptr;
+              p.SetError("invalid low surrogate"); return false;
             }
             cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
           } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
-            p.SetError("unexpected low surrogate"); return nullptr;
+            p.SetError("unexpected low surrogate"); return false;
           }
           char utf8[4];
           int n = EncodeUtf8(static_cast<uint32_t>(cp), utf8);
-          if (n == 0) { p.SetError("invalid codepoint"); return nullptr; }
+          if (n == 0) { p.SetError("invalid codepoint"); return false; }
           buf.PushN(utf8, static_cast<size_t>(n));
           break;
         }
         default:
           p.SetError("invalid escape character");
-          return nullptr;
+          return false;
       }
     } else {
       buf.Push(c);
     }
   }
   p.SetError("unterminated string");
-  return nullptr;
+  return false;
 }
 
-struct StringKeyResult {
-  char* data;
-  size_t len;
-};
+static JsonValue* ParseString(Parser& p) {
+  GrowBuf buf;
+  if (!ParseStringContent(p, buf)) return nullptr;
+  return JsonValue::CreateString(buf.data, static_cast<uint32_t>(buf.len));
+}
 
 static bool ParseStringKey(Parser& p, StringKeyResult& out) {
-  auto* raw = ParseString(p, false);
-  if (!raw) return false;
-  out.data = reinterpret_cast<char*>(raw);
-  out.len = std::strlen(out.data);
+  GrowBuf buf;
+  if (!ParseStringContent(p, buf)) return false;
+  buf.Push('\0');
+  out.len = buf.len - 1;
+  out.data = buf.Release();
   return true;
 }
 

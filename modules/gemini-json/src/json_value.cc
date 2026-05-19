@@ -159,6 +159,7 @@ double JsonValue::GetNumber() const {
 
 bool JsonValue::ArrayGrow() {
   uint32_t new_cap = arr_.cap == 0 ? 4 : arr_.cap * 2;
+  if (new_cap <= arr_.cap) return false;
   auto* new_items = static_cast<JsonValue**>(
     RMRealloc(arr_.items, new_cap * sizeof(JsonValue*)));
   if (!new_items) return false;
@@ -231,6 +232,7 @@ JsonValue* JsonValue::ObjectGet(std::string_view key) const {
 
 bool JsonValue::ObjectGrow() {
   uint32_t new_cap = obj_.cap == 0 ? 4 : obj_.cap * 2;
+  if (new_cap <= obj_.cap) return false;
   auto* new_entries = static_cast<ObjEntry*>(
     RMRealloc(obj_.entries, new_cap * sizeof(ObjEntry)));
   if (!new_entries) return false;
@@ -362,10 +364,9 @@ bool JsonValue::DeepEqual(const JsonValue* other) const {
     case JsonType::kObject:
       if (obj_.len != other->obj_.len) return false;
       for (uint32_t i = 0; i < obj_.len; i++) {
-        if (obj_.entries[i].key_len != other->obj_.entries[i].key_len) return false;
-        if (std::memcmp(obj_.entries[i].key, other->obj_.entries[i].key,
-                        obj_.entries[i].key_len) != 0) return false;
-        if (!obj_.entries[i].value->DeepEqual(other->obj_.entries[i].value)) return false;
+        auto* other_val = other->ObjectGet(
+          std::string_view(obj_.entries[i].key, obj_.entries[i].key_len));
+        if (!other_val || !obj_.entries[i].value->DeepEqual(other_val)) return false;
       }
       return true;
   }
