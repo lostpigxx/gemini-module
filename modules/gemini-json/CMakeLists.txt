@@ -77,10 +77,25 @@ if(GTest_FOUND)
   target_compile_definitions(json_path_test PRIVATE REDIS_JSON_TESTING)
   target_compile_options(json_path_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(json_asan_test EXCLUDE_FROM_ALL
+    tests/json_asan_test.cc
+    ${JSON_TEST_COMMON}
+  )
+  target_include_directories(json_asan_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(json_asan_test PRIVATE
+    redis_module_api
+    GTest::gtest_main
+  )
+  target_compile_definitions(json_asan_test PRIVATE REDIS_JSON_TESTING)
+  target_compile_options(json_asan_test PRIVATE -Wall -Wextra -Wpedantic)
+
   add_custom_target(json_test
     COMMAND json_value_test --gtest_color=yes
     COMMAND json_parse_test --gtest_color=yes
     COMMAND json_path_test --gtest_color=yes
-    DEPENDS json_value_test json_parse_test json_path_test
+    COMMAND json_asan_test --gtest_color=yes
+    DEPENDS json_value_test json_parse_test json_path_test json_asan_test
   )
 endif()
