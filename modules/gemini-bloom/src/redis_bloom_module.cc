@@ -10,7 +10,7 @@ extern "C" {
 
 extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
                                    RedisModuleString** argv, int argc) {
-  if (RedisModule_Init(ctx, "bf", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
+  if (RedisModule_Init(ctx, "GeminiBloom", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
     return REDISMODULE_ERR;
   }
 
@@ -41,6 +41,6 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
     return REDISMODULE_ERR;
   }
 
-  RedisModule_Log(ctx, "notice", "Bloom filter module loaded");
+  RedisModule_Log(ctx, "notice", "GeminiBloom module loaded");
   return REDISMODULE_OK;
 }
