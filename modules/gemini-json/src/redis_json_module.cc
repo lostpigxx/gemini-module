@@ -7,7 +7,7 @@ extern "C" {
 
 extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
                                    RedisModuleString** /*argv*/, int /*argc*/) {
-  if (RedisModule_Init(ctx, "ReJSON", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
+  if (RedisModule_Init(ctx, "GeminiJSON", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
     return REDISMODULE_ERR;
   }
 

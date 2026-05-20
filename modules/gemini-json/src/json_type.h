@@ -16,7 +16,7 @@ extern "C" {
 
 extern RedisModuleType* JsonModuleType;
 
-constexpr int kJsonEncVer = 1;
+constexpr int kJsonEncVer = 2;
 
 void* RdbLoadJson(RedisModuleIO* rdb, int encver);
 void RdbSaveJson(RedisModuleIO* rdb, void* value);

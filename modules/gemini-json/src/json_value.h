@@ -78,6 +78,11 @@ private:
 
   bool ArrayGrow();
   bool ObjectGrow();
+  void ObjHashRebuild();
+  void ObjHashClear();
+  int32_t ObjHashProbe(const char* key, uint32_t key_len) const;
+
+  static constexpr uint32_t kObjHashThreshold = 8;
 
   JsonType type_;
   union {
@@ -86,6 +91,12 @@ private:
     double num_val_;
     struct { char* data; uint32_t len; } str_;
     struct { JsonValue** items; uint32_t len; uint32_t cap; } arr_;
-    struct { ObjEntry* entries; uint32_t len; uint32_t cap; } obj_;
+    struct {
+      ObjEntry* entries;
+      uint32_t len;
+      uint32_t cap;
+      int32_t* hash_idx;
+      uint32_t hash_cap;
+    } obj_;
   };
 };

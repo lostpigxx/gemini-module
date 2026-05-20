@@ -21,6 +21,16 @@ static JsonValue* AllocValue() {
   return static_cast<JsonValue*>(RMCalloc(1, sizeof(JsonValue)));
 }
 
+// FNV-1a hash for key lookup acceleration
+static uint32_t FnvHash(const char* data, uint32_t len) {
+  uint32_t h = 0x811c9dc5u;
+  for (uint32_t i = 0; i < len; i++) {
+    h ^= static_cast<uint8_t>(data[i]);
+    h *= 0x01000193u;
+  }
+  return h;
+}
+
 JsonValue* JsonValue::CreateNull() {
   auto* v = AllocValue();
   if (!v) return nullptr;
@@ -81,6 +91,8 @@ JsonValue* JsonValue::CreateObject() {
   v->obj_.entries = nullptr;
   v->obj_.len = 0;
   v->obj_.cap = 0;
+  v->obj_.hash_idx = nullptr;
+  v->obj_.hash_cap = 0;
   return v;
 }
 
@@ -103,6 +115,7 @@ void JsonValue::Destroy(JsonValue* v) {
         Destroy(v->obj_.entries[i].value);
       }
       RMFree(v->obj_.entries);
+      RMFree(v->obj_.hash_idx);
       break;
     default:
       break;
@@ -220,7 +233,57 @@ void JsonValue::ArrayTrim(uint32_t start, uint32_t stop) {
   arr_.len = new_len;
 }
 
+// --- Hash-accelerated object operations ---
+
+void JsonValue::ObjHashRebuild() {
+  if (obj_.hash_idx) {
+    for (uint32_t i = 0; i < obj_.hash_cap; i++) obj_.hash_idx[i] = -1;
+  } else {
+    obj_.hash_cap = obj_.cap * 2;
+    if (obj_.hash_cap < 16) obj_.hash_cap = 16;
+    obj_.hash_idx = static_cast<int32_t*>(RMAlloc(obj_.hash_cap * sizeof(int32_t)));
+    if (!obj_.hash_idx) { obj_.hash_cap = 0; return; }
+    for (uint32_t i = 0; i < obj_.hash_cap; i++) obj_.hash_idx[i] = -1;
+  }
+
+  for (uint32_t i = 0; i < obj_.len; i++) {
+    uint32_t h = FnvHash(obj_.entries[i].key, obj_.entries[i].key_len) % obj_.hash_cap;
+    while (obj_.hash_idx[h] != -1) {
+      h = (h + 1) % obj_.hash_cap;
+    }
+    obj_.hash_idx[h] = static_cast<int32_t>(i);
+  }
+}
+
+void JsonValue::ObjHashClear() {
+  RMFree(obj_.hash_idx);
+  obj_.hash_idx = nullptr;
+  obj_.hash_cap = 0;
+}
+
+int32_t JsonValue::ObjHashProbe(const char* key, uint32_t key_len) const {
+  if (!obj_.hash_idx) return -1;
+
+  uint32_t h = FnvHash(key, key_len) % obj_.hash_cap;
+  while (obj_.hash_idx[h] != -1) {
+    auto slot = static_cast<uint32_t>(obj_.hash_idx[h]);
+    if (slot < obj_.len &&
+        obj_.entries[slot].key_len == key_len &&
+        std::memcmp(obj_.entries[slot].key, key, key_len) == 0) {
+      return obj_.hash_idx[h];
+    }
+    h = (h + 1) % obj_.hash_cap;
+  }
+  return -1;
+}
+
 JsonValue* JsonValue::ObjectGet(std::string_view key) const {
+  if (obj_.len > kObjHashThreshold && obj_.hash_idx) {
+    int32_t slot = ObjHashProbe(key.data(), static_cast<uint32_t>(key.size()));
+    if (slot >= 0) return obj_.entries[slot].value;
+    return nullptr;
+  }
+
   for (uint32_t i = 0; i < obj_.len; i++) {
     if (key.size() == obj_.entries[i].key_len &&
         std::memcmp(key.data(), obj_.entries[i].key, key.size()) == 0) {
@@ -238,16 +301,31 @@ bool JsonValue::ObjectGrow() {
   if (!new_entries) return false;
   obj_.entries = new_entries;
   obj_.cap = new_cap;
+
+  if (obj_.len >= kObjHashThreshold) {
+    ObjHashClear();
+    ObjHashRebuild();
+  }
   return true;
 }
 
 bool JsonValue::ObjectSet(const char* key, uint32_t key_len, JsonValue* child) {
-  for (uint32_t i = 0; i < obj_.len; i++) {
-    if (key_len == obj_.entries[i].key_len &&
-        std::memcmp(key, obj_.entries[i].key, key_len) == 0) {
-      Destroy(obj_.entries[i].value);
-      obj_.entries[i].value = child;
+  // Check for existing key
+  if (obj_.len > kObjHashThreshold && obj_.hash_idx) {
+    int32_t slot = ObjHashProbe(key, key_len);
+    if (slot >= 0) {
+      Destroy(obj_.entries[slot].value);
+      obj_.entries[slot].value = child;
       return true;
+    }
+  } else {
+    for (uint32_t i = 0; i < obj_.len; i++) {
+      if (key_len == obj_.entries[i].key_len &&
+          std::memcmp(key, obj_.entries[i].key, key_len) == 0) {
+        Destroy(obj_.entries[i].value);
+        obj_.entries[i].value = child;
+        return true;
+      }
     }
   }
 
@@ -260,6 +338,18 @@ bool JsonValue::ObjectSet(const char* key, uint32_t key_len, JsonValue* child) {
 
   obj_.entries[obj_.len] = {k, key_len, child};
   obj_.len++;
+
+  if (obj_.len > kObjHashThreshold) {
+    if (!obj_.hash_idx || obj_.len * 2 > obj_.hash_cap) {
+      ObjHashClear();
+      ObjHashRebuild();
+    } else {
+      uint32_t h = FnvHash(k, key_len) % obj_.hash_cap;
+      while (obj_.hash_idx[h] != -1) h = (h + 1) % obj_.hash_cap;
+      obj_.hash_idx[h] = static_cast<int32_t>(obj_.len - 1);
+    }
+  }
+
   return true;
 }
 
@@ -274,6 +364,12 @@ bool JsonValue::ObjectDelete(std::string_view key) {
                      (obj_.len - i - 1) * sizeof(ObjEntry));
       }
       obj_.len--;
+
+      if (obj_.len > kObjHashThreshold) {
+        ObjHashRebuild();
+      } else {
+        ObjHashClear();
+      }
       return true;
     }
   }
@@ -292,6 +388,7 @@ void JsonValue::Clear() {
         Destroy(obj_.entries[i].value);
       }
       obj_.len = 0;
+      ObjHashClear();
       break;
     case JsonType::kInteger:
       int_val_ = 0;
@@ -318,6 +415,7 @@ size_t JsonValue::MemoryUsage() const {
       break;
     case JsonType::kObject:
       total += obj_.cap * sizeof(ObjEntry);
+      total += obj_.hash_cap * sizeof(int32_t);
       for (uint32_t i = 0; i < obj_.len; i++) {
         total += obj_.entries[i].key_len + 1;
         total += obj_.entries[i].value->MemoryUsage();
