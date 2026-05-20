@@ -6,8 +6,11 @@
 #include <cstring>
 
 RedisModuleType* JsonModuleType = nullptr;
+bool JsonCompatMode = false;
 
-// --- Binary RDB format (encver 2) ---
+// ======================================================================
+// Binary RDB format (encver 2) — Gemini native
+// ======================================================================
 // Each node: type tag (uint64) followed by type-specific payload.
 // Tag values: 0=null, 1=false, 2=true, 3=integer, 4=double,
 //             5=string, 6=array, 7=object
@@ -124,7 +127,14 @@ static JsonValue* BinaryLoad(RedisModuleIO* rdb) {
   }
 }
 
-// --- Legacy text format (encver 1) ---
+// ======================================================================
+// JSON text RDB format (encver 1 & 3) — compat with RedisJSON
+// ======================================================================
+
+static void TextSave(RedisModuleIO* rdb, const JsonValue* v) {
+  auto json = JsonSerialize(v);
+  RedisModule_SaveStringBuffer(rdb, json.data(), json.size());
+}
 
 static JsonValue* TextLoad(RedisModuleIO* rdb) {
   size_t len;
@@ -135,16 +145,23 @@ static JsonValue* TextLoad(RedisModuleIO* rdb) {
   return result.value;
 }
 
-// --- Public interface ---
+// ======================================================================
+// Public interface — dispatches based on encver and compat mode
+// ======================================================================
 
 void* RdbLoadJson(RedisModuleIO* rdb, int encver) {
-  if (encver == 1) return TextLoad(rdb);
+  if (encver == 1 || encver == 3) return TextLoad(rdb);
   if (encver == 2) return BinaryLoad(rdb);
   return nullptr;
 }
 
 void RdbSaveJson(RedisModuleIO* rdb, void* value) {
-  BinarySave(rdb, static_cast<JsonValue*>(value));
+  auto* v = static_cast<JsonValue*>(value);
+  if (JsonCompatMode) {
+    TextSave(rdb, v);
+  } else {
+    BinarySave(rdb, v);
+  }
 }
 
 void AofRewriteJson(RedisModuleIO* aof, RedisModuleString* key, void* value) {
