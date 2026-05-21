@@ -45,6 +45,8 @@ int BloomConfigLoad(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
         return REDISMODULE_ERR;
       }
       g_bloomConfig.defaultExpansion = static_cast<unsigned>(val);
+    } else if (len == 6 && strncasecmp(arg, "COMPAT", 6) == 0) {
+      // Handled by module entrypoint, not a config parameter.
     } else {
       RedisModule_Log(ctx, "warning", "Unrecognized config argument: %.*s",
                        static_cast<int>(len), arg);

@@ -20,6 +20,14 @@ extern "C" {
 
 extern RedisModuleType* BloomType;
 
+// Compat mode: when true, type name "MBbloom--" is used for cross-module
+// RDB migration with RedisBloom. Controlled by MODULE LOAD ... COMPAT.
+extern bool BloomCompatMode;
+
+// RDB encoding version history (wire-format protocol versions, required for
+// reading RDB files produced by any compatible bloom filter implementation):
+//   encver 2: added BloomFlags field
+//   encver 4: added expansion factor field
 constexpr int kEncVerWithFlags = 2;
 constexpr int kEncVerWithExpansion = 4;
 constexpr int kCurrentEncVer = 4;

@@ -1,5 +1,3 @@
-// Module entry point for the bloom filter Redis module.
-// Registers data type and BF.* commands.
 extern "C" {
 #include "redismodule.h"
 }
@@ -8,20 +6,37 @@ extern "C" {
 #include "bloom_rdb.h"
 #include "bloom_config.h"
 
+#include <cstring>
+
+// Data type identifiers (exactly 9 chars each, per Redis Module API).
+//   Native:  independent operation.
+//   Compat:  matches RedisBloom's type name for cross-module RDB migration.
+static constexpr const char* kTypeNameNative = "GmBloom--";
+static constexpr const char* kTypeNameCompat = "MBbloom--";
+
 extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
                                    RedisModuleString** argv, int argc) {
   if (RedisModule_Init(ctx, "GeminiBloom", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
     return REDISMODULE_ERR;
   }
 
+  // Scan for COMPAT flag before passing to config loader.
+  // BloomConfigLoad will ignore COMPAT since it's not a config key.
+  BloomCompatMode = false;
+  for (int i = 0; i < argc; i++) {
+    size_t len;
+    const char* arg = RedisModule_StringPtrLen(argv[i], &len);
+    if (len == 6 && strncasecmp(arg, "COMPAT", 6) == 0) {
+      BloomCompatMode = true;
+    }
+  }
+
   if (BloomConfigLoad(ctx, argv, argc) != REDISMODULE_OK) {
     return REDISMODULE_ERR;
   }
 
-  // Type name "MBbloom--" and encoding version 4 are required for
-  // interoperability with existing Redis RDB files that contain
-  // bloom filter data. This is a wire-format compatibility requirement,
-  // not derived from the RedisBloom source code.
+  const char* type_name = BloomCompatMode ? kTypeNameCompat : kTypeNameNative;
+
   RedisModuleTypeMethods tm = {};
   tm.version = REDISMODULE_TYPE_METHOD_VERSION;
   tm.rdb_load = RdbLoadBloom;
@@ -30,9 +45,9 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
   tm.free = FreeBloom;
   tm.mem_usage = BloomMemUsage;
 
-  BloomType = RedisModule_CreateDataType(ctx, "MBbloom--", kCurrentEncVer, &tm);
+  BloomType = RedisModule_CreateDataType(ctx, type_name, kCurrentEncVer, &tm);
   if (!BloomType) {
-    RedisModule_Log(ctx, "warning", "Failed to register bloom filter data type");
+    RedisModule_Log(ctx, "warning", "Failed to register bloom filter data type '%s'", type_name);
     return REDISMODULE_ERR;
   }
 
@@ -41,6 +56,13 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
     return REDISMODULE_ERR;
   }
 
-  RedisModule_Log(ctx, "notice", "GeminiBloom module loaded");
+  if (BloomCompatMode) {
+    RedisModule_Log(ctx, "notice",
+      "GeminiBloom loaded in COMPAT mode (type=%s) — "
+      "RDB files are cross-compatible with RedisBloom", type_name);
+  } else {
+    RedisModule_Log(ctx, "notice",
+      "GeminiBloom loaded in native mode (type=%s)", type_name);
+  }
   return REDISMODULE_OK;
 }

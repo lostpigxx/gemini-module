@@ -10,9 +10,15 @@
 #include <numbers>
 
 // --- Hash policies ---
-// Seeds are required for data-level interoperability: they determine which
-// bits are set in the persisted bit array. Changing them would cause false
-// negatives when querying filters loaded from existing RDB files.
+// The double-hashing scheme follows Kirsch & Mitzenmacher (ESA 2006):
+// compute two independent hashes h1, h2 and derive k probes as h1 + i*h2.
+//
+// Seed values and the "h2 = hash(data, seed=h1)" pattern are part of the
+// wire-format protocol — they determine which bits are set in the persisted
+// bit array. Any implementation that reads/writes the same RDB format MUST
+// use these same seeds to avoid false negatives on deserialized filters.
+//   32-bit seed: 0x9747b28c  (MurmurHash2 conventional default)
+//   64-bit seed: 0xc6a4a7935bd1e995  (MurmurHash64A mixing constant m)
 
 HashPair Hash32Policy::Compute(std::span<const std::byte> data) {
   auto* ptr = reinterpret_cast<const void*>(data.data());
