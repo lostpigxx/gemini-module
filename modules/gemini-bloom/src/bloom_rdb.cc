@@ -201,7 +201,6 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
 // --- Module type callbacks ---
 
 RedisModuleType* BloomType = nullptr;
-bool BloomCompatMode = false;
 
 // The filter object serializes itself via WriteTo/ReadFrom.
 // These callbacks are thin adapters between the Redis Module C API
