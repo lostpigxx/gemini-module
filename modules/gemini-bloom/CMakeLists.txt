@@ -59,9 +59,28 @@ if(GTest_FOUND)
   target_compile_definitions(sb_chain_test PRIVATE REDIS_BLOOM_TESTING)
   target_compile_options(sb_chain_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(bloom_rdb_test EXCLUDE_FROM_ALL
+    tests/bloom_rdb_test.cc
+    src/bloom_rdb.cc
+    src/sb_chain.cc
+    src/bloom_filter.cc
+    src/murmur2.cc
+  )
+  target_include_directories(bloom_rdb_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/include
+  )
+  target_link_libraries(bloom_rdb_test PRIVATE
+    redis_module_api
+    GTest::gtest_main
+  )
+  target_compile_definitions(bloom_rdb_test PRIVATE REDIS_BLOOM_TESTING)
+  target_compile_options(bloom_rdb_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
+
   add_custom_target(bloom_test
     COMMAND bloom_filter_test --gtest_color=yes
     COMMAND sb_chain_test --gtest_color=yes
-    DEPENDS bloom_filter_test sb_chain_test
+    COMMAND bloom_rdb_test --gtest_color=yes
+    DEPENDS bloom_filter_test sb_chain_test bloom_rdb_test
   )
 endif()

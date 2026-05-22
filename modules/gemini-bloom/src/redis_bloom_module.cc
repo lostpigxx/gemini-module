@@ -1,5 +1,3 @@
-// Module entry point for the bloom filter Redis module.
-// Registers data type and BF.* commands.
 extern "C" {
 #include "redismodule.h"
 }
@@ -10,7 +8,7 @@ extern "C" {
 
 extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
                                    RedisModuleString** argv, int argc) {
-  if (RedisModule_Init(ctx, "bf", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
+  if (RedisModule_Init(ctx, "GeminiBloom", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
     return REDISMODULE_ERR;
   }
 
@@ -18,10 +16,8 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
     return REDISMODULE_ERR;
   }
 
-  // Type name "MBbloom--" and encoding version 4 are required for
-  // interoperability with existing Redis RDB files that contain
-  // bloom filter data. This is a wire-format compatibility requirement,
-  // not derived from the RedisBloom source code.
+  // Data type name "MBbloom--" matches RedisBloom's wire format for RDB
+  // interoperability. Module identity "GeminiBloom" is separate.
   RedisModuleTypeMethods tm = {};
   tm.version = REDISMODULE_TYPE_METHOD_VERSION;
   tm.rdb_load = RdbLoadBloom;
@@ -41,6 +37,6 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
     return REDISMODULE_ERR;
   }
 
-  RedisModule_Log(ctx, "notice", "Bloom filter module loaded");
+  RedisModule_Log(ctx, "notice", "GeminiBloom module loaded");
   return REDISMODULE_OK;
 }

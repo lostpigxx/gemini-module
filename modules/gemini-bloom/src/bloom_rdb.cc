@@ -22,6 +22,9 @@ std::pair<char*, size_t> RdbReader::GetBlob() {
 }
 
 // --- BloomLayer serialization (lives here to access Redis Module API) ---
+// Field order is part of the RDB wire-format protocol for bloom filter
+// persistence. Any compatible implementation MUST read/write fields in
+// this exact sequence to produce interoperable RDB files.
 
 void BloomLayer::WriteTo(RdbWriter& w) const {
   w.PutUint(capacity_);
@@ -88,6 +91,9 @@ BloomLayer BloomLayer::FromWireMeta(const WireLayerMeta& meta, BloomFlags filter
 }
 
 // --- ScalingBloomFilter RDB serialization ---
+// Filter-level field order: totalItems, numLayers, flags, expansion, layers[]
+// is the RDB wire-format protocol. encver gates which fields are present
+// (see kEncVerWithFlags, kEncVerWithExpansion in bloom_rdb.h).
 
 void ScalingBloomFilter::WriteTo(RdbWriter& w) const {
   w.PutUint(totalItems_);
