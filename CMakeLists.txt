@@ -19,3 +19,4 @@ target_include_directories(redis_module_api INTERFACE
 
 add_subdirectory(modules/gemini-bloom)
 add_subdirectory(modules/gemini-json)
+add_subdirectory(modules/gemini-search)
