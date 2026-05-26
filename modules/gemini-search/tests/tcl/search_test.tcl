@@ -268,24 +268,23 @@ puts "\n=== FT.INFO ==="
 
 test_assert "FT.INFO returns correct schema" {
   set info [r FT.INFO myidx]
-  # info is a flat list: index_name <name> fields <field_array>
-  if {[llength $info] != 4} {
-    error "Expected 4 elements, got [llength $info]: $info"
+  # info is a flat list: index_name <name> num_docs <n> fields <field_array>
+  if {[llength $info] != 6} {
+    error "Expected 6 elements, got [llength $info]: $info"
   }
-  set idx_name_label [lindex $info 0]
-  set idx_name [lindex $info 1]
-  set fields_label [lindex $info 2]
-  set fields [lindex $info 3]
-
-  if {$idx_name_label ne "index_name"} {
-    error "Expected 'index_name' label, got '$idx_name_label'"
+  if {[lindex $info 0] ne "index_name"} {
+    error "Expected 'index_name' label, got '[lindex $info 0]'"
   }
-  if {$idx_name ne "myidx"} {
-    error "Expected index name 'myidx', got '$idx_name'"
+  if {[lindex $info 1] ne "myidx"} {
+    error "Expected index name 'myidx', got '[lindex $info 1]'"
   }
-  if {$fields_label ne "fields"} {
-    error "Expected 'fields' label, got '$fields_label'"
+  if {[lindex $info 2] ne "num_docs"} {
+    error "Expected 'num_docs' label, got '[lindex $info 2]'"
   }
+  if {[lindex $info 4] ne "fields"} {
+    error "Expected 'fields' label, got '[lindex $info 4]'"
+  }
+  set fields [lindex $info 5]
   if {[llength $fields] != 2} {
     error "Expected 2 fields, got [llength $fields]"
   }
@@ -363,7 +362,7 @@ test "FT.CREATE re-create dropped index" {
 
 test_assert "FT.INFO re-created index has new schema" {
   set info [r FT.INFO tagonly]
-  set fields [lindex $info 3]
+  set fields [lindex $info 5]
   if {[llength $fields] != 1} {
     error "Expected 1 field, got [llength $fields]"
   }
@@ -381,7 +380,7 @@ test "FT.CREATE with lowercase type names" {
 
 test_assert "FT.INFO shows normalized type names" {
   set info [r FT.INFO case_idx]
-  set fields [lindex $info 3]
+  set fields [lindex $info 5]
   set f0 [lindex $fields 0]
   set f1 [lindex $fields 1]
   if {[lindex $f0 1] ne "TAG"} {
@@ -389,6 +388,173 @@ test_assert "FT.INFO shows normalized type names" {
   }
   if {[lindex $f1 1] ne "NUMERIC"} {
     error "Expected NUMERIC, got [lindex $f1 1]"
+  }
+}
+
+puts "\n=== FT.ADD ==="
+
+# Use myidx which has SCHEMA: name TAG, price NUMERIC
+test "FT.ADD basic document" {
+  r FT.ADD myidx doc1 FIELDS name shoes price 299
+} {OK}
+
+test "FT.ADD second document" {
+  r FT.ADD myidx doc2 FIELDS name hat price 49
+} {OK}
+
+test "FT.ADD third document same tag" {
+  r FT.ADD myidx doc3 FIELDS name shoes price 199
+} {OK}
+
+test_error "FT.ADD to nonexistent index" {
+  r FT.ADD no_such_idx d1 FIELDS name foo
+} {ERR index not found}
+
+test_error "FT.ADD with unknown field" {
+  r FT.ADD myidx d1 FIELDS unknown_field val
+} {ERR field not in schema}
+
+test_error "FT.ADD missing FIELDS keyword" {
+  r FT.ADD myidx d1 name foo price 100
+} {ERR syntax error*}
+
+test_error "FT.ADD wrong arity" {
+  r FT.ADD myidx doc1
+} {ERR*}
+
+test_error "FT.ADD odd field args" {
+  r FT.ADD myidx doc1 FIELDS name
+} {ERR*}
+
+puts "\n=== FT.SEARCH ==="
+
+test_assert "FT.SEARCH match-all returns all docs" {
+  set result [r FT.SEARCH myidx *]
+  set total [lindex $result 0]
+  if {$total != 3} {
+    error "Expected 3 results, got $total"
+  }
+}
+
+test_assert "FT.SEARCH @name:{shoes} returns 2 docs" {
+  set result [r FT.SEARCH myidx "@name:{shoes}"]
+  set total [lindex $result 0]
+  if {$total != 2} {
+    error "Expected 2 results for shoes, got $total"
+  }
+  # doc1 and doc3 should be in results
+  set ids {}
+  for {set i 1} {$i < [llength $result]} {incr i 2} {
+    lappend ids [lindex $result $i]
+  }
+  if {[lsearch $ids "doc1"] < 0} { error "doc1 not in results: $ids" }
+  if {[lsearch $ids "doc3"] < 0} { error "doc3 not in results: $ids" }
+}
+
+test_assert "FT.SEARCH @name:{hat} returns doc2" {
+  set result [r FT.SEARCH myidx "@name:{hat}"]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 result, got $total" }
+  set doc_id [lindex $result 1]
+  if {$doc_id ne "doc2"} { error "Expected doc2, got $doc_id" }
+}
+
+test_assert "FT.SEARCH @name:{nonexistent} returns 0" {
+  set result [r FT.SEARCH myidx "@name:{nonexistent}"]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0 results, got $total" }
+}
+
+test_assert "FT.SEARCH multi-value OR" {
+  set result [r FT.SEARCH myidx "@name:{shoes|hat}"]
+  set total [lindex $result 0]
+  if {$total != 3} { error "Expected 3 results for shoes|hat, got $total" }
+}
+
+test_error "FT.SEARCH nonexistent index" {
+  r FT.SEARCH no_such_idx *
+} {ERR index not found}
+
+test_error "FT.SEARCH invalid syntax" {
+  r FT.SEARCH myidx "@bad"
+} {ERR*}
+
+test_error "FT.SEARCH wrong arity" {
+  r FT.SEARCH myidx
+} {ERR*}
+
+puts "\n=== FT.SEARCH returns field values ==="
+
+test_assert "FT.SEARCH result contains field values" {
+  set result [r FT.SEARCH myidx "@name:{hat}"]
+  # result: total doc_id [field1 val1 field2 val2]
+  set fields_list [lindex $result 2]
+  # Fields are sorted: name, price
+  if {[llength $fields_list] != 4} {
+    error "Expected 4 field elements, got [llength $fields_list]: $fields_list"
+  }
+  set idx_name [lsearch $fields_list "name"]
+  if {$idx_name < 0} { error "Field 'name' not found in $fields_list" }
+  set name_val [lindex $fields_list [expr {$idx_name + 1}]]
+  if {$name_val ne "hat"} { error "Expected name=hat, got $name_val" }
+}
+
+puts "\n=== FT.ADD replace ==="
+
+test "FT.ADD replace existing doc" {
+  r FT.ADD myidx doc2 FIELDS name boots price 150
+} {OK}
+
+test_assert "FT.SEARCH old tag no longer matches after replace" {
+  set result [r FT.SEARCH myidx "@name:{hat}"]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0 after replacing hat with boots, got $total" }
+}
+
+test_assert "FT.SEARCH new tag matches after replace" {
+  set result [r FT.SEARCH myidx "@name:{boots}"]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 result for boots, got $total" }
+}
+
+puts "\n=== FT.DEL ==="
+
+test "FT.DEL existing doc" {
+  r FT.DEL myidx doc1
+} {OK}
+
+test_error "FT.DEL already deleted" {
+  r FT.DEL myidx doc1
+} {ERR document not found}
+
+test_error "FT.DEL nonexistent index" {
+  r FT.DEL no_such_idx doc1
+} {ERR index not found}
+
+test_error "FT.DEL wrong arity" {
+  r FT.DEL myidx
+} {ERR*}
+
+test_assert "FT.SEARCH after delete" {
+  set result [r FT.SEARCH myidx "@name:{shoes}"]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 after deleting doc1, got $total" }
+  set doc_id [lindex $result 1]
+  if {$doc_id ne "doc3"} { error "Expected doc3, got $doc_id" }
+}
+
+puts "\n=== FT.INFO num_docs ==="
+
+test_assert "FT.INFO shows correct num_docs" {
+  set info [r FT.INFO myidx]
+  set num_docs_label [lindex $info 2]
+  set num_docs [lindex $info 3]
+  if {$num_docs_label ne "num_docs"} {
+    error "Expected 'num_docs' label, got '$num_docs_label'"
+  }
+  # doc1 deleted, doc2 replaced, doc3 still there => 2 docs
+  if {$num_docs != 2} {
+    error "Expected 2 docs, got $num_docs"
   }
 }
 

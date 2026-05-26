@@ -2,6 +2,9 @@ set(SEARCH_SOURCES
   src/redis_search_module.cc
   src/index_spec.cc
   src/search_commands.cc
+  src/document_store.cc
+  src/tag_index.cc
+  src/tag_query.cc
 )
 
 add_library(redis_search SHARED ${SEARCH_SOURCES})
@@ -38,9 +41,39 @@ if(GTest_FOUND)
   target_compile_definitions(index_spec_test PRIVATE GEMINI_SEARCH_TESTING)
   target_compile_options(index_spec_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(document_store_test EXCLUDE_FROM_ALL
+    tests/document_store_test.cc
+    src/document_store.cc
+  )
+  target_include_directories(document_store_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(document_store_test PRIVATE
+    GTest::gtest_main
+  )
+  target_compile_definitions(document_store_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(document_store_test PRIVATE -Wall -Wextra -Wpedantic)
+
+  add_executable(tag_index_test EXCLUDE_FROM_ALL
+    tests/tag_index_test.cc
+    src/tag_index.cc
+    src/tag_query.cc
+  )
+  target_include_directories(tag_index_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(tag_index_test PRIVATE
+    GTest::gtest_main
+  )
+  target_compile_definitions(tag_index_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(tag_index_test PRIVATE -Wall -Wextra -Wpedantic)
+
   add_executable(search_asan_test EXCLUDE_FROM_ALL
     tests/search_asan_test.cc
     src/index_spec.cc
+    src/document_store.cc
+    src/tag_index.cc
+    src/tag_query.cc
   )
   target_include_directories(search_asan_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -54,7 +87,9 @@ if(GTest_FOUND)
 
   add_custom_target(search_test
     COMMAND index_spec_test --gtest_color=yes
+    COMMAND document_store_test --gtest_color=yes
+    COMMAND tag_index_test --gtest_color=yes
     COMMAND search_asan_test --gtest_color=yes
-    DEPENDS index_spec_test search_asan_test
+    DEPENDS index_spec_test document_store_test tag_index_test search_asan_test
   )
 endif()

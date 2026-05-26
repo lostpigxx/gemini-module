@@ -1,7 +1,11 @@
 #include <gtest/gtest.h>
+#include "document_store.h"
 #include "index_spec.h"
+#include "tag_index.h"
+#include "tag_query.h"
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // =============================================================
@@ -186,4 +190,143 @@ TEST(AsanBoundaryTest, FindFieldInLargeSchema) {
   EXPECT_NE(spec->FindField("field_500"), nullptr);
   EXPECT_NE(spec->FindField("field_999"), nullptr);
   EXPECT_EQ(spec->FindField("field_1000"), nullptr);
+}
+
+// =============================================================
+// Phase 2: DocumentStore ASAN tests
+// =============================================================
+
+TEST(AsanDocStoreStress, RepeatedAddRemove) {
+  DocumentStore store;
+  for (int i = 0; i < 1000; i++) {
+    auto id = "doc_" + std::to_string(i);
+    store.Add(id, {{"f1", "val_" + std::to_string(i)}, {"f2", "data"}});
+  }
+  EXPECT_EQ(store.Size(), 1000u);
+  for (int i = 0; i < 1000; i++) {
+    store.Remove("doc_" + std::to_string(i));
+  }
+  EXPECT_EQ(store.Size(), 0u);
+}
+
+TEST(AsanDocStoreStress, RepeatedReplace) {
+  DocumentStore store;
+  for (int i = 0; i < 500; i++) {
+    std::unordered_map<std::string, std::string> fields;
+    for (int j = 0; j < 10; j++) {
+      fields["field_" + std::to_string(j)] = "round_" + std::to_string(i);
+    }
+    store.Add("doc1", std::move(fields));
+  }
+  EXPECT_EQ(store.Size(), 1u);
+  auto* doc = store.Get("doc1");
+  ASSERT_NE(doc, nullptr);
+  EXPECT_EQ(doc->fields.at("field_0"), "round_499");
+}
+
+TEST(AsanDocStoreStress, LargeFieldValues) {
+  DocumentStore store;
+  std::string big_val(100000, 'x');
+  store.Add("doc1", {{"data", big_val}});
+  auto* doc = store.Get("doc1");
+  ASSERT_NE(doc, nullptr);
+  EXPECT_EQ(doc->fields.at("data").size(), 100000u);
+  store.Remove("doc1");
+}
+
+TEST(AsanDocStoreStress, ClearAndReuse) {
+  DocumentStore store;
+  for (int round = 0; round < 100; round++) {
+    for (int i = 0; i < 50; i++) {
+      store.Add("doc_" + std::to_string(i), {{"r", std::to_string(round)}});
+    }
+    store.Clear();
+    EXPECT_EQ(store.Size(), 0u);
+  }
+}
+
+// =============================================================
+// Phase 2: TagIndex ASAN tests
+// =============================================================
+
+TEST(AsanTagIndexStress, ManyTagValues) {
+  TagIndex idx;
+  for (int i = 0; i < 1000; i++) {
+    idx.Add("tag_" + std::to_string(i), "doc1");
+  }
+  EXPECT_EQ(idx.NumTags(), 1000u);
+  idx.Clear();
+  EXPECT_EQ(idx.NumTags(), 0u);
+}
+
+TEST(AsanTagIndexStress, ManyDocsPerTag) {
+  TagIndex idx;
+  for (int i = 0; i < 1000; i++) {
+    idx.Add("common_tag", "doc_" + std::to_string(i));
+  }
+  auto results = idx.Lookup("common_tag");
+  EXPECT_EQ(results.size(), 1000u);
+}
+
+TEST(AsanTagIndexStress, InterleavedAddRemove) {
+  TagIndex idx;
+  for (int i = 0; i < 1000; i++) {
+    idx.Add("tag", "doc_" + std::to_string(i));
+    if (i >= 100) {
+      idx.Remove("tag", "doc_" + std::to_string(i - 100));
+    }
+  }
+  auto results = idx.Lookup("tag");
+  EXPECT_EQ(results.size(), 100u);
+}
+
+TEST(AsanTagIndexStress, LookupOrManyValues) {
+  TagIndex idx;
+  for (int i = 0; i < 100; i++) {
+    idx.Add("tag_" + std::to_string(i), "doc_" + std::to_string(i));
+  }
+  std::vector<std::string> values;
+  for (int i = 0; i < 100; i++) {
+    values.push_back("tag_" + std::to_string(i));
+  }
+  auto results = idx.LookupOr(values);
+  EXPECT_EQ(results.size(), 100u);
+}
+
+TEST(AsanTagFieldIndicesStress, ManyFieldsClearCycle) {
+  TagFieldIndices indices;
+  for (int round = 0; round < 50; round++) {
+    for (int f = 0; f < 20; f++) {
+      auto& idx = indices.GetOrCreate("field_" + std::to_string(f));
+      for (int d = 0; d < 10; d++) {
+        idx.Add("val_" + std::to_string(d), "doc_" + std::to_string(d));
+      }
+    }
+    indices.Clear();
+  }
+}
+
+// =============================================================
+// Phase 2: TagQuery ASAN tests
+// =============================================================
+
+TEST(AsanTagQueryStress, ParseManyPipeValues) {
+  std::string query = "@field:{v0";
+  for (int i = 1; i < 200; i++) {
+    query += "|v" + std::to_string(i);
+  }
+  query += "}";
+
+  TagQuery q;
+  std::string err;
+  ASSERT_TRUE(ParseTagQuery(query, q, err));
+  EXPECT_EQ(q.tag_values.size(), 200u);
+}
+
+TEST(AsanTagQueryStress, RepeatedParseCycles) {
+  for (int i = 0; i < 1000; i++) {
+    TagQuery q;
+    std::string err;
+    ParseTagQuery("@field:{val_" + std::to_string(i) + "}", q, err);
+  }
 }
