@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "document_store.h"
 #include "index_spec.h"
+#include "numeric_index.h"
 #include "tag_index.h"
 #include "tag_query.h"
 
@@ -328,5 +329,79 @@ TEST(AsanTagQueryStress, RepeatedParseCycles) {
     TagQuery q;
     std::string err;
     ParseTagQuery("@field:{val_" + std::to_string(i) + "}", q, err);
+  }
+}
+
+// =============================================================
+// Phase 3: NumericIndex ASAN tests
+// =============================================================
+
+TEST(AsanNumericIndexStress, RepeatedAddRemove) {
+  NumericIndex idx;
+  for (int i = 0; i < 1000; i++) {
+    idx.Add(static_cast<double>(i), "doc_" + std::to_string(i));
+  }
+  EXPECT_EQ(idx.Size(), 1000u);
+  for (int i = 0; i < 1000; i++) {
+    idx.Remove(static_cast<double>(i), "doc_" + std::to_string(i));
+  }
+  EXPECT_EQ(idx.Size(), 0u);
+}
+
+TEST(AsanNumericIndexStress, ManyDocsAtSameValue) {
+  NumericIndex idx;
+  for (int i = 0; i < 1000; i++) {
+    idx.Add(42.0, "doc_" + std::to_string(i));
+  }
+  auto results = idx.RangeQuery(42.0, false, 42.0, false);
+  EXPECT_EQ(results.size(), 1000u);
+  idx.Clear();
+}
+
+TEST(AsanNumericIndexStress, LargeRangeScan) {
+  NumericIndex idx;
+  for (int i = 0; i < 10000; i++) {
+    idx.Add(static_cast<double>(i), "doc_" + std::to_string(i));
+  }
+  auto results = idx.RangeQuery(0, false, 9999, false);
+  EXPECT_EQ(results.size(), 10000u);
+}
+
+TEST(AsanNumericIndexStress, InterleavedAddRemoveWithQuery) {
+  NumericIndex idx;
+  for (int i = 0; i < 1000; i++) {
+    idx.Add(static_cast<double>(i), "doc_" + std::to_string(i));
+    if (i >= 100) {
+      idx.Remove(static_cast<double>(i - 100),
+                 "doc_" + std::to_string(i - 100));
+    }
+    if (i % 50 == 0) {
+      auto r = idx.RangeQuery(0, false, 1e9, false);
+      (void)r;
+    }
+  }
+  EXPECT_EQ(idx.Size(), 100u);
+}
+
+TEST(AsanNumericFieldIndicesStress, ClearCycle) {
+  NumericFieldIndices indices;
+  for (int round = 0; round < 50; round++) {
+    for (int f = 0; f < 10; f++) {
+      auto& idx = indices.GetOrCreate("field_" + std::to_string(f));
+      for (int d = 0; d < 20; d++) {
+        idx.Add(static_cast<double>(d), "doc_" + std::to_string(d));
+      }
+    }
+    indices.Clear();
+  }
+}
+
+TEST(AsanNumericQueryStress, RepeatedParseCycles) {
+  for (int i = 0; i < 1000; i++) {
+    TagQuery q;
+    std::string err;
+    ParseTagQuery("@price:[" + std::to_string(i) + " " +
+                      std::to_string(i + 100) + "]",
+                  q, err);
   }
 }

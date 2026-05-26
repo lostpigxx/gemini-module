@@ -1,10 +1,12 @@
 #include "search_commands.h"
 #include "document_store.h"
 #include "index_spec.h"
+#include "numeric_index.h"
 #include "tag_index.h"
 #include "tag_query.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -15,6 +17,7 @@ static IndexRegistry g_registry;
 struct IndexData {
   DocumentStore doc_store;
   TagFieldIndices tag_indices;
+  NumericFieldIndices numeric_indices;
 };
 
 static std::unordered_map<std::string, IndexData> g_index_data;
@@ -209,8 +212,15 @@ static int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (old_doc) {
     for (auto& [fname, fval] : old_doc->fields) {
       const auto* fspec = spec->FindField(fname);
-      if (fspec && fspec->type == FieldType::kTag) {
+      if (!fspec) continue;
+      if (fspec->type == FieldType::kTag) {
         data.tag_indices.GetOrCreate(fname).Remove(fval, doc_id_str);
+      } else if (fspec->type == FieldType::kNumeric) {
+        char* endptr = nullptr;
+        double num = std::strtod(fval.c_str(), &endptr);
+        if (endptr != fval.c_str()) {
+          data.numeric_indices.GetOrCreate(fname).Remove(num, doc_id_str);
+        }
       }
     }
   }
@@ -219,8 +229,15 @@ static int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   for (auto& [fname, fval] : doc_fields) {
     const auto* fspec = spec->FindField(fname);
-    if (fspec && fspec->type == FieldType::kTag) {
+    if (!fspec) continue;
+    if (fspec->type == FieldType::kTag) {
       data.tag_indices.GetOrCreate(fname).Add(fval, doc_id_str);
+    } else if (fspec->type == FieldType::kNumeric) {
+      char* endptr = nullptr;
+      double num = std::strtod(fval.c_str(), &endptr);
+      if (endptr != fval.c_str()) {
+        data.numeric_indices.GetOrCreate(fname).Add(num, doc_id_str);
+      }
     }
   }
 
@@ -256,8 +273,15 @@ static int FtDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   for (auto& [fname, fval] : doc->fields) {
     const auto* fspec = spec->FindField(fname);
-    if (fspec && fspec->type == FieldType::kTag) {
+    if (!fspec) continue;
+    if (fspec->type == FieldType::kTag) {
       data.tag_indices.GetOrCreate(fname).Remove(fval, doc_id_str);
+    } else if (fspec->type == FieldType::kNumeric) {
+      char* endptr = nullptr;
+      double num = std::strtod(fval.c_str(), &endptr);
+      if (endptr != fval.c_str()) {
+        data.numeric_indices.GetOrCreate(fname).Remove(num, doc_id_str);
+      }
     }
   }
 
@@ -297,7 +321,7 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   if (query.type == TagQuery::Type::kMatchAll) {
     result_ids = data.doc_store.AllIds();
-  } else {
+  } else if (query.type == TagQuery::Type::kTagMatch) {
     const auto* fspec = spec->FindField(query.field_name);
     if (!fspec) {
       return RedisModule_ReplyWithError(ctx, "ERR query field not in schema");
@@ -313,6 +337,21 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       } else {
         result_ids = tag_idx->LookupOr(query.tag_values);
       }
+    }
+  } else if (query.type == TagQuery::Type::kNumericRange) {
+    const auto* fspec = spec->FindField(query.field_name);
+    if (!fspec) {
+      return RedisModule_ReplyWithError(ctx, "ERR query field not in schema");
+    }
+    if (fspec->type != FieldType::kNumeric) {
+      return RedisModule_ReplyWithError(ctx,
+                                        "ERR field is not a NUMERIC field");
+    }
+
+    const auto* num_idx = data.numeric_indices.Get(query.field_name);
+    if (num_idx) {
+      result_ids = num_idx->RangeQuery(query.range_min, query.min_exclusive,
+                                        query.range_max, query.max_exclusive);
     }
   }
 

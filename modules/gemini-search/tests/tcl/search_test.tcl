@@ -558,6 +558,101 @@ test_assert "FT.INFO shows correct num_docs" {
   }
 }
 
+puts "\n=== NUMERIC range queries ==="
+
+# Create a fresh index for numeric tests
+test "FT.CREATE numeric test index" {
+  r FT.CREATE numtest SCHEMA category TAG price NUMERIC rating NUMERIC
+} {OK}
+
+test "FT.ADD docs with numeric fields" {
+  r FT.ADD numtest p1 FIELDS category shoes price 299 rating 4.5
+} {OK}
+
+test "FT.ADD more docs" {
+  r FT.ADD numtest p2 FIELDS category hat price 49 rating 3.0
+  r FT.ADD numtest p3 FIELDS category shoes price 199 rating 4.0
+  r FT.ADD numtest p4 FIELDS category boots price 399 rating 4.8
+  r FT.ADD numtest p5 FIELDS category sandals price 79 rating 3.5
+} {OK}
+
+test_assert {FT.SEARCH @price:[100 300] closed interval} {
+  set result [r FT.SEARCH numtest {@price:[100 300]}]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 (p1=299, p3=199), got $total" }
+}
+
+test_assert {FT.SEARCH @price:[-inf 100] unbounded min} {
+  set result [r FT.SEARCH numtest {@price:[-inf 100]}]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 (p2=49, p5=79), got $total" }
+}
+
+test_assert {FT.SEARCH @price:[300 +inf] unbounded max} {
+  set result [r FT.SEARCH numtest {@price:[300 +inf]}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 (p4=399), got $total" }
+}
+
+test_assert {FT.SEARCH @price:[(49 (399] exclusive boundaries} {
+  set result [r FT.SEARCH numtest {@price:[(49 (399]}]
+  set total [lindex $result 0]
+  # Docs: p2=49(excl), p5=79, p3=199, p1=299, p4=399(excl)
+  if {$total != 3} { error "Expected 3 (p5=79, p3=199, p1=299), got $total" }
+}
+
+test_assert {FT.SEARCH @rating:[4.0 5.0]} {
+  set result [r FT.SEARCH numtest {@rating:[4.0 5.0]}]
+  set total [lindex $result 0]
+  if {$total != 3} { error "Expected 3 (p1=4.5, p3=4.0, p4=4.8), got $total" }
+}
+
+test_assert {FT.SEARCH @price:[-inf +inf] returns all} {
+  set result [r FT.SEARCH numtest {@price:[-inf +inf]}]
+  set total [lindex $result 0]
+  if {$total != 5} { error "Expected 5, got $total" }
+}
+
+test_error "FT.SEARCH numeric range on TAG field" {
+  r FT.SEARCH numtest {@category:[1 10]}
+} {ERR field is not a NUMERIC field}
+
+test_error "FT.SEARCH TAG query on NUMERIC field" {
+  r FT.SEARCH numtest "@price:{100}"
+} {ERR field is not a TAG field}
+
+puts "\n=== NUMERIC FT.DEL removes from index ==="
+
+test "FT.DEL doc with numeric field" {
+  r FT.DEL numtest p1
+} {OK}
+
+test_assert {FT.SEARCH @price:[200 400] after delete} {
+  set result [r FT.SEARCH numtest {@price:[200 400]}]
+  set total [lindex $result 0]
+  # p1 (299) deleted, only p4 (399) remains in range
+  if {$total != 1} { error "Expected 1 (p4), got $total" }
+}
+
+puts "\n=== NUMERIC FT.ADD replace ==="
+
+test "FT.ADD replace updates numeric index" {
+  r FT.ADD numtest p2 FIELDS category hat price 999 rating 5.0
+} {OK}
+
+test_assert "FT.SEARCH old price range excludes replaced doc" {
+  set result [r FT.SEARCH numtest {@price:[0 100]}]
+  set total [lindex $result 0]
+  # p2 was 49 but now 999, p5=79 still there
+  if {$total != 1} { error "Expected 1 (p5=79), got $total" }
+}
+
+test_assert "FT.SEARCH new price range includes replaced doc" {
+  set result [r FT.SEARCH numtest {@price:[900 1000]}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 (p2=999), got $total" }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================
