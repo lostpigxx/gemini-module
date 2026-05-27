@@ -99,6 +99,9 @@ run_host() {
 
   cp "$built" "$bin_dir/pict"
   chmod +x "$bin_dir/pict"
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
+    codesign --force --sign - "$bin_dir/pict" >/dev/null 2>&1 || true
+  fi
   "$bin_dir/pict" /? >/dev/null 2>&1 || true
   echo "PICT built at $root/$bin_dir/pict"
 }
