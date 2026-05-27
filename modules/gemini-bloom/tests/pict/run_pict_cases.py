@@ -965,7 +965,7 @@ def validate_args(args):
 
 def parse_args():
   parser = argparse.ArgumentParser()
-  parser.add_argument("--pict-bin", default="build/tools/pict/bin/pict")
+  parser.add_argument("--pict-bin", default="build/tools/pict/docker/bin/pict")
   parser.add_argument("--module", default="./build/redis_bloom.so")
   parser.add_argument("--model", default="all")
   parser.add_argument("--order", type=int, default=2)

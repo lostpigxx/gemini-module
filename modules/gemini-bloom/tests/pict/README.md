@@ -12,11 +12,16 @@ Docker mode builds PICT inside the project container:
 ./tools/pict/bootstrap_pict.sh --mode docker --container 974d83bcff5c
 ```
 
+The Docker binary is written to `build/tools/pict/docker/bin/pict`.
+
 Host mode builds PICT in the local checkout:
 
 ```bash
 ./tools/pict/bootstrap_pict.sh --mode host
 ```
+
+The host binary is written to `build/tools/pict/host/bin/pict`, so host and
+Docker builds can coexist in the same checkout.
 
 The bootstrap uses `PICT_REF=v3.7.4` by default. Override `PICT_REF` or
 `PICT_REPO` if the project needs to test another Microsoft PICT tag or branch.

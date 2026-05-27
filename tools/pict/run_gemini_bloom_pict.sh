@@ -10,7 +10,7 @@ order="2"
 keep_cases="false"
 generate_only="false"
 out_dir="build/pict/gemini-bloom"
-pict_bin="build/tools/pict/bin/pict"
+pict_bin=""
 
 usage() {
   cat <<'USAGE'
@@ -83,6 +83,17 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "$pict_bin" ]]; then
+  case "$mode" in
+    docker)
+      pict_bin="build/tools/pict/docker/bin/pict"
+      ;;
+    host)
+      pict_bin="build/tools/pict/host/bin/pict"
+      ;;
+  esac
+fi
 
 quote() {
   printf "%q" "$1"

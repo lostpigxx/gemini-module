@@ -11,7 +11,9 @@ usage() {
   cat <<'USAGE'
 Usage: tools/pict/bootstrap_pict.sh [--mode docker|host] [--container ID] [--repo-in-container PATH]
 
-Builds Microsoft PICT into build/tools/pict/bin/pict.
+Builds Microsoft PICT into a mode-specific path:
+  docker  build/tools/pict/docker/bin/pict
+  host    build/tools/pict/host/bin/pict
 
 Modes:
   docker  Run this bootstrap inside the configured Docker container.
@@ -58,9 +60,10 @@ run_host() {
   root="$(git rev-parse --show-toplevel)"
   cd "$root"
 
+  local flavor="${PICT_BUILD_FLAVOR:-host}"
   local src_dir="build/tools/pict/src"
-  local build_dir="build/tools/pict/build"
-  local bin_dir="build/tools/pict/bin"
+  local build_dir="build/tools/pict/$flavor/build"
+  local bin_dir="build/tools/pict/$flavor/bin"
 
   mkdir -p "$(dirname "$src_dir")" "$build_dir" "$bin_dir"
 
@@ -72,7 +75,16 @@ run_host() {
     git -C "$src_dir" checkout --detach FETCH_HEAD
   fi
 
-  cmake -S "$src_dir" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release
+  local cmake_args=(
+    -S "$src_dir"
+    -B "$build_dir"
+    -DCMAKE_BUILD_TYPE=Release
+  )
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    cmake_args+=(-DCMAKE_CXX_FLAGS="-Wno-error=unqualified-std-cast-call -Wno-error=unused-but-set-variable -Wno-unqualified-std-cast-call -Wno-unused-but-set-variable")
+  fi
+
+  cmake "${cmake_args[@]}"
   cmake --build "$build_dir" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
 
   local built
@@ -96,7 +108,7 @@ case "$mode" in
     run_host
     ;;
   docker)
-    cmd="cd $(quote "$repo_in_container") && PICT_REPO=$(quote "$pict_repo") PICT_REF=$(quote "$pict_ref") tools/pict/bootstrap_pict.sh --mode host"
+    cmd="cd $(quote "$repo_in_container") && PICT_BUILD_FLAVOR=docker PICT_REPO=$(quote "$pict_repo") PICT_REF=$(quote "$pict_ref") tools/pict/bootstrap_pict.sh --mode host"
     docker exec "$container" bash -lc "$cmd"
     ;;
   *)
