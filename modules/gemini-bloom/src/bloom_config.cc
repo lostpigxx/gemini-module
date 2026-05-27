@@ -40,8 +40,8 @@ int BloomConfigLoad(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       }
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
-          val < 0) {
-        RedisModule_Log(ctx, "warning", "Invalid EXPANSION");
+          val < 1) {
+        RedisModule_Log(ctx, "warning", "Invalid EXPANSION (must be >= 1)");
         return REDISMODULE_ERR;
       }
       g_bloomConfig.defaultExpansion = static_cast<unsigned>(val);

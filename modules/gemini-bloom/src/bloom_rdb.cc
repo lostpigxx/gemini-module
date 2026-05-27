@@ -3,6 +3,7 @@
 #include "rm_alloc.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 // --- RdbWriter / RdbReader ---
@@ -13,18 +14,30 @@ void RdbWriter::PutBlob(const uint8_t* data, uint64_t len) {
   RedisModule_SaveStringBuffer(io_, reinterpret_cast<const char*>(data), len);
 }
 
-uint64_t RdbReader::GetUint() { return RedisModule_LoadUnsigned(io_); }
-double RdbReader::GetFloat() { return RedisModule_LoadDouble(io_); }
+uint64_t RdbReader::GetUint() {
+  if (!ok_) return 0;
+  uint64_t v = RedisModule_LoadUnsigned(io_);
+  if (RedisModule_IsIOError(io_)) ok_ = false;
+  return v;
+}
+double RdbReader::GetFloat() {
+  if (!ok_) return 0.0;
+  double v = RedisModule_LoadDouble(io_);
+  if (RedisModule_IsIOError(io_)) ok_ = false;
+  return v;
+}
 std::pair<char*, size_t> RdbReader::GetBlob() {
+  if (!ok_) return {nullptr, 0};
   size_t len = 0;
   char* buf = RedisModule_LoadStringBuffer(io_, &len);
+  if (RedisModule_IsIOError(io_)) ok_ = false;
   return {buf, len};
 }
 
 // --- BloomLayer serialization (lives here to access Redis Module API) ---
-// Field order is part of the RDB wire-format protocol for bloom filter
-// persistence. Any compatible implementation MUST read/write fields in
-// this exact sequence to produce interoperable RDB files.
+// Field order is intended to match the RedisBloom RDB wire format for
+// bloom filter persistence. Full interoperability has not been verified
+// against an official RedisBloom golden corpus.
 
 void BloomLayer::WriteTo(RdbWriter& w) const {
   w.PutUint(capacity_);
@@ -47,19 +60,20 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   layer.dataSize_ = (layer.totalBits_ > 0) ? ((layer.totalBits_ + 7) / 8) : 0;
   layer.use64Bit_ = HasFlag(filterFlags, BloomFlags::Use64Bit);
 
+  if (!r.Ok()) return std::nullopt;
+
   auto [buf, bufLen] = r.GetBlob();
-  layer.bitArray_ = static_cast<uint8_t*>(RMAlloc(layer.dataSize_));
-  if (!layer.bitArray_) {
+  if (!r.Ok() || !buf || bufLen != static_cast<size_t>(layer.dataSize_)) {
     if (buf) RedisModule_Free(buf);
     return std::nullopt;
   }
-  if (buf && bufLen > 0) {
-    std::memcpy(layer.bitArray_, buf, std::min(bufLen, static_cast<size_t>(layer.dataSize_)));
+  layer.bitArray_ = static_cast<uint8_t*>(RMAlloc(layer.dataSize_));
+  if (!layer.bitArray_) {
     RedisModule_Free(buf);
-  } else {
-    std::memset(layer.bitArray_, 0, layer.dataSize_);
-    if (buf) RedisModule_Free(buf);
+    return std::nullopt;
   }
+  std::memcpy(layer.bitArray_, buf, bufLen);
+  RedisModule_Free(buf);
   return layer;
 }
 
@@ -120,7 +134,7 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
     ? static_cast<unsigned>(r.GetUint())
     : 2;
 
-  if (shell.numLayers == 0) return nullptr;
+  if (!r.Ok() || shell.numLayers == 0) return nullptr;
 
   auto* filter = FromRdbShell(shell);
   if (!filter) return nullptr;
@@ -165,6 +179,16 @@ size_t SerializeHeader(const ScalingBloomFilter& filter, void* output) {
 
 constexpr uint32_t kMaxLayers = 1024;
 
+static bool ValidateLayerMeta(const WireLayerMeta& meta) {
+  if (meta.hashCount == 0 && meta.totalBits > 0) return false;
+  if (meta.totalBits == 0) return false;
+  uint64_t expectedSize = (meta.totalBits + 7) / 8;
+  if (meta.dataSize < expectedSize) return false;
+  if (!std::isfinite(meta.fpRate) || meta.fpRate <= 0.0) return false;
+  if (!std::isfinite(meta.bitsPerEntry) || meta.bitsPerEntry < 0.0) return false;
+  return true;
+}
+
 ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   if (length < sizeof(WireFilterHeader)) return nullptr;
 
@@ -173,7 +197,20 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   size_t required = sizeof(WireFilterHeader) + hdr->numLayers * sizeof(WireLayerMeta);
   if (length < required) return nullptr;
 
+  if (!HasFlag(FromUnderlying(hdr->flags), BloomFlags::FixedSize) &&
+      hdr->expansionFactor == 0) {
+    return nullptr;
+  }
+
   auto filterFlags = FromUnderlying(hdr->flags);
+
+  const auto* meta = reinterpret_cast<const WireLayerMeta*>(
+    static_cast<const char*>(data) + sizeof(WireFilterHeader));
+
+  for (size_t i = 0; i < hdr->numLayers; i++) {
+    if (!ValidateLayerMeta(meta[i])) return nullptr;
+  }
+
   auto* filter = ScalingBloomFilter::FromRdbShell({
     .totalItems = hdr->totalItems,
     .numLayers = hdr->numLayers,
@@ -181,9 +218,6 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
     .expansionFactor = hdr->expansionFactor,
   });
   if (!filter) return nullptr;
-
-  const auto* meta = reinterpret_cast<const WireLayerMeta*>(
-    static_cast<const char*>(data) + sizeof(WireFilterHeader));
 
   for (size_t i = 0; i < hdr->numLayers; i++) {
     auto layer = BloomLayer::FromWireMeta(meta[i], filterFlags);
@@ -228,9 +262,9 @@ void AofRewriteBloom(RedisModuleIO* aof, RedisModuleString* key, void* value) {
   RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, (long long)1, hdrBuf, hdrBytes);
   RMFree(hdrBuf);
 
-  long long idx = 2;
+  long long cursor = 2;
   for (const auto& layer : filter->Layers()) {
-    RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, idx++,
+    RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, cursor++,
       reinterpret_cast<const char*>(layer.bloom.GetBitArray()),
       layer.bloom.GetDataSize());
   }

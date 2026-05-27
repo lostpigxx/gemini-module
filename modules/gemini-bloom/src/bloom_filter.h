@@ -9,13 +9,10 @@
 #include <type_traits>
 
 // --- Bloom filter flags ---
-// Bit-field values are part of the persisted RDB/SCANDUMP wire-format
-// protocol. These specific numeric assignments are required for reading
-// and writing bloom filter data that is interoperable across different
-// Scalable Bloom Filter implementations (including RedisBloom).
-// They are NOT derived from any particular source code — they are
-// protocol-level constants analogous to HTTP status codes or TLS
-// cipher suite IDs.
+// Bit-field values are part of the persisted RDB/SCANDUMP wire format.
+// These numeric assignments are intended to match RedisBloom's layout
+// for future interoperability, but full compatibility has not been
+// verified against an official RedisBloom golden corpus.
 enum class BloomFlags : unsigned {
   None      = 0,
   NoRound   = 1,

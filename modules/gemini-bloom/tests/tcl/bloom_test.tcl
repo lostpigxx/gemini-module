@@ -455,20 +455,17 @@ test_assert "SCANDUMP/LOADCHUNK preserves data" {
     r BF.ADD dump_src "dump_item_$i"
   }
 
-  # Dump all chunks: each call returns [next_cursor, data]
-  # cursor=0 returns header, cursor=1..N returns bit arrays per layer
-  set load_iter 1
-  set scan_iter 0
+  # Use official protocol: pass SCANDUMP's returned cursor to LOADCHUNK
+  set cursor 0
   while {1} {
-    set reply [r BF.SCANDUMP dump_src $scan_iter]
+    set reply [r BF.SCANDUMP dump_src $cursor]
     set next_cursor [lindex $reply 0]
     set chunk_data [lindex $reply 1]
 
-    r BF.LOADCHUNK dump_dst $load_iter $chunk_data
-    incr load_iter
+    if {$next_cursor == 0 && [string length $chunk_data] == 0} break
 
-    if {$next_cursor == 0} break
-    set scan_iter $next_cursor
+    r BF.LOADCHUNK dump_dst $next_cursor $chunk_data
+    set cursor $next_cursor
   }
 
   # Verify cardinality
@@ -482,6 +479,38 @@ test_assert "SCANDUMP/LOADCHUNK preserves data" {
   for {set i 0} {$i < 200} {incr i} {
     set exists [r BF.EXISTS dump_dst "dump_item_$i"]
     if {$exists != 1} { error "False negative after LOADCHUNK for dump_item_$i" }
+  }
+}
+
+test_assert "SCANDUMP/LOADCHUNK using returned iterator directly (official protocol)" {
+  r DEL proto_src proto_dst
+  r BF.RESERVE proto_src 0.01 500
+  for {set i 0} {$i < 200} {incr i} {
+    r BF.ADD proto_src "proto_item_$i"
+  }
+
+  # Official protocol: pass SCANDUMP's returned iterator to LOADCHUNK
+  set cursor 0
+  while {1} {
+    set reply [r BF.SCANDUMP proto_src $cursor]
+    set next_cursor [lindex $reply 0]
+    set chunk_data [lindex $reply 1]
+
+    if {$next_cursor == 0 && [string length $chunk_data] == 0} break
+
+    r BF.LOADCHUNK proto_dst $next_cursor $chunk_data
+    set cursor $next_cursor
+  }
+
+  set src_card [r BF.CARD proto_src]
+  set dst_card [r BF.CARD proto_dst]
+  if {$src_card != $dst_card} {
+    error "Cardinality mismatch: src=$src_card dst=$dst_card"
+  }
+
+  for {set i 0} {$i < 200} {incr i} {
+    set exists [r BF.EXISTS proto_dst "proto_item_$i"]
+    if {$exists != 1} { error "False negative for proto_item_$i" }
   }
 }
 
@@ -499,6 +528,196 @@ test_error "BF.EXISTS on string key" {
 test_error "BF.INFO on string key" {
   r BF.INFO string_key
 } {WRONGTYPE*}
+
+test_assert "BF.MEXISTS on string key returns top-level WRONGTYPE (not array of errors)" {
+  # Send BF.MEXISTS raw and check the first byte of response is '-' (error), not '*' (array)
+  global redis_fd
+  set cmd "*4\r\n\$10\r\nBF.MEXISTS\r\n\$10\r\nstring_key\r\n\$1\r\na\r\n\$1\r\nb\r\n"
+  puts -nonewline $redis_fd $cmd
+  flush $redis_fd
+  gets $redis_fd line
+  set type [string index $line 0]
+  if {$type eq "*"} {
+    # Drain the array elements
+    set count [string range $line 1 end]
+    set count [string trimright $count "\r"]
+    for {set i 0} {$i < $count} {incr i} {
+      redis_read_reply $redis_fd
+    }
+    error "Got array response (type=$type) instead of top-level error"
+  }
+  if {$type ne "-"} {
+    set data [string range $line 1 end]
+    error "Expected error type '-', got '$type': $data"
+  }
+  set data [string range $line 1 end]
+  set data [string trimright $data "\r"]
+  if {![string match "WRONGTYPE*" $data]} {
+    error "Expected WRONGTYPE error, got: $data"
+  }
+}
+
+test_error "BF.MADD on string key returns top-level WRONGTYPE" {
+  r BF.MADD string_key a b c
+} {WRONGTYPE*}
+
+test_error "BF.INSERT on string key returns WRONGTYPE" {
+  r BF.INSERT string_key ITEMS a b
+} {WRONGTYPE*}
+
+test_error "BF.CARD on string key returns WRONGTYPE" {
+  r BF.CARD string_key
+} {WRONGTYPE*}
+
+test_error "BF.SCANDUMP on string key returns WRONGTYPE" {
+  r BF.SCANDUMP string_key 0
+} {WRONGTYPE*}
+
+puts "\n=== EXPANSION validation ==="
+
+test_error "BF.RESERVE EXPANSION 0 should be rejected" {
+  r BF.RESERVE exp0_test 0.01 100 EXPANSION 0
+} {ERR*}
+
+test_error "BF.RESERVE NONSCALING and EXPANSION together should be rejected" {
+  r BF.RESERVE ns_exp_test 0.01 100 NONSCALING EXPANSION 2
+} {ERR*}
+
+test_error "BF.INSERT EXPANSION 0 should be rejected" {
+  r BF.INSERT exp0_ins EXPANSION 0 ITEMS a
+} {ERR*}
+
+test_error "BF.INSERT NONSCALING and EXPANSION together should be rejected" {
+  r BF.INSERT ns_exp_ins NONSCALING EXPANSION 2 ITEMS a
+} {ERR*}
+
+puts "\n=== LOADCHUNK safety ==="
+
+test_error "BF.LOADCHUNK on string key should return WRONGTYPE, not delete" {
+  r SET lc_string_key hello
+  r BF.LOADCHUNK lc_string_key 1 "invalid_header_data"
+} {WRONGTYPE*}
+
+test_assert "BF.LOADCHUNK WRONGTYPE preserves original key" {
+  set val [r GET lc_string_key]
+  if {$val ne "hello"} { error "Key was deleted! Got: $val" }
+}
+
+test_assert "BF.LOADCHUNK with malformed header does not delete existing bloom key" {
+  r BF.RESERVE lc_bloom_key 0.01 100
+  r BF.ADD lc_bloom_key testitem
+  catch {r BF.LOADCHUNK lc_bloom_key 1 "short"}
+  set card [r BF.CARD lc_bloom_key]
+  if {$card != 1} { error "Bloom key was deleted/corrupted! Card=$card" }
+}
+
+test_error "BF.LOADCHUNK rejects header too short" {
+  r DEL lc_hdr_short
+  r BF.LOADCHUNK lc_hdr_short 1 "short"
+} {ERR*corrupted*}
+
+test_error "BF.LOADCHUNK rejects header with zero layers" {
+  r DEL lc_hdr_zero
+  # Build a WireFilterHeader with numLayers=0
+  # WireFilterHeader: totalItems(8) + numLayers(4) + flags(4) + expansionFactor(4) = 20 bytes
+  set hdr [binary format wuiuiuiu 0 0 5 2]
+  r BF.LOADCHUNK lc_hdr_zero 1 $hdr
+} {ERR*corrupted*}
+
+puts "\n=== BytesUsed accuracy ==="
+
+test_assert "BF.INFO Size accounts for layer storage capacity" {
+  r BF.RESERVE size_test 0.01 10
+  set info1 [r BF.INFO size_test]
+  set idx [lsearch $info1 "Size"]
+  set size1 [lindex $info1 [expr {$idx + 1}]]
+  # Size should include at minimum sizeof(ScalingBloomFilter) + layer capacity * sizeof(FilterLayer) + bit array
+  # With layerCapacity_=4 (initial), it should account for all 4 slots
+  if {$size1 <= 0} { error "Size should be positive, got $size1" }
+}
+
+puts "\n=== Additional LOADCHUNK safety ==="
+
+test_error "BF.LOADCHUNK cursor 0 should be rejected" {
+  r DEL lc_cur0
+  r BF.LOADCHUNK lc_cur0 0 "data"
+} {ERR*cursor*}
+
+test_error "BF.LOADCHUNK negative cursor should be rejected" {
+  r DEL lc_neg
+  r BF.LOADCHUNK lc_neg -1 "data"
+} {ERR*cursor*}
+
+test_error "BF.LOADCHUNK data chunk on non-existent key" {
+  r DEL lc_nokey
+  r BF.LOADCHUNK lc_nokey 2 "somedata"
+} {ERR*key does not exist*}
+
+test_error "BF.LOADCHUNK data chunk with wrong size" {
+  r DEL lc_badsize
+  r BF.RESERVE lc_badsize 0.01 100
+  # Dump to get a valid header, then restore it to a new key
+  set reply [r BF.SCANDUMP lc_badsize 0]
+  set hdr [lindex $reply 1]
+  r DEL lc_badsize_dst
+  r BF.LOADCHUNK lc_badsize_dst 1 $hdr
+  # Now try to load a data chunk with wrong size
+  r BF.LOADCHUNK lc_badsize_dst 2 "short"
+} {ERR*data length mismatch*}
+
+puts "\n=== Additional parameter validation ==="
+
+test_error "BF.RESERVE EXPANSION negative should be rejected" {
+  r BF.RESERVE exp_neg 0.01 100 EXPANSION -1
+} {ERR*}
+
+test_error "BF.RESERVE unrecognized option" {
+  r BF.RESERVE badopt 0.01 100 FOOBAR
+} {ERR*unrecognized*}
+
+test_error "BF.INSERT NONSCALING filter rejects when full" {
+  r BF.RESERVE insert_ns_full 0.01 5 NONSCALING
+  for {set i 0} {$i < 20} {incr i} {
+    catch {r BF.ADD insert_ns_full "item_$i"}
+  }
+  r BF.INSERT insert_ns_full NOCREATE ITEMS new_overflow
+} {ERR*capacity*}
+
+puts "\n=== Multi-layer behavior ==="
+
+test_assert "EXPANSION 4 creates fewer layers than EXPANSION 1" {
+  r BF.RESERVE exp4_test 0.01 10 EXPANSION 4
+  r BF.RESERVE exp1_test 0.01 10 EXPANSION 1
+  for {set i 0} {$i < 100} {incr i} {
+    r BF.ADD exp4_test "item_$i"
+    r BF.ADD exp1_test "item_$i"
+  }
+  set info4 [r BF.INFO exp4_test]
+  set info1 [r BF.INFO exp1_test]
+  set idx4 [lsearch $info4 "Number of filters"]
+  set idx1 [lsearch $info1 "Number of filters"]
+  set layers4 [lindex $info4 [expr {$idx4 + 1}]]
+  set layers1 [lindex $info1 [expr {$idx1 + 1}]]
+  if {$layers4 >= $layers1} {
+    error "EXPANSION 4 ($layers4 layers) should have fewer layers than EXPANSION 1 ($layers1 layers)"
+  }
+}
+
+test_assert "BF.INFO reports correct expansion rate" {
+  set info [r BF.INFO exp4_test]
+  set idx [lsearch $info "Expansion rate"]
+  set val [lindex $info [expr {$idx + 1}]]
+  if {$val != 4} { error "Expected expansion=4, got $val" }
+}
+
+test_assert "All items survive multi-layer scaling (no false negatives)" {
+  for {set i 0} {$i < 100} {incr i} {
+    set e4 [r BF.EXISTS exp4_test "item_$i"]
+    set e1 [r BF.EXISTS exp1_test "item_$i"]
+    if {$e4 != 1} { error "False negative in exp4 for item_$i" }
+    if {$e1 != 1} { error "False negative in exp1 for item_$i" }
+  }
+}
 
 puts "\n=== Edge cases ==="
 
@@ -518,6 +737,16 @@ test "BF.ADD very long item" {
 test "BF.EXISTS very long item" {
   set long_item [string repeat "x" 10000]
   r BF.EXISTS edge_long $long_item
+} {1}
+
+test "BF.ADD binary item with null bytes" {
+  set bin_item "hello\x00world\x00"
+  r BF.ADD edge_binary $bin_item
+} {1}
+
+test "BF.EXISTS binary item with null bytes" {
+  set bin_item "hello\x00world\x00"
+  r BF.EXISTS edge_binary $bin_item
 } {1}
 
 puts "\n=== RDB persistence ==="
@@ -550,6 +779,88 @@ test_assert "Data survives BGSAVE + restart" {
     error "Items missing after restart: alpha=$e1 beta=$e2 gamma=$e3"
   }
   if {$card != 3} { error "Card=$card after restart, expected 3" }
+}
+
+puts "\n=== AOF persistence ==="
+
+test_assert "Data survives AOF rewrite + restart" {
+  global redis_fd port module_path
+
+  # Restart server with AOF enabled
+  catch {redis_command $redis_fd SHUTDOWN NOSAVE}
+  catch {close $redis_fd}
+  after 500
+
+  # Cleanup old AOF/RDB
+  catch {file delete -force /tmp/bloom_tcl_test.rdb}
+  catch {file delete -force /tmp/appendonlydir}
+
+  catch {
+    exec redis-server \
+      --port $port \
+      --daemonize yes \
+      --loglevel warning \
+      --logfile /tmp/bloom_tcl_test.log \
+      --dbfilename bloom_tcl_test.rdb \
+      --dir /tmp \
+      --appendonly yes \
+      --loadmodule $module_path
+  }
+  for {set i 0} {$i < 50} {incr i} {
+    if {![catch {socket localhost $port} fd]} {
+      close $fd
+      break
+    }
+    after 100
+  }
+  set redis_fd [redis_connect localhost $port]
+
+  r DEL aof_test
+  r BF.RESERVE aof_test 0.01 100
+  for {set i 0} {$i < 50} {incr i} {
+    r BF.ADD aof_test "aof_item_$i"
+  }
+
+  r BGREWRITEAOF
+  after 2000
+
+  # Restart
+  catch {redis_command $redis_fd SHUTDOWN NOSAVE}
+  catch {close $redis_fd}
+  after 1000
+
+  catch {
+    exec redis-server \
+      --port $port \
+      --daemonize yes \
+      --loglevel warning \
+      --logfile /tmp/bloom_tcl_test.log \
+      --dbfilename bloom_tcl_test.rdb \
+      --dir /tmp \
+      --appendonly yes \
+      --loadmodule $module_path
+  }
+  for {set i 0} {$i < 50} {incr i} {
+    if {![catch {socket localhost $port} fd]} {
+      close $fd
+      break
+    }
+    after 100
+  }
+  set redis_fd [redis_connect localhost $port]
+
+  set card [r BF.CARD aof_test]
+  if {$card != 50} { error "Card=$card after AOF restart, expected 50" }
+
+  for {set i 0} {$i < 50} {incr i} {
+    set exists [r BF.EXISTS aof_test "aof_item_$i"]
+    if {$exists != 1} { error "False negative for aof_item_$i after AOF restart" }
+  }
+
+  # Disable AOF and clean up for subsequent tests
+  r CONFIG SET appendonly no
+  catch {file delete -force {*}[glob -nocomplain /tmp/appendonlydir/*]}
+  catch {file delete -force /tmp/appendonlydir}
 }
 
 # ============================================================

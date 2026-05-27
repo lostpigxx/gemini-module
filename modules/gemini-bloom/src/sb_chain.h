@@ -81,12 +81,10 @@ private:
   unsigned expansionFactor_ = 2;
 };
 
-// Wire-format structures for BF.SCANDUMP / BF.LOADCHUNK interoperability.
-// Field order, types, and packing are part of the binary protocol that
-// defines how bloom filter state is transferred between Redis instances
-// (regardless of which module implementation produced it). These layouts
-// are required for cross-implementation compatibility — they are NOT
-// derived from any particular source code.
+// Wire-format structures for BF.SCANDUMP / BF.LOADCHUNK.
+// Field order, types, and packing are intended to match the RedisBloom
+// binary protocol for cross-implementation compatibility. Full
+// interoperability has not been verified against an official corpus.
 #pragma pack(push, 1)
 struct WireLayerMeta {
   uint64_t dataSize;

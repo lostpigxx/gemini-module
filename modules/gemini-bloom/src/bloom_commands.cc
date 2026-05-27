@@ -5,6 +5,7 @@
 #include "rm_alloc.h"
 
 #include <cstring>
+#include <strings.h>
 #include <string_view>
 
 // --- Helpers ---
@@ -17,10 +18,10 @@ static ScalingBloomFilter* GetFilter(RedisModuleKey* key) {
 static ScalingBloomFilter* AllocFilter(uint64_t cap, double rate,
                                         unsigned expansion, bool fixed) {
   auto flg = BloomFlags::Use64Bit | BloomFlags::NoRound;
-  if (fixed || expansion == 0) flg = flg | BloomFlags::FixedSize;
+  if (fixed) flg = flg | BloomFlags::FixedSize;
   auto* mem = static_cast<ScalingBloomFilter*>(RMAlloc(sizeof(ScalingBloomFilter)));
   if (!mem) return nullptr;
-  new (mem) ScalingBloomFilter(cap, rate, flg, expansion > 0 ? expansion : 2);
+  new (mem) ScalingBloomFilter(cap, rate, flg, expansion);
   if (!mem->IsValid()) {
     mem->~ScalingBloomFilter();
     RMFree(mem);
@@ -48,7 +49,12 @@ static ScalingBloomFilter* OpenOrCreate(RedisModuleCtx* ctx, RedisModuleString* 
       RedisModule_ReplyWithError(ctx, "ERR allocation failure");
       return nullptr;
     }
-    RedisModule_ModuleTypeSetValue(key, BloomType, filter);
+    if (RedisModule_ModuleTypeSetValue(key, BloomType, filter) != REDISMODULE_OK) {
+      filter->~ScalingBloomFilter();
+      RMFree(filter);
+      RedisModule_ReplyWithError(ctx, "ERR failed to set key value");
+      return nullptr;
+    }
     *created = true;
     return filter;
   }
@@ -101,6 +107,7 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   unsigned expansion = g_bloomConfig.defaultExpansion;
   bool fixed = false;
+  bool expansionSet = false;
 
   for (int i = 4; i < argc; i++) {
     size_t len;
@@ -111,15 +118,20 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       if (++i >= argc)
         return RedisModule_ReplyWithError(ctx, "ERR EXPANSION expects a numeric argument");
       long long val;
-      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val < 0) {
-        return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value out of range");
+      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val < 1) {
+        return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value must be a positive integer");
       }
       expansion = static_cast<unsigned>(val);
+      expansionSet = true;
     } else if (MatchArg(sv, "NONSCALING")) {
       fixed = true;
     } else {
       return RedisModule_ReplyWithError(ctx, "ERR unrecognized option");
     }
+  }
+
+  if (fixed && expansionSet) {
+    return RedisModule_ReplyWithError(ctx, "ERR NONSCALING and EXPANSION are mutually exclusive");
   }
 
   auto* key = static_cast<RedisModuleKey*>(
@@ -133,7 +145,11 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     return RedisModule_ReplyWithError(ctx, "ERR allocation failure");
   }
 
-  RedisModule_ModuleTypeSetValue(key, BloomType, filter);
+  if (RedisModule_ModuleTypeSetValue(key, BloomType, filter) != REDISMODULE_OK) {
+    filter->~ScalingBloomFilter();
+    RMFree(filter);
+    return RedisModule_ReplyWithError(ctx, "ERR failed to set key value");
+  }
   RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
@@ -200,6 +216,7 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
   opts.errorRate = g_bloomConfig.defaultErrorRate;
   opts.capacity = g_bloomConfig.defaultCapacity;
   opts.expansion = g_bloomConfig.defaultExpansion;
+  bool expansionSet = false;
 
   for (int i = 2; i < argc; i++) {
     size_t len;
@@ -224,15 +241,19 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
     } else if (MatchArg(sv, "EXPANSION")) {
       if (++i >= argc) return RedisModule_WrongArity(ctx);
       long long val;
-      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val < 0) {
-        return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value out of range");
+      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val < 1) {
+        return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value must be a positive integer");
       }
       opts.expansion = static_cast<unsigned>(val);
+      expansionSet = true;
     } else if (MatchArg(sv, "NOCREATE")) {
       opts.noCreate = true;
     } else if (MatchArg(sv, "NONSCALING")) {
       opts.fixedSize = true;
     } else if (MatchArg(sv, "ITEMS")) {
+      if (opts.fixedSize && expansionSet) {
+        return RedisModule_ReplyWithError(ctx, "ERR NONSCALING and EXPANSION are mutually exclusive");
+      }
       opts.itemsStart = i + 1;
       return -1;
     } else {
@@ -269,7 +290,11 @@ static int CmdInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     if (!filter) {
       return RedisModule_ReplyWithError(ctx, "ERR allocation failure");
     }
-    RedisModule_ModuleTypeSetValue(key, BloomType, filter);
+    if (RedisModule_ModuleTypeSetValue(key, BloomType, filter) != REDISMODULE_OK) {
+      filter->~ScalingBloomFilter();
+      RMFree(filter);
+      return RedisModule_ReplyWithError(ctx, "ERR failed to set key value");
+    }
   } else if (keyType == REDISMODULE_KEYTYPE_MODULE) {
     filter = GetFilter(key);
     if (!filter) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
@@ -319,21 +344,19 @@ static int CmdMexists(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ));
 
   int count = argc - 2;
-  RedisModule_ReplyWithArray(ctx, count);
 
   if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
+    RedisModule_ReplyWithArray(ctx, count);
     for (int i = 0; i < count; i++) RedisModule_ReplyWithLongLong(ctx, 0);
     return REDISMODULE_OK;
   }
 
   auto* filter = GetFilter(key);
   if (!filter) {
-    for (int i = 0; i < count; i++) {
-      RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
-    }
-    return REDISMODULE_OK;
+    return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
   }
 
+  RedisModule_ReplyWithArray(ctx, count);
   for (int i = 0; i < count; i++) {
     size_t len;
     const char* item = RedisModule_StringPtrLen(argv[i + 2], &len);
@@ -416,8 +439,14 @@ static int CmdCard(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 }
 
 // --- BF.SCANDUMP ---
-// Cursor protocol is dictated by the BF.SCANDUMP command specification:
-// cursor=0 returns metadata header, cursor=1..N returns per-layer bit arrays.
+// Cursor protocol: SCANDUMP returns (iter, data) pairs. The returned iter is
+// what the client passes to LOADCHUNK alongside data. iter=0 means end of
+// iteration with empty data. cursor=0 starts the dump.
+//   SCANDUMP key 0   → [1, header]
+//   SCANDUMP key 1   → [2, layer0_bits]
+//   SCANDUMP key 2   → [3, layer1_bits]
+//   ...
+//   SCANDUMP key N+1 → [0, ""]   (end)
 static int CmdScandump(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (argc != 3) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
@@ -437,28 +466,24 @@ static int CmdScandump(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
     return RedisModule_ReplyWithError(ctx, "ERR cursor must be non-negative");
   }
 
-  char* hdrBuf = nullptr;
-  size_t hdrBytes = 0;
-  if (cursor == 0) {
-    hdrBytes = ComputeHeaderSize(*filter);
-    hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
-    if (!hdrBuf) {
-      return RedisModule_ReplyWithError(ctx, "ERR allocation failure");
-    }
-    SerializeHeader(*filter, hdrBuf);
-  }
-
   RedisModule_ReplyWithArray(ctx, 2);
 
   if (cursor == 0) {
+    size_t hdrBytes = ComputeHeaderSize(*filter);
+    auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
+    if (!hdrBuf) {
+      RedisModule_ReplyWithLongLong(ctx, 0);
+      RedisModule_ReplyWithStringBuffer(ctx, "", 0);
+      return REDISMODULE_OK;
+    }
+    SerializeHeader(*filter, hdrBuf);
     RedisModule_ReplyWithLongLong(ctx, 1);
     RedisModule_ReplyWithStringBuffer(ctx, hdrBuf, hdrBytes);
     RMFree(hdrBuf);
   } else if (cursor >= 1 && static_cast<size_t>(cursor - 1) < filter->NumLayers()) {
     size_t idx = static_cast<size_t>(cursor - 1);
     const auto& layer = filter->Layers()[idx];
-    long long nextCursor = (idx + 1 < filter->NumLayers()) ? cursor + 1 : 0;
-    RedisModule_ReplyWithLongLong(ctx, nextCursor);
+    RedisModule_ReplyWithLongLong(ctx, cursor + 1);
     RedisModule_ReplyWithStringBuffer(ctx,
       reinterpret_cast<const char*>(layer.bloom.GetBitArray()),
       layer.bloom.GetDataSize());
@@ -486,16 +511,26 @@ static int CmdLoadchunk(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
 
   if (cursor == 1) {
-    if (RedisModule_KeyType(key) != REDISMODULE_KEYTYPE_EMPTY) {
-      RedisModule_DeleteKey(key);
-      key = static_cast<RedisModuleKey*>(
-        RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
+    int keyType = RedisModule_KeyType(key);
+    if (keyType != REDISMODULE_KEYTYPE_EMPTY) {
+      if (keyType != REDISMODULE_KEYTYPE_MODULE || !GetFilter(key)) {
+        return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+      }
     }
     auto* filter = DeserializeHeader(data, dataLen);
     if (!filter) {
       return RedisModule_ReplyWithError(ctx, "ERR corrupted header payload");
     }
-    RedisModule_ModuleTypeSetValue(key, BloomType, filter);
+    if (keyType != REDISMODULE_KEYTYPE_EMPTY) {
+      RedisModule_DeleteKey(key);
+      key = static_cast<RedisModuleKey*>(
+        RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
+    }
+    if (RedisModule_ModuleTypeSetValue(key, BloomType, filter) != REDISMODULE_OK) {
+      filter->~ScalingBloomFilter();
+      RMFree(filter);
+      return RedisModule_ReplyWithError(ctx, "ERR failed to set key value");
+    }
   } else {
     if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
       return RedisModule_ReplyWithError(ctx, "ERR key does not exist");

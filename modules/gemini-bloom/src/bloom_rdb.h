@@ -48,8 +48,10 @@ public:
   double GetFloat();
   // Returns (buffer, length). Caller owns the buffer via RedisModule_Free.
   std::pair<char*, size_t> GetBlob();
+  bool Ok() const { return ok_; }
 private:
   RedisModuleIO* io_;
+  bool ok_ = true;
 };
 
 // Redis Module type callbacks

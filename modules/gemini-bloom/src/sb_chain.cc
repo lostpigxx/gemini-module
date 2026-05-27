@@ -15,8 +15,10 @@ ScalingBloomFilter::ScalingBloomFilter(uint64_t initialCapacity, double errorRat
     : errorRate * kTighteningRatio;
 
   if (!AppendLayer(initialCapacity, firstRate)) {
+    if (layers_) RMFree(layers_);
     layers_ = nullptr;
     numLayers_ = 0;
+    layerCapacity_ = 0;
   }
 }
 
@@ -84,9 +86,11 @@ HashPair ScalingBloomFilter::ComputeHash(std::span<const std::byte> data) const 
 }
 
 bool ScalingBloomFilter::IsDuplicate(const HashPair& hp) const {
-  return std::ranges::any_of(Layers(), [&](const FilterLayer& layer) {
-    return layer.bloom.Test(hp);
-  });
+  auto layers = Layers();
+  for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
+    if (it->bloom.Test(hp)) return true;
+  }
+  return false;
 }
 
 bool ScalingBloomFilter::GrowIfNeeded() {
@@ -129,7 +133,7 @@ uint64_t ScalingBloomFilter::TotalCapacity() const {
 }
 
 size_t ScalingBloomFilter::BytesUsed() const {
-  size_t base = sizeof(ScalingBloomFilter) + numLayers_ * sizeof(FilterLayer);
+  size_t base = sizeof(ScalingBloomFilter) + layerCapacity_ * sizeof(FilterLayer);
   auto layerSpan = Layers();
   return std::transform_reduce(layerSpan.begin(), layerSpan.end(),
     base, std::plus<>{},
