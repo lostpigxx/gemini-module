@@ -1,0 +1,5 @@
+RespVersion: resp2, resp3
+Command: ADD, EXISTS, MADD, MEXISTS
+KeyState: missing, bloom_with_item, existing_string
+ItemCase: new_item, existing_item, missing_item, binary_item
+Arity: valid, too_few

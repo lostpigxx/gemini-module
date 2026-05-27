@@ -1,10 +1,14 @@
 .claude
 .vscode
 build
+build/pict/
+build/tools/pict/
 minikv/build
 minikv/build*/
 __pycache__/
 *.pyc
+*.pict.tsv
+*.pict.report
 dump.rdb
 .clangd
 .codemate
