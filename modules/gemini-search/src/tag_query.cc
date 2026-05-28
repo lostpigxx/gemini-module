@@ -36,6 +36,90 @@ bool ParseTagQuery(const std::string& input, TagQuery& out,
   size_t end = input.find_last_not_of(" \t\r\n");
   std::string q = input.substr(start, end - start + 1);
 
+  // Check for KNN suffix: <filter>=>[KNN k @field $param]
+  size_t arrow = q.find("=>");
+  if (arrow != std::string::npos) {
+    std::string filter_part = q.substr(0, arrow);
+    std::string knn_part = q.substr(arrow + 2);
+
+    // Trim knn_part
+    size_t ks = knn_part.find_first_not_of(" \t");
+    if (ks != std::string::npos)
+      knn_part = knn_part.substr(ks);
+    size_t ke = knn_part.find_last_not_of(" \t");
+    if (ke != std::string::npos)
+      knn_part = knn_part.substr(0, ke + 1);
+
+    if (knn_part.empty() || knn_part.front() != '[' || knn_part.back() != ']') {
+      error_msg = "ERR syntax error: KNN clause must be [KNN k @field $param]";
+      return false;
+    }
+    std::string knn_body = knn_part.substr(1, knn_part.size() - 2);
+
+    // Trim filter_part
+    size_t fs = filter_part.find_first_not_of(" \t");
+    size_t fe = filter_part.find_last_not_of(" \t");
+    if (fs == std::string::npos) {
+      error_msg = "ERR syntax error: empty pre-filter before =>";
+      return false;
+    }
+    filter_part = filter_part.substr(fs, fe - fs + 1);
+    if (filter_part != "*") {
+      error_msg = "ERR syntax error: only * pre-filter supported with KNN";
+      return false;
+    }
+
+    // Parse: KNN k @field $param
+    // Split by spaces
+    std::vector<std::string> tokens;
+    size_t tp = 0;
+    while (tp < knn_body.size()) {
+      size_t sp = knn_body.find(' ', tp);
+      if (sp == std::string::npos) sp = knn_body.size();
+      if (sp > tp) tokens.push_back(knn_body.substr(tp, sp - tp));
+      tp = sp + 1;
+    }
+
+    if (tokens.size() != 4 ||
+        (tokens[0] != "KNN" && tokens[0] != "knn")) {
+      error_msg = "ERR syntax error: expected [KNN k @field $param]";
+      return false;
+    }
+
+    char* endptr = nullptr;
+    long k_val = std::strtol(tokens[1].c_str(), &endptr, 10);
+    if (*endptr != '\0' || k_val <= 0) {
+      error_msg = "ERR syntax error: KNN k must be a positive integer";
+      return false;
+    }
+
+    if (tokens[2].empty() || tokens[2][0] != '@') {
+      error_msg = "ERR syntax error: KNN field must start with @";
+      return false;
+    }
+    std::string knn_field = tokens[2].substr(1);
+    if (knn_field.empty()) {
+      error_msg = "ERR syntax error: empty KNN field name";
+      return false;
+    }
+
+    if (tokens[3].empty() || tokens[3][0] != '$') {
+      error_msg = "ERR syntax error: KNN param must start with $";
+      return false;
+    }
+    std::string knn_param = tokens[3].substr(1);
+    if (knn_param.empty()) {
+      error_msg = "ERR syntax error: empty KNN param name";
+      return false;
+    }
+
+    out.type = TagQuery::Type::kKnn;
+    out.knn_k = static_cast<size_t>(k_val);
+    out.knn_field = std::move(knn_field);
+    out.knn_param_name = std::move(knn_param);
+    return true;
+  }
+
   if (q == "*") {
     out.type = TagQuery::Type::kMatchAll;
     return true;

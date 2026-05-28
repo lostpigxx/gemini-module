@@ -653,6 +653,123 @@ test_assert "FT.SEARCH new price range includes replaced doc" {
   if {$total != 1} { error "Expected 1 (p2=999), got $total" }
 }
 
+puts "\n=== VECTOR KNN queries ==="
+
+# Helper: create a float32 blob from a list of numbers
+proc float_blob {values} {
+  return [binary format f* $values]
+}
+
+test "FT.CREATE with VECTOR FLAT field" {
+  r FT.CREATE vecidx SCHEMA label TAG embedding VECTOR FLAT DIM 3 DISTANCE_METRIC L2
+} {OK}
+
+test_assert "FT.INFO shows VECTOR field params" {
+  set info [r FT.INFO vecidx]
+  set fields [lindex $info 5]
+  # Second field is the VECTOR field
+  set vf [lindex $fields 1]
+  # Should have 8 elements: name VECTOR algorithm FLAT dim 3 distance_metric L2
+  if {[llength $vf] != 8} {
+    error "Expected 8 elements for VECTOR field info, got [llength $vf]: $vf"
+  }
+  if {[lindex $vf 0] ne "embedding"} { error "Expected field name 'embedding'" }
+  if {[lindex $vf 1] ne "VECTOR"} { error "Expected type VECTOR" }
+  if {[lindex $vf 3] ne "FLAT"} { error "Expected algorithm FLAT, got [lindex $vf 3]" }
+  if {[lindex $vf 5] != 3} { error "Expected dim 3, got [lindex $vf 5]" }
+  if {[lindex $vf 7] ne "L2"} { error "Expected distance_metric L2, got [lindex $vf 7]" }
+}
+
+test "FT.ADD doc with vector" {
+  set blob [float_blob {1.0 0.0 0.0}]
+  r FT.ADD vecidx v1 FIELDS label x_axis embedding $blob
+} {OK}
+
+test "FT.ADD more vector docs" {
+  set blob2 [float_blob {0.0 1.0 0.0}]
+  r FT.ADD vecidx v2 FIELDS label y_axis embedding $blob2
+  set blob3 [float_blob {0.0 0.0 1.0}]
+  r FT.ADD vecidx v3 FIELDS label z_axis embedding $blob3
+  set blob4 [float_blob {1.0 1.0 0.0}]
+  r FT.ADD vecidx v4 FIELDS label diagonal embedding $blob4
+} {OK}
+
+test_assert "FT.SEARCH KNN returns closest vectors" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH vecidx {*=>[KNN 2 @embedding $blob]} PARAMS 2 blob $query]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 KNN results, got $total" }
+  # First result should be v1 (exact match, distance 0)
+  set first_id [lindex $result 1]
+  if {$first_id ne "v1"} { error "Expected v1 as nearest, got $first_id" }
+  # Check __vec_score is present in fields
+  set first_fields [lindex $result 2]
+  set score_idx [lsearch $first_fields "__vec_score"]
+  if {$score_idx < 0} { error "__vec_score not found in result fields: $first_fields" }
+  set score_val [lindex $first_fields [expr {$score_idx + 1}]]
+  # Score should be 0 for exact match
+  if {$score_val > 0.001} { error "Expected score ~0 for exact match, got $score_val" }
+}
+
+test_assert "FT.SEARCH KNN top-1" {
+  set query [float_blob {0.0 0.9 0.0}]
+  set result [r FT.SEARCH vecidx {*=>[KNN 1 @embedding $blob]} PARAMS 2 blob $query]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 result, got $total" }
+  set first_id [lindex $result 1]
+  if {$first_id ne "v2"} { error "Expected v2 (y_axis) as nearest, got $first_id" }
+}
+
+test_error "FT.SEARCH KNN wrong dimension" {
+  set bad_query [float_blob {1.0 0.0}]
+  r FT.SEARCH vecidx {*=>[KNN 2 @embedding $blob]} PARAMS 2 blob $bad_query
+} {ERR query vector dimension mismatch}
+
+test_error "FT.SEARCH KNN on TAG field" {
+  set query [float_blob {1.0 0.0 0.0}]
+  r FT.SEARCH vecidx {*=>[KNN 2 @label $blob]} PARAMS 2 blob $query
+} {ERR KNN field is not a VECTOR field}
+
+test_error "FT.SEARCH KNN missing PARAMS" {
+  r FT.SEARCH vecidx {*=>[KNN 2 @embedding $blob]}
+} {ERR KNN param not found in PARAMS}
+
+test "FT.DEL removes from vector index" {
+  r FT.DEL vecidx v1
+} {OK}
+
+test_assert "FT.SEARCH KNN after delete" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH vecidx {*=>[KNN 1 @embedding $blob]} PARAMS 2 blob $query]
+  set first_id [lindex $result 1]
+  # v1 deleted, so v4 (diagonal 1,1,0) should be nearest to (1,0,0)
+  if {$first_id ne "v4"} { error "Expected v4 after v1 deleted, got $first_id" }
+}
+
+test_error "FT.ADD vector wrong dimension" {
+  set bad_blob [float_blob {1.0 0.0}]
+  r FT.ADD vecidx vbad FIELDS label bad embedding $bad_blob
+} {ERR vector dimension mismatch}
+
+puts "\n=== VECTOR with COSINE metric ==="
+
+test "FT.CREATE cosine index" {
+  r FT.CREATE cosidx SCHEMA vec VECTOR FLAT DIM 2 DISTANCE_METRIC COSINE
+} {OK}
+
+test "FT.ADD to cosine index" {
+  r FT.ADD cosidx d1 FIELDS vec [float_blob {1.0 0.0}]
+  r FT.ADD cosidx d2 FIELDS vec [float_blob {0.0 1.0}]
+  r FT.ADD cosidx d3 FIELDS vec [float_blob {0.707 0.707}]
+} {OK}
+
+test_assert "FT.SEARCH cosine KNN" {
+  set query [float_blob {1.0 0.0}]
+  set result [r FT.SEARCH cosidx {*=>[KNN 1 @vec $q]} PARAMS 2 q $query]
+  set first_id [lindex $result 1]
+  if {$first_id ne "d1"} { error "Expected d1 as cosine nearest, got $first_id" }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

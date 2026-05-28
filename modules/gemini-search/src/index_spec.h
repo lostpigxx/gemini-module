@@ -5,19 +5,47 @@
 #include <unordered_map>
 #include <vector>
 
-enum class FieldType { kTag, kNumeric };
+enum class FieldType { kTag, kNumeric, kVector };
 
 inline const char* FieldTypeName(FieldType t) {
   switch (t) {
     case FieldType::kTag: return "TAG";
     case FieldType::kNumeric: return "NUMERIC";
+    case FieldType::kVector: return "VECTOR";
   }
   return "UNKNOWN";
 }
 
+enum class VectorAlgorithm { kFlat };
+
+enum class DistanceMetric { kL2, kCosine, kIP };
+
+inline const char* DistanceMetricName(DistanceMetric m) {
+  switch (m) {
+    case DistanceMetric::kL2: return "L2";
+    case DistanceMetric::kCosine: return "COSINE";
+    case DistanceMetric::kIP: return "IP";
+  }
+  return "UNKNOWN";
+}
+
+inline const char* VectorAlgorithmName(VectorAlgorithm a) {
+  switch (a) {
+    case VectorAlgorithm::kFlat: return "FLAT";
+  }
+  return "UNKNOWN";
+}
+
+struct VectorFieldParams {
+  VectorAlgorithm algorithm = VectorAlgorithm::kFlat;
+  size_t dim = 0;
+  DistanceMetric metric = DistanceMetric::kL2;
+};
+
 struct FieldSpec {
   std::string name;
   FieldType type;
+  VectorFieldParams vector_params;
 };
 
 struct IndexSpec {

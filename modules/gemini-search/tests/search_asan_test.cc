@@ -4,7 +4,9 @@
 #include "numeric_index.h"
 #include "tag_index.h"
 #include "tag_query.h"
+#include "vector_index.h"
 
+#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -403,5 +405,86 @@ TEST(AsanNumericQueryStress, RepeatedParseCycles) {
     ParseTagQuery("@price:[" + std::to_string(i) + " " +
                       std::to_string(i + 100) + "]",
                   q, err);
+  }
+}
+
+// =============================================================
+// Phase 4: FlatVectorIndex ASAN tests
+// =============================================================
+
+TEST(AsanVectorStress, RepeatedAddRemove) {
+  FlatVectorIndex idx(128, DistanceMetric::kL2);
+  std::vector<float> vec(128, 0.0f);
+  for (int i = 0; i < 1000; i++) {
+    vec[0] = static_cast<float>(i);
+    idx.Add("doc_" + std::to_string(i), vec.data());
+  }
+  EXPECT_EQ(idx.Size(), 1000u);
+  for (int i = 0; i < 1000; i++) {
+    idx.Remove("doc_" + std::to_string(i));
+  }
+  EXPECT_EQ(idx.Size(), 0u);
+}
+
+TEST(AsanVectorStress, LargeDimension) {
+  FlatVectorIndex idx(1024, DistanceMetric::kCosine);
+  std::vector<float> vec(1024);
+  for (int i = 0; i < 100; i++) {
+    for (size_t j = 0; j < 1024; j++) {
+      vec[j] = static_cast<float>(i * 1024 + j) * 0.001f;
+    }
+    idx.Add("doc_" + std::to_string(i), vec.data());
+  }
+  std::vector<float> query(1024, 0.5f);
+  auto results = idx.KnnQuery(query.data(), 10);
+  EXPECT_EQ(results.size(), 10u);
+}
+
+TEST(AsanVectorStress, ManyVectorsKnn) {
+  FlatVectorIndex idx(4, DistanceMetric::kL2);
+  for (int i = 0; i < 5000; i++) {
+    float v[] = {static_cast<float>(i), 0, 0, 0};
+    idx.Add("doc_" + std::to_string(i), v);
+  }
+  float query[] = {2500, 0, 0, 0};
+  auto results = idx.KnnQuery(query, 10);
+  EXPECT_EQ(results.size(), 10u);
+}
+
+TEST(AsanVectorStress, KnnEdgeCases) {
+  FlatVectorIndex idx(2, DistanceMetric::kL2);
+  float v[] = {1, 1};
+  idx.Add("only", v);
+
+  float query[] = {0, 0};
+  auto r0 = idx.KnnQuery(query, 0);
+  EXPECT_TRUE(r0.empty());
+
+  auto r1 = idx.KnnQuery(query, 1);
+  EXPECT_EQ(r1.size(), 1u);
+
+  auto r_big = idx.KnnQuery(query, 1000);
+  EXPECT_EQ(r_big.size(), 1u);
+}
+
+TEST(AsanVectorStress, ClearAndReuse) {
+  FlatVectorIndex idx(3, DistanceMetric::kIP);
+  std::vector<float> vec(3);
+  for (int round = 0; round < 100; round++) {
+    for (int i = 0; i < 50; i++) {
+      vec[0] = static_cast<float>(round * 50 + i);
+      idx.Add("doc_" + std::to_string(i), vec.data());
+    }
+    idx.Clear();
+    EXPECT_EQ(idx.Size(), 0u);
+  }
+}
+
+TEST(AsanVectorStress, KnnQueryParseCycles) {
+  for (int i = 0; i < 1000; i++) {
+    TagQuery q;
+    std::string err;
+    ParseTagQuery("*=>[KNN " + std::to_string(i + 1) + " @emb $blob]", q,
+                  err);
   }
 }
