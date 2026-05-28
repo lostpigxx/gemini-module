@@ -13,6 +13,13 @@ cmake --build build -j$(nproc)
 tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
 ```
 
+## 编码规范
+
+- 代码列宽 **120 字符**，不是 80
+- 缩进用 **2 空格**（tab = 2 spaces）
+- 函数名**首字母大写**（PascalCase），例如 `AppendLayer`、`ComputeHash`
+- 指针 `*` 和引用 `&` **跟着类型**，不跟变量名：`int* ptr`，不是 `int *ptr`
+
 ## 规则
 
 ### 1. Clean-room 实现原则
