@@ -1,6 +1,6 @@
 # gemini-bloom Code Review 审查结果
 
-审查基线：`doc/code_review/gemini-bloom/` 下 7 份审计文档，共 71 条意见。
+审查基线：`doc/code_review/gemini-bloom/v1/` 下 7 份第一版审计文档，共 71 条意见。
 
 ## 修复统计
 
