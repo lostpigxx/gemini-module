@@ -7,6 +7,7 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <numbers>
 
 // --- Hash policies ---
@@ -22,14 +23,14 @@
 
 HashPair Hash32Policy::Compute(std::span<const std::byte> data) {
   auto* ptr = reinterpret_cast<const void*>(data.data());
-  auto len = static_cast<int>(std::min(data.size(), static_cast<size_t>(INT_MAX)));
+  size_t len = data.size();
   uint32_t h1 = MurmurHash2(ptr, len, 0x9747b28c);
   return {h1, MurmurHash2(ptr, len, h1)};
 }
 
 HashPair Hash64Policy::Compute(std::span<const std::byte> data) {
   auto* ptr = reinterpret_cast<const void*>(data.data());
-  auto len = static_cast<int>(std::min(data.size(), static_cast<size_t>(INT_MAX)));
+  size_t len = data.size();
   uint64_t h1 = MurmurHash64A(ptr, len, 0xc6a4a7935bd1e995ULL);
   return {h1, MurmurHash64A(ptr, len, h1)};
 }
@@ -83,28 +84,47 @@ static double OptimalBitsPerEntry(double fpRate) {
   return -std::log(fpRate) / kLn2Squared;
 }
 
-static uint32_t OptimalHashCount(double bitsPerEntry) {
-  return std::max(1u,
-    static_cast<uint32_t>(std::ceil(std::numbers::ln2 * bitsPerEntry)));
+static std::optional<uint32_t> OptimalHashCount(double bitsPerEntry) {
+  double probes = std::ceil(std::numbers::ln2 * bitsPerEntry);
+  if (!std::isfinite(probes) || probes < 1.0 ||
+      probes > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
+    return std::nullopt;
+  }
+  return std::max(1u, static_cast<uint32_t>(probes));
 }
 
 std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveRate,
                                               BloomFlags flags) {
+  if (cap == 0 ||
+      cap > static_cast<uint64_t>(std::numeric_limits<long long>::max()) ||
+      !std::isfinite(falsePositiveRate) ||
+      falsePositiveRate <= 0.0 || falsePositiveRate >= 1.0 ||
+      HasFlag(flags, BloomFlags::RawBits)) {
+    return std::nullopt;
+  }
+
   BloomLayer layer;
   layer.capacity_ = cap;
   layer.fpRate_ = falsePositiveRate;
   layer.use64Bit_ = HasFlag(flags, BloomFlags::Use64Bit);
 
-  if (HasFlag(flags, BloomFlags::RawBits)) {
-    layer.bitsPerEntry_ = 0;
-    layer.totalBits_ = cap;
-    layer.hashCount_ = 0;
-  } else {
-    layer.bitsPerEntry_ = OptimalBitsPerEntry(falsePositiveRate);
-    auto rawBits = static_cast<double>(cap) * layer.bitsPerEntry_;
-    layer.totalBits_ = static_cast<uint64_t>(std::max(rawBits, 1024.0));
-    layer.hashCount_ = OptimalHashCount(layer.bitsPerEntry_);
+  layer.bitsPerEntry_ = OptimalBitsPerEntry(falsePositiveRate);
+  if (!std::isfinite(layer.bitsPerEntry_) || layer.bitsPerEntry_ <= 0.0) {
+    return std::nullopt;
   }
+
+  double rawBits = static_cast<double>(cap) * layer.bitsPerEntry_;
+  double boundedBits = std::max(rawBits, 1024.0);
+  if (!std::isfinite(boundedBits) ||
+      static_cast<long double>(boundedBits) >
+        static_cast<long double>(std::numeric_limits<uint64_t>::max() - 7)) {
+    return std::nullopt;
+  }
+  layer.totalBits_ = static_cast<uint64_t>(boundedBits);
+
+  auto hashCount = OptimalHashCount(layer.bitsPerEntry_);
+  if (!hashCount) return std::nullopt;
+  layer.hashCount_ = *hashCount;
 
   if (!HasFlag(flags, BloomFlags::NoRound)) {
     if (layer.totalBits_ > (1ULL << 63)) return std::nullopt;
@@ -112,10 +132,16 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
     layer.log2Bits_ = static_cast<uint8_t>(std::bit_width(layer.totalBits_) - 1);
   }
 
+  if (layer.totalBits_ > std::numeric_limits<uint64_t>::max() - 7) {
+    return std::nullopt;
+  }
   layer.dataSize_ = (layer.totalBits_ + 7) / 8;
-  if (layer.dataSize_ == 0) return std::nullopt;
+  if (layer.dataSize_ == 0 ||
+      layer.dataSize_ > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    return std::nullopt;
+  }
 
-  layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
+  layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(static_cast<size_t>(layer.dataSize_), 1));
   if (!layer.bitArray_) return std::nullopt;
 
   return layer;
@@ -124,7 +150,7 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
 // --- Bit-level operations ---
 
 uint64_t BloomLayer::ComputeModuloMask() const {
-  return (1ULL << log2Bits_) - 1;
+  return totalBits_ - 1;
 }
 
 bool BloomLayer::TestBit(uint64_t bitIndex) const {

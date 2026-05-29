@@ -11,6 +11,7 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
   if (RedisModule_Init(ctx, "GeminiBloom", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
     return REDISMODULE_ERR;
   }
+  RedisModule_SetModuleOptions(ctx, REDISMODULE_OPTIONS_HANDLE_IO_ERRORS);
 
   if (BloomConfigLoad(ctx, argv, argc) != REDISMODULE_OK) {
     return REDISMODULE_ERR;

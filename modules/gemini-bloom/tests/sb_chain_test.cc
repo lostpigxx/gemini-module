@@ -79,6 +79,33 @@ TEST(ScalingBloomTest, AutoExpansion) {
   free(mem);
 }
 
+TEST(ScalingBloomTest, AutoExpansionSurvivesLayerStorageReallocation) {
+  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (mem) ScalingBloomFilter(4, 0.001, DefaultFlags(), 1);
+
+  std::vector<std::string> items;
+  for (int i = 0; mem->NumLayers() <= 4 && i < 100; i++) {
+    items.push_back("realloc_" + std::to_string(i));
+    mem->Put(ToSpan(items.back()));
+  }
+  ASSERT_GT(mem->NumLayers(), 4u);
+
+  for (const auto& item : items) {
+    EXPECT_TRUE(mem->Contains(ToSpan(item))) << "False negative for " << item;
+  }
+
+  mem->~ScalingBloomFilter();
+  free(mem);
+}
+
+TEST(ScalingBloomTest, RejectsZeroExpansionForScalingFilter) {
+  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (mem) ScalingBloomFilter(100, 0.01, DefaultFlags(), 0);
+  EXPECT_FALSE(mem->IsValid());
+  mem->~ScalingBloomFilter();
+  free(mem);
+}
+
 TEST(ScalingBloomTest, FixedSizeRejectsOverflow) {
   auto flg = DefaultFlags() | BloomFlags::FixedSize;
   auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));

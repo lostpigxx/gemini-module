@@ -1,6 +1,8 @@
 #include "bloom_config.h"
 
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 BloomConfig g_bloomConfig;
 
@@ -16,7 +18,7 @@ int BloomConfigLoad(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       }
       double val;
       if (RedisModule_StringToDouble(argv[i], &val) != REDISMODULE_OK ||
-          val <= 0.0 || val >= 1.0) {
+          !std::isfinite(val) || val <= 0.0 || val >= 1.0) {
         RedisModule_Log(ctx, "warning", "Invalid ERROR_RATE");
         return REDISMODULE_ERR;
       }
@@ -40,8 +42,10 @@ int BloomConfigLoad(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       }
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
-          val < 1) {
-        RedisModule_Log(ctx, "warning", "Invalid EXPANSION (must be >= 1)");
+          val < 1 ||
+          static_cast<unsigned long long>(val) >
+            std::numeric_limits<unsigned>::max()) {
+        RedisModule_Log(ctx, "warning", "Invalid EXPANSION");
         return REDISMODULE_ERR;
       }
       g_bloomConfig.defaultExpansion = static_cast<unsigned>(val);

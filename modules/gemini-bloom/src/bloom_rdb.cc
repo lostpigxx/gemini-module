@@ -3,8 +3,146 @@
 #include "rm_alloc.h"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstring>
+#include <limits>
+#include <numbers>
+#include <optional>
+#include <utility>
+
+namespace {
+
+constexpr unsigned kKnownBloomFlagMask =
+  ToUnderlying(BloomFlags::NoRound | BloomFlags::RawBits |
+               BloomFlags::Use64Bit | BloomFlags::FixedSize);
+
+bool ValidateFlags(BloomFlags flags) {
+  unsigned raw = ToUnderlying(flags);
+  if ((raw & ~kKnownBloomFlagMask) != 0) return false;
+  return !HasFlag(flags, BloomFlags::RawBits);
+}
+
+std::optional<uint64_t> ExpectedDataSize(uint64_t totalBits) {
+  if (totalBits == 0 || totalBits > std::numeric_limits<uint64_t>::max() - 7) {
+    return std::nullopt;
+  }
+  uint64_t bytes = (totalBits + 7) / 8;
+  if (bytes == 0 ||
+      bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    return std::nullopt;
+  }
+  return bytes;
+}
+
+bool NearlyEqual(double a, double b) {
+  double scale = std::max({1.0, std::abs(a), std::abs(b)});
+  return std::abs(a - b) <= scale * 1e-12;
+}
+
+std::optional<double> ExpectedBitsPerEntry(double fpRate) {
+  if (!std::isfinite(fpRate) || fpRate <= 0.0 || fpRate >= 1.0) {
+    return std::nullopt;
+  }
+  constexpr double kLn2Squared = std::numbers::ln2 * std::numbers::ln2;
+  double bitsPerEntry = -std::log(fpRate) / kLn2Squared;
+  if (!std::isfinite(bitsPerEntry) || bitsPerEntry <= 0.0) {
+    return std::nullopt;
+  }
+  return bitsPerEntry;
+}
+
+std::optional<uint32_t> ExpectedHashCount(double bitsPerEntry) {
+  double probes = std::ceil(std::numbers::ln2 * bitsPerEntry);
+  if (!std::isfinite(probes) || probes < 1.0 ||
+      probes > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
+    return std::nullopt;
+  }
+  return std::max(1u, static_cast<uint32_t>(probes));
+}
+
+std::optional<uint64_t> ExpectedTotalBits(uint64_t capacity, double bitsPerEntry,
+                                          BloomFlags flags) {
+  double rawBits = static_cast<double>(capacity) * bitsPerEntry;
+  double boundedBits = std::max(rawBits, 1024.0);
+  if (!std::isfinite(boundedBits) ||
+      static_cast<long double>(boundedBits) >
+        static_cast<long double>(std::numeric_limits<uint64_t>::max() - 7)) {
+    return std::nullopt;
+  }
+
+  auto totalBits = static_cast<uint64_t>(boundedBits);
+  if (!HasFlag(flags, BloomFlags::NoRound)) {
+    if (totalBits > (uint64_t{1} << 63)) return std::nullopt;
+    totalBits = std::bit_ceil(totalBits);
+  }
+  return totalBits;
+}
+
+bool ValidateLog2Bits(uint64_t totalBits, uint64_t log2Bits, BloomFlags flags) {
+  if (HasFlag(flags, BloomFlags::NoRound)) return log2Bits == 0;
+
+  bool isPowerOfTwo = totalBits != 0 && (totalBits & (totalBits - 1)) == 0;
+  if (!isPowerOfTwo) return false;
+  return log2Bits < 64 && (uint64_t{1} << log2Bits) == totalBits;
+}
+
+bool ValidateLayerMetaValues(uint64_t capacity, double fpRate,
+                             uint64_t hashCount, double bitsPerEntry,
+                             uint64_t totalBits, uint64_t log2Bits,
+                             uint64_t dataSize, BloomFlags flags,
+                             std::optional<uint64_t> itemCount = std::nullopt) {
+  if (capacity == 0 ||
+      capacity > static_cast<uint64_t>(std::numeric_limits<long long>::max())) {
+    return false;
+  }
+  if (hashCount == 0 ||
+      hashCount > std::numeric_limits<uint32_t>::max()) {
+    return false;
+  }
+  if (!std::isfinite(fpRate) || fpRate <= 0.0 || fpRate >= 1.0) {
+    return false;
+  }
+  if (!std::isfinite(bitsPerEntry) || bitsPerEntry <= 0.0) {
+    return false;
+  }
+
+  auto expectedBitsPerEntry = ExpectedBitsPerEntry(fpRate);
+  if (!expectedBitsPerEntry ||
+      !NearlyEqual(bitsPerEntry, *expectedBitsPerEntry)) {
+    return false;
+  }
+  auto expectedHashCount = ExpectedHashCount(*expectedBitsPerEntry);
+  if (!expectedHashCount || hashCount != *expectedHashCount) return false;
+  auto expectedTotalBits = ExpectedTotalBits(capacity, *expectedBitsPerEntry, flags);
+  if (!expectedTotalBits || totalBits != *expectedTotalBits) return false;
+
+  auto expectedSize = ExpectedDataSize(totalBits);
+  if (!expectedSize || dataSize != *expectedSize) return false;
+  if (!ValidateLog2Bits(totalBits, log2Bits, flags)) return false;
+  if (itemCount && *itemCount > capacity) return false;
+  return true;
+}
+
+bool ValidateFilterMetaValues(uint64_t totalItems, uint64_t numLayers,
+                              BloomFlags flags, uint64_t expansionFactor) {
+  if (totalItems > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
+      totalItems > static_cast<uint64_t>(std::numeric_limits<long long>::max())) {
+    return false;
+  }
+  if (numLayers == 0 || numLayers > kMaxBloomLayers ||
+      numLayers > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    return false;
+  }
+  if (!ValidateFlags(flags)) return false;
+  if (!HasFlag(flags, BloomFlags::FixedSize) && expansionFactor == 0) {
+    return false;
+  }
+  return expansionFactor <= std::numeric_limits<unsigned>::max();
+}
+
+}  // namespace
 
 // --- RdbWriter / RdbReader ---
 
@@ -53,14 +191,24 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   BloomLayer layer;
   layer.capacity_ = r.GetUint();
   layer.fpRate_ = r.GetFloat();
-  layer.hashCount_ = static_cast<uint32_t>(r.GetUint());
+  uint64_t hashCount = r.GetUint();
   layer.bitsPerEntry_ = r.GetFloat();
   layer.totalBits_ = r.GetUint();
-  layer.log2Bits_ = static_cast<uint8_t>(r.GetUint());
-  layer.dataSize_ = (layer.totalBits_ > 0) ? ((layer.totalBits_ + 7) / 8) : 0;
+  uint64_t log2Bits = r.GetUint();
   layer.use64Bit_ = HasFlag(filterFlags, BloomFlags::Use64Bit);
 
   if (!r.Ok()) return std::nullopt;
+  auto expectedDataSize = ExpectedDataSize(layer.totalBits_);
+  if (!expectedDataSize) return std::nullopt;
+  if (!ValidateLayerMetaValues(layer.capacity_, layer.fpRate_, hashCount,
+                               layer.bitsPerEntry_, layer.totalBits_,
+                               log2Bits, *expectedDataSize, filterFlags)) {
+    return std::nullopt;
+  }
+
+  layer.hashCount_ = static_cast<uint32_t>(hashCount);
+  layer.log2Bits_ = static_cast<uint8_t>(log2Bits);
+  layer.dataSize_ = *expectedDataSize;
 
   auto [buf, bufLen] = r.GetBlob();
   if (!r.Ok() || !buf || bufLen != static_cast<size_t>(layer.dataSize_)) {
@@ -100,7 +248,9 @@ BloomLayer BloomLayer::FromWireMeta(const WireLayerMeta& meta, BloomFlags filter
   layer.bitsPerEntry_ = meta.bitsPerEntry;
   layer.totalBits_ = meta.totalBits;
   layer.dataSize_ = meta.dataSize;
-  layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
+  if (layer.dataSize_ <= static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(static_cast<size_t>(layer.dataSize_), 1));
+  }
   return layer;
 }
 
@@ -122,23 +272,38 @@ void ScalingBloomFilter::WriteTo(RdbWriter& w) const {
 }
 
 ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
-  RdbShell shell;
-  shell.totalItems = r.GetUint();
-  shell.numLayers = static_cast<size_t>(r.GetUint());
+  uint64_t totalItems = r.GetUint();
+  uint64_t numLayers = r.GetUint();
 
-  shell.flags = (encver >= kEncVerWithFlags)
-    ? FromUnderlying(static_cast<unsigned>(r.GetUint()))
-    : (BloomFlags::Use64Bit | BloomFlags::NoRound);
+  uint64_t rawFlags = (encver >= kEncVerWithFlags)
+    ? r.GetUint()
+    : ToUnderlying(BloomFlags::Use64Bit | BloomFlags::NoRound);
 
-  shell.expansionFactor = (encver >= kEncVerWithExpansion)
-    ? static_cast<unsigned>(r.GetUint())
+  uint64_t expansionFactor = (encver >= kEncVerWithExpansion)
+    ? r.GetUint()
     : 2;
 
-  if (!r.Ok() || shell.numLayers == 0) return nullptr;
+  if (!r.Ok() || rawFlags > std::numeric_limits<unsigned>::max()) return nullptr;
+
+  BloomFlags flags = (encver >= kEncVerWithFlags)
+    ? FromUnderlying(static_cast<unsigned>(rawFlags))
+    : (BloomFlags::Use64Bit | BloomFlags::NoRound);
+
+  if (!ValidateFilterMetaValues(totalItems, numLayers, flags, expansionFactor)) {
+    return nullptr;
+  }
+
+  RdbShell shell{
+    .totalItems = static_cast<size_t>(totalItems),
+    .numLayers = static_cast<size_t>(numLayers),
+    .flags = flags,
+    .expansionFactor = static_cast<unsigned>(expansionFactor),
+  };
 
   auto* filter = FromRdbShell(shell);
   if (!filter) return nullptr;
 
+  size_t countSum = 0;
   for (size_t i = 0; i < shell.numLayers; i++) {
     auto maybeLayer = BloomLayer::ReadFrom(r, shell.flags);
     if (!maybeLayer) {
@@ -146,8 +311,28 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
       RMFree(filter);
       return nullptr;
     }
-    size_t count = static_cast<size_t>(r.GetUint());
-    filter->SetLayer(i, {std::move(*maybeLayer), count});
+    uint64_t countRaw = r.GetUint();
+    if (!r.Ok() ||
+        countRaw > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
+        countRaw > maybeLayer->GetCapacity()) {
+      filter->~ScalingBloomFilter();
+      RMFree(filter);
+      return nullptr;
+    }
+    size_t count = static_cast<size_t>(countRaw);
+    if (count > std::numeric_limits<size_t>::max() - countSum ||
+        !filter->SetLayer(i, {std::move(*maybeLayer), count})) {
+      filter->~ScalingBloomFilter();
+      RMFree(filter);
+      return nullptr;
+    }
+    countSum += count;
+  }
+
+  if (countSum != shell.totalItems) {
+    filter->~ScalingBloomFilter();
+    RMFree(filter);
+    return nullptr;
   }
 
   return filter;
@@ -156,6 +341,7 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
 // --- SCANDUMP wire format ---
 
 size_t ComputeHeaderSize(const ScalingBloomFilter& filter) {
+  if (filter.NumLayers() > kMaxBloomLayers) return 0;
   return sizeof(WireFilterHeader) + filter.NumLayers() * sizeof(WireLayerMeta);
 }
 
@@ -177,42 +363,41 @@ size_t SerializeHeader(const ScalingBloomFilter& filter, void* output) {
   return sizeof(WireFilterHeader) + filter.NumLayers() * sizeof(WireLayerMeta);
 }
 
-constexpr uint32_t kMaxLayers = 1024;
-
-static bool ValidateLayerMeta(const WireLayerMeta& meta) {
-  if (meta.hashCount == 0 && meta.totalBits > 0) return false;
-  if (meta.totalBits == 0) return false;
-  uint64_t expectedSize = (meta.totalBits + 7) / 8;
-  if (meta.dataSize < expectedSize) return false;
-  if (!std::isfinite(meta.fpRate) || meta.fpRate <= 0.0) return false;
-  if (!std::isfinite(meta.bitsPerEntry) || meta.bitsPerEntry < 0.0) return false;
-  return true;
+static bool ValidateLayerMeta(const WireLayerMeta& meta, BloomFlags flags) {
+  return ValidateLayerMetaValues(meta.capacity, meta.fpRate, meta.hashCount,
+                                 meta.bitsPerEntry, meta.totalBits,
+                                 meta.log2Bits, meta.dataSize, flags,
+                                 meta.itemCount);
 }
 
 ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   if (length < sizeof(WireFilterHeader)) return nullptr;
 
   const auto* hdr = static_cast<const WireFilterHeader*>(data);
-  if (hdr->numLayers == 0 || hdr->numLayers > kMaxLayers) return nullptr;
-  size_t required = sizeof(WireFilterHeader) + hdr->numLayers * sizeof(WireLayerMeta);
-  if (length < required) return nullptr;
-
-  if (!HasFlag(FromUnderlying(hdr->flags), BloomFlags::FixedSize) &&
-      hdr->expansionFactor == 0) {
+  auto filterFlags = FromUnderlying(hdr->flags);
+  if (!ValidateFilterMetaValues(hdr->totalItems, hdr->numLayers, filterFlags,
+                                hdr->expansionFactor)) {
     return nullptr;
   }
 
-  auto filterFlags = FromUnderlying(hdr->flags);
+  size_t required = sizeof(WireFilterHeader) + hdr->numLayers * sizeof(WireLayerMeta);
+  if (length != required) return nullptr;
 
   const auto* meta = reinterpret_cast<const WireLayerMeta*>(
     static_cast<const char*>(data) + sizeof(WireFilterHeader));
 
+  uint64_t itemSum = 0;
   for (size_t i = 0; i < hdr->numLayers; i++) {
-    if (!ValidateLayerMeta(meta[i])) return nullptr;
+    if (!ValidateLayerMeta(meta[i], filterFlags)) return nullptr;
+    if (meta[i].itemCount > std::numeric_limits<uint64_t>::max() - itemSum) {
+      return nullptr;
+    }
+    itemSum += meta[i].itemCount;
   }
+  if (itemSum != hdr->totalItems) return nullptr;
 
   auto* filter = ScalingBloomFilter::FromRdbShell({
-    .totalItems = hdr->totalItems,
+    .totalItems = static_cast<size_t>(hdr->totalItems),
     .numLayers = hdr->numLayers,
     .flags = filterFlags,
     .expansionFactor = hdr->expansionFactor,
@@ -226,7 +411,11 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
       RMFree(filter);
       return nullptr;
     }
-    filter->SetLayer(i, {std::move(layer), meta[i].itemCount});
+    if (!filter->SetLayer(i, {std::move(layer), static_cast<size_t>(meta[i].itemCount)})) {
+      filter->~ScalingBloomFilter();
+      RMFree(filter);
+      return nullptr;
+    }
   }
 
   return filter;
@@ -255,12 +444,15 @@ void AofRewriteBloom(RedisModuleIO* aof, RedisModuleString* key, void* value) {
   auto* filter = static_cast<ScalingBloomFilter*>(value);
 
   size_t hdrBytes = ComputeHeaderSize(*filter);
-  auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
-  if (!hdrBuf) return;
-  SerializeHeader(*filter, hdrBuf);
+  if (hdrBytes == 0 || hdrBytes > kMaxBloomHeaderBytes) {
+    RedisModule_LogIOError(aof, "warning", "Failed to serialize bloom header for AOF rewrite");
+    return;
+  }
+  std::array<char, kMaxBloomHeaderBytes> hdrBuf{};
+  SerializeHeader(*filter, hdrBuf.data());
 
-  RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, (long long)1, hdrBuf, hdrBytes);
-  RMFree(hdrBuf);
+  RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, (long long)1,
+                      hdrBuf.data(), hdrBytes);
 
   long long cursor = 2;
   for (const auto& layer : filter->Layers()) {

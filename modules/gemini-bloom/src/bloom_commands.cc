@@ -4,7 +4,11 @@
 #include "sb_chain.h"
 #include "rm_alloc.h"
 
+#include <array>
+#include <cmath>
 #include <cstring>
+#include <limits>
+#include <optional>
 #include <strings.h>
 #include <string_view>
 
@@ -77,16 +81,36 @@ static bool MatchArg(std::string_view arg, std::string_view target) {
   return strncasecmp(arg.data(), target.data(), arg.size()) == 0;
 }
 
-// Executes a Put and replies with the result. Returns true if the item was new.
-static bool PutAndReply(RedisModuleCtx* ctx, ScalingBloomFilter* filter,
-                         const char* item, size_t len) {
+static bool ValidExpansionValue(long long value) {
+  return value >= 1 &&
+         static_cast<unsigned long long>(value) <=
+           std::numeric_limits<unsigned>::max();
+}
+
+static int ReplyWithUint64(RedisModuleCtx* ctx, uint64_t value) {
+  if (value > static_cast<uint64_t>(std::numeric_limits<long long>::max())) {
+    return RedisModule_ReplyWithError(ctx, "ERR integer reply out of range");
+  }
+  return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(value));
+}
+
+static int ReplyWithSize(RedisModuleCtx* ctx, size_t value) {
+  if (value > static_cast<size_t>(std::numeric_limits<long long>::max())) {
+    return RedisModule_ReplyWithError(ctx, "ERR integer reply out of range");
+  }
+  return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(value));
+}
+
+// Executes a Put and replies with a scalar array element when it succeeds.
+static std::optional<bool> PutAndReplyElement(RedisModuleCtx* ctx,
+                                              ScalingBloomFilter* filter,
+                                              const char* item, size_t len) {
   auto result = filter->Put(AsBytes(item, len));
   if (!result.has_value()) {
-    RedisModule_ReplyWithError(ctx, "ERR reached capacity limit (non-scaling mode)");
-    return false;
+    return std::nullopt;
   }
   RedisModule_ReplyWithLongLong(ctx, *result ? 1 : 0);
-  return *result;
+  return result;
 }
 
 // --- BF.RESERVE ---
@@ -96,7 +120,7 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   double rate;
   if (RedisModule_StringToDouble(argv[2], &rate) != REDISMODULE_OK ||
-      rate <= 0.0 || rate >= 1.0) {
+      !std::isfinite(rate) || rate <= 0.0 || rate >= 1.0) {
     return RedisModule_ReplyWithError(ctx, "ERR false positive rate must be in (0, 1)");
   }
 
@@ -118,8 +142,9 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       if (++i >= argc)
         return RedisModule_ReplyWithError(ctx, "ERR EXPANSION expects a numeric argument");
       long long val;
-      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val < 1) {
-        return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value must be a positive integer");
+      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
+          !ValidExpansionValue(val)) {
+        return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value out of range");
       }
       expansion = static_cast<unsigned>(val);
       expansionSet = true;
@@ -136,7 +161,14 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   auto* key = static_cast<RedisModuleKey*>(
     RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
-  if (RedisModule_KeyType(key) != REDISMODULE_KEYTYPE_EMPTY) {
+  int keyType = RedisModule_KeyType(key);
+  if (keyType == REDISMODULE_KEYTYPE_MODULE && !GetFilter(key)) {
+    return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+  }
+  if (keyType != REDISMODULE_KEYTYPE_EMPTY && keyType != REDISMODULE_KEYTYPE_MODULE) {
+    return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+  }
+  if (keyType == REDISMODULE_KEYTYPE_MODULE) {
     return RedisModule_ReplyWithError(ctx, "ERR key already exists");
   }
 
@@ -169,7 +201,7 @@ static int CmdAdd(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   auto result = filter->Put(AsBytes(item, len));
 
   if (!result.has_value()) {
-    return RedisModule_ReplyWithError(ctx, "ERR reached capacity limit (non-scaling mode)");
+    return RedisModule_ReplyWithError(ctx, "ERR reached capacity limit");
   }
 
   if (*result || created) RedisModule_ReplicateVerbatim(ctx);
@@ -187,14 +219,19 @@ static int CmdMadd(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (!filter) return REDISMODULE_OK;
 
   int count = argc - 2;
-  RedisModule_ReplyWithArray(ctx, count);
+  RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
 
   bool changed = created;
+  long replies = 0;
   for (int i = 0; i < count; i++) {
     size_t len;
     const char* item = RedisModule_StringPtrLen(argv[i + 2], &len);
-    if (PutAndReply(ctx, filter, item, len)) changed = true;
+    auto result = PutAndReplyElement(ctx, filter, item, len);
+    if (!result.has_value()) break;
+    replies++;
+    if (*result) changed = true;
   }
+  RedisModule_ReplySetArrayLength(ctx, replies);
 
   if (changed) RedisModule_ReplicateVerbatim(ctx);
   return REDISMODULE_OK;
@@ -227,7 +264,7 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (++i >= argc) return RedisModule_WrongArity(ctx);
       double val;
       if (RedisModule_StringToDouble(argv[i], &val) != REDISMODULE_OK ||
-          val <= 0.0 || val >= 1.0) {
+          !std::isfinite(val) || val <= 0.0 || val >= 1.0) {
         return RedisModule_ReplyWithError(ctx, "ERR false positive rate must be in (0, 1)");
       }
       opts.errorRate = val;
@@ -241,8 +278,9 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
     } else if (MatchArg(sv, "EXPANSION")) {
       if (++i >= argc) return RedisModule_WrongArity(ctx);
       long long val;
-      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val < 1) {
-        return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value must be a positive integer");
+      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
+          !ValidExpansionValue(val)) {
+        return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value out of range");
       }
       opts.expansion = static_cast<unsigned>(val);
       expansionSet = true;
@@ -302,14 +340,19 @@ static int CmdInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
   }
 
-  RedisModule_ReplyWithArray(ctx, count);
+  RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
 
   bool changed = (keyType == REDISMODULE_KEYTYPE_EMPTY);
+  long replies = 0;
   for (int i = 0; i < count; i++) {
     size_t len;
     const char* item = RedisModule_StringPtrLen(argv[opts.itemsStart + i], &len);
-    if (PutAndReply(ctx, filter, item, len)) changed = true;
+    auto result = PutAndReplyElement(ctx, filter, item, len);
+    if (!result.has_value()) break;
+    replies++;
+    if (*result) changed = true;
   }
+  RedisModule_ReplySetArrayLength(ctx, replies);
 
   if (changed) RedisModule_ReplicateVerbatim(ctx);
   return REDISMODULE_OK;
@@ -388,13 +431,13 @@ static int CmdInfo(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     auto sv = std::string_view{field, len};
 
     if (MatchArg(sv, "Capacity")) {
-      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalCapacity()));
+      return ReplyWithUint64(ctx, filter->TotalCapacity());
     } else if (MatchArg(sv, "Size")) {
-      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->BytesUsed()));
+      return ReplyWithSize(ctx, filter->BytesUsed());
     } else if (MatchArg(sv, "Filters")) {
-      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->NumLayers()));
+      return ReplyWithSize(ctx, filter->NumLayers());
     } else if (MatchArg(sv, "Items")) {
-      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalItems()));
+      return ReplyWithSize(ctx, filter->TotalItems());
     } else if (MatchArg(sv, "Expansion")) {
       if (HasFlag(filter->Flags(), BloomFlags::FixedSize)) return RedisModule_ReplyWithNull(ctx);
       return RedisModule_ReplyWithLongLong(ctx, filter->ExpansionFactor());
@@ -404,13 +447,13 @@ static int CmdInfo(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   RedisModule_ReplyWithArray(ctx, 10);
   RedisModule_ReplyWithSimpleString(ctx, "Capacity");
-  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalCapacity()));
+  ReplyWithUint64(ctx, filter->TotalCapacity());
   RedisModule_ReplyWithSimpleString(ctx, "Size");
-  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->BytesUsed()));
+  ReplyWithSize(ctx, filter->BytesUsed());
   RedisModule_ReplyWithSimpleString(ctx, "Number of filters");
-  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->NumLayers()));
+  ReplyWithSize(ctx, filter->NumLayers());
   RedisModule_ReplyWithSimpleString(ctx, "Number of items inserted");
-  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalItems()));
+  ReplyWithSize(ctx, filter->TotalItems());
   RedisModule_ReplyWithSimpleString(ctx, "Expansion rate");
   if (HasFlag(filter->Flags(), BloomFlags::FixedSize)) {
     RedisModule_ReplyWithNull(ctx);
@@ -435,7 +478,7 @@ static int CmdCard(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   auto* filter = GetFilter(key);
   if (!filter) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
 
-  return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalItems()));
+  return ReplyWithSize(ctx, filter->TotalItems());
 }
 
 // --- BF.SCANDUMP ---
@@ -466,21 +509,22 @@ static int CmdScandump(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
     return RedisModule_ReplyWithError(ctx, "ERR cursor must be non-negative");
   }
 
-  RedisModule_ReplyWithArray(ctx, 2);
-
   if (cursor == 0) {
     size_t hdrBytes = ComputeHeaderSize(*filter);
-    auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
-    if (!hdrBuf) {
-      RedisModule_ReplyWithLongLong(ctx, 0);
-      RedisModule_ReplyWithStringBuffer(ctx, "", 0);
-      return REDISMODULE_OK;
+    if (hdrBytes == 0 || hdrBytes > kMaxBloomHeaderBytes) {
+      return RedisModule_ReplyWithError(ctx, "ERR failed to serialize bloom header");
     }
-    SerializeHeader(*filter, hdrBuf);
+    std::array<char, kMaxBloomHeaderBytes> hdrBuf{};
+    SerializeHeader(*filter, hdrBuf.data());
+    RedisModule_ReplyWithArray(ctx, 2);
     RedisModule_ReplyWithLongLong(ctx, 1);
-    RedisModule_ReplyWithStringBuffer(ctx, hdrBuf, hdrBytes);
-    RMFree(hdrBuf);
-  } else if (cursor >= 1 && static_cast<size_t>(cursor - 1) < filter->NumLayers()) {
+    RedisModule_ReplyWithStringBuffer(ctx, hdrBuf.data(), hdrBytes);
+    return REDISMODULE_OK;
+  }
+
+  RedisModule_ReplyWithArray(ctx, 2);
+
+  if (cursor >= 1 && static_cast<size_t>(cursor - 1) < filter->NumLayers()) {
     size_t idx = static_cast<size_t>(cursor - 1);
     const auto& layer = filter->Layers()[idx];
     RedisModule_ReplyWithLongLong(ctx, cursor + 1);

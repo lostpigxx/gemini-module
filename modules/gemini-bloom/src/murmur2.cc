@@ -3,9 +3,9 @@
 
 #include "murmur2.h"
 
-uint32_t MurmurHash2(const void* key, int len, uint32_t seed) {
+uint32_t MurmurHash2(const void* key, size_t len, uint32_t seed) {
   const uint32_t m = 0x5bd1e995;
-  const int r = 24;
+  constexpr int r = 24;
 
   uint32_t h = seed ^ static_cast<uint32_t>(len);
   const auto* data = static_cast<const unsigned char*>(key);
@@ -40,9 +40,9 @@ uint32_t MurmurHash2(const void* key, int len, uint32_t seed) {
   return h;
 }
 
-uint64_t MurmurHash64A(const void* key, int len, uint64_t seed) {
+uint64_t MurmurHash64A(const void* key, size_t len, uint64_t seed) {
   const uint64_t m = 0xc6a4a7935bd1e995ULL;
-  const int r = 47;
+  constexpr int r = 47;
 
   uint64_t h = seed ^ (static_cast<uint64_t>(len) * m);
   const auto* data = static_cast<const unsigned char*>(key);
