@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 #include "vector_index.h"
-#include "tag_query.h"
 
 #include <cmath>
 #include <cstring>
@@ -222,73 +221,3 @@ TEST(VectorFieldIndicesTest, Clear) {
   EXPECT_EQ(indices.Get("b"), nullptr);
 }
 
-// =============================================================
-// KNN query parser
-// =============================================================
-
-TEST(KnnQueryParserTest, BasicKnn) {
-  TagQuery q;
-  std::string err;
-  ASSERT_TRUE(ParseTagQuery("*=>[KNN 5 @embedding $blob]", q, err)) << err;
-  EXPECT_EQ(q.type, TagQuery::Type::kKnn);
-  EXPECT_EQ(q.knn_k, 5u);
-  EXPECT_EQ(q.knn_field, "embedding");
-  EXPECT_EQ(q.knn_param_name, "blob");
-}
-
-TEST(KnnQueryParserTest, KnnWithSpaces) {
-  TagQuery q;
-  std::string err;
-  ASSERT_TRUE(ParseTagQuery("  * => [KNN 10 @vec $query_vec]  ", q, err)) << err;
-  EXPECT_EQ(q.knn_k, 10u);
-  EXPECT_EQ(q.knn_field, "vec");
-  EXPECT_EQ(q.knn_param_name, "query_vec");
-}
-
-TEST(KnnQueryParserTest, ErrorMissingBracket) {
-  TagQuery q;
-  std::string err;
-  EXPECT_FALSE(ParseTagQuery("*=>KNN 5 @emb $blob", q, err));
-}
-
-TEST(KnnQueryParserTest, ErrorNonNumericK) {
-  TagQuery q;
-  std::string err;
-  EXPECT_FALSE(ParseTagQuery("*=>[KNN abc @emb $blob]", q, err));
-}
-
-TEST(KnnQueryParserTest, ErrorZeroK) {
-  TagQuery q;
-  std::string err;
-  EXPECT_FALSE(ParseTagQuery("*=>[KNN 0 @emb $blob]", q, err));
-}
-
-TEST(KnnQueryParserTest, ErrorMissingAt) {
-  TagQuery q;
-  std::string err;
-  EXPECT_FALSE(ParseTagQuery("*=>[KNN 5 emb $blob]", q, err));
-}
-
-TEST(KnnQueryParserTest, ErrorMissingDollar) {
-  TagQuery q;
-  std::string err;
-  EXPECT_FALSE(ParseTagQuery("*=>[KNN 5 @emb blob]", q, err));
-}
-
-TEST(KnnQueryParserTest, ErrorNonStarPreFilter) {
-  TagQuery q;
-  std::string err;
-  EXPECT_FALSE(ParseTagQuery("@tag:{val}=>[KNN 5 @emb $blob]", q, err));
-}
-
-TEST(KnnQueryParserTest, ErrorEmptyKnnField) {
-  TagQuery q;
-  std::string err;
-  EXPECT_FALSE(ParseTagQuery("*=>[KNN 5 @ $blob]", q, err));
-}
-
-TEST(KnnQueryParserTest, ErrorEmptyParam) {
-  TagQuery q;
-  std::string err;
-  EXPECT_FALSE(ParseTagQuery("*=>[KNN 5 @emb $]", q, err));
-}

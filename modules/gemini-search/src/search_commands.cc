@@ -3,7 +3,7 @@
 #include "index_spec.h"
 #include "numeric_index.h"
 #include "tag_index.h"
-#include "tag_query.h"
+#include "query_parser.h"
 #include "vector_index.h"
 
 #include <algorithm>
@@ -401,9 +401,9 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   auto& entry = it->second;
 
-  TagQuery query;
+  ParsedQuery parsed;
   std::string parse_error;
-  if (!ParseTagQuery(std::string(ArgView(argv[2])), query, parse_error)) {
+  if (!ParseQuery(std::string(ArgView(argv[2])), parsed, parse_error)) {
     return RedisModule_ReplyWithError(ctx, parse_error.c_str());
   }
 
@@ -435,35 +435,34 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
   }
 
-  // Execute query
-  if (query.type == TagQuery::Type::kKnn) {
-    const auto* fspec = entry.spec.FindField(query.knn_field);
+  // KNN path
+  if (parsed.has_knn) {
+    const auto* fspec = entry.spec.FindField(parsed.knn_field);
     if (!fspec) {
-      return RedisModule_ReplyWithError(ctx,
-                                        "ERR KNN field not in schema");
+      return RedisModule_ReplyWithError(ctx, "ERR KNN field not in schema");
     }
     if (fspec->type != FieldType::kVector) {
-      return RedisModule_ReplyWithError(ctx,
-                                        "ERR KNN field is not a VECTOR field");
+      return RedisModule_ReplyWithError(
+          ctx, "ERR KNN field is not a VECTOR field");
     }
 
-    auto pit = params.find(query.knn_param_name);
+    auto pit = params.find(parsed.knn_param_name);
     if (pit == params.end()) {
-      return RedisModule_ReplyWithError(ctx,
-                                        "ERR KNN param not found in PARAMS");
+      return RedisModule_ReplyWithError(
+          ctx, "ERR KNN param not found in PARAMS");
     }
     auto& blob = pit->second;
     size_t expected_bytes = fspec->vector_params.dim * sizeof(float);
     if (blob.size() != expected_bytes) {
-      return RedisModule_ReplyWithError(ctx,
-                                        "ERR query vector dimension mismatch");
+      return RedisModule_ReplyWithError(
+          ctx, "ERR query vector dimension mismatch");
     }
 
-    const auto* vidx = entry.vector_indices.Get(query.knn_field);
+    const auto* vidx = entry.vector_indices.Get(parsed.knn_field);
     std::vector<KnnResult> knn_results;
     if (vidx) {
       knn_results = vidx->KnnQuery(
-          reinterpret_cast<const float*>(blob.data()), query.knn_k);
+          reinterpret_cast<const float*>(blob.data()), parsed.knn_k);
     }
 
     long total = static_cast<long>(knn_results.size());
@@ -474,7 +473,6 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       RedisModule_ReplyWithCString(ctx, kr.doc_id.c_str());
       const auto* doc = entry.doc_store.Get(kr.doc_id);
       if (doc) {
-        // +2 for __vec_score field
         long field_count = static_cast<long>(doc->fields.size()) * 2 + 2;
         RedisModule_ReplyWithArray(ctx, field_count);
         RedisModule_ReplyWithCString(ctx, "__vec_score");
@@ -499,43 +497,13 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return REDISMODULE_OK;
   }
 
-  // Non-KNN queries
-  std::vector<std::string> result_ids;
-
-  if (query.type == TagQuery::Type::kMatchAll) {
-    result_ids = entry.doc_store.AllIds();
-  } else if (query.type == TagQuery::Type::kTagMatch) {
-    const auto* fspec = entry.spec.FindField(query.field_name);
-    if (!fspec) {
-      return RedisModule_ReplyWithError(ctx, "ERR query field not in schema");
-    }
-    if (fspec->type != FieldType::kTag) {
-      return RedisModule_ReplyWithError(ctx, "ERR field is not a TAG field");
-    }
-
-    const auto* tag_idx = entry.tag_indices.Get(query.field_name);
-    if (tag_idx) {
-      if (query.tag_values.size() == 1) {
-        result_ids = tag_idx->Lookup(query.tag_values[0]);
-      } else {
-        result_ids = tag_idx->LookupOr(query.tag_values);
-      }
-    }
-  } else if (query.type == TagQuery::Type::kNumericRange) {
-    const auto* fspec = entry.spec.FindField(query.field_name);
-    if (!fspec) {
-      return RedisModule_ReplyWithError(ctx, "ERR query field not in schema");
-    }
-    if (fspec->type != FieldType::kNumeric) {
-      return RedisModule_ReplyWithError(ctx,
-                                        "ERR field is not a NUMERIC field");
-    }
-
-    const auto* num_idx = entry.numeric_indices.Get(query.field_name);
-    if (num_idx) {
-      result_ids = num_idx->RangeQuery(query.range_min, query.min_exclusive,
-                                        query.range_max, query.max_exclusive);
-    }
+  // Non-KNN: evaluate query tree
+  std::string eval_error;
+  auto result_ids =
+      EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
+                    entry.tag_indices, entry.numeric_indices, eval_error);
+  if (!eval_error.empty()) {
+    return RedisModule_ReplyWithError(ctx, eval_error.c_str());
   }
 
   long total = static_cast<long>(result_ids.size());

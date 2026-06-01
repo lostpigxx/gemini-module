@@ -770,6 +770,80 @@ test_assert "FT.SEARCH cosine KNN" {
   if {$first_id ne "d1"} { error "Expected d1 as cosine nearest, got $first_id" }
 }
 
+puts "\n=== Boolean combination queries ==="
+
+# Use numtest index (category TAG, price NUMERIC, rating NUMERIC)
+# Existing docs after earlier tests: p3(shoes,199,4.0), p4(boots,399,4.8),
+# p5(sandals,79,3.5), p2(hat,999,5.0)
+# Re-add fresh docs for boolean tests
+test "FT.CREATE boolean test index" {
+  r FT.CREATE boolidx SCHEMA name TAG color TAG price NUMERIC
+} {OK}
+
+test "FT.ADD boolean test docs" {
+  r FT.ADD boolidx b1 FIELDS name shoes color red price 100
+  r FT.ADD boolidx b2 FIELDS name hat color blue price 50
+  r FT.ADD boolidx b3 FIELDS name shoes color blue price 200
+  r FT.ADD boolidx b4 FIELDS name boots color red price 300
+  r FT.ADD boolidx b5 FIELDS name sandals color green price 80
+} {OK}
+
+test_assert "AND: @name:{shoes} @color:{red}" {
+  set result [r FT.SEARCH boolidx "@name:{shoes} @color:{red}"]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1, got $total" }
+  set id [lindex $result 1]
+  if {$id ne "b1"} { error "Expected b1, got $id" }
+}
+
+test_assert "AND: tag + numeric range" {
+  set result [r FT.SEARCH boolidx {@name:{shoes} @price:[100 200]}]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 (b1,b3), got $total" }
+}
+
+test_assert "OR: @name:{shoes} | @name:{boots}" {
+  set result [r FT.SEARCH boolidx {@name:{shoes} | @name:{boots}}]
+  set total [lindex $result 0]
+  if {$total != 3} { error "Expected 3 (b1,b3,b4), got $total" }
+}
+
+test_assert "NOT: -@name:{shoes}" {
+  set result [r FT.SEARCH boolidx {-@name:{shoes}}]
+  set total [lindex $result 0]
+  if {$total != 3} { error "Expected 3 (b2,b4,b5), got $total" }
+}
+
+test_assert {Grouped: (@name:{shoes} | @name:{hat}) @price:[0 100]} {
+  set result [r FT.SEARCH boolidx {(@name:{shoes} | @name:{hat}) @price:[0 100]}]
+  set total [lindex $result 0]
+  # shoes@100=b1, hat@50=b2 match OR; both have price<=100
+  if {$total != 2} { error "Expected 2 (b1,b2), got $total" }
+}
+
+test_assert {NOT with AND: -@color:{red} @price:[0 150]} {
+  set result [r FT.SEARCH boolidx {-@color:{red} @price:[0 150]}]
+  set total [lindex $result 0]
+  # non-red: b2(blue,50), b3(blue,200), b5(green,80)
+  # price<=150: b2(50), b5(80)
+  if {$total != 2} { error "Expected 2 (b2,b5), got $total" }
+}
+
+test_assert {Complex: (@color:{red} | @color:{blue}) @price:[100 +inf]} {
+  set result [r FT.SEARCH boolidx {(@color:{red} | @color:{blue}) @price:[100 +inf]}]
+  set total [lindex $result 0]
+  # red|blue: b1(red,100), b2(blue,50), b3(blue,200), b4(red,300)
+  # price>=100: b1(100), b3(200), b4(300)
+  if {$total != 3} { error "Expected 3 (b1,b3,b4), got $total" }
+}
+
+test_assert "OR precedence: @name:{shoes} @color:{red} | @name:{hat}" {
+  set result [r FT.SEARCH boolidx {@name:{shoes} @color:{red} | @name:{hat}}]
+  set total [lindex $result 0]
+  # AND(shoes,red)=b1 OR hat=b2 => 2
+  if {$total != 2} { error "Expected 2 (b1,b2), got $total" }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

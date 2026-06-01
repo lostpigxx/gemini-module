@@ -4,7 +4,7 @@ set(SEARCH_SOURCES
   src/search_commands.cc
   src/document_store.cc
   src/tag_index.cc
-  src/tag_query.cc
+  src/query_parser.cc
   src/numeric_index.cc
   src/vector_index.cc
 )
@@ -59,7 +59,6 @@ if(GTest_FOUND)
   add_executable(tag_index_test EXCLUDE_FROM_ALL
     tests/tag_index_test.cc
     src/tag_index.cc
-    src/tag_query.cc
   )
   target_include_directories(tag_index_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -73,7 +72,6 @@ if(GTest_FOUND)
   add_executable(numeric_index_test EXCLUDE_FROM_ALL
     tests/numeric_index_test.cc
     src/numeric_index.cc
-    src/tag_query.cc
   )
   target_include_directories(numeric_index_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -88,7 +86,6 @@ if(GTest_FOUND)
     tests/vector_index_test.cc
     src/vector_index.cc
     src/index_spec.cc
-    src/tag_query.cc
   )
   target_include_directories(vector_index_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -100,12 +97,30 @@ if(GTest_FOUND)
   target_compile_definitions(vector_index_test PRIVATE GEMINI_SEARCH_TESTING)
   target_compile_options(vector_index_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(query_parser_test EXCLUDE_FROM_ALL
+    tests/query_parser_test.cc
+    src/query_parser.cc
+    src/index_spec.cc
+    src/document_store.cc
+    src/tag_index.cc
+    src/numeric_index.cc
+  )
+  target_include_directories(query_parser_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(query_parser_test PRIVATE
+    redis_module_api
+    GTest::gtest_main
+  )
+  target_compile_definitions(query_parser_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(query_parser_test PRIVATE -Wall -Wextra -Wpedantic)
+
   add_executable(search_asan_test EXCLUDE_FROM_ALL
     tests/search_asan_test.cc
     src/index_spec.cc
     src/document_store.cc
     src/tag_index.cc
-    src/tag_query.cc
+    src/query_parser.cc
     src/numeric_index.cc
     src/vector_index.cc
   )
@@ -125,7 +140,8 @@ if(GTest_FOUND)
     COMMAND tag_index_test --gtest_color=yes
     COMMAND numeric_index_test --gtest_color=yes
     COMMAND vector_index_test --gtest_color=yes
+    COMMAND query_parser_test --gtest_color=yes
     COMMAND search_asan_test --gtest_color=yes
-    DEPENDS index_spec_test document_store_test tag_index_test numeric_index_test vector_index_test search_asan_test
+    DEPENDS index_spec_test document_store_test tag_index_test numeric_index_test vector_index_test query_parser_test search_asan_test
   )
 endif()

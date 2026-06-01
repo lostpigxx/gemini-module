@@ -3,7 +3,7 @@
 #include "index_spec.h"
 #include "numeric_index.h"
 #include "tag_index.h"
-#include "tag_query.h"
+#include "query_parser.h"
 #include "vector_index.h"
 
 #include <cstring>
@@ -320,17 +320,17 @@ TEST(AsanTagQueryStress, ParseManyPipeValues) {
   }
   query += "}";
 
-  TagQuery q;
+  ParsedQuery q;
   std::string err;
-  ASSERT_TRUE(ParseTagQuery(query, q, err));
-  EXPECT_EQ(q.tag_values.size(), 200u);
+  ASSERT_TRUE(ParseQuery(query, q, err));
+  EXPECT_EQ(q.root.tag_values.size(), 200u);
 }
 
 TEST(AsanTagQueryStress, RepeatedParseCycles) {
   for (int i = 0; i < 1000; i++) {
-    TagQuery q;
+    ParsedQuery q;
     std::string err;
-    ParseTagQuery("@field:{val_" + std::to_string(i) + "}", q, err);
+    ParseQuery("@field:{val_" + std::to_string(i) + "}", q, err);
   }
 }
 
@@ -400,9 +400,9 @@ TEST(AsanNumericFieldIndicesStress, ClearCycle) {
 
 TEST(AsanNumericQueryStress, RepeatedParseCycles) {
   for (int i = 0; i < 1000; i++) {
-    TagQuery q;
+    ParsedQuery q;
     std::string err;
-    ParseTagQuery("@price:[" + std::to_string(i) + " " +
+    ParseQuery("@price:[" + std::to_string(i) + " " +
                       std::to_string(i + 100) + "]",
                   q, err);
   }
@@ -482,9 +482,9 @@ TEST(AsanVectorStress, ClearAndReuse) {
 
 TEST(AsanVectorStress, KnnQueryParseCycles) {
   for (int i = 0; i < 1000; i++) {
-    TagQuery q;
+    ParsedQuery q;
     std::string err;
-    ParseTagQuery("*=>[KNN " + std::to_string(i + 1) + " @emb $blob]", q,
+    ParseQuery("*=>[KNN " + std::to_string(i + 1) + " @emb $blob]", q,
                   err);
   }
 }
