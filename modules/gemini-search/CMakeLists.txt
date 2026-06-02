@@ -7,6 +7,7 @@ set(SEARCH_SOURCES
   src/query_parser.cc
   src/numeric_index.cc
   src/vector_index.cc
+  src/search_rdb.cc
 )
 
 add_library(redis_search SHARED ${SEARCH_SOURCES})
@@ -115,6 +116,28 @@ if(GTest_FOUND)
   target_compile_definitions(query_parser_test PRIVATE GEMINI_SEARCH_TESTING)
   target_compile_options(query_parser_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(search_rdb_test EXCLUDE_FROM_ALL
+    tests/search_rdb_test.cc
+    src/search_rdb.cc
+    src/search_commands.cc
+    src/index_spec.cc
+    src/document_store.cc
+    src/tag_index.cc
+    src/query_parser.cc
+    src/numeric_index.cc
+    src/vector_index.cc
+  )
+  target_include_directories(search_rdb_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/include
+  )
+  target_link_libraries(search_rdb_test PRIVATE
+    redis_module_api
+    GTest::gtest_main
+  )
+  target_compile_definitions(search_rdb_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(search_rdb_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
+
   add_executable(search_asan_test EXCLUDE_FROM_ALL
     tests/search_asan_test.cc
     src/index_spec.cc
@@ -141,7 +164,8 @@ if(GTest_FOUND)
     COMMAND numeric_index_test --gtest_color=yes
     COMMAND vector_index_test --gtest_color=yes
     COMMAND query_parser_test --gtest_color=yes
+    COMMAND search_rdb_test --gtest_color=yes
     COMMAND search_asan_test --gtest_color=yes
-    DEPENDS index_spec_test document_store_test tag_index_test numeric_index_test vector_index_test query_parser_test search_asan_test
+    DEPENDS index_spec_test document_store_test tag_index_test numeric_index_test vector_index_test query_parser_test search_rdb_test search_asan_test
   )
 endif()

@@ -1,10 +1,6 @@
 #include "search_commands.h"
-#include "document_store.h"
-#include "index_spec.h"
-#include "numeric_index.h"
-#include "tag_index.h"
 #include "query_parser.h"
-#include "vector_index.h"
+#include "search_rdb.h"
 
 #include <algorithm>
 #include <cmath>
@@ -13,17 +9,42 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
-struct IndexEntry {
-  IndexSpec spec;
-  DocumentStore doc_store;
-  TagFieldIndices tag_indices;
-  NumericFieldIndices numeric_indices;
-  VectorFieldIndices vector_indices;
-};
-
 static std::unordered_map<std::string, IndexEntry> g_indices;
+
+IndexEntry* GetIndexEntry(const std::string& name) {
+  auto it = g_indices.find(name);
+  if (it == g_indices.end()) return nullptr;
+  return &it->second;
+}
+
+bool CreateIndexEntry(const std::string& name, IndexEntry entry) {
+  auto [it, inserted] = g_indices.try_emplace(name, std::move(entry));
+  return inserted;
+}
+
+void EraseIndexEntry(const std::string& name) { g_indices.erase(name); }
+
+// Forward declaration of static helper defined below
+static void AddDocToIndices(
+    IndexEntry& entry, const std::string& doc_id,
+    const std::unordered_map<std::string, std::string>& fields);
+
+void CreateIndexFromRdb(
+    const std::string& name, IndexSpec spec,
+    const std::vector<
+        std::pair<std::string, std::unordered_map<std::string, std::string>>>&
+        docs) {
+  IndexEntry entry;
+  entry.spec = std::move(spec);
+  for (auto& [doc_id, fields] : docs) {
+    entry.doc_store.Add(doc_id, fields);
+    AddDocToIndices(entry, doc_id, fields);
+  }
+  g_indices[name] = std::move(entry);
+}
 
 static bool TryParseDouble(const std::string& s, double& out) {
   char* endptr = nullptr;
@@ -218,6 +239,13 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   it->second.spec = IndexSpec{idx_str, std::move(fields)};
 
+  if (SearchModuleType) {
+    auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
+        ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
+    RedisModule_ModuleTypeSetValue(key, SearchModuleType,
+                                   new std::string(idx_str));
+  }
+
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -230,6 +258,12 @@ static int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::string idx_str(ArgView(argv[1]));
   if (g_indices.erase(idx_str) == 0) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+
+  if (SearchModuleType) {
+    auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
+        ctx, argv[1], REDISMODULE_WRITE));
+    RedisModule_DeleteKey(key);
   }
 
   return RedisModule_ReplyWithSimpleString(ctx, "OK");

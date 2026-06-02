@@ -986,6 +986,61 @@ test_error "LIMIT negative count" {
   r FT.SEARCH boolidx * LIMIT 0 -1
 } {ERR LIMIT*}
 
+puts "\n=== RDB persistence ==="
+
+test "FT.CREATE persistence test index" {
+  r FT.CREATE persistidx SCHEMA tag TAG num NUMERIC
+} {OK}
+
+test "FT.ADD docs for persistence" {
+  r FT.ADD persistidx pd1 FIELDS tag hello num 42
+  r FT.ADD persistidx pd2 FIELDS tag world num 99
+} {OK}
+
+test_assert "Data survives BGSAVE + restart" {
+  r BGSAVE
+  after 2000
+
+  global redis_fd port module_path
+  catch {redis_command $redis_fd SHUTDOWN SAVE}
+  catch {close $redis_fd}
+  after 1000
+
+  start_redis $module_path $port
+  set redis_fd [redis_connect localhost $port]
+
+  set info [r FT.INFO persistidx]
+  set num_docs_label [lindex $info 2]
+  set num_docs [lindex $info 3]
+  if {$num_docs_label ne "num_docs"} {
+    error "Expected 'num_docs' label, got '$num_docs_label'"
+  }
+  if {$num_docs != 2} {
+    error "Expected 2 docs after restart, got $num_docs"
+  }
+}
+
+test_assert "FT.SEARCH works after restart" {
+  set result [r FT.SEARCH persistidx {@tag:{hello}}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 result for tag hello, got $total" }
+  set doc_id [lindex $result 1]
+  if {$doc_id ne "pd1"} { error "Expected pd1, got $doc_id" }
+}
+
+test_assert "Numeric search works after restart" {
+  set result [r FT.SEARCH persistidx {@num:[50 100]}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 result for num 50-100, got $total" }
+}
+
+test_assert "FT._LIST shows index after restart" {
+  set list [r FT._LIST]
+  if {[lsearch $list "persistidx"] < 0} {
+    error "persistidx not in FT._LIST after restart: $list"
+  }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================
