@@ -844,6 +844,148 @@ test_assert "OR precedence: @name:{shoes} @color:{red} | @name:{hat}" {
   if {$total != 2} { error "Expected 2 (b1,b2), got $total" }
 }
 
+puts "\n=== RETURN / SORTBY / LIMIT ==="
+
+# Use boolidx from boolean tests: b1(shoes,red,100), b2(hat,blue,50),
+# b3(shoes,blue,200), b4(boots,red,300), b5(sandals,green,80)
+
+test_assert "RETURN: only specified fields" {
+  set result [r FT.SEARCH boolidx * RETURN 1 name]
+  set total [lindex $result 0]
+  if {$total != 5} { error "Expected 5 docs, got $total" }
+  # Check first doc's fields — should only have "name" field
+  set fields [lindex $result 2]
+  if {[llength $fields] != 2} {
+    error "Expected 2 field elements (name + value), got [llength $fields]: $fields"
+  }
+  if {[lindex $fields 0] ne "name"} {
+    error "Expected field 'name', got [lindex $fields 0]"
+  }
+}
+
+test_assert "RETURN 2 fields" {
+  set result [r FT.SEARCH boolidx * RETURN 2 name price]
+  set fields [lindex $result 2]
+  if {[llength $fields] != 4} {
+    error "Expected 4 field elements, got [llength $fields]"
+  }
+}
+
+test_assert "RETURN 0: no fields, just doc IDs" {
+  set result [r FT.SEARCH boolidx * RETURN 0]
+  set total [lindex $result 0]
+  if {$total != 5} { error "Expected 5, got $total" }
+  # Each doc's field array should be empty (0 elements)
+  set fields [lindex $result 2]
+  if {[llength $fields] != 0} {
+    error "Expected empty fields array, got [llength $fields]: $fields"
+  }
+}
+
+test_assert "SORTBY price ASC" {
+  set result [r FT.SEARCH boolidx * SORTBY price ASC]
+  set total [lindex $result 0]
+  if {$total != 5} { error "Expected 5, got $total" }
+  # Order by price: b2(50), b5(80), b1(100), b3(200), b4(300)
+  set ids {}
+  for {set i 1} {$i < [llength $result]} {incr i 2} {
+    lappend ids [lindex $result $i]
+  }
+  if {$ids ne {b2 b5 b1 b3 b4}} {
+    error "Expected {b2 b5 b1 b3 b4}, got {$ids}"
+  }
+}
+
+test_assert "SORTBY price DESC" {
+  set result [r FT.SEARCH boolidx * SORTBY price DESC]
+  set ids {}
+  for {set i 1} {$i < [llength $result]} {incr i 2} {
+    lappend ids [lindex $result $i]
+  }
+  if {$ids ne {b4 b3 b1 b5 b2}} {
+    error "Expected {b4 b3 b1 b5 b2}, got {$ids}"
+  }
+}
+
+test_assert "SORTBY name ASC (lexicographic)" {
+  set result [r FT.SEARCH boolidx * SORTBY name ASC]
+  set ids {}
+  for {set i 1} {$i < [llength $result]} {incr i 2} {
+    lappend ids [lindex $result $i]
+  }
+  # boots(b4), hat(b2), sandals(b5), shoes(b1), shoes(b3)
+  set first [lindex $ids 0]
+  if {$first ne "b4"} { error "Expected b4 (boots) first, got $first" }
+  set second [lindex $ids 1]
+  if {$second ne "b2"} { error "Expected b2 (hat) second, got $second" }
+}
+
+test_assert "LIMIT 0 2: first 2 results" {
+  set result [r FT.SEARCH boolidx * SORTBY price ASC LIMIT 0 2]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+  set ids {}
+  for {set i 1} {$i < [llength $result]} {incr i 2} {
+    lappend ids [lindex $result $i]
+  }
+  if {$ids ne {b2 b5}} { error "Expected {b2 b5}, got {$ids}" }
+}
+
+test_assert "LIMIT 2 2: skip 2, take 2" {
+  set result [r FT.SEARCH boolidx * SORTBY price ASC LIMIT 2 2]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+  set ids {}
+  for {set i 1} {$i < [llength $result]} {incr i 2} {
+    lappend ids [lindex $result $i]
+  }
+  if {$ids ne {b1 b3}} { error "Expected {b1 b3}, got {$ids}" }
+}
+
+test_assert "LIMIT beyond results" {
+  set result [r FT.SEARCH boolidx * SORTBY price ASC LIMIT 4 10]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1, got $total" }
+}
+
+test_assert "LIMIT offset equals total" {
+  set result [r FT.SEARCH boolidx * LIMIT 5 10]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0, got $total" }
+}
+
+test_assert "Combined: RETURN + SORTBY + LIMIT" {
+  set result [r FT.SEARCH boolidx * RETURN 1 name SORTBY price DESC LIMIT 0 3]
+  set total [lindex $result 0]
+  if {$total != 3} { error "Expected 3, got $total" }
+  # Top 3 by price DESC: b4(300), b3(200), b1(100)
+  set first_id [lindex $result 1]
+  if {$first_id ne "b4"} { error "Expected b4 first, got $first_id" }
+  set first_fields [lindex $result 2]
+  if {[llength $first_fields] != 2} {
+    error "Expected 2 field elements with RETURN 1, got [llength $first_fields]"
+  }
+}
+
+test_assert "RETURN with missing field returns empty string" {
+  set result [r FT.SEARCH boolidx {@name:{shoes}} RETURN 1 nonexistent]
+  set fields [lindex $result 2]
+  set val [lindex $fields 1]
+  if {$val ne ""} { error "Expected empty string for missing field, got '$val'" }
+}
+
+test_error "SORTBY unknown field" {
+  r FT.SEARCH boolidx * SORTBY unknown_field ASC
+} {ERR SORTBY field not in schema}
+
+test_error "LIMIT negative offset" {
+  r FT.SEARCH boolidx * LIMIT -1 10
+} {ERR LIMIT*}
+
+test_error "LIMIT negative count" {
+  r FT.SEARCH boolidx * LIMIT 0 -1
+} {ERR LIMIT*}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

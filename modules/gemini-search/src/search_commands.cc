@@ -388,7 +388,56 @@ static int FtDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
-// FT.SEARCH <index> <query> [PARAMS <n> <key> <value> ...]
+struct SearchOptions {
+  std::vector<std::string> return_fields;
+  bool has_return = false;
+  std::string sortby_field;
+  bool sortby_desc = false;
+  bool has_sortby = false;
+  long long limit_offset = 0;
+  long long limit_count = -1;
+  bool has_limit = false;
+};
+
+static void ReplyWithDocFields(RedisModuleCtx* ctx, const Document* doc,
+                               const SearchOptions& opts,
+                               const std::string* vec_score) {
+  if (!doc) {
+    RedisModule_ReplyWithEmptyArray(ctx);
+    return;
+  }
+
+  std::vector<std::string> keys;
+  if (opts.has_return) {
+    keys = opts.return_fields;
+  } else {
+    keys.reserve(doc->fields.size());
+    for (auto& [k, v] : doc->fields) {
+      keys.push_back(k);
+    }
+    std::sort(keys.begin(), keys.end());
+  }
+
+  long count = static_cast<long>(keys.size()) * 2;
+  if (vec_score) count += 2;
+
+  RedisModule_ReplyWithArray(ctx, count);
+  if (vec_score) {
+    RedisModule_ReplyWithCString(ctx, "__vec_score");
+    RedisModule_ReplyWithCString(ctx, vec_score->c_str());
+  }
+  for (auto& k : keys) {
+    RedisModule_ReplyWithCString(ctx, k.c_str());
+    auto fit = doc->fields.find(k);
+    if (fit != doc->fields.end()) {
+      RedisModule_ReplyWithCString(ctx, fit->second.c_str());
+    } else {
+      RedisModule_ReplyWithCString(ctx, "");
+    }
+  }
+}
+
+// FT.SEARCH <index> <query> [PARAMS ...] [RETURN ...] [SORTBY ...] [LIMIT ...]
 static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                            int argc) {
   if (argc < 3) return RedisModule_WrongArity(ctx);
@@ -407,31 +456,101 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, parse_error.c_str());
   }
 
-  // Parse optional PARAMS block
+  // Parse optional blocks: PARAMS, RETURN, SORTBY, LIMIT
   std::unordered_map<std::string, std::string> params;
+  SearchOptions opts;
   int arg_i = 3;
-  if (arg_i < argc && MatchArg(ArgView(argv[arg_i]), "PARAMS")) {
-    arg_i++;
-    if (arg_i >= argc) {
-      return RedisModule_ReplyWithError(ctx, "ERR PARAMS requires count");
-    }
-    char* endptr = nullptr;
-    long param_count =
-        std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
-    arg_i++;
-    if (*endptr != '\0' || param_count < 0 || param_count % 2 != 0) {
-      return RedisModule_ReplyWithError(
-          ctx, "ERR PARAMS count must be a non-negative even integer");
-    }
-    long pairs = param_count / 2;
-    for (long p = 0; p < pairs; p++) {
-      if (arg_i + 1 >= argc) {
-        return RedisModule_ReplyWithError(ctx, "ERR not enough PARAMS values");
+
+  while (arg_i < argc) {
+    auto kw = ArgView(argv[arg_i]);
+
+    if (MatchArg(kw, "PARAMS")) {
+      arg_i++;
+      if (arg_i >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR PARAMS requires count");
       }
-      std::string pname(ArgView(argv[arg_i]));
-      std::string pval = ArgStr(argv[arg_i + 1]);
+      char* endptr = nullptr;
+      long param_count =
+          std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
+      arg_i++;
+      if (*endptr != '\0' || param_count < 0 || param_count % 2 != 0) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR PARAMS count must be a non-negative even integer");
+      }
+      long pairs = param_count / 2;
+      for (long p = 0; p < pairs; p++) {
+        if (arg_i + 1 >= argc) {
+          return RedisModule_ReplyWithError(ctx,
+                                            "ERR not enough PARAMS values");
+        }
+        std::string pname(ArgView(argv[arg_i]));
+        std::string pval = ArgStr(argv[arg_i + 1]);
+        arg_i += 2;
+        params[std::move(pname)] = std::move(pval);
+      }
+    } else if (MatchArg(kw, "RETURN")) {
+      arg_i++;
+      if (arg_i >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR RETURN requires count");
+      }
+      char* endptr = nullptr;
+      long ret_count =
+          std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
+      arg_i++;
+      if (*endptr != '\0' || ret_count < 0) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR RETURN count must be a non-negative integer");
+      }
+      opts.has_return = true;
+      for (long r = 0; r < ret_count; r++) {
+        if (arg_i >= argc) {
+          return RedisModule_ReplyWithError(ctx,
+                                            "ERR not enough RETURN fields");
+        }
+        opts.return_fields.emplace_back(ArgView(argv[arg_i]));
+        arg_i++;
+      }
+    } else if (MatchArg(kw, "SORTBY")) {
+      arg_i++;
+      if (arg_i >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR SORTBY requires field");
+      }
+      opts.sortby_field = std::string(ArgView(argv[arg_i]));
+      opts.has_sortby = true;
+      arg_i++;
+      if (arg_i < argc) {
+        auto dir = ArgView(argv[arg_i]);
+        if (MatchArg(dir, "ASC")) {
+          opts.sortby_desc = false;
+          arg_i++;
+        } else if (MatchArg(dir, "DESC")) {
+          opts.sortby_desc = true;
+          arg_i++;
+        }
+      }
+    } else if (MatchArg(kw, "LIMIT")) {
+      arg_i++;
+      if (arg_i + 1 >= argc) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR LIMIT requires offset and count");
+      }
+      char* ep1 = nullptr;
+      char* ep2 = nullptr;
+      std::string off_s(ArgView(argv[arg_i]));
+      std::string cnt_s(ArgView(argv[arg_i + 1]));
+      long long off = std::strtoll(off_s.c_str(), &ep1, 10);
+      long long cnt = std::strtoll(cnt_s.c_str(), &ep2, 10);
+      if (*ep1 != '\0' || *ep2 != '\0' || off < 0 || cnt < 0) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR LIMIT offset and count must be non-negative integers");
+      }
+      opts.limit_offset = off;
+      opts.limit_count = cnt;
+      opts.has_limit = true;
       arg_i += 2;
-      params[std::move(pname)] = std::move(pval);
+    } else {
+      return RedisModule_ReplyWithError(ctx,
+                                        "ERR unknown search option");
     }
   }
 
@@ -465,33 +584,30 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
           reinterpret_cast<const float*>(blob.data()), parsed.knn_k);
     }
 
+    // Apply LIMIT to KNN results
+    long long knn_total_before_limit = static_cast<long long>(knn_results.size());
+    if (opts.has_limit) {
+      if (opts.limit_offset >= knn_total_before_limit) {
+        knn_results.clear();
+      } else {
+        auto begin = knn_results.begin() + opts.limit_offset;
+        auto end = (opts.limit_count >= 0 &&
+                    opts.limit_offset + opts.limit_count < knn_total_before_limit)
+                       ? knn_results.begin() + opts.limit_offset + opts.limit_count
+                       : knn_results.end();
+        knn_results = std::vector<KnnResult>(begin, end);
+      }
+    }
+
     long total = static_cast<long>(knn_results.size());
     RedisModule_ReplyWithArray(ctx, 1 + total * 2);
     RedisModule_ReplyWithLongLong(ctx, total);
 
     for (auto& kr : knn_results) {
       RedisModule_ReplyWithCString(ctx, kr.doc_id.c_str());
-      const auto* doc = entry.doc_store.Get(kr.doc_id);
-      if (doc) {
-        long field_count = static_cast<long>(doc->fields.size()) * 2 + 2;
-        RedisModule_ReplyWithArray(ctx, field_count);
-        RedisModule_ReplyWithCString(ctx, "__vec_score");
-        auto score_str = std::to_string(kr.score);
-        RedisModule_ReplyWithCString(ctx, score_str.c_str());
-
-        std::vector<std::string> sorted_keys;
-        sorted_keys.reserve(doc->fields.size());
-        for (auto& [k, v] : doc->fields) {
-          sorted_keys.push_back(k);
-        }
-        std::sort(sorted_keys.begin(), sorted_keys.end());
-        for (auto& k : sorted_keys) {
-          RedisModule_ReplyWithCString(ctx, k.c_str());
-          RedisModule_ReplyWithCString(ctx, doc->fields.at(k).c_str());
-        }
-      } else {
-        RedisModule_ReplyWithEmptyArray(ctx);
-      }
+      auto score_str = std::to_string(kr.score);
+      ReplyWithDocFields(ctx, entry.doc_store.Get(kr.doc_id), opts,
+                         &score_str);
     }
 
     return REDISMODULE_OK;
@@ -506,29 +622,60 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, eval_error.c_str());
   }
 
+  // SORTBY
+  if (opts.has_sortby) {
+    const auto* sort_fspec = entry.spec.FindField(opts.sortby_field);
+    if (!sort_fspec) {
+      return RedisModule_ReplyWithError(ctx,
+                                        "ERR SORTBY field not in schema");
+    }
+    bool numeric_sort = (sort_fspec->type == FieldType::kNumeric);
+    bool desc = opts.sortby_desc;
+    std::sort(result_ids.begin(), result_ids.end(),
+              [&](const std::string& a, const std::string& b) {
+                const auto* da = entry.doc_store.Get(a);
+                const auto* db = entry.doc_store.Get(b);
+                std::string va, vb;
+                if (da) {
+                  auto fa = da->fields.find(opts.sortby_field);
+                  if (fa != da->fields.end()) va = fa->second;
+                }
+                if (db) {
+                  auto fb = db->fields.find(opts.sortby_field);
+                  if (fb != db->fields.end()) vb = fb->second;
+                }
+                if (numeric_sort) {
+                  double na = 0, nb = 0;
+                  TryParseDouble(va, na);
+                  TryParseDouble(vb, nb);
+                  return desc ? na > nb : na < nb;
+                }
+                return desc ? va > vb : va < vb;
+              });
+  }
+
+  // LIMIT
+  if (opts.has_limit) {
+    long long total_before = static_cast<long long>(result_ids.size());
+    if (opts.limit_offset >= total_before) {
+      result_ids.clear();
+    } else {
+      auto begin = result_ids.begin() + opts.limit_offset;
+      auto end = (opts.limit_count >= 0 &&
+                  opts.limit_offset + opts.limit_count < total_before)
+                     ? result_ids.begin() + opts.limit_offset + opts.limit_count
+                     : result_ids.end();
+      result_ids = std::vector<std::string>(begin, end);
+    }
+  }
+
   long total = static_cast<long>(result_ids.size());
   RedisModule_ReplyWithArray(ctx, 1 + total * 2);
   RedisModule_ReplyWithLongLong(ctx, total);
 
   for (auto& rid : result_ids) {
     RedisModule_ReplyWithCString(ctx, rid.c_str());
-    const auto* doc = entry.doc_store.Get(rid);
-    if (doc) {
-      RedisModule_ReplyWithArray(ctx,
-                                 static_cast<long>(doc->fields.size() * 2));
-      std::vector<std::string> sorted_keys;
-      sorted_keys.reserve(doc->fields.size());
-      for (auto& [k, v] : doc->fields) {
-        sorted_keys.push_back(k);
-      }
-      std::sort(sorted_keys.begin(), sorted_keys.end());
-      for (auto& k : sorted_keys) {
-        RedisModule_ReplyWithCString(ctx, k.c_str());
-        RedisModule_ReplyWithCString(ctx, doc->fields.at(k).c_str());
-      }
-    } else {
-      RedisModule_ReplyWithEmptyArray(ctx);
-    }
+    ReplyWithDocFields(ctx, entry.doc_store.Get(rid), opts, nullptr);
   }
 
   return REDISMODULE_OK;
