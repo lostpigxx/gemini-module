@@ -247,36 +247,192 @@ FT.SEARCH idx "*=>[KNN 10 @embedding $blob EF_RUNTIME 100]"
 
 ---
 
-## Phase 9 — Future Extensions (pick by interest)
+## Phase 9 — KNN Pre-Filter + AOF Rewrite
+
+**Goal**: Fix two gaps in the current implementation.
+
+### KNN Pre-Filter
+
+Currently KNN only supports `*` as pre-filter. This phase adds support for
+arbitrary boolean pre-filters before KNN:
+```
+FT.SEARCH idx "@category:{shoes} =>[KNN 5 @embedding $blob]" PARAMS 2 blob <binary>
+```
+
+**Implementation**:
+- Evaluate the pre-filter query tree to get a candidate doc_id set
+- Pass candidate set to FlatVectorIndex (or future HNSW) — only compute
+  distances for docs in the candidate set
+- Add `KnnQueryFiltered(query, k, candidate_ids)` to FlatVectorIndex
+
+### AOF Rewrite
+
+Currently `AofRewriteSearch` is a no-op. Implement it so indices survive
+AOF-only persistence mode.
+
+**Implementation**:
+- For each document in the index, emit `FT.ADD` commands in the AOF
+- Emit `FT.CREATE` first, then all `FT.ADD` commands
+
+**Unit tests**:
+- TCL: filtered KNN returns correct subset
+- TCL: AOF rewrite + restart preserves data (appendonly yes)
+
+---
+
+## Phase 10 — GEO Index
+
+**Goal**: Geographic coordinate field type with radius and bounding box queries.
+
+**Schema extension**:
+```
+FT.CREATE idx SCHEMA ... location GEO
+```
+
+**Query syntax**:
+- `@location:[lon lat radius unit]` — radius query (unit: km/m/mi/ft)
+- Returns documents within the specified radius, sorted by distance
+
+**Data structures**:
+- `GeoIndex` — encode lat/lon with geohash, store in sorted structure
+- Distance calculation: Haversine formula (clean-room, based on public
+  mathematical definition)
+
+**Unit tests**:
+- Known coordinates with known distances
+- Boundary cases (poles, antimeridian)
+- Empty result for out-of-range radius
+
+---
+
+## Phase 11 — Full-Text Search
+
+**Goal**: Tokenized text search with relevance scoring. This is the largest
+single feature — comparable in scope to P0–P3 combined.
+
+**Schema extension**:
+```
+FT.CREATE idx SCHEMA ... title TEXT description TEXT
+```
+
+**Core modules**:
+- **Tokenizer** — whitespace + punctuation splitting, Unicode-aware,
+  lowercase normalization
+- **Stopwords** — configurable stop word list (default: English common words)
+- **Inverted index** — term → posting list with term frequency per doc
+- **BM25 scoring** — standard BM25 relevance ranking (clean-room, based on
+  the public BM25 formula from Robertson & Zaragoza)
+
+**Query syntax**:
+- `@title:{hello world}` is TAG exact match; TEXT uses different syntax:
+- `hello world` — full-text search across all TEXT fields
+- `@title:hello` — full-text search in specific field
+- Combine with existing: `@title:hello @price:[0 100]`
+
+**Sub-phases** (can be split further):
+1. Tokenizer + inverted index + basic term matching
+2. BM25 scoring + result ranking
+3. Stopwords + stemming (optional, language-dependent)
+4. Phrase queries (`"hello world"` as exact phrase)
+5. Prefix/wildcard queries (`hel*`)
+
+---
+
+## Phase 12 — FT.AGGREGATE
+
+**Goal**: Aggregation pipeline for analytics queries.
+
+**Syntax**:
+```
+FT.AGGREGATE idx "@status:{active}"
+    GROUPBY 1 @category
+    REDUCE COUNT 0 AS count
+    REDUCE AVG 1 @price AS avg_price
+    SORTBY 2 @count DESC
+    LIMIT 0 10
+```
+
+**Pipeline stages**:
+- `GROUPBY <n> @field ...` — group results by field values
+- `REDUCE <func> <nargs> @field ... AS alias` — aggregate functions:
+  COUNT, SUM, AVG, MIN, MAX, COUNT_DISTINCT
+- `SORTBY` / `LIMIT` — reuse from Phase 6
+- `APPLY <expr> AS alias` — computed fields (optional)
+
+---
+
+## Phase 13 — Auto-Indexing (ON HASH)
+
+**Goal**: Automatically index Redis Hash keys matching a prefix, without
+requiring explicit `FT.ADD`.
+
+**Schema extension**:
+```
+FT.CREATE idx ON HASH PREFIX 1 product: SCHEMA name TAG price NUMERIC
+```
+
+**Implementation**:
+- Subscribe to keyspace notifications for HSET/HDEL/DEL on matching prefixes
+  via `RedisModule_SubscribeToKeyspaceEvents`
+- On HSET: read Hash fields, update index (equivalent to FT.ADD)
+- On DEL: remove from index (equivalent to FT.DEL)
+- On module load: scan existing keys matching prefix and index them
+
+---
+
+## Phase 14 — Suggestion / Autocomplete
+
+**Goal**: Prefix-based autocomplete with weighted suggestions.
+
+**Commands**:
+| Command | Description |
+|---------|-------------|
+| `FT.SUGADD key string score [INCR] [PAYLOAD payload]` | Add suggestion |
+| `FT.SUGGET key prefix [FUZZY] [MAX n]` | Get completions |
+| `FT.SUGDEL key string` | Remove suggestion |
+| `FT.SUGLEN key` | Count suggestions |
+
+**Data structures**:
+- **Trie** — prefix tree with weighted nodes for ranked completion
+- Optional fuzzy matching via Levenshtein distance (edit distance ≤ 1)
+
+---
+
+## Phase 15+ — Advanced Extensions
 
 | Direction | Notes |
 |-----------|-------|
-| GEO index | Lat/lon field + radius query |
-| Full-text search | Tokenizer + inverted index + BM25 scoring |
-| FT.AGGREGATE | GROUPBY + REDUCE pipeline |
-| Auto-indexing | Keyspace notification on HSET → auto-index |
-| Suggestion / autocomplete | `FT.SUGADD` / `FT.SUGGET` via trie |
 | Vector quantization | PQ / SQ for memory-efficient vector storage |
 | Hybrid scoring | Combine BM25 text score with vector distance |
+| Synonyms | `FT.SYNUPDATE` / `FT.SYNDUMP` for synonym groups |
+| Highlighting | `HIGHLIGHT` / `SUMMARIZE` in FT.SEARCH results |
+| Multi-language | Chinese segmentation, language-specific stemming |
+| Cluster support | Coordinate indices across Redis Cluster shards |
 
 ---
 
 ## Milestone Summary
 
-| Phase | Core Capability | Approx. Size |
-|-------|----------------|--------------|
-| P0 | Empty module skeleton | ~3 files |
-| P1 | Schema management | ~4 files |
-| P2 | TAG exact query | ~5 files — first real search |
-| P3 | NUMERIC range query | ~2 new files |
-| P4 | VECTOR FLAT (brute-force KNN) | ~4 new files |
-| P5 | Boolean combinations | ~3 new files (parser is the bulk) |
-| P6 | RETURN / SORT / LIMIT | Mostly edits, little new code |
-| P7 | RDB persistence | ~2 new files |
-| P8 | VECTOR HNSW (approximate KNN) | ~3 new files |
+| Phase | Core Capability | Status |
+|-------|----------------|--------|
+| P0 | Empty module skeleton | Done |
+| P1 | Schema management | Done |
+| P2 | TAG exact query | Done |
+| P3 | NUMERIC range query | Done |
+| P4 | VECTOR FLAT (brute-force KNN) | Done |
+| P5 | Boolean combinations | Done |
+| P6 | RETURN / SORT / LIMIT | Done |
+| P7 | RDB persistence | Done |
+| P8 | VECTOR HNSW (approximate KNN) | Planned |
+| P9 | KNN pre-filter + AOF rewrite | Planned |
+| P10 | GEO index | Planned |
+| P11 | Full-text search (TEXT + BM25) | Planned |
+| P12 | FT.AGGREGATE | Planned |
+| P13 | Auto-indexing (ON HASH) | Planned |
+| P14 | Suggestion / autocomplete | Planned |
+| P15+ | Advanced extensions | Future |
 
-P0–P3 = minimum viable search engine.
-P4 = vector search capability (exact).
-P5 = practical query power.
-P6–P7 = polish and durability.
-P8 = production-grade vector search.
+P0–P7 = complete, functional search engine.
+P8–P9 = production-grade vector search.
+P10–P14 = feature parity with RediSearch core.
+P15+ = advanced / niche features.
