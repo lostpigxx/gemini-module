@@ -298,6 +298,11 @@ test "BF.MADD with duplicates returns mixed results" {
   r BF.MADD madd_test a d
 } {0 1}
 
+test "BF.MADD NONSCALING stops at capacity with actual array length" {
+  r BF.RESERVE madd_ns_full 0.0001 2 NONSCALING
+  r BF.MADD madd_ns_full a b c d
+} {1 1}
+
 puts "\n=== BF.MEXISTS ==="
 
 test "BF.MEXISTS checks multiple items" {
@@ -521,6 +526,10 @@ test_error "BF.ADD on string key" {
   r BF.ADD string_key item
 } {WRONGTYPE*}
 
+test_error "BF.RESERVE on string key returns WRONGTYPE" {
+  r BF.RESERVE string_key 0.01 100
+} {WRONGTYPE*}
+
 test_error "BF.EXISTS on string key" {
   r BF.EXISTS string_key item
 } {WRONGTYPE*}
@@ -579,6 +588,10 @@ test_error "BF.RESERVE EXPANSION 0 should be rejected" {
   r BF.RESERVE exp0_test 0.01 100 EXPANSION 0
 } {ERR*}
 
+test_error "BF.RESERVE EXPANSION above unsigned range should be rejected" {
+  r BF.RESERVE exp_huge_test 0.01 100 EXPANSION 4294967296
+} {ERR*EXPANSION*}
+
 test_error "BF.RESERVE NONSCALING and EXPANSION together should be rejected" {
   r BF.RESERVE ns_exp_test 0.01 100 NONSCALING EXPANSION 2
 } {ERR*}
@@ -586,6 +599,10 @@ test_error "BF.RESERVE NONSCALING and EXPANSION together should be rejected" {
 test_error "BF.INSERT EXPANSION 0 should be rejected" {
   r BF.INSERT exp0_ins EXPANSION 0 ITEMS a
 } {ERR*}
+
+test_error "BF.INSERT EXPANSION above unsigned range should be rejected" {
+  r BF.INSERT exp_huge_ins EXPANSION 4294967296 ITEMS a
+} {ERR*EXPANSION*}
 
 test_error "BF.INSERT NONSCALING and EXPANSION together should be rejected" {
   r BF.INSERT ns_exp_ins NONSCALING EXPANSION 2 ITEMS a
@@ -622,6 +639,15 @@ test_error "BF.LOADCHUNK rejects header with zero layers" {
   # WireFilterHeader: totalItems(8) + numLayers(4) + flags(4) + expansionFactor(4) = 20 bytes
   set hdr [binary format wuiuiuiu 0 0 5 2]
   r BF.LOADCHUNK lc_hdr_zero 1 $hdr
+} {ERR*corrupted*}
+
+test_error "BF.LOADCHUNK rejects header with trailing bytes" {
+  r DEL lc_hdr_trailing_src lc_hdr_trailing_dst
+  r BF.RESERVE lc_hdr_trailing_src 0.01 100
+  set reply [r BF.SCANDUMP lc_hdr_trailing_src 0]
+  set hdr [lindex $reply 1]
+  append hdr "x"
+  r BF.LOADCHUNK lc_hdr_trailing_dst 1 $hdr
 } {ERR*corrupted*}
 
 puts "\n=== BytesUsed accuracy ==="
@@ -675,13 +701,13 @@ test_error "BF.RESERVE unrecognized option" {
   r BF.RESERVE badopt 0.01 100 FOOBAR
 } {ERR*unrecognized*}
 
-test_error "BF.INSERT NONSCALING filter rejects when full" {
+test "BF.INSERT NONSCALING filter stops with empty array when already full" {
   r BF.RESERVE insert_ns_full 0.01 5 NONSCALING
   for {set i 0} {$i < 20} {incr i} {
     catch {r BF.ADD insert_ns_full "item_$i"}
   }
   r BF.INSERT insert_ns_full NOCREATE ITEMS new_overflow
-} {ERR*capacity*}
+} {}
 
 puts "\n=== Multi-layer behavior ==="
 

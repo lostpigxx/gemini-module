@@ -16,6 +16,7 @@ extern "C" {
 #include "rm_alloc.h"
 
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,12 @@ static ScalingBloomFilter* RdbRoundTrip(ScalingBloomFilter* src, int load_encver
 
 static std::span<const std::byte> ToSpan(const std::string& s) {
   return AsBytes(s.data(), s.size());
+}
+
+static std::vector<uint8_t> HeaderBytes(ScalingBloomFilter* filter) {
+  std::vector<uint8_t> buf(ComputeHeaderSize(*filter));
+  SerializeHeader(*filter, buf.data());
+  return buf;
 }
 
 // ==================================================================
@@ -451,6 +458,144 @@ TEST(BloomWire, RejectsTooManyLayers) {
 
   auto* result = DeserializeHeader(&hdr, sizeof(hdr));
   EXPECT_EQ(result, nullptr);
+}
+
+TEST(BloomWire, RejectsHeaderWithTrailingBytes) {
+  auto* filter = CreateFilter(1000, 0.01, DefaultFlags(), 2);
+  auto buf = HeaderBytes(filter);
+  buf.push_back(0);
+
+  auto* result = DeserializeHeader(buf.data(), buf.size());
+  EXPECT_EQ(result, nullptr);
+
+  DestroyFilter(filter);
+}
+
+TEST(BloomWire, RejectsUnknownAndRawBitsFlags) {
+  auto* filter = CreateFilter(1000, 0.01, DefaultFlags(), 2);
+  auto buf = HeaderBytes(filter);
+  auto* hdr = reinterpret_cast<WireFilterHeader*>(buf.data());
+
+  hdr->flags = ToUnderlying(DefaultFlags()) | 0x80000000u;
+  EXPECT_EQ(DeserializeHeader(buf.data(), buf.size()), nullptr);
+
+  hdr->flags = ToUnderlying(DefaultFlags() | BloomFlags::RawBits);
+  EXPECT_EQ(DeserializeHeader(buf.data(), buf.size()), nullptr);
+
+  DestroyFilter(filter);
+}
+
+TEST(BloomWire, RejectsInvalidLayerMetadata) {
+  auto* filter = CreateFilter(1000, 0.01, DefaultFlags(), 2);
+  auto buf = HeaderBytes(filter);
+  auto* hdr = reinterpret_cast<WireFilterHeader*>(buf.data());
+  auto* meta = reinterpret_cast<WireLayerMeta*>(
+    buf.data() + sizeof(WireFilterHeader));
+
+  auto original = meta[0];
+
+  meta[0].dataSize = original.dataSize + 1;
+  EXPECT_EQ(DeserializeHeader(buf.data(), buf.size()), nullptr);
+
+  meta[0] = original;
+  meta[0].itemCount = original.capacity + 1;
+  hdr->totalItems = meta[0].itemCount;
+  EXPECT_EQ(DeserializeHeader(buf.data(), buf.size()), nullptr);
+
+  meta[0] = original;
+  hdr->totalItems = original.itemCount + 1;
+  EXPECT_EQ(DeserializeHeader(buf.data(), buf.size()), nullptr);
+
+  meta[0] = original;
+  hdr->totalItems = original.itemCount;
+  meta[0].log2Bits = 1;
+  EXPECT_EQ(DeserializeHeader(buf.data(), buf.size()), nullptr);
+
+  meta[0] = original;
+  meta[0].totalBits = std::numeric_limits<uint64_t>::max();
+  meta[0].dataSize = 0;
+  EXPECT_EQ(DeserializeHeader(buf.data(), buf.size()), nullptr);
+
+  DestroyFilter(filter);
+}
+
+TEST(BloomWire, RejectsInconsistentLayerSizingMetadata) {
+  auto* filter = CreateFilter(1000, 0.01, DefaultFlags(), 2);
+  auto buf = HeaderBytes(filter);
+  auto* meta = reinterpret_cast<WireLayerMeta*>(
+    buf.data() + sizeof(WireFilterHeader));
+
+  meta[0].capacity = static_cast<uint64_t>(std::numeric_limits<long long>::max());
+
+  EXPECT_EQ(DeserializeHeader(buf.data(), buf.size()), nullptr);
+
+  DestroyFilter(filter);
+}
+
+TEST(BloomRdb, RejectsTruncatedStreamAndSetsIoError) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  MockRdbStream stream;
+  RdbSaveBloom(stream.IO(), filter);
+  ASSERT_GT(stream.buf.size(), 0u);
+  stream.buf.pop_back();
+  stream.Rewind();
+
+  auto* loaded = static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), kCurrentEncVer));
+  EXPECT_EQ(loaded, nullptr);
+  EXPECT_TRUE(stream.io_error);
+
+  DestroyFilter(filter);
+}
+
+TEST(BloomRdb, RejectsTooManyLayersBeforeAllocation) {
+  MockRdbStream stream;
+  auto* io = stream.IO();
+  Mock_SaveUnsigned(io, 0);
+  Mock_SaveUnsigned(io, kMaxBloomLayers + 1);
+  Mock_SaveUnsigned(io, ToUnderlying(DefaultFlags()));
+  Mock_SaveUnsigned(io, 2);
+  stream.Rewind();
+
+  auto* loaded = static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), kCurrentEncVer));
+  EXPECT_EQ(loaded, nullptr);
+}
+
+TEST(BloomRdb, RejectsLayerMetadataThatWouldOverflowDataSize) {
+  MockRdbStream stream;
+  auto* io = stream.IO();
+  Mock_SaveUnsigned(io, 0);
+  Mock_SaveUnsigned(io, 1);
+  Mock_SaveUnsigned(io, ToUnderlying(DefaultFlags()));
+  Mock_SaveUnsigned(io, 2);
+  Mock_SaveUnsigned(io, 100);
+  Mock_SaveDouble(io, 0.01);
+  Mock_SaveUnsigned(io, 7);
+  Mock_SaveDouble(io, 10.0);
+  Mock_SaveUnsigned(io, std::numeric_limits<uint64_t>::max());
+  Mock_SaveUnsigned(io, 0);
+  stream.Rewind();
+
+  auto* loaded = static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), kCurrentEncVer));
+  EXPECT_EQ(loaded, nullptr);
+}
+
+TEST(BloomRdb, RejectsInconsistentLayerSizingMetadata) {
+  MockRdbStream stream;
+  auto* io = stream.IO();
+  Mock_SaveUnsigned(io, 0);
+  Mock_SaveUnsigned(io, 1);
+  Mock_SaveUnsigned(io, ToUnderlying(DefaultFlags()));
+  Mock_SaveUnsigned(io, 2);
+  Mock_SaveUnsigned(io, static_cast<uint64_t>(std::numeric_limits<long long>::max()));
+  Mock_SaveDouble(io, 0.5);
+  Mock_SaveUnsigned(io, 1);
+  Mock_SaveDouble(io, 1.0);
+  Mock_SaveUnsigned(io, 1024);
+  Mock_SaveUnsigned(io, 0);
+  stream.Rewind();
+
+  auto* loaded = static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), kCurrentEncVer));
+  EXPECT_EQ(loaded, nullptr);
 }
 
 // ==================================================================

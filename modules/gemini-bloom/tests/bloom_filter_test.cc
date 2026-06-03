@@ -2,6 +2,7 @@
 #include "bloom_filter.h"
 #include "murmur2.h"
 
+#include <limits>
 #include <string>
 
 static std::span<const std::byte> ToSpan(const std::string& s) {
@@ -56,6 +57,23 @@ TEST(BloomLayerTest, CreateRAII) {
   EXPECT_GT(layer->GetDataSize(), 0u);
   EXPECT_NE(layer->GetBitArray(), nullptr);
   EXPECT_GT(layer->GetBitsPerEntry(), 0.0);
+}
+
+TEST(BloomLayerTest, RejectsInvalidConstructionParameters) {
+  EXPECT_FALSE(BloomLayer::Create(0, 0.01, BloomFlags::Use64Bit).has_value());
+  EXPECT_FALSE(BloomLayer::Create(1000, 0.0, BloomFlags::Use64Bit).has_value());
+  EXPECT_FALSE(BloomLayer::Create(1000, 1.0, BloomFlags::Use64Bit).has_value());
+  EXPECT_FALSE(BloomLayer::Create(1000, std::numeric_limits<double>::quiet_NaN(),
+                                  BloomFlags::Use64Bit).has_value());
+  EXPECT_FALSE(BloomLayer::Create(1000, 0.01,
+                                  BloomFlags::Use64Bit | BloomFlags::RawBits).has_value());
+}
+
+TEST(BloomLayerTest, RejectsCapacityThatWouldOverflowBitCount) {
+  auto layer = BloomLayer::Create(
+    static_cast<uint64_t>(std::numeric_limits<long long>::max()),
+    0.01, BloomFlags::Use64Bit | BloomFlags::NoRound);
+  EXPECT_FALSE(layer.has_value());
 }
 
 TEST(BloomLayerTest, MoveSemantics) {

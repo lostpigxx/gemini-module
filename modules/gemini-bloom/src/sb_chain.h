@@ -12,6 +12,7 @@
 // each successive layer halves the per-layer FP rate so the
 // overall rate converges to the user-specified target.
 constexpr double kTighteningRatio = 0.5;
+constexpr size_t kMaxBloomLayers = 1024;
 
 // One layer in a scaling bloom filter.
 struct FilterLayer {
@@ -62,7 +63,7 @@ public:
     unsigned expansionFactor;
   };
   static ScalingBloomFilter* FromRdbShell(RdbShell shell);
-  void SetLayer(size_t index, FilterLayer&& layer);
+  bool SetLayer(size_t index, FilterLayer&& layer);
 
 private:
   struct EmptyShellTag {};
@@ -104,6 +105,9 @@ struct WireFilterHeader {
   uint32_t expansionFactor;
 };
 #pragma pack(pop)
+
+constexpr size_t kMaxBloomHeaderBytes =
+  sizeof(WireFilterHeader) + kMaxBloomLayers * sizeof(WireLayerMeta);
 
 size_t ComputeHeaderSize(const ScalingBloomFilter& filter);
 size_t SerializeHeader(const ScalingBloomFilter& filter, void* output);

@@ -3,13 +3,18 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
+#include <new>
 #include <ranges>
+#include <utility>
 
 // --- Lifecycle ---
 
 ScalingBloomFilter::ScalingBloomFilter(uint64_t initialCapacity, double errorRate,
                                         BloomFlags flg, unsigned expansion)
     : flags_(flg), expansionFactor_(expansion) {
+  if (!HasFlag(flg, BloomFlags::FixedSize) && expansion == 0) return;
+
   double firstRate = HasFlag(flg, BloomFlags::FixedSize)
     ? errorRate
     : errorRate * kTighteningRatio;
@@ -62,10 +67,26 @@ ScalingBloomFilter& ScalingBloomFilter::operator=(ScalingBloomFilter&& other) no
 // --- Internal helpers ---
 
 bool ScalingBloomFilter::AppendLayer(uint64_t cap, double rate) {
+  if (numLayers_ >= kMaxBloomLayers) return false;
+
   if (numLayers_ >= layerCapacity_) {
-    size_t newCap = std::max(layerCapacity_ * 2, size_t{4});
-    auto* expanded = static_cast<FilterLayer*>(RMRealloc(layers_, newCap * sizeof(FilterLayer)));
+    size_t newCap = std::max(layerCapacity_ == 0 ? size_t{4} : layerCapacity_ * 2,
+                             size_t{4});
+    newCap = std::min(newCap, kMaxBloomLayers);
+    if (newCap <= layerCapacity_ ||
+        newCap > std::numeric_limits<size_t>::max() / sizeof(FilterLayer)) {
+      return false;
+    }
+
+    auto* expanded = static_cast<FilterLayer*>(RMAlloc(newCap * sizeof(FilterLayer)));
     if (!expanded) return false;
+
+    for (size_t i = 0; i < numLayers_; i++) {
+      new (&expanded[i]) FilterLayer{std::move(layers_[i].bloom), layers_[i].itemCount};
+      layers_[i].~FilterLayer();
+    }
+    if (layers_) RMFree(layers_);
+
     layers_ = expanded;
     layerCapacity_ = newCap;
   }
@@ -97,10 +118,14 @@ bool ScalingBloomFilter::GrowIfNeeded() {
   auto& top = layers_[numLayers_ - 1];
   if (top.itemCount < top.bloom.GetCapacity()) return true;
   if (HasFlag(flags_, BloomFlags::FixedSize)) return false;
+  if (expansionFactor_ == 0 || numLayers_ >= kMaxBloomLayers) return false;
 
   uint64_t prevCap = top.bloom.GetCapacity();
   if (prevCap > UINT64_MAX / expansionFactor_) return false;
   uint64_t nextCap = prevCap * expansionFactor_;
+  if (nextCap > static_cast<uint64_t>(std::numeric_limits<long long>::max())) {
+    return false;
+  }
   constexpr double kMinFpRate = 1e-15;
   double nextRate = top.bloom.GetFpRate() * kTighteningRatio;
   return (nextRate >= kMinFpRate) && AppendLayer(nextCap, nextRate);
@@ -126,45 +151,73 @@ bool ScalingBloomFilter::Contains(std::span<const std::byte> data) const {
 }
 
 uint64_t ScalingBloomFilter::TotalCapacity() const {
-  auto layerSpan = Layers();
-  return std::transform_reduce(layerSpan.begin(), layerSpan.end(),
-    uint64_t{0}, std::plus<>{},
-    [](const FilterLayer& l) { return l.bloom.GetCapacity(); });
+  uint64_t total = 0;
+  for (const auto& layer : Layers()) {
+    uint64_t cap = layer.bloom.GetCapacity();
+    if (cap > std::numeric_limits<uint64_t>::max() - total) {
+      return std::numeric_limits<uint64_t>::max();
+    }
+    total += cap;
+  }
+  return total;
 }
 
 size_t ScalingBloomFilter::BytesUsed() const {
-  size_t base = sizeof(ScalingBloomFilter) + layerCapacity_ * sizeof(FilterLayer);
-  auto layerSpan = Layers();
-  return std::transform_reduce(layerSpan.begin(), layerSpan.end(),
-    base, std::plus<>{},
-    [](const FilterLayer& l) { return static_cast<size_t>(l.bloom.GetDataSize()); });
+  constexpr size_t kMax = std::numeric_limits<size_t>::max();
+  if (layerCapacity_ > (kMax - sizeof(ScalingBloomFilter)) / sizeof(FilterLayer)) {
+    return kMax;
+  }
+
+  size_t total = sizeof(ScalingBloomFilter) + layerCapacity_ * sizeof(FilterLayer);
+  for (const auto& layer : Layers()) {
+    uint64_t dataSize = layer.bloom.GetDataSize();
+    if (dataSize > kMax || static_cast<size_t>(dataSize) > kMax - total) {
+      return kMax;
+    }
+    total += static_cast<size_t>(dataSize);
+  }
+  return total;
 }
 
 // --- Shell construction for deserialization ---
 
 ScalingBloomFilter* ScalingBloomFilter::FromRdbShell(RdbShell shell) {
+  if (shell.numLayers == 0 || shell.numLayers > kMaxBloomLayers ||
+      shell.numLayers > std::numeric_limits<size_t>::max() / sizeof(FilterLayer)) {
+    return nullptr;
+  }
+  if (!HasFlag(shell.flags, BloomFlags::FixedSize) && shell.expansionFactor == 0) {
+    return nullptr;
+  }
+
   auto* filter = static_cast<ScalingBloomFilter*>(RMAlloc(sizeof(ScalingBloomFilter)));
   if (!filter) return nullptr;
 
   new (filter) ScalingBloomFilter(EmptyShellTag{});
-  filter->layers_ = static_cast<FilterLayer*>(RMCalloc(shell.numLayers, sizeof(FilterLayer)));
+  filter->layers_ = static_cast<FilterLayer*>(RMAlloc(shell.numLayers * sizeof(FilterLayer)));
   if (!filter->layers_) {
     filter->~ScalingBloomFilter();
     RMFree(filter);
     return nullptr;
   }
   filter->totalItems_ = shell.totalItems;
-  filter->numLayers_ = shell.numLayers;
+  filter->numLayers_ = 0;
   filter->layerCapacity_ = shell.numLayers;
   filter->flags_ = shell.flags;
   filter->expansionFactor_ = shell.expansionFactor;
   return filter;
 }
 
-void ScalingBloomFilter::SetLayer(size_t index, FilterLayer&& layer) {
-  if (index < numLayers_) {
+bool ScalingBloomFilter::SetLayer(size_t index, FilterLayer&& layer) {
+  if (!layers_ || index >= layerCapacity_ || index > numLayers_) return false;
+
+  if (index == numLayers_) {
+    new (&layers_[index]) FilterLayer{std::move(layer.bloom), layer.itemCount};
+    numLayers_++;
+  } else {
     layers_[index] = {std::move(layer.bloom), layer.itemCount};
   }
+  return true;
 }
 
 // WriteTo, ReadFrom, SerializeHeader, DeserializeHeader live in bloom_rdb.cc
