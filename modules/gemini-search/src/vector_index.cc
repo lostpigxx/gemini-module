@@ -71,6 +71,35 @@ std::vector<KnnResult> FlatVectorIndex::KnnQuery(const float* query,
   return results;
 }
 
+std::vector<KnnResult> FlatVectorIndex::KnnQueryFiltered(
+    const float* query, size_t k,
+    const std::vector<std::string>& candidates) const {
+  using DistFn = float (*)(const float*, const float*, size_t);
+  DistFn dist_fn;
+  switch (metric_) {
+    case DistanceMetric::kL2: dist_fn = L2Distance; break;
+    case DistanceMetric::kCosine: dist_fn = CosineDistance; break;
+    case DistanceMetric::kIP: dist_fn = InnerProductDistance; break;
+  }
+
+  std::vector<KnnResult> results;
+  for (auto& doc_id : candidates) {
+    auto it = vectors_.find(doc_id);
+    if (it == vectors_.end()) continue;
+    float score = dist_fn(query, it->second.data(), dim_);
+    results.push_back({doc_id, score});
+  }
+
+  size_t n = std::min(k, results.size());
+  std::partial_sort(results.begin(), results.begin() + static_cast<long>(n),
+                    results.end(),
+                    [](const KnnResult& a, const KnnResult& b) {
+                      return a.score < b.score;
+                    });
+  results.resize(n);
+  return results;
+}
+
 size_t FlatVectorIndex::Size() const { return vectors_.size(); }
 size_t FlatVectorIndex::Dim() const { return dim_; }
 DistanceMetric FlatVectorIndex::Metric() const { return metric_; }

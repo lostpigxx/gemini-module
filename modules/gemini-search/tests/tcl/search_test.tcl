@@ -1612,6 +1612,137 @@ test_error "NUMERIC syntax on TEXT field" {
   r FT.SEARCH textidx {@title:[0 100]}
 } {ERR field is not a NUMERIC field}
 
+puts "\n=== Phase 10: KNN Pre-Filter + AOF Rewrite ==="
+
+puts "\n--- KNN Pre-Filter ---"
+
+# Create an index with TAG + VECTOR fields for pre-filter tests
+test "FT.CREATE for KNN pre-filter tests" {
+  r FT.CREATE filteridx SCHEMA category TAG price NUMERIC embedding VECTOR FLAT DIM 3 DISTANCE_METRIC L2
+} {OK}
+
+test "FT.ADD docs for KNN pre-filter" {
+  # shoes: close to (1,0,0)
+  r FT.ADD filteridx f1 FIELDS category shoes price 100 embedding [float_blob {1.0 0.0 0.0}]
+  # shoes: close to (0,1,0)
+  r FT.ADD filteridx f2 FIELDS category shoes price 200 embedding [float_blob {0.0 1.0 0.0}]
+  # hat: close to (1,0,0)
+  r FT.ADD filteridx f3 FIELDS category hat price 50 embedding [float_blob {0.9 0.1 0.0}]
+  # hat: far from (1,0,0)
+  r FT.ADD filteridx f4 FIELDS category hat price 300 embedding [float_blob {0.0 0.0 1.0}]
+  # boots: close to (1,0,0)
+  r FT.ADD filteridx f5 FIELDS category boots price 150 embedding [float_blob {0.8 0.2 0.0}]
+} {OK}
+
+test_assert "KNN with * pre-filter returns all (baseline)" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH filteridx {*=>[KNN 2 @embedding $q]} PARAMS 2 q $query]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+  # f1 should be nearest (exact match), then f3 (0.9,0.1,0)
+  set first [lindex $result 1]
+  if {$first ne "f1"} { error "Expected f1 nearest, got $first" }
+}
+
+test_assert "KNN pre-filter @category:{shoes}" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH filteridx {@category:{shoes}=>[KNN 2 @embedding $q]} PARAMS 2 q $query]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 shoes, got $total" }
+  # f1 (shoes, 1,0,0) should be nearest, then f2 (shoes, 0,1,0)
+  set first [lindex $result 1]
+  if {$first ne "f1"} { error "Expected f1 nearest shoe, got $first" }
+  set second [lindex $result 3]
+  if {$second ne "f2"} { error "Expected f2 second shoe, got $second" }
+}
+
+test_assert "KNN pre-filter @category:{hat}" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH filteridx {@category:{hat}=>[KNN 1 @embedding $q]} PARAMS 2 q $query]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1, got $total" }
+  set first [lindex $result 1]
+  # f3 (hat, 0.9,0.1,0) is closer than f4 (hat, 0,0,1) to (1,0,0)
+  if {$first ne "f3"} { error "Expected f3 nearest hat, got $first" }
+}
+
+test_assert "KNN pre-filter with numeric range" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH filteridx {@price:[0 150]=>[KNN 3 @embedding $q]} PARAMS 2 q $query]
+  set total [lindex $result 0]
+  # price <= 150: f1(100), f2(200 excluded), f3(50), f5(150)
+  # KNN top 3 from {f1, f3, f5} nearest to (1,0,0)
+  if {$total != 3} { error "Expected 3, got $total" }
+  set first [lindex $result 1]
+  if {$first ne "f1"} { error "Expected f1, got $first" }
+}
+
+test_assert "KNN pre-filter with boolean AND" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH filteridx {@category:{shoes} @price:[0 150]=>[KNN 2 @embedding $q]} PARAMS 2 q $query]
+  set total [lindex $result 0]
+  # shoes AND price<=150: only f1(shoes,100)
+  if {$total != 1} { error "Expected 1, got $total" }
+  set first [lindex $result 1]
+  if {$first ne "f1"} { error "Expected f1, got $first" }
+}
+
+test_assert "KNN pre-filter with OR" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH filteridx {(@category:{shoes} | @category:{boots})=>[KNN 2 @embedding $q]} PARAMS 2 q $query]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+  # shoes|boots: f1, f2, f5. Top 2 by L2 to (1,0,0): f1(0), f5(0.08)
+  set first [lindex $result 1]
+  if {$first ne "f1"} { error "Expected f1 nearest, got $first" }
+}
+
+test_assert "KNN pre-filter empty result" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH filteridx {@category:{nonexistent}=>[KNN 5 @embedding $q]} PARAMS 2 q $query]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0, got $total" }
+}
+
+puts "\n--- AOF Rewrite ---"
+
+test "FT.CREATE for AOF test" {
+  r FT.CREATE aofidx SCHEMA tag TAG num NUMERIC
+} {OK}
+
+test "FT.ADD docs for AOF" {
+  r FT.ADD aofidx ad1 FIELDS tag hello num 42
+  r FT.ADD aofidx ad2 FIELDS tag world num 99
+} {OK}
+
+test_assert "Data survives BGREWRITEAOF + restart (appendonly)" {
+  # Enable appendonly — this triggers an initial AOF write
+  r CONFIG SET appendonly yes
+  after 2000
+  # Now trigger an explicit rewrite to exercise our AofRewriteSearch callback
+  catch { r BGREWRITEAOF }
+  after 2000
+
+  global redis_fd port module_path
+  catch {redis_command $redis_fd SHUTDOWN SAVE}
+  catch {close $redis_fd}
+  after 1000
+
+  start_redis $module_path $port
+  set redis_fd [redis_connect localhost $port]
+
+  set info [r FT.INFO aofidx]
+  set num_docs_label [lindex $info 2]
+  set num_docs [lindex $info 3]
+  if {$num_docs != 2} {
+    error "Expected 2 docs after AOF restart, got $num_docs"
+  }
+
+  set result [r FT.SEARCH aofidx {@tag:{hello}}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 for hello after AOF restart, got $total" }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

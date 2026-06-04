@@ -26,6 +26,8 @@ class FlatVectorIndex {
   void Add(const std::string& doc_id, const float* data);
   bool Remove(const std::string& doc_id);
   std::vector<KnnResult> KnnQuery(const float* query, size_t k) const;
+  std::vector<KnnResult> KnnQueryFiltered(const float* query, size_t k,
+                                           const std::vector<std::string>& candidates) const;
   size_t Size() const;
   size_t Dim() const;
   DistanceMetric Metric() const;

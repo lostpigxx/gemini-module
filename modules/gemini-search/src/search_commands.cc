@@ -669,8 +669,20 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     const auto* vidx = entry.vector_indices.Get(parsed.knn_field);
     std::vector<KnnResult> knn_results;
     if (vidx) {
-      knn_results = vidx->KnnQuery(
-          reinterpret_cast<const float*>(blob.data()), parsed.knn_k);
+      if (parsed.root.type != QueryNode::Type::kMatchAll) {
+        std::string filter_error;
+        auto candidates = EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
+                                        entry.tag_indices, entry.numeric_indices,
+                                        entry.text_indices, filter_error);
+        if (!filter_error.empty()) {
+          return RedisModule_ReplyWithError(ctx, filter_error.c_str());
+        }
+        knn_results = vidx->KnnQueryFiltered(
+            reinterpret_cast<const float*>(blob.data()), parsed.knn_k, candidates);
+      } else {
+        knn_results = vidx->KnnQuery(
+            reinterpret_cast<const float*>(blob.data()), parsed.knn_k);
+      }
     }
 
     // Apply LIMIT to KNN results
