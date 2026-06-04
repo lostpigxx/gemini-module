@@ -88,6 +88,8 @@ static void RemoveDocFromIndices(IndexEntry& entry,
       entry.vector_indices.GetOrCreate(
           fname, fspec->vector_params.dim, fspec->vector_params.metric)
           .Remove(doc_id);
+    } else if (fspec->type == FieldType::kText) {
+      entry.text_indices.GetOrCreate(fname).Remove(doc_id);
     }
   }
 }
@@ -112,6 +114,8 @@ static void AddDocToIndices(
             fname, dim, fspec->vector_params.metric);
         vidx.Add(doc_id, reinterpret_cast<const float*>(fval.data()));
       }
+    } else if (fspec->type == FieldType::kText) {
+      entry.text_indices.GetOrCreate(fname).Add(doc_id, fval);
     }
   }
 }
@@ -246,9 +250,11 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         return RedisModule_ReplyWithError(
             ctx, "ERR VECTOR field requires DISTANCE_METRIC parameter");
       }
+    } else if (MatchArg(ftype_str, "TEXT")) {
+      fspec.type = FieldType::kText;
     } else {
       return RedisModule_ReplyWithError(
-          ctx, "ERR unknown field type, expected TAG, NUMERIC, or VECTOR");
+          ctx, "ERR unknown field type, expected TAG, NUMERIC, TEXT, or VECTOR");
     }
 
     for (auto& existing : fields) {
@@ -700,7 +706,8 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::string eval_error;
   auto result_ids =
       EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
-                    entry.tag_indices, entry.numeric_indices, eval_error);
+                    entry.tag_indices, entry.numeric_indices,
+                    entry.text_indices, eval_error);
   if (!eval_error.empty()) {
     return RedisModule_ReplyWithError(ctx, eval_error.c_str());
   }

@@ -253,7 +253,7 @@ test_error "FT.CREATE odd number of field args" {
 } {ERR*}
 
 test_error "FT.CREATE unknown field type" {
-  r FT.CREATE bad_idx SCHEMA name TEXT
+  r FT.CREATE bad_idx SCHEMA name BADTYPE
 } {ERR unknown field type*}
 
 test_error "FT.CREATE duplicate field name" {
@@ -1343,6 +1343,274 @@ test_error "FT.CREATE ON HASH PREFIX 0" {
 test_error "FT.CREATE ON HASH PREFIX count exceeds args" {
   r FT.CREATE bad ON HASH PREFIX 3 x: y:
 } {ERR not enough PREFIX values}
+
+puts "\n=== Phase 9: Full-Text Search (TEXT + BM25) ==="
+
+puts "\n--- FT.CREATE with TEXT fields ---"
+
+test "FT.CREATE with TEXT field" {
+  r FT.CREATE textidx SCHEMA title TEXT body TEXT category TAG
+} {OK}
+
+test_assert "FT.INFO shows TEXT field type" {
+  set info [r FT.INFO textidx]
+  set fields [lindex $info 5]
+  set f0 [lindex $fields 0]
+  if {[lindex $f0 0] ne "title"} { error "Expected field 'title'" }
+  if {[lindex $f0 1] ne "TEXT"} { error "Expected type TEXT, got [lindex $f0 1]" }
+  set f1 [lindex $fields 1]
+  if {[lindex $f1 0] ne "body"} { error "Expected field 'body'" }
+  if {[lindex $f1 1] ne "TEXT"} { error "Expected type TEXT, got [lindex $f1 1]" }
+}
+
+puts "\n--- FT.ADD with TEXT fields ---"
+
+test "FT.ADD doc with text" {
+  r FT.ADD textidx doc1 FIELDS title "Quick Brown Fox" body "The quick brown fox jumps over the lazy dog" category animals
+} {OK}
+
+test "FT.ADD more text docs" {
+  r FT.ADD textidx doc2 FIELDS title "Fast Red Car" body "A fast red car drives quickly down the highway" category vehicles
+  r FT.ADD textidx doc3 FIELDS title "Brown Bear" body "The brown bear sleeps quietly in the dark forest" category animals
+  r FT.ADD textidx doc4 FIELDS title "Quick Guide to Redis" body "Redis is a quick in-memory database used for caching" category tech
+  r FT.ADD textidx doc5 FIELDS title "Fox Hunting" body "Fox hunting is a controversial outdoor activity" category sports
+} {OK}
+
+puts "\n--- @field:term single term search ---"
+
+test_assert "FT.SEARCH @title:quick finds docs with quick in title" {
+  set result [r FT.SEARCH textidx "@title:quick"]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 (doc1, doc4), got $total" }
+}
+
+test_assert "FT.SEARCH @body:fox finds docs with fox in body" {
+  set result [r FT.SEARCH textidx "@body:fox"]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 (doc1, doc5), got $total" }
+}
+
+test_assert "FT.SEARCH @title:nonexistent returns 0" {
+  set result [r FT.SEARCH textidx "@title:nonexistent"]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0, got $total" }
+}
+
+puts "\n--- @field:(multi term) search ---"
+
+test_assert "FT.SEARCH @title:(quick brown) matches union of terms" {
+  set result [r FT.SEARCH textidx {@title:(quick brown)}]
+  set total [lindex $result 0]
+  # doc1 has "Quick Brown Fox" (both terms), doc3 has "Brown Bear", doc4 has "Quick Guide..."
+  if {$total != 3} { error "Expected 3, got $total" }
+}
+
+test_assert "FT.SEARCH @body:(bear forest) matches docs with either term" {
+  set result [r FT.SEARCH textidx {@body:(bear forest)}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 (doc3 has both), got $total" }
+}
+
+puts "\n--- Bare term search across all TEXT fields ---"
+
+test_assert "Bare term 'brown' searches all TEXT fields" {
+  set result [r FT.SEARCH textidx "brown"]
+  set total [lindex $result 0]
+  # doc1 title+body has brown, doc3 title+body has brown
+  if {$total != 2} { error "Expected 2, got $total" }
+}
+
+test_assert "Bare term 'redis' searches all TEXT fields" {
+  set result [r FT.SEARCH textidx "redis"]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 (doc4), got $total" }
+}
+
+puts "\n--- Case insensitivity ---"
+
+test_assert "FT.SEARCH text is case insensitive" {
+  set result [r FT.SEARCH textidx "@title:QUICK"]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+}
+
+puts "\n--- Stop words filtered ---"
+
+test_assert "Stop words don't match" {
+  set result [r FT.SEARCH textidx "@body:the"]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0 (the is a stop word), got $total" }
+}
+
+puts "\n--- TEXT + TAG combined queries ---"
+
+test_assert "TEXT AND TAG: @body:brown @category:{animals}" {
+  set result [r FT.SEARCH textidx {@body:brown @category:{animals}}]
+  set total [lindex $result 0]
+  # doc1 (brown fox, animals) and doc3 (brown bear, animals)
+  if {$total != 2} { error "Expected 2, got $total" }
+}
+
+test_assert "TEXT AND TAG: @body:quick @category:{tech}" {
+  set result [r FT.SEARCH textidx {@body:quick @category:{tech}}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 (doc4), got $total" }
+}
+
+test_assert "TEXT OR TAG: @title:fox | @category:{tech}" {
+  set result [r FT.SEARCH textidx {@title:fox | @category:{tech}}]
+  set total [lindex $result 0]
+  # doc1 (fox in title), doc4 (tech category), doc5 (fox in title)
+  if {$total != 3} { error "Expected 3, got $total" }
+}
+
+test_assert "NOT TEXT: -@title:quick" {
+  set result [r FT.SEARCH textidx {-@title:quick}]
+  set total [lindex $result 0]
+  if {$total != 3} { error "Expected 3 (doc2, doc3, doc5), got $total" }
+}
+
+puts "\n--- TEXT with RETURN/SORTBY/LIMIT ---"
+
+test_assert "RETURN on TEXT search" {
+  set result [r FT.SEARCH textidx "@title:quick" RETURN 1 title]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+  set fields [lindex $result 2]
+  if {[llength $fields] != 2} { error "Expected 2 field elements" }
+}
+
+test_assert "SORTBY on TEXT search" {
+  set result [r FT.SEARCH textidx "@title:quick" SORTBY title ASC]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+}
+
+test_assert "LIMIT on TEXT search" {
+  set result [r FT.SEARCH textidx * LIMIT 0 2]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+}
+
+puts "\n--- FT.DEL removes from TEXT index ---"
+
+test "FT.DEL doc with text fields" {
+  r FT.DEL textidx doc1
+} {OK}
+
+test_assert "FT.SEARCH @title:quick after delete" {
+  set result [r FT.SEARCH textidx "@title:quick"]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 (doc4 only), got $total" }
+}
+
+test_assert "FT.SEARCH @body:fox after delete" {
+  set result [r FT.SEARCH textidx "@body:fox"]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 (doc5 only), got $total" }
+}
+
+puts "\n--- FT.ADD replace updates TEXT index ---"
+
+test "FT.ADD replace text doc" {
+  r FT.ADD textidx doc2 FIELDS title "Blue Airplane" body "A blue airplane flies high in the sky" category vehicles
+} {OK}
+
+test_assert "Old text no longer matches" {
+  set result [r FT.SEARCH textidx "@title:red"]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0 after replacing red car, got $total" }
+}
+
+test_assert "New text matches" {
+  set result [r FT.SEARCH textidx "@title:airplane"]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1, got $total" }
+}
+
+puts "\n--- ON HASH auto-indexing with TEXT fields ---"
+
+test "FT.CREATE ON HASH with TEXT fields" {
+  r FT.CREATE autotextidx ON HASH PREFIX 1 article: SCHEMA headline TEXT content TEXT
+} {OK}
+
+test "HSET hash with TEXT fields" {
+  r HSET article:1 headline "Breaking News Today" content "Major events happened across the world today"
+  r HSET article:2 headline "Sports Update" content "The local team won the championship game today"
+  r HSET article:3 headline "Tech News" content "New programming language released for developers"
+} {2}
+
+test_assert "FT.SEARCH auto-indexed TEXT docs" {
+  set result [r FT.SEARCH autotextidx "@headline:news"]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 (article:1, article:3), got $total" }
+}
+
+test_assert "FT.SEARCH bare term on auto-indexed docs" {
+  set result [r FT.SEARCH autotextidx "today"]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 (article:1, article:2), got $total" }
+}
+
+test_assert "HSET update triggers re-indexing for TEXT" {
+  r HSET article:1 headline "Old Story" content "Nothing interesting happened"
+  set result [r FT.SEARCH autotextidx "@headline:breaking"]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0 after update, got $total" }
+}
+
+test_assert "DEL removes from auto-indexed TEXT" {
+  r DEL article:2
+  set result [r FT.SEARCH autotextidx "today"]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0 after DEL, got $total" }
+}
+
+puts "\n--- TEXT persistence ---"
+
+test "FT.CREATE TEXT persistence test" {
+  r FT.CREATE persisttext SCHEMA name TEXT score NUMERIC
+} {OK}
+
+test "FT.ADD TEXT persistence docs" {
+  r FT.ADD persisttext td1 FIELDS name "hello world program" score 10
+  r FT.ADD persisttext td2 FIELDS name "goodbye world" score 20
+} {OK}
+
+test_assert "TEXT index survives BGSAVE + restart" {
+  r BGSAVE
+  after 2000
+
+  global redis_fd port module_path
+  catch {redis_command $redis_fd SHUTDOWN SAVE}
+  catch {close $redis_fd}
+  after 1000
+
+  start_redis $module_path $port
+  set redis_fd [redis_connect localhost $port]
+
+  set result [r FT.SEARCH persisttext "@name:hello"]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 after restart, got $total" }
+  set doc_id [lindex $result 1]
+  if {$doc_id ne "td1"} { error "Expected td1, got $doc_id" }
+}
+
+test_assert "TEXT bare term search works after restart" {
+  set result [r FT.SEARCH persisttext "world"]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 after restart, got $total" }
+}
+
+puts "\n--- Error cases ---"
+
+test_error "TAG syntax on TEXT field" {
+  r FT.SEARCH textidx "@title:{quick}"
+} {ERR field is not a TAG field}
+
+test_error "NUMERIC syntax on TEXT field" {
+  r FT.SEARCH textidx {@title:[0 100]}
+} {ERR field is not a NUMERIC field}
 
 # ============================================================
 # Cleanup & Summary

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <iterator>
 #include <limits>
+#include <set>
 
 // =============================================================
 // Set operations on sorted vectors
@@ -42,7 +43,8 @@ std::vector<std::string> SetDifference(const std::vector<std::string>& a,
 std::vector<std::string> EvaluateQuery(
     const QueryNode& node, const IndexSpec& spec,
     const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
-    const NumericFieldIndices& numeric_indices, std::string& error_msg) {
+    const NumericFieldIndices& numeric_indices,
+    const TextFieldIndices& text_indices, std::string& error_msg) {
   switch (node.type) {
     case QueryNode::Type::kMatchAll:
       return doc_store.AllIds();
@@ -81,16 +83,49 @@ std::vector<std::string> EvaluateQuery(
                               node.range_max, node.max_exclusive);
     }
 
+    case QueryNode::Type::kTextMatch: {
+      if (!node.field_name.empty()) {
+        const auto* fspec = spec.FindField(node.field_name);
+        if (!fspec) {
+          error_msg = "ERR query field not in schema";
+          return {};
+        }
+        if (fspec->type != FieldType::kText) {
+          error_msg = "ERR field is not a TEXT field";
+          return {};
+        }
+        const auto* idx = text_indices.Get(node.field_name);
+        if (!idx) return {};
+        std::set<std::string> merged;
+        for (auto& term : node.text_terms) {
+          auto ids = idx->Lookup(term);
+          merged.insert(ids.begin(), ids.end());
+        }
+        return {merged.begin(), merged.end()};
+      }
+      std::set<std::string> merged;
+      for (auto& f : spec.fields) {
+        if (f.type != FieldType::kText) continue;
+        const auto* idx = text_indices.Get(f.name);
+        if (!idx) continue;
+        for (auto& term : node.text_terms) {
+          auto ids = idx->Lookup(term);
+          merged.insert(ids.begin(), ids.end());
+        }
+      }
+      return {merged.begin(), merged.end()};
+    }
+
     case QueryNode::Type::kAnd: {
       if (node.children.size() != 2) {
         error_msg = "ERR internal: AND requires 2 children";
         return {};
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
-                                 tag_indices, numeric_indices, error_msg);
+                                 tag_indices, numeric_indices, text_indices, error_msg);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
-                                  tag_indices, numeric_indices, error_msg);
+                                  tag_indices, numeric_indices, text_indices, error_msg);
       if (!error_msg.empty()) return {};
       return SetIntersect(left, right);
     }
@@ -101,10 +136,10 @@ std::vector<std::string> EvaluateQuery(
         return {};
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
-                                 tag_indices, numeric_indices, error_msg);
+                                 tag_indices, numeric_indices, text_indices, error_msg);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
-                                  tag_indices, numeric_indices, error_msg);
+                                  tag_indices, numeric_indices, text_indices, error_msg);
       if (!error_msg.empty()) return {};
       return SetUnion(left, right);
     }
@@ -116,7 +151,7 @@ std::vector<std::string> EvaluateQuery(
       }
       auto all = doc_store.AllIds();
       auto child = EvaluateQuery(node.children[0], spec, doc_store,
-                                  tag_indices, numeric_indices, error_msg);
+                                  tag_indices, numeric_indices, text_indices, error_msg);
       if (!error_msg.empty()) return {};
       return SetDifference(all, child);
     }
@@ -295,8 +330,44 @@ struct Parser {
       return true;
     }
 
-    error_msg = "ERR syntax error: expected { or [ after field:";
-    return false;
+    // TEXT match: @field:term or @field:(term1 term2)
+    if (input[pos] == '(') {
+      size_t close = FindClosing('(', ')', pos + 1);
+      if (close == std::string::npos) {
+        error_msg = "ERR syntax error: expected closing )";
+        return false;
+      }
+      std::string body = input.substr(pos + 1, close - pos - 1);
+      pos = close + 1;
+      auto terms = TextIndex::Tokenize(body);
+      if (terms.empty()) {
+        error_msg = "ERR syntax error: empty text query";
+        return false;
+      }
+      out.type = QueryNode::Type::kTextMatch;
+      out.field_name = std::move(field_name);
+      out.text_terms = std::move(terms);
+      return true;
+    }
+
+    {
+      size_t term_start = pos;
+      while (pos < input.size() && input[pos] != ' ' && input[pos] != '\t' &&
+             input[pos] != ')' && input[pos] != '|' && input[pos] != '=' &&
+             input[pos] != '\0') {
+        pos++;
+      }
+      if (pos == term_start) {
+        error_msg = "ERR syntax error: expected {, [, or text term after field:";
+        return false;
+      }
+      std::string raw = input.substr(term_start, pos - term_start);
+      auto terms = TextIndex::Tokenize(raw);
+      out.type = QueryNode::Type::kTextMatch;
+      out.field_name = std::move(field_name);
+      out.text_terms = std::move(terms);
+      return true;
+    }
   }
 
   // Primary: '(' expr ')', '*', '@field:...'
@@ -320,6 +391,25 @@ struct Parser {
     }
     if (Peek() == '@') {
       return ParseFieldExpr(out);
+    }
+    // Bare term: full-text search across all TEXT fields
+    if (std::isalnum(static_cast<unsigned char>(Peek()))) {
+      size_t term_start = pos;
+      while (pos < input.size() && input[pos] != ' ' && input[pos] != '\t' &&
+             input[pos] != ')' && input[pos] != '|' && input[pos] != '=' &&
+             input[pos] != '\0') {
+        pos++;
+      }
+      std::string raw = input.substr(term_start, pos - term_start);
+      auto terms = TextIndex::Tokenize(raw);
+      if (terms.empty()) {
+        out.type = QueryNode::Type::kMatchAll;
+        return true;
+      }
+      out.type = QueryNode::Type::kTextMatch;
+      out.field_name = "";
+      out.text_terms = std::move(terms);
+      return true;
     }
     error_msg = "ERR syntax error: expected @, *, or (";
     return false;

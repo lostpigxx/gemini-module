@@ -4,6 +4,7 @@
 #include "index_spec.h"
 #include "numeric_index.h"
 #include "tag_index.h"
+#include "text_index.h"
 
 #include <string>
 #include <vector>
@@ -13,6 +14,7 @@ struct QueryNode {
     kMatchAll,
     kTagMatch,
     kNumericRange,
+    kTextMatch,
     kAnd,
     kOr,
     kNot,
@@ -22,6 +24,7 @@ struct QueryNode {
 
   std::string field_name;
   std::vector<std::string> tag_values;
+  std::vector<std::string> text_terms;
 
   double range_min = 0;
   double range_max = 0;
@@ -54,4 +57,5 @@ std::vector<std::string> EvaluateQuery(const QueryNode& node,
                                         const DocumentStore& doc_store,
                                         const TagFieldIndices& tag_indices,
                                         const NumericFieldIndices& numeric_indices,
+                                        const TextFieldIndices& text_indices,
                                         std::string& error_msg);

@@ -18,6 +18,7 @@ extern "C" {
 #include "index_spec.h"
 #include "numeric_index.h"
 #include "tag_index.h"
+#include "text_index.h"
 #include "vector_index.h"
 
 #include <string>
@@ -31,6 +32,7 @@ struct IndexEntry {
   TagFieldIndices tag_indices;
   NumericFieldIndices numeric_indices;
   VectorFieldIndices vector_indices;
+  TextFieldIndices text_indices;
 };
 
 int RegisterSearchCommands(RedisModuleCtx* ctx);

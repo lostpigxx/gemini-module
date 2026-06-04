@@ -302,6 +302,7 @@ class QueryEvalTest : public ::testing::Test {
   DocumentStore doc_store;
   TagFieldIndices tag_indices;
   NumericFieldIndices numeric_indices;
+  TextFieldIndices text_indices;
 
   void SetUp() override {
     spec.name = "test";
@@ -338,7 +339,7 @@ class QueryEvalTest : public ::testing::Test {
     if (!ParseQuery(query_str, pq, parse_err)) return {};
     std::string eval_err;
     return EvaluateQuery(pq.root, spec, doc_store, tag_indices,
-                          numeric_indices, eval_err);
+                          numeric_indices, text_indices, eval_err);
   }
 };
 
