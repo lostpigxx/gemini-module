@@ -116,22 +116,55 @@ static void AddDocToIndices(
   }
 }
 
-// FT.CREATE <index_name> SCHEMA <field> <type> [params...] [<field> <type> ...]
+static void ScanExistingKeys(RedisModuleCtx* ctx, IndexEntry& entry);
+static void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry,
+                         const std::string& key_name);
+
+// FT.CREATE <index_name> [ON HASH PREFIX <count> <prefix> ...] SCHEMA <field> <type> [params...]
 static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                            int argc) {
   if (argc < 5) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
   auto index_name = ArgView(argv[1]);
-  auto schema_kw = ArgView(argv[2]);
 
-  if (!MatchArg(schema_kw, "SCHEMA")) {
-    return RedisModule_ReplyWithError(
-        ctx, "ERR syntax error, expected SCHEMA keyword");
+  int i = 2;
+  std::vector<std::string> prefixes;
+
+  if (i < argc && MatchArg(ArgView(argv[i]), "ON")) {
+    i++;
+    if (i >= argc || !MatchArg(ArgView(argv[i]), "HASH")) {
+      return RedisModule_ReplyWithError(ctx, "ERR only HASH is supported for ON");
+    }
+    i++;
+    if (i >= argc || !MatchArg(ArgView(argv[i]), "PREFIX")) {
+      return RedisModule_ReplyWithError(ctx, "ERR expected PREFIX after ON HASH");
+    }
+    i++;
+    if (i >= argc) {
+      return RedisModule_ReplyWithError(ctx, "ERR PREFIX requires a count");
+    }
+    char* endptr = nullptr;
+    long prefix_count = std::strtol(std::string(ArgView(argv[i])).c_str(), &endptr, 10);
+    i++;
+    if (*endptr != '\0' || prefix_count <= 0) {
+      return RedisModule_ReplyWithError(ctx, "ERR PREFIX count must be a positive integer");
+    }
+    for (long p = 0; p < prefix_count; p++) {
+      if (i >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR not enough PREFIX values");
+      }
+      prefixes.emplace_back(ArgView(argv[i]));
+      i++;
+    }
   }
 
+  if (i >= argc || !MatchArg(ArgView(argv[i]), "SCHEMA")) {
+    return RedisModule_ReplyWithError(ctx, "ERR syntax error, expected SCHEMA keyword");
+  }
+  i++;
+
   std::vector<FieldSpec> fields;
-  int i = 3;
   while (i < argc) {
     if (i + 1 >= argc) {
       return RedisModule_ReplyWithError(
@@ -237,13 +270,17 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (!inserted) {
     return RedisModule_ReplyWithError(ctx, "ERR index already exists");
   }
-  it->second.spec = IndexSpec{idx_str, std::move(fields)};
+  it->second.spec = IndexSpec{idx_str, std::move(fields), std::move(prefixes)};
 
   if (SearchModuleType) {
     auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
         ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
     RedisModule_ModuleTypeSetValue(key, SearchModuleType,
                                    new std::string(idx_str));
+  }
+
+  if (it->second.spec.HasPrefixes()) {
+    ScanExistingKeys(ctx, it->second);
   }
 
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
@@ -282,7 +319,8 @@ static int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   auto& entry = it->second;
 
-  RedisModule_ReplyWithArray(ctx, 6);
+  long info_len = entry.spec.HasPrefixes() ? 8 : 6;
+  RedisModule_ReplyWithArray(ctx, info_len);
 
   RedisModule_ReplyWithSimpleString(ctx, "index_name");
   RedisModule_ReplyWithCString(ctx, entry.spec.name.c_str());
@@ -290,6 +328,17 @@ static int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_ReplyWithSimpleString(ctx, "num_docs");
   RedisModule_ReplyWithLongLong(
       ctx, static_cast<long long>(entry.doc_store.Size()));
+
+  if (entry.spec.HasPrefixes()) {
+    RedisModule_ReplyWithSimpleString(ctx, "index_definition");
+    long def_len = 2 + static_cast<long>(entry.spec.prefixes.size());
+    RedisModule_ReplyWithArray(ctx, def_len);
+    RedisModule_ReplyWithSimpleString(ctx, "key_type");
+    RedisModule_ReplyWithSimpleString(ctx, "HASH");
+    for (auto& p : entry.spec.prefixes) {
+      RedisModule_ReplyWithCString(ctx, p.c_str());
+    }
+  }
 
   RedisModule_ReplyWithSimpleString(ctx, "fields");
   RedisModule_ReplyWithArray(ctx,
@@ -721,6 +770,88 @@ static int FtDebugCommand(RedisModuleCtx* ctx, RedisModuleString** /*argv*/,
   return RedisModule_ReplyWithSimpleString(ctx, "GeminiSearch OK");
 }
 
+static void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry,
+                         const std::string& key_name) {
+  RedisModuleString* rms_key = RedisModule_CreateString(ctx, key_name.c_str(), key_name.size());
+  auto* rkey = static_cast<RedisModuleKey*>(
+      RedisModule_OpenKey(ctx, rms_key, REDISMODULE_READ));
+  if (!rkey || RedisModule_KeyType(rkey) != REDISMODULE_KEYTYPE_HASH) return;
+
+  std::unordered_map<std::string, std::string> doc_fields;
+  for (auto& fspec : entry.spec.fields) {
+    if (fspec.type == FieldType::kVector) continue;
+    RedisModuleString* val = nullptr;
+    RedisModule_HashGet(rkey, REDISMODULE_HASH_CFIELDS, fspec.name.c_str(), &val, NULL);
+    if (val) {
+      size_t len = 0;
+      const char* data = RedisModule_StringPtrLen(val, &len);
+      doc_fields[fspec.name] = std::string(data, len);
+    }
+  }
+
+  if (doc_fields.empty()) return;
+
+  RemoveDocFromIndices(entry, key_name);
+  entry.doc_store.Add(key_name, doc_fields);
+  AddDocToIndices(entry, key_name, doc_fields);
+}
+
+static void RemoveHashKey(IndexEntry& entry, const std::string& key_name) {
+  if (!entry.doc_store.Contains(key_name)) return;
+  RemoveDocFromIndices(entry, key_name);
+  entry.doc_store.Remove(key_name);
+}
+
+struct ScanPrivdata {
+  RedisModuleCtx* ctx;
+  IndexEntry* entry;
+};
+
+static void ScanCallback(RedisModuleCtx* /*ctx*/, RedisModuleString* keyname,
+                          RedisModuleKey* /*key*/, void* privdata) {
+  auto* pd = static_cast<ScanPrivdata*>(privdata);
+  size_t len = 0;
+  const char* data = RedisModule_StringPtrLen(keyname, &len);
+  std::string key_str(data, len);
+  if (pd->entry->spec.MatchesPrefix(key_str)) {
+    IndexHashKey(pd->ctx, *pd->entry, key_str);
+  }
+}
+
+static void ScanExistingKeys(RedisModuleCtx* ctx, IndexEntry& entry) {
+  auto* cursor = RedisModule_ScanCursorCreate();
+  ScanPrivdata pd{ctx, &entry};
+  while (RedisModule_Scan(ctx, cursor, ScanCallback, &pd)) {}
+  RedisModule_ScanCursorDestroy(cursor);
+}
+
+static int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event,
+                           RedisModuleString* key) {
+  (void)type;
+  size_t len = 0;
+  const char* data = RedisModule_StringPtrLen(key, &len);
+  std::string key_str(data, len);
+
+  bool is_del = (strcmp(event, "del") == 0 || strcmp(event, "expired") == 0 ||
+                 strcmp(event, "evicted") == 0);
+  bool is_hash_write = (strcmp(event, "hset") == 0 || strcmp(event, "hdel") == 0 ||
+                        strcmp(event, "hincrby") == 0 || strcmp(event, "hincrbyfloat") == 0 ||
+                        strcmp(event, "hmset") == 0 || strcmp(event, "hsetnx") == 0);
+
+  for (auto& [idx_name, entry] : g_indices) {
+    if (!entry.spec.HasPrefixes()) continue;
+    if (!entry.spec.MatchesPrefix(key_str)) continue;
+
+    if (is_del) {
+      RemoveHashKey(entry, key_str);
+    } else if (is_hash_write) {
+      IndexHashKey(ctx, entry, key_str);
+    }
+  }
+
+  return REDISMODULE_OK;
+}
+
 int RegisterSearchCommands(RedisModuleCtx* ctx) {
   struct CmdEntry {
     const char* name;
@@ -745,5 +876,12 @@ int RegisterSearchCommands(RedisModuleCtx* ctx) {
       return REDISMODULE_ERR;
     }
   }
+
+  if (RedisModule_SubscribeToKeyspaceEvents(
+          ctx, REDISMODULE_NOTIFY_HASH | REDISMODULE_NOTIFY_GENERIC,
+          OnKeyspaceEvent) == REDISMODULE_ERR) {
+    RedisModule_Log(ctx, "warning", "Failed to subscribe to keyspace events");
+  }
+
   return REDISMODULE_OK;
 }

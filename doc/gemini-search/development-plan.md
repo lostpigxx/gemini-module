@@ -376,14 +376,14 @@ FT.AGGREGATE idx "@status:{active}"
 | P5 | Boolean combinations | Done |
 | P6 | RETURN / SORT / LIMIT | Done |
 | P7 | RDB persistence | Done |
-| P8 | Auto-indexing (ON HASH) | Planned |
+| P8 | Auto-indexing (ON HASH) | Done |
 | P9 | Full-text search (TEXT + BM25) | Planned |
 | P10 | KNN pre-filter + AOF rewrite | Planned |
 | P11 | VECTOR HNSW (approximate KNN) | Planned |
 | P12 | FT.AGGREGATE | Planned |
 
-P0–P7 = complete, functional search engine.
-P8 = usability — write Hash, auto-index.
+P0–P8 = complete, functional search engine with auto-indexing.
+P8 = usability — write Hash, auto-index (done).
 P9 = RediSearch's core selling point — full-text search.
 P10–P11 = production-grade vector search.
 P12 = analytics queries.

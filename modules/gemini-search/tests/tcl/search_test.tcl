@@ -1041,6 +1041,309 @@ test_assert "FT._LIST shows index after restart" {
   }
 }
 
+puts "\n=== Phase 8: Auto-Indexing (ON HASH) ==="
+
+# Clean up all prior indices first
+catch { r FT.DROPINDEX myidx }
+catch { r FT.DROPINDEX numonly }
+catch { r FT.DROPINDEX wide }
+catch { r FT.DROPINDEX tagonly }
+catch { r FT.DROPINDEX case_idx }
+catch { r FT.DROPINDEX numtest }
+catch { r FT.DROPINDEX vecidx }
+catch { r FT.DROPINDEX cosidx }
+catch { r FT.DROPINDEX boolidx }
+catch { r FT.DROPINDEX persistidx }
+r FLUSHDB
+
+puts "\n--- FT.CREATE ON HASH ---"
+
+test "FT.CREATE with ON HASH PREFIX" {
+  r FT.CREATE autoidx ON HASH PREFIX 1 product: SCHEMA name TAG price NUMERIC
+} {OK}
+
+test_assert "FT.INFO shows index_definition for ON HASH index" {
+  set info [r FT.INFO autoidx]
+  set found 0
+  for {set i 0} {$i < [llength $info]} {incr i} {
+    if {[lindex $info $i] eq "index_definition"} {
+      set found 1
+      set def [lindex $info [expr {$i + 1}]]
+      if {[lindex $def 0] ne "key_type"} {
+        error "Expected 'key_type', got '[lindex $def 0]'"
+      }
+      if {[lindex $def 1] ne "HASH"} {
+        error "Expected 'HASH', got '[lindex $def 1]'"
+      }
+      if {[lindex $def 2] ne "product:"} {
+        error "Expected prefix 'product:', got '[lindex $def 2]'"
+      }
+      break
+    }
+  }
+  if {!$found} { error "index_definition not found in FT.INFO output" }
+}
+
+puts "\n--- HSET triggers auto-indexing ---"
+
+test "HSET triggers indexing" {
+  r HSET product:1 name shoes price 299
+} {2}
+
+test_assert "FT.SEARCH finds auto-indexed doc" {
+  set result [r FT.SEARCH autoidx {@name:{shoes}}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1, got $total" }
+  set doc_id [lindex $result 1]
+  if {$doc_id ne "product:1"} { error "Expected product:1, got $doc_id" }
+}
+
+test_assert "FT.INFO shows num_docs after auto-index" {
+  set info [r FT.INFO autoidx]
+  for {set i 0} {$i < [llength $info]} {incr i} {
+    if {[lindex $info $i] eq "num_docs"} {
+      set num [lindex $info [expr {$i + 1}]]
+      if {$num != 1} { error "Expected 1 doc, got $num" }
+      break
+    }
+  }
+}
+
+test "HSET second doc" {
+  r HSET product:2 name hat price 49
+} {2}
+
+test_assert "FT.SEARCH match-all returns both auto-indexed docs" {
+  set result [r FT.SEARCH autoidx *]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+}
+
+test_assert "FT.SEARCH numeric range on auto-indexed docs" {
+  set result [r FT.SEARCH autoidx {@price:[100 500]}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 (product:1=299), got $total" }
+  set doc_id [lindex $result 1]
+  if {$doc_id ne "product:1"} { error "Expected product:1, got $doc_id" }
+}
+
+puts "\n--- HSET update triggers re-indexing ---"
+
+test "HSET update existing key" {
+  r HSET product:1 name boots price 399
+} {0}
+
+test_assert "FT.SEARCH reflects updated value" {
+  set result [r FT.SEARCH autoidx {@name:{boots}}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1, got $total" }
+}
+
+test_assert "Old tag value no longer matches" {
+  set result [r FT.SEARCH autoidx {@name:{shoes}}]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0, got $total" }
+}
+
+puts "\n--- DEL removes from index ---"
+
+test "DEL removes hash and triggers de-indexing" {
+  r DEL product:1
+} {1}
+
+test_assert "FT.SEARCH no longer finds deleted key" {
+  set result [r FT.SEARCH autoidx {@name:{boots}}]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0 after DEL, got $total" }
+}
+
+test_assert "Other docs remain after DEL" {
+  set result [r FT.SEARCH autoidx *]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 remaining, got $total" }
+}
+
+puts "\n--- Prefix mismatch ---"
+
+test "HSET non-matching prefix does not index" {
+  r HSET order:1 name widget price 99
+} {2}
+
+test_assert "Non-matching key not in index" {
+  set result [r FT.SEARCH autoidx *]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 (only product:2), got $total" }
+}
+
+puts "\n--- Multiple prefixes ---"
+
+test "FT.CREATE with multiple prefixes" {
+  r FT.CREATE multiprefix ON HASH PREFIX 2 item: thing: SCHEMA label TAG
+} {OK}
+
+test "HSET with first prefix" {
+  r HSET item:1 label alpha
+} {1}
+
+test "HSET with second prefix" {
+  r HSET thing:1 label beta
+} {1}
+
+test_assert "Both prefixes indexed" {
+  set result [r FT.SEARCH multiprefix *]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+}
+
+test_assert "Search by tag across prefixes" {
+  set result [r FT.SEARCH multiprefix {@label:{alpha}}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 for alpha, got $total" }
+  set doc_id [lindex $result 1]
+  if {$doc_id ne "item:1"} { error "Expected item:1, got $doc_id" }
+}
+
+puts "\n--- Existing keys scanned on FT.CREATE ---"
+
+# Pre-populate some hashes, then create an index that matches them
+r HSET widget:1 color red size 10
+r HSET widget:2 color blue size 20
+r HSET widget:3 color red size 30
+r HSET gadget:1 color green size 5
+
+test "FT.CREATE scans existing keys" {
+  r FT.CREATE scanidx ON HASH PREFIX 1 widget: SCHEMA color TAG size NUMERIC
+} {OK}
+
+test_assert "Existing matching keys are auto-indexed on create" {
+  set result [r FT.SEARCH scanidx *]
+  set total [lindex $result 0]
+  if {$total != 3} { error "Expected 3 existing widgets, got $total" }
+}
+
+test_assert "Tag search on scanned keys" {
+  set result [r FT.SEARCH scanidx {@color:{red}}]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 red widgets, got $total" }
+}
+
+test_assert "Numeric range on scanned keys" {
+  set result [r FT.SEARCH scanidx {@size:[15 35]}]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 (widget:2=20, widget:3=30), got $total" }
+}
+
+test_assert "Non-matching prefix not included in scan" {
+  set result [r FT.SEARCH scanidx {@color:{green}}]
+  set total [lindex $result 0]
+  if {$total != 0} { error "Expected 0 (gadget:1 doesn't match prefix), got $total" }
+}
+
+puts "\n--- FT.ADD still works alongside ON HASH ---"
+
+test "FT.ADD still works on ON HASH index" {
+  r FT.ADD autoidx manual:1 FIELDS name manual_item price 999
+} {OK}
+
+test_assert "FT.ADD doc found by search" {
+  set result [r FT.SEARCH autoidx {@name:{manual_item}}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1, got $total" }
+}
+
+puts "\n--- ON HASH with boolean queries ---"
+
+r HSET product:10 name jacket price 500
+r HSET product:11 name jacket price 100
+r HSET product:12 name gloves price 25
+
+test_assert "Boolean AND on auto-indexed docs" {
+  set result [r FT.SEARCH autoidx {@name:{jacket} @price:[200 600]}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 (product:10=500), got $total" }
+}
+
+test_assert "Boolean OR on auto-indexed docs" {
+  set result [r FT.SEARCH autoidx {@name:{jacket} | @name:{gloves}}]
+  set total [lindex $result 0]
+  if {$total != 3} { error "Expected 3 (2 jackets + 1 gloves), got $total" }
+}
+
+puts "\n--- ON HASH with SORTBY/LIMIT ---"
+
+test_assert "SORTBY on auto-indexed docs" {
+  set result [r FT.SEARCH autoidx {@name:{jacket}} SORTBY price ASC]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2 jackets, got $total" }
+  set first_id [lindex $result 1]
+  if {$first_id ne "product:11"} { error "Expected product:11 first (price 100), got $first_id" }
+}
+
+test_assert "LIMIT on auto-indexed docs" {
+  set result [r FT.SEARCH autoidx * SORTBY price ASC LIMIT 0 2]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+}
+
+puts "\n--- ON HASH persistence ---"
+
+test_assert "ON HASH index survives BGSAVE + restart" {
+  r BGSAVE
+  after 2000
+
+  global redis_fd port module_path
+  catch {redis_command $redis_fd SHUTDOWN SAVE}
+  catch {close $redis_fd}
+  after 1000
+
+  start_redis $module_path $port
+  set redis_fd [redis_connect localhost $port]
+
+  set info [r FT.INFO autoidx]
+  set found_def 0
+  for {set i 0} {$i < [llength $info]} {incr i} {
+    if {[lindex $info $i] eq "index_definition"} {
+      set found_def 1
+      break
+    }
+  }
+  if {!$found_def} { error "index_definition lost after restart" }
+
+  # Verify docs survived
+  set result [r FT.SEARCH autoidx *]
+  set total [lindex $result 0]
+  if {$total < 4} { error "Expected at least 4 docs after restart, got $total" }
+}
+
+test_assert "HSET still triggers indexing after restart" {
+  r HSET product:99 name reloaded price 1
+  set result [r FT.SEARCH autoidx {@name:{reloaded}}]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1 for reloaded, got $total" }
+}
+
+puts "\n--- Error cases ---"
+
+test_error "FT.CREATE ON without HASH" {
+  r FT.CREATE bad ON STRING PREFIX 1 x: SCHEMA f TAG
+} {ERR only HASH is supported for ON}
+
+test_error "FT.CREATE ON HASH without PREFIX" {
+  r FT.CREATE bad ON HASH SCHEMA f TAG
+} {ERR expected PREFIX after ON HASH}
+
+test_error "FT.CREATE ON HASH PREFIX without count" {
+  r FT.CREATE bad ON HASH PREFIX SCHEMA f TAG
+} {ERR PREFIX count must be a positive integer}
+
+test_error "FT.CREATE ON HASH PREFIX 0" {
+  r FT.CREATE bad ON HASH PREFIX 0 SCHEMA f TAG
+} {ERR PREFIX count must be a positive integer}
+
+test_error "FT.CREATE ON HASH PREFIX count exceeds args" {
+  r FT.CREATE bad ON HASH PREFIX 3 x: y:
+} {ERR not enough PREFIX values}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

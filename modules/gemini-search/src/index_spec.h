@@ -51,6 +51,17 @@ struct FieldSpec {
 struct IndexSpec {
   std::string name;
   std::vector<FieldSpec> fields;
+  std::vector<std::string> prefixes;
+
+  bool HasPrefixes() const { return !prefixes.empty(); }
+
+  bool MatchesPrefix(const std::string& key) const {
+    if (prefixes.empty()) return false;
+    for (auto& p : prefixes) {
+      if (key.size() >= p.size() && key.compare(0, p.size(), p) == 0) return true;
+    }
+    return false;
+  }
 
   const FieldSpec* FindField(const std::string& field_name) const {
     for (auto& f : fields) {

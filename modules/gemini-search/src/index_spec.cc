@@ -6,7 +6,7 @@
 bool IndexRegistry::Create(std::string name, std::vector<FieldSpec> fields) {
   std::string key = name;
   auto [it, inserted] =
-      indices_.try_emplace(std::move(key), IndexSpec{std::move(name), std::move(fields)});
+      indices_.try_emplace(std::move(key), IndexSpec{std::move(name), std::move(fields), {}});
   return inserted;
 }
 

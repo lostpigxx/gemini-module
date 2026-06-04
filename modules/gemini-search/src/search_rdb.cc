@@ -16,6 +16,11 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
 
   RedisModule_SaveStringBuffer(rdb, spec.name.c_str(), spec.name.size());
 
+  RedisModule_SaveUnsigned(rdb, spec.prefixes.size());
+  for (auto& p : spec.prefixes) {
+    RedisModule_SaveStringBuffer(rdb, p.c_str(), p.size());
+  }
+
   RedisModule_SaveUnsigned(rdb, spec.fields.size());
   for (auto& f : spec.fields) {
     RedisModule_SaveStringBuffer(rdb, f.name.c_str(), f.name.size());
@@ -55,9 +60,17 @@ static std::string LoadString(RedisModuleIO* rdb) {
 }
 
 void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
-  if (encver != kSearchEncVer) return nullptr;
+  if (encver != 1 && encver != kSearchEncVer) return nullptr;
 
   std::string index_name = LoadString(rdb);
+
+  std::vector<std::string> prefixes;
+  if (encver >= 2) {
+    uint64_t prefix_count = RedisModule_LoadUnsigned(rdb);
+    for (uint64_t i = 0; i < prefix_count; i++) {
+      prefixes.push_back(LoadString(rdb));
+    }
+  }
 
   uint64_t field_count = RedisModule_LoadUnsigned(rdb);
   std::vector<FieldSpec> fields;
@@ -90,7 +103,7 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
     docs.emplace_back(std::move(doc_id), std::move(doc_fields));
   }
 
-  IndexSpec spec{index_name, std::move(fields)};
+  IndexSpec spec{index_name, std::move(fields), std::move(prefixes)};
   CreateIndexFromRdb(index_name, std::move(spec), docs);
 
   return new std::string(std::move(index_name));
