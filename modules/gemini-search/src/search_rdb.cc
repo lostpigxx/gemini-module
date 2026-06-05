@@ -31,6 +31,8 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
       RedisModule_SaveUnsigned(rdb, f.vector_params.dim);
       RedisModule_SaveUnsigned(rdb,
                                 static_cast<uint64_t>(f.vector_params.metric));
+      RedisModule_SaveUnsigned(rdb, f.vector_params.m);
+      RedisModule_SaveUnsigned(rdb, f.vector_params.ef_construction);
     }
   }
 
@@ -60,7 +62,7 @@ static std::string LoadString(RedisModuleIO* rdb) {
 }
 
 void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
-  if (encver != 1 && encver != kSearchEncVer) return nullptr;
+  if (encver != 1 && encver != 2 && encver != kSearchEncVer) return nullptr;
 
   std::string index_name = LoadString(rdb);
 
@@ -84,6 +86,10 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
       f.vector_params.dim = static_cast<size_t>(RedisModule_LoadUnsigned(rdb));
       f.vector_params.metric =
           static_cast<DistanceMetric>(RedisModule_LoadUnsigned(rdb));
+      if (encver >= 3) {
+        f.vector_params.m = static_cast<size_t>(RedisModule_LoadUnsigned(rdb));
+        f.vector_params.ef_construction = static_cast<size_t>(RedisModule_LoadUnsigned(rdb));
+      }
     }
     fields.push_back(std::move(f));
   }
@@ -183,6 +189,12 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key,
       create_args.push_back(std::to_string(f.vector_params.dim));
       create_args.push_back("DISTANCE_METRIC");
       create_args.push_back(DistanceMetricName(f.vector_params.metric));
+      if (f.vector_params.algorithm == VectorAlgorithm::kHnsw) {
+        create_args.push_back("M");
+        create_args.push_back(std::to_string(f.vector_params.m));
+        create_args.push_back("EF_CONSTRUCTION");
+        create_args.push_back(std::to_string(f.vector_params.ef_construction));
+      }
     }
   }
   EmitAofCreate(aof, key, create_args);

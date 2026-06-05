@@ -1743,6 +1743,151 @@ test_assert "Data survives BGREWRITEAOF + restart (appendonly)" {
   if {$total != 1} { error "Expected 1 for hello after AOF restart, got $total" }
 }
 
+puts "\n=== Phase 11: VECTOR HNSW ==="
+
+puts "\n--- FT.CREATE with HNSW ---"
+
+test "FT.CREATE with HNSW VECTOR field" {
+  r FT.CREATE hnswi SCHEMA label TAG embedding VECTOR HNSW DIM 3 DISTANCE_METRIC L2 M 8 EF_CONSTRUCTION 100
+} {OK}
+
+test_assert "FT.INFO shows HNSW params" {
+  set info [r FT.INFO hnswi]
+  set fields [lindex $info 5]
+  set vf [lindex $fields 1]
+  if {[llength $vf] != 12} {
+    error "Expected 12 elements for HNSW field, got [llength $vf]: $vf"
+  }
+  if {[lindex $vf 0] ne "embedding"} { error "Expected embedding" }
+  if {[lindex $vf 1] ne "VECTOR"} { error "Expected VECTOR" }
+  if {[lindex $vf 3] ne "HNSW"} { error "Expected HNSW, got [lindex $vf 3]" }
+  if {[lindex $vf 5] != 3} { error "Expected dim 3, got [lindex $vf 5]" }
+  if {[lindex $vf 7] ne "L2"} { error "Expected L2, got [lindex $vf 7]" }
+  if {[lindex $vf 9] != 8} { error "Expected M=8, got [lindex $vf 9]" }
+  if {[lindex $vf 11] != 100} { error "Expected ef_construction=100, got [lindex $vf 11]" }
+}
+
+test "FT.CREATE HNSW with default M/EF" {
+  r FT.CREATE hnswdef SCHEMA vec VECTOR HNSW DIM 2 DISTANCE_METRIC COSINE
+} {OK}
+
+test_assert "FT.INFO HNSW defaults M=16, EF=200" {
+  set info [r FT.INFO hnswdef]
+  set fields [lindex $info 5]
+  set vf [lindex $fields 0]
+  if {[lindex $vf 9] != 16} { error "Expected M=16, got [lindex $vf 9]" }
+  if {[lindex $vf 11] != 200} { error "Expected ef=200, got [lindex $vf 11]" }
+}
+
+puts "\n--- FT.ADD + FT.SEARCH with HNSW ---"
+
+test "FT.ADD HNSW docs" {
+  r FT.ADD hnswi h1 FIELDS label x_axis embedding [float_blob {1.0 0.0 0.0}]
+  r FT.ADD hnswi h2 FIELDS label y_axis embedding [float_blob {0.0 1.0 0.0}]
+  r FT.ADD hnswi h3 FIELDS label z_axis embedding [float_blob {0.0 0.0 1.0}]
+  r FT.ADD hnswi h4 FIELDS label diagonal embedding [float_blob {1.0 1.0 0.0}]
+} {OK}
+
+test_assert "HNSW KNN returns nearest" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH hnswi {*=>[KNN 2 @embedding $q]} PARAMS 2 q $query]
+  set total [lindex $result 0]
+  if {$total != 2} { error "Expected 2, got $total" }
+  set first [lindex $result 1]
+  if {$first ne "h1"} { error "Expected h1 nearest, got $first" }
+}
+
+test_assert "HNSW KNN top-1" {
+  set query [float_blob {0.0 0.9 0.0}]
+  set result [r FT.SEARCH hnswi {*=>[KNN 1 @embedding $q]} PARAMS 2 q $query]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1, got $total" }
+  set first [lindex $result 1]
+  if {$first ne "h2"} { error "Expected h2 (y_axis), got $first" }
+}
+
+test_assert "HNSW KNN has __vec_score" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH hnswi {*=>[KNN 1 @embedding $q]} PARAMS 2 q $query]
+  set fields [lindex $result 2]
+  set score_idx [lsearch $fields "__vec_score"]
+  if {$score_idx < 0} { error "__vec_score not found" }
+  set score [lindex $fields [expr {$score_idx + 1}]]
+  if {$score > 0.001} { error "Expected ~0 for exact match, got $score" }
+}
+
+puts "\n--- HNSW KNN with pre-filter ---"
+
+test_assert "HNSW KNN pre-filter @label:{x_axis|diagonal}" {
+  set query [float_blob {0.9 0.1 0.0}]
+  set result [r FT.SEARCH hnswi {@label:{x_axis|diagonal}=>[KNN 1 @embedding $q]} PARAMS 2 q $query]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1, got $total" }
+  set first [lindex $result 1]
+  if {$first ne "h1"} { error "Expected h1 (x_axis closest to 0.9,0.1,0), got $first" }
+}
+
+puts "\n--- FT.DEL from HNSW index ---"
+
+test "FT.DEL from HNSW" {
+  r FT.DEL hnswi h1
+} {OK}
+
+test_assert "HNSW search after delete" {
+  set query [float_blob {1.0 0.0 0.0}]
+  set result [r FT.SEARCH hnswi {*=>[KNN 1 @embedding $q]} PARAMS 2 q $query]
+  set total [lindex $result 0]
+  if {$total != 1} { error "Expected 1, got $total" }
+  set first [lindex $result 1]
+  if {$first ne "h4"} { error "Expected h4 (diagonal nearest after h1 deleted), got $first" }
+}
+
+puts "\n--- HNSW persistence ---"
+
+test "FT.CREATE HNSW persistence index" {
+  r FT.CREATE hnswpersist SCHEMA vec VECTOR HNSW DIM 2 DISTANCE_METRIC L2 M 4 EF_CONSTRUCTION 50
+} {OK}
+
+test "FT.ADD HNSW persistence docs" {
+  r FT.ADD hnswpersist hp1 FIELDS vec [float_blob {1.0 0.0}]
+  r FT.ADD hnswpersist hp2 FIELDS vec [float_blob {0.0 1.0}]
+} {OK}
+
+test_assert "HNSW survives BGSAVE + restart" {
+  r BGSAVE
+  after 2000
+
+  global redis_fd port module_path
+  catch {redis_command $redis_fd SHUTDOWN SAVE}
+  catch {close $redis_fd}
+  after 1000
+
+  start_redis $module_path $port
+  set redis_fd [redis_connect localhost $port]
+
+  set info [r FT.INFO hnswpersist]
+  set fields [lindex $info 5]
+  set vf [lindex $fields 0]
+  if {[lindex $vf 3] ne "HNSW"} { error "Expected HNSW after restart" }
+  if {[lindex $vf 9] != 4} { error "Expected M=4, got [lindex $vf 9]" }
+
+  set query [float_blob {1.0 0.0}]
+  set result [r FT.SEARCH hnswpersist {*=>[KNN 1 @vec $q]} PARAMS 2 q $query]
+  set first [lindex $result 1]
+  if {$first ne "hp1"} { error "Expected hp1 after restart, got $first" }
+}
+
+puts "\n--- Error cases ---"
+
+test_error "FT.CREATE VECTOR unknown algorithm" {
+  r FT.CREATE bad SCHEMA v VECTOR UNKNOWN DIM 2 DISTANCE_METRIC L2
+} {ERR unknown VECTOR algorithm*}
+
+test_error "FT.SEARCH HNSW wrong dimension" {
+  set bad [float_blob {1.0}]
+  r FT.SEARCH hnswi {*=>[KNN 1 @embedding $q]} PARAMS 2 q $bad
+} {ERR query vector dimension mismatch}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

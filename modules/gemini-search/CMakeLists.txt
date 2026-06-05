@@ -8,6 +8,7 @@ set(SEARCH_SOURCES
   src/query_parser.cc
   src/numeric_index.cc
   src/vector_index.cc
+  src/hnsw_index.cc
   src/search_rdb.cc
 )
 
@@ -84,9 +85,26 @@ if(GTest_FOUND)
   target_compile_definitions(numeric_index_test PRIVATE GEMINI_SEARCH_TESTING)
   target_compile_options(numeric_index_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(hnsw_index_test EXCLUDE_FROM_ALL
+    tests/hnsw_index_test.cc
+    src/hnsw_index.cc
+    src/vector_index.cc
+    src/index_spec.cc
+  )
+  target_include_directories(hnsw_index_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(hnsw_index_test PRIVATE
+    redis_module_api
+    GTest::gtest_main
+  )
+  target_compile_definitions(hnsw_index_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(hnsw_index_test PRIVATE -Wall -Wextra -Wpedantic)
+
   add_executable(vector_index_test EXCLUDE_FROM_ALL
     tests/vector_index_test.cc
     src/vector_index.cc
+    src/hnsw_index.cc
     src/index_spec.cc
   )
   target_include_directories(vector_index_test PRIVATE
@@ -142,6 +160,7 @@ if(GTest_FOUND)
     src/query_parser.cc
     src/numeric_index.cc
     src/vector_index.cc
+    src/hnsw_index.cc
   )
   target_include_directories(search_rdb_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -163,6 +182,7 @@ if(GTest_FOUND)
     src/query_parser.cc
     src/numeric_index.cc
     src/vector_index.cc
+    src/hnsw_index.cc
   )
   target_include_directories(search_asan_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -181,9 +201,10 @@ if(GTest_FOUND)
     COMMAND text_index_test --gtest_color=yes
     COMMAND numeric_index_test --gtest_color=yes
     COMMAND vector_index_test --gtest_color=yes
+    COMMAND hnsw_index_test --gtest_color=yes
     COMMAND query_parser_test --gtest_color=yes
     COMMAND search_rdb_test --gtest_color=yes
     COMMAND search_asan_test --gtest_color=yes
-    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test query_parser_test search_rdb_test search_asan_test
+    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test query_parser_test search_rdb_test search_asan_test
   )
 endif()

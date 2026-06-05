@@ -1,4 +1,5 @@
 #include "vector_index.h"
+#include "hnsw_index.h"
 
 #include <algorithm>
 #include <cmath>
@@ -105,21 +106,36 @@ size_t FlatVectorIndex::Dim() const { return dim_; }
 DistanceMetric FlatVectorIndex::Metric() const { return metric_; }
 void FlatVectorIndex::Clear() { vectors_.clear(); }
 
-FlatVectorIndex& VectorFieldIndices::GetOrCreate(const std::string& field_name,
-                                                  size_t dim,
-                                                  DistanceMetric metric) {
-  auto it = field_indices_.find(field_name);
-  if (it != field_indices_.end()) return it->second;
-  auto [new_it, inserted] =
-      field_indices_.emplace(field_name, FlatVectorIndex(dim, metric));
-  return new_it->second;
+DistFn GetDistanceFunction(DistanceMetric metric) {
+  switch (metric) {
+    case DistanceMetric::kL2: return L2Distance;
+    case DistanceMetric::kCosine: return CosineDistance;
+    case DistanceMetric::kIP: return InnerProductDistance;
+  }
+  return L2Distance;
 }
 
-const FlatVectorIndex* VectorFieldIndices::Get(
+VectorIndexBase& VectorFieldIndices::GetOrCreate(
+    const std::string& field_name, const VectorFieldParams& params) {
+  auto it = field_indices_.find(field_name);
+  if (it != field_indices_.end()) return *it->second;
+
+  std::unique_ptr<VectorIndexBase> idx;
+  if (params.algorithm == VectorAlgorithm::kHnsw) {
+    idx = std::make_unique<HnswIndex>(params.dim, params.metric,
+                                      params.m, params.ef_construction);
+  } else {
+    idx = std::make_unique<FlatVectorIndex>(params.dim, params.metric);
+  }
+  auto [new_it, inserted] = field_indices_.emplace(field_name, std::move(idx));
+  return *new_it->second;
+}
+
+const VectorIndexBase* VectorFieldIndices::Get(
     const std::string& field_name) const {
   auto it = field_indices_.find(field_name);
   if (it == field_indices_.end()) return nullptr;
-  return &it->second;
+  return it->second.get();
 }
 
 void VectorFieldIndices::Clear() { field_indices_.clear(); }

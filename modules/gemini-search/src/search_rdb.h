@@ -16,7 +16,7 @@ extern "C" {
 
 extern RedisModuleType* SearchModuleType;
 
-constexpr int kSearchEncVer = 2;
+constexpr int kSearchEncVer = 3;
 
 void* RdbLoadSearch(RedisModuleIO* rdb, int encver);
 void RdbSaveSearch(RedisModuleIO* rdb, void* value);

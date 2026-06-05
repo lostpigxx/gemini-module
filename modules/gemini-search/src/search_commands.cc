@@ -85,9 +85,7 @@ static void RemoveDocFromIndices(IndexEntry& entry,
         entry.numeric_indices.GetOrCreate(fname).Remove(num, doc_id);
       }
     } else if (fspec->type == FieldType::kVector) {
-      entry.vector_indices.GetOrCreate(
-          fname, fspec->vector_params.dim, fspec->vector_params.metric)
-          .Remove(doc_id);
+      entry.vector_indices.GetOrCreate(fname, fspec->vector_params).Remove(doc_id);
     } else if (fspec->type == FieldType::kText) {
       entry.text_indices.GetOrCreate(fname).Remove(doc_id);
     }
@@ -110,8 +108,7 @@ static void AddDocToIndices(
     } else if (fspec->type == FieldType::kVector) {
       size_t dim = fspec->vector_params.dim;
       if (fval.size() == dim * sizeof(float)) {
-        auto& vidx = entry.vector_indices.GetOrCreate(
-            fname, dim, fspec->vector_params.metric);
+        auto& vidx = entry.vector_indices.GetOrCreate(fname, fspec->vector_params);
         vidx.Add(doc_id, reinterpret_cast<const float*>(fval.data()));
       }
     } else if (fspec->type == FieldType::kText) {
@@ -195,11 +192,14 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
       auto algo_str = ArgView(argv[i]);
       i++;
-      if (!MatchArg(algo_str, "FLAT")) {
+      if (MatchArg(algo_str, "FLAT")) {
+        fspec.vector_params.algorithm = VectorAlgorithm::kFlat;
+      } else if (MatchArg(algo_str, "HNSW")) {
+        fspec.vector_params.algorithm = VectorAlgorithm::kHnsw;
+      } else {
         return RedisModule_ReplyWithError(
-            ctx, "ERR unknown VECTOR algorithm, expected FLAT");
+            ctx, "ERR unknown VECTOR algorithm, expected FLAT or HNSW");
       }
-      fspec.vector_params.algorithm = VectorAlgorithm::kFlat;
 
       bool has_dim = false, has_metric = false;
       while (i < argc) {
@@ -236,6 +236,30 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                 ctx, "ERR unknown DISTANCE_METRIC, expected L2, COSINE, or IP");
           }
           has_metric = true;
+          i += 2;
+        } else if (MatchArg(param, "M")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR M requires a value");
+          }
+          auto m_str = ArgView(argv[i + 1]);
+          char* endptr = nullptr;
+          long m_val = std::strtol(std::string(m_str).c_str(), &endptr, 10);
+          if (*endptr != '\0' || m_val <= 0) {
+            return RedisModule_ReplyWithError(ctx, "ERR M must be a positive integer");
+          }
+          fspec.vector_params.m = static_cast<size_t>(m_val);
+          i += 2;
+        } else if (MatchArg(param, "EF_CONSTRUCTION")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR EF_CONSTRUCTION requires a value");
+          }
+          auto ef_str = ArgView(argv[i + 1]);
+          char* endptr = nullptr;
+          long ef_val = std::strtol(std::string(ef_str).c_str(), &endptr, 10);
+          if (*endptr != '\0' || ef_val <= 0) {
+            return RedisModule_ReplyWithError(ctx, "ERR EF_CONSTRUCTION must be a positive integer");
+          }
+          fspec.vector_params.ef_construction = static_cast<size_t>(ef_val);
           i += 2;
         } else {
           break;
@@ -351,7 +375,8 @@ static int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                              static_cast<long>(entry.spec.fields.size()));
   for (auto& f : entry.spec.fields) {
     if (f.type == FieldType::kVector) {
-      RedisModule_ReplyWithArray(ctx, 8);
+      long vec_info_len = (f.vector_params.algorithm == VectorAlgorithm::kHnsw) ? 12 : 8;
+      RedisModule_ReplyWithArray(ctx, vec_info_len);
       RedisModule_ReplyWithCString(ctx, f.name.c_str());
       RedisModule_ReplyWithSimpleString(ctx, "VECTOR");
       RedisModule_ReplyWithSimpleString(ctx, "algorithm");
@@ -363,6 +388,12 @@ static int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       RedisModule_ReplyWithSimpleString(ctx, "distance_metric");
       RedisModule_ReplyWithSimpleString(
           ctx, DistanceMetricName(f.vector_params.metric));
+      if (f.vector_params.algorithm == VectorAlgorithm::kHnsw) {
+        RedisModule_ReplyWithSimpleString(ctx, "m");
+        RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(f.vector_params.m));
+        RedisModule_ReplyWithSimpleString(ctx, "ef_construction");
+        RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(f.vector_params.ef_construction));
+      }
     } else {
       RedisModule_ReplyWithArray(ctx, 2);
       RedisModule_ReplyWithCString(ctx, f.name.c_str());

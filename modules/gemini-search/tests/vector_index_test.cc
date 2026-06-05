@@ -198,7 +198,10 @@ TEST(FlatVectorIndexTest, Clear) {
 
 TEST(VectorFieldIndicesTest, GetOrCreateAndGet) {
   VectorFieldIndices indices;
-  auto& idx = indices.GetOrCreate("emb", 3, DistanceMetric::kL2);
+  VectorFieldParams params;
+  params.dim = 3;
+  params.metric = DistanceMetric::kL2;
+  auto& idx = indices.GetOrCreate("emb", params);
   float v[] = {1, 2, 3};
   idx.Add("doc1", v);
 
@@ -214,10 +217,30 @@ TEST(VectorFieldIndicesTest, GetNonexistent) {
 
 TEST(VectorFieldIndicesTest, Clear) {
   VectorFieldIndices indices;
-  indices.GetOrCreate("a", 2, DistanceMetric::kL2);
-  indices.GetOrCreate("b", 4, DistanceMetric::kCosine);
+  VectorFieldParams p1;
+  p1.dim = 2;
+  p1.metric = DistanceMetric::kL2;
+  VectorFieldParams p2;
+  p2.dim = 4;
+  p2.metric = DistanceMetric::kCosine;
+  indices.GetOrCreate("a", p1);
+  indices.GetOrCreate("b", p2);
   indices.Clear();
   EXPECT_EQ(indices.Get("a"), nullptr);
   EXPECT_EQ(indices.Get("b"), nullptr);
+}
+
+TEST(VectorFieldIndicesTest, GetOrCreateHnsw) {
+  VectorFieldIndices indices;
+  VectorFieldParams params;
+  params.algorithm = VectorAlgorithm::kHnsw;
+  params.dim = 3;
+  params.metric = DistanceMetric::kL2;
+  params.m = 8;
+  params.ef_construction = 100;
+  auto& idx = indices.GetOrCreate("emb", params);
+  float v[] = {1, 2, 3};
+  idx.Add("doc1", v);
+  EXPECT_EQ(idx.Size(), 1u);
 }
 

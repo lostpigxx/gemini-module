@@ -17,7 +17,7 @@ inline const char* FieldTypeName(FieldType t) {
   return "UNKNOWN";
 }
 
-enum class VectorAlgorithm { kFlat };
+enum class VectorAlgorithm { kFlat, kHnsw };
 
 enum class DistanceMetric { kL2, kCosine, kIP };
 
@@ -33,6 +33,7 @@ inline const char* DistanceMetricName(DistanceMetric m) {
 inline const char* VectorAlgorithmName(VectorAlgorithm a) {
   switch (a) {
     case VectorAlgorithm::kFlat: return "FLAT";
+    case VectorAlgorithm::kHnsw: return "HNSW";
   }
   return "UNKNOWN";
 }
@@ -41,6 +42,8 @@ struct VectorFieldParams {
   VectorAlgorithm algorithm = VectorAlgorithm::kFlat;
   size_t dim = 0;
   DistanceMetric metric = DistanceMetric::kL2;
+  size_t m = 16;
+  size_t ef_construction = 200;
 };
 
 struct FieldSpec {
