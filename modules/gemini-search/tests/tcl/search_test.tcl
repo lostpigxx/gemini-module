@@ -1888,6 +1888,224 @@ test_error "FT.SEARCH HNSW wrong dimension" {
   r FT.SEARCH hnswi {*=>[KNN 1 @embedding $q]} PARAMS 2 q $bad
 } {ERR query vector dimension mismatch}
 
+puts "\n=== Phase 12: FT.AGGREGATE ==="
+
+puts "\n--- Setup ---"
+
+test "FT.CREATE aggregate test index" {
+  r FT.CREATE aggidx SCHEMA category TAG brand TAG price NUMERIC rating NUMERIC
+} {OK}
+
+test "FT.ADD aggregate test data" {
+  r FT.ADD aggidx p1 FIELDS category shoes brand nike price 120 rating 4.5
+  r FT.ADD aggidx p2 FIELDS category shoes brand adidas price 90 rating 4.0
+  r FT.ADD aggidx p3 FIELDS category shoes brand nike price 200 rating 4.8
+  r FT.ADD aggidx p4 FIELDS category hat brand nike price 30 rating 3.5
+  r FT.ADD aggidx p5 FIELDS category hat brand adidas price 25 rating 4.2
+  r FT.ADD aggidx p6 FIELDS category boots brand puma price 150 rating 4.0
+  r FT.ADD aggidx p7 FIELDS category boots brand nike price 180 rating 4.6
+  r FT.ADD aggidx p8 FIELDS category boots brand adidas price 130 rating 3.8
+} {OK}
+
+puts "\n--- GROUPBY + COUNT ---"
+
+test_assert "FT.AGGREGATE GROUPBY category REDUCE COUNT" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE COUNT 0 AS count]
+  if {[llength $result] != 3} {
+    error "Expected 3 groups, got [llength $result]"
+  }
+  # Find shoes group
+  set found 0
+  foreach row $result {
+    set cat_idx [lsearch $row "category"]
+    if {$cat_idx >= 0} {
+      set cat_val [lindex $row [expr {$cat_idx + 1}]]
+      set cnt_idx [lsearch $row "count"]
+      set cnt_val [lindex $row [expr {$cnt_idx + 1}]]
+      if {$cat_val eq "shoes" && $cnt_val == 3} { incr found }
+      if {$cat_val eq "hat" && $cnt_val == 2} { incr found }
+      if {$cat_val eq "boots" && $cnt_val == 3} { incr found }
+    }
+  }
+  if {$found != 3} { error "Expected 3 correct group counts, found $found" }
+}
+
+puts "\n--- GROUPBY + SUM ---"
+
+test_assert "FT.AGGREGATE GROUPBY category REDUCE SUM price" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE SUM 1 @price AS total_price]
+  foreach row $result {
+    set cat_idx [lsearch $row "category"]
+    set cat_val [lindex $row [expr {$cat_idx + 1}]]
+    set tp_idx [lsearch $row "total_price"]
+    set tp_val [lindex $row [expr {$tp_idx + 1}]]
+    if {$cat_val eq "shoes"} {
+      # 120 + 90 + 200 = 410
+      set expected 410.0
+      if {abs($tp_val - $expected) > 0.01} {
+        error "shoes total_price: expected $expected, got $tp_val"
+      }
+    }
+  }
+}
+
+puts "\n--- GROUPBY + AVG ---"
+
+test_assert "FT.AGGREGATE GROUPBY category REDUCE AVG price" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE AVG 1 @price AS avg_price]
+  foreach row $result {
+    set cat_idx [lsearch $row "category"]
+    set cat_val [lindex $row [expr {$cat_idx + 1}]]
+    set ap_idx [lsearch $row "avg_price"]
+    set ap_val [lindex $row [expr {$ap_idx + 1}]]
+    if {$cat_val eq "hat"} {
+      # (30 + 25) / 2 = 27.5
+      if {abs($ap_val - 27.5) > 0.01} {
+        error "hat avg_price: expected 27.5, got $ap_val"
+      }
+    }
+  }
+}
+
+puts "\n--- GROUPBY + MIN/MAX ---"
+
+test_assert "FT.AGGREGATE GROUPBY category REDUCE MIN/MAX" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE MIN 1 @price AS min_price REDUCE MAX 1 @price AS max_price]
+  foreach row $result {
+    set cat_idx [lsearch $row "category"]
+    set cat_val [lindex $row [expr {$cat_idx + 1}]]
+    set min_idx [lsearch $row "min_price"]
+    set min_val [lindex $row [expr {$min_idx + 1}]]
+    set max_idx [lsearch $row "max_price"]
+    set max_val [lindex $row [expr {$max_idx + 1}]]
+    if {$cat_val eq "boots"} {
+      # min=130, max=180
+      if {abs($min_val - 130) > 0.01} { error "boots min: expected 130, got $min_val" }
+      if {abs($max_val - 180) > 0.01} { error "boots max: expected 180, got $max_val" }
+    }
+  }
+}
+
+puts "\n--- GROUPBY + COUNT_DISTINCT ---"
+
+test_assert "FT.AGGREGATE GROUPBY category REDUCE COUNT_DISTINCT brand" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE COUNT_DISTINCT 1 @brand AS num_brands]
+  foreach row $result {
+    set cat_idx [lsearch $row "category"]
+    set cat_val [lindex $row [expr {$cat_idx + 1}]]
+    set nb_idx [lsearch $row "num_brands"]
+    set nb_val [lindex $row [expr {$nb_idx + 1}]]
+    if {$cat_val eq "shoes"} {
+      # nike, adidas = 2
+      if {$nb_val != 2} { error "shoes num_brands: expected 2, got $nb_val" }
+    }
+    if {$cat_val eq "boots"} {
+      # puma, nike, adidas = 3
+      if {$nb_val != 3} { error "boots num_brands: expected 3, got $nb_val" }
+    }
+  }
+}
+
+puts "\n--- Multiple reducers ---"
+
+test_assert "FT.AGGREGATE with COUNT + AVG + SUM" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE COUNT 0 AS count REDUCE AVG 1 @price AS avg_price REDUCE SUM 1 @rating AS total_rating]
+  if {[llength $result] != 3} { error "Expected 3 groups" }
+  foreach row $result {
+    set cnt_idx [lsearch $row "count"]
+    set avg_idx [lsearch $row "avg_price"]
+    set tr_idx [lsearch $row "total_rating"]
+    if {$cnt_idx < 0} { error "count field missing" }
+    if {$avg_idx < 0} { error "avg_price field missing" }
+    if {$tr_idx < 0} { error "total_rating field missing" }
+  }
+}
+
+puts "\n--- SORTBY ---"
+
+test_assert "FT.AGGREGATE GROUPBY + SORTBY count DESC" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE COUNT 0 AS count SORTBY 2 @count DESC]
+  if {[llength $result] != 3} { error "Expected 3, got [llength $result]" }
+  set first [lindex $result 0]
+  set cnt_idx [lsearch $first "count"]
+  set cnt_val [lindex $first [expr {$cnt_idx + 1}]]
+  # shoes=3 and boots=3 are tied at top
+  if {$cnt_val != 3} { error "Expected highest count 3, got $cnt_val" }
+}
+
+test_assert "FT.AGGREGATE SORTBY ASC" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE COUNT 0 AS count SORTBY 2 @count ASC]
+  set first [lindex $result 0]
+  set cnt_idx [lsearch $first "count"]
+  set cnt_val [lindex $first [expr {$cnt_idx + 1}]]
+  if {$cnt_val != 2} { error "Expected lowest count 2 (hat), got $cnt_val" }
+}
+
+puts "\n--- LIMIT ---"
+
+test_assert "FT.AGGREGATE LIMIT 0 2" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE COUNT 0 AS count SORTBY 2 @count DESC LIMIT 0 2]
+  if {[llength $result] != 2} { error "Expected 2, got [llength $result]" }
+}
+
+test_assert "FT.AGGREGATE LIMIT 1 1" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE COUNT 0 AS count SORTBY 2 @count DESC LIMIT 1 1]
+  if {[llength $result] != 1} { error "Expected 1, got [llength $result]" }
+}
+
+test_assert "FT.AGGREGATE LIMIT beyond" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE COUNT 0 AS count LIMIT 10 5]
+  if {[llength $result] != 0} { error "Expected 0, got [llength $result]" }
+}
+
+puts "\n--- GROUPBY multiple fields ---"
+
+test_assert "FT.AGGREGATE GROUPBY 2 fields" {
+  set result [r FT.AGGREGATE aggidx * GROUPBY 2 @category @brand REDUCE COUNT 0 AS count]
+  # shoes/nike=2, shoes/adidas=1, hat/nike=1, hat/adidas=1, boots/puma=1, boots/nike=1, boots/adidas=1
+  if {[llength $result] != 7} { error "Expected 7 groups, got [llength $result]" }
+}
+
+puts "\n--- Filtered query ---"
+
+test_assert "FT.AGGREGATE with filter query" {
+  set result [r FT.AGGREGATE aggidx {@category:{shoes}} GROUPBY 1 @brand REDUCE COUNT 0 AS count]
+  if {[llength $result] != 2} { error "Expected 2 brands in shoes, got [llength $result]" }
+  foreach row $result {
+    set b_idx [lsearch $row "brand"]
+    set bv [lindex $row [expr {$b_idx + 1}]]
+    set c_idx [lsearch $row "count"]
+    set cv [lindex $row [expr {$c_idx + 1}]]
+    if {$bv eq "nike" && $cv != 2} { error "nike count should be 2, got $cv" }
+    if {$bv eq "adidas" && $cv != 1} { error "adidas count should be 1, got $cv" }
+  }
+}
+
+puts "\n--- No GROUPBY (raw rows) ---"
+
+test_assert "FT.AGGREGATE without GROUPBY returns raw rows" {
+  set result [r FT.AGGREGATE aggidx * LIMIT 0 3]
+  if {[llength $result] != 3} { error "Expected 3 rows, got [llength $result]" }
+}
+
+puts "\n--- Error cases ---"
+
+test_error "FT.AGGREGATE nonexistent index" {
+  r FT.AGGREGATE nosuchidx *
+} {ERR index not found}
+
+test_error "FT.AGGREGATE unknown option" {
+  r FT.AGGREGATE aggidx * BADOPTION
+} {ERR unknown AGGREGATE option}
+
+test_error "FT.AGGREGATE REDUCE unknown function" {
+  r FT.AGGREGATE aggidx * GROUPBY 1 @category REDUCE BADFUNCTION 0 AS x
+} {ERR unknown REDUCE function}
+
+test_error "FT.AGGREGATE wrong arity" {
+  r FT.AGGREGATE aggidx
+} {ERR*}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

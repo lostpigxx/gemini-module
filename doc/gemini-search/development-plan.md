@@ -380,11 +380,13 @@ FT.AGGREGATE idx "@status:{active}"
 | P9 | Full-text search (TEXT + BM25) | Done |
 | P10 | KNN pre-filter + AOF rewrite | Done |
 | P11 | VECTOR HNSW (approximate KNN) | Done |
-| P12 | FT.AGGREGATE | Planned |
+| P12 | FT.AGGREGATE | Done |
 
 P0–P9 = complete search engine with auto-indexing and full-text search.
 P8 = usability — write Hash, auto-index (done).
 P9 = full-text search with BM25 relevance scoring (done).
 P10 = KNN pre-filter + AOF rewrite (done).
 P11 = HNSW approximate nearest neighbor (done).
-P12 = analytics queries.
+P12 = FT.AGGREGATE analytics pipeline (done).
+
+All phases complete.
