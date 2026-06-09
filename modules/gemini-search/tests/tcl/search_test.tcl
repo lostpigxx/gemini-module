@@ -2107,6 +2107,184 @@ test_error "FT.AGGREGATE wrong arity" {
 } {ERR*}
 
 # ============================================================
+# Phase 13 — Search Options Enhancement
+# ============================================================
+
+puts "\n--- Phase 13: Search Options ---"
+
+r FT.CREATE p13idx SCHEMA title TEXT body TEXT status TAG price NUMERIC
+r FT.ADD p13idx doc1 FIELDS title "the quick brown fox" body "jumps over the lazy dog" status active price 100
+r FT.ADD p13idx doc2 FIELDS title "the slow red car" body "drives on the road" status active price 200
+r FT.ADD p13idx doc3 FIELDS title "quick green turtle" body "swims in the sea" status inactive price 50
+
+# --- NOCONTENT ---
+
+test "NOCONTENT returns only doc IDs" {
+  set res [r FT.SEARCH p13idx "@status:{active}" NOCONTENT]
+  # result: count id1 id2 (no field arrays)
+  lindex $res 0
+} {2}
+
+test "NOCONTENT result has no field arrays" {
+  set res [r FT.SEARCH p13idx "@status:{active}" NOCONTENT]
+  # should be [2, id1, id2] — length 3
+  llength $res
+} {3}
+
+# --- WITHSCORES ---
+
+test "WITHSCORES returns scores for TEXT query" {
+  set res [r FT.SEARCH p13idx "quick" WITHSCORES]
+  # result: count, id, [__search_score, score, fields...], ...
+  set count [lindex $res 0]
+  expr {$count == 2}
+} {1}
+
+test_assert "WITHSCORES score is positive" {
+  set res [r FT.SEARCH p13idx "quick" WITHSCORES]
+  # First result fields array should contain __search_score
+  set fields [lindex $res 2]
+  set score_idx [lsearch $fields "__search_score"]
+  if {$score_idx < 0} {error "no __search_score in fields"}
+  set score_val [lindex $fields [expr {$score_idx + 1}]]
+  if {$score_val <= 0} {error "score should be positive, got $score_val"}
+}
+
+test_assert "WITHSCORES results sorted by score descending" {
+  set res [r FT.SEARCH p13idx "quick" WITHSCORES]
+  set f1 [lindex $res 2]
+  set f2 [lindex $res 4]
+  set si1 [lsearch $f1 "__search_score"]
+  set si2 [lsearch $f2 "__search_score"]
+  set s1 [lindex $f1 [expr {$si1 + 1}]]
+  set s2 [lindex $f2 [expr {$si2 + 1}]]
+  if {$s1 < $s2} {error "first score ($s1) should be >= second score ($s2)"}
+}
+
+test "WITHSCORES + NOCONTENT returns IDs only" {
+  set res [r FT.SEARCH p13idx "quick" WITHSCORES NOCONTENT]
+  set count [lindex $res 0]
+  set total_items [llength $res]
+  # Should be count + count ids = 1 + count
+  expr {$total_items == $count + 1}
+} {1}
+
+# --- NOSTOPWORDS ---
+
+test "Stop word 'the' not found without NOSTOPWORDS" {
+  set res [r FT.SEARCH p13idx "the"]
+  lindex $res 0
+} {0}
+
+test "NOSTOPWORDS: stop word 'the' is searchable" {
+  set res [r FT.SEARCH p13idx "the" NOSTOPWORDS]
+  lindex $res 0
+} {3}
+
+# --- VERBATIM (same as NOSTOPWORDS for now) ---
+
+test "VERBATIM disables stop word filtering" {
+  set res [r FT.SEARCH p13idx "the" VERBATIM]
+  lindex $res 0
+} {3}
+
+# --- INFIELDS ---
+
+test "INFIELDS limits search to specified field" {
+  # "quick" appears in title of doc1 and doc3, body of neither
+  set res [r FT.SEARCH p13idx "quick" INFIELDS 1 title]
+  lindex $res 0
+} {2}
+
+test "INFIELDS body: 'quick' not in body" {
+  set res [r FT.SEARCH p13idx "swims" INFIELDS 1 body]
+  lindex $res 0
+} {1}
+
+test "INFIELDS title: 'swims' not in title" {
+  set res [r FT.SEARCH p13idx "swims" INFIELDS 1 title]
+  lindex $res 0
+} {0}
+
+# --- INKEYS ---
+
+test "INKEYS limits search to specified keys" {
+  set res [r FT.SEARCH p13idx "@status:{active}" INKEYS 1 doc1]
+  lindex $res 0
+} {1}
+
+test_assert "INKEYS returns only the specified key" {
+  set res [r FT.SEARCH p13idx "@status:{active}" INKEYS 1 doc1]
+  set id [lindex $res 1]
+  if {$id ne "doc1"} {error "expected doc1, got $id"}
+}
+
+test "INKEYS with multiple keys" {
+  set res [r FT.SEARCH p13idx "*" INKEYS 2 doc1 doc3]
+  lindex $res 0
+} {2}
+
+test "INKEYS with nonexistent key" {
+  set res [r FT.SEARCH p13idx "*" INKEYS 1 nosuchkey]
+  lindex $res 0
+} {0}
+
+# --- TIMEOUT ---
+
+test "TIMEOUT option accepted" {
+  set res [r FT.SEARCH p13idx "@status:{active}" TIMEOUT 5000]
+  lindex $res 0
+} {2}
+
+# --- Combined options ---
+
+test "NOCONTENT + INKEYS" {
+  set res [r FT.SEARCH p13idx "*" NOCONTENT INKEYS 2 doc1 doc2]
+  set count [lindex $res 0]
+  set total [llength $res]
+  list $count $total
+} {2 3}
+
+test "INFIELDS + INKEYS" {
+  set res [r FT.SEARCH p13idx "quick" INFIELDS 1 title INKEYS 1 doc1]
+  lindex $res 0
+} {1}
+
+test_assert "WITHSCORES + SORTBY: SORTBY overrides score order" {
+  set res [r FT.SEARCH p13idx "@status:{active}" WITHSCORES SORTBY price ASC]
+  set id1 [lindex $res 1]
+  set id2 [lindex $res 3]
+  # doc1 has price=100, doc2 has price=200, ASC order
+  if {$id1 ne "doc1"} {error "expected doc1 first (price ASC), got $id1"}
+}
+
+test "NOSTOPWORDS + INFIELDS" {
+  # "the" should be found in title when NOSTOPWORDS is on, limited to title field
+  set res [r FT.SEARCH p13idx "the" NOSTOPWORDS INFIELDS 1 title]
+  lindex $res 0
+} {2}
+
+# --- Error cases for new options ---
+
+test_error "INFIELDS without count" {
+  r FT.SEARCH p13idx "hello" INFIELDS
+} {ERR*}
+
+test_error "INKEYS without count" {
+  r FT.SEARCH p13idx "hello" INKEYS
+} {ERR*}
+
+test_error "TIMEOUT without value" {
+  r FT.SEARCH p13idx "hello" TIMEOUT
+} {ERR*}
+
+test_error "TIMEOUT negative value" {
+  r FT.SEARCH p13idx "hello" TIMEOUT -1
+} {ERR*}
+
+r FT.DROPINDEX p13idx
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

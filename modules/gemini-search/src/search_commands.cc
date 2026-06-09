@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <set>
 #include <string>
 #include <string_view>
@@ -519,11 +520,22 @@ struct SearchOptions {
   long long limit_offset = 0;
   long long limit_count = -1;
   bool has_limit = false;
+  bool nocontent = false;
+  bool withscores = false;
+  bool verbatim = false;
+  bool nostopwords = false;
+  std::vector<std::string> infields;
+  bool has_infields = false;
+  std::vector<std::string> inkeys;
+  bool has_inkeys = false;
+  long long timeout_ms = 0;
+  bool has_timeout = false;
 };
 
 static void ReplyWithDocFields(RedisModuleCtx* ctx, const Document* doc,
                                const SearchOptions& opts,
-                               const std::string* vec_score) {
+                               const std::string* score_val,
+                               const char* score_name = "__vec_score") {
   if (!doc) {
     RedisModule_ReplyWithEmptyArray(ctx);
     return;
@@ -541,12 +553,12 @@ static void ReplyWithDocFields(RedisModuleCtx* ctx, const Document* doc,
   }
 
   long count = static_cast<long>(keys.size()) * 2;
-  if (vec_score) count += 2;
+  if (score_val) count += 2;
 
   RedisModule_ReplyWithArray(ctx, count);
-  if (vec_score) {
-    RedisModule_ReplyWithCString(ctx, "__vec_score");
-    RedisModule_ReplyWithCString(ctx, vec_score->c_str());
+  if (score_val) {
+    RedisModule_ReplyWithCString(ctx, score_name);
+    RedisModule_ReplyWithCString(ctx, score_val->c_str());
   }
   for (auto& k : keys) {
     RedisModule_ReplyWithCString(ctx, k.c_str());
@@ -572,13 +584,9 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   auto& entry = it->second;
 
-  ParsedQuery parsed;
-  std::string parse_error;
-  if (!ParseQuery(std::string(ArgView(argv[2])), parsed, parse_error)) {
-    return RedisModule_ReplyWithError(ctx, parse_error.c_str());
-  }
+  std::string query_str(ArgView(argv[2]));
 
-  // Parse optional blocks: PARAMS, RETURN, SORTBY, LIMIT
+  // Parse optional blocks: PARAMS, RETURN, SORTBY, LIMIT, etc.
   std::unordered_map<std::string, std::string> params;
   SearchOptions opts;
   int arg_i = 3;
@@ -670,10 +678,96 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       opts.limit_count = cnt;
       opts.has_limit = true;
       arg_i += 2;
+    } else if (MatchArg(kw, "NOCONTENT")) {
+      opts.nocontent = true;
+      arg_i++;
+    } else if (MatchArg(kw, "WITHSCORES")) {
+      opts.withscores = true;
+      arg_i++;
+    } else if (MatchArg(kw, "VERBATIM")) {
+      opts.verbatim = true;
+      arg_i++;
+    } else if (MatchArg(kw, "NOSTOPWORDS")) {
+      opts.nostopwords = true;
+      arg_i++;
+    } else if (MatchArg(kw, "INFIELDS")) {
+      arg_i++;
+      if (arg_i >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR INFIELDS requires count");
+      }
+      char* endptr = nullptr;
+      long inf_count =
+          std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
+      arg_i++;
+      if (*endptr != '\0' || inf_count < 0) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR INFIELDS count must be a non-negative integer");
+      }
+      opts.has_infields = true;
+      for (long f = 0; f < inf_count; f++) {
+        if (arg_i >= argc) {
+          return RedisModule_ReplyWithError(ctx, "ERR not enough INFIELDS fields");
+        }
+        opts.infields.emplace_back(ArgView(argv[arg_i]));
+        arg_i++;
+      }
+    } else if (MatchArg(kw, "INKEYS")) {
+      arg_i++;
+      if (arg_i >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR INKEYS requires count");
+      }
+      char* endptr = nullptr;
+      long ink_count =
+          std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
+      arg_i++;
+      if (*endptr != '\0' || ink_count < 0) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR INKEYS count must be a non-negative integer");
+      }
+      opts.has_inkeys = true;
+      for (long k = 0; k < ink_count; k++) {
+        if (arg_i >= argc) {
+          return RedisModule_ReplyWithError(ctx, "ERR not enough INKEYS keys");
+        }
+        opts.inkeys.emplace_back(ArgView(argv[arg_i]));
+        arg_i++;
+      }
+    } else if (MatchArg(kw, "TIMEOUT")) {
+      arg_i++;
+      if (arg_i >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR TIMEOUT requires value");
+      }
+      char* endptr = nullptr;
+      long long tms =
+          std::strtoll(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
+      if (*endptr != '\0' || tms < 0) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR TIMEOUT must be a non-negative integer");
+      }
+      opts.timeout_ms = tms;
+      opts.has_timeout = true;
+      arg_i++;
     } else {
       return RedisModule_ReplyWithError(ctx,
                                         "ERR unknown search option");
     }
+  }
+
+  // Build query options
+  QueryOptions qopts;
+  qopts.nostopwords = opts.nostopwords || opts.verbatim;
+  qopts.infields = opts.infields;
+
+  ParsedQuery parsed;
+  std::string parse_error;
+  if (!ParseQuery(query_str, parsed, parse_error, qopts)) {
+    return RedisModule_ReplyWithError(ctx, parse_error.c_str());
+  }
+
+  // Record start time for TIMEOUT
+  struct timespec start_time;
+  if (opts.has_timeout) {
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
   }
 
   // KNN path
@@ -706,7 +800,8 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         std::string filter_error;
         auto candidates = EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
                                         entry.tag_indices, entry.numeric_indices,
-                                        entry.text_indices, filter_error);
+                                        entry.text_indices, filter_error,
+                                        opts.infields);
         if (!filter_error.empty()) {
           return RedisModule_ReplyWithError(ctx, filter_error.c_str());
         }
@@ -716,6 +811,28 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         knn_results = vidx->KnnQuery(
             reinterpret_cast<const float*>(blob.data()), parsed.knn_k);
       }
+    }
+
+    // TIMEOUT check
+    if (opts.has_timeout) {
+      struct timespec now;
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      long long elapsed_ms = (now.tv_sec - start_time.tv_sec) * 1000LL +
+                             (now.tv_nsec - start_time.tv_nsec) / 1000000LL;
+      if (elapsed_ms > opts.timeout_ms) {
+        return RedisModule_ReplyWithError(ctx, "ERR query timed out");
+      }
+    }
+
+    // INKEYS filter
+    if (opts.has_inkeys) {
+      std::unordered_set<std::string> allowed(opts.inkeys.begin(), opts.inkeys.end());
+      knn_results.erase(
+          std::remove_if(knn_results.begin(), knn_results.end(),
+                         [&](const KnnResult& r) {
+                           return allowed.find(r.doc_id) == allowed.end();
+                         }),
+          knn_results.end());
     }
 
     // Apply LIMIT to KNN results
@@ -734,14 +851,17 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
 
     long total = static_cast<long>(knn_results.size());
-    RedisModule_ReplyWithArray(ctx, 1 + total * 2);
+    long multiplier = opts.nocontent ? 1 : 2;
+    RedisModule_ReplyWithArray(ctx, 1 + total * multiplier);
     RedisModule_ReplyWithLongLong(ctx, total);
 
     for (auto& kr : knn_results) {
       RedisModule_ReplyWithCString(ctx, kr.doc_id.c_str());
-      auto score_str = std::to_string(kr.score);
-      ReplyWithDocFields(ctx, entry.doc_store.Get(kr.doc_id), opts,
-                         &score_str);
+      if (!opts.nocontent) {
+        auto score_str = std::to_string(kr.score);
+        ReplyWithDocFields(ctx, entry.doc_store.Get(kr.doc_id), opts,
+                           &score_str);
+      }
     }
 
     return REDISMODULE_OK;
@@ -749,68 +869,184 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   // Non-KNN: evaluate query tree
   std::string eval_error;
-  auto result_ids =
-      EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
-                    entry.tag_indices, entry.numeric_indices,
-                    entry.text_indices, eval_error);
-  if (!eval_error.empty()) {
-    return RedisModule_ReplyWithError(ctx, eval_error.c_str());
-  }
 
-  // SORTBY
-  if (opts.has_sortby) {
-    const auto* sort_fspec = entry.spec.FindField(opts.sortby_field);
-    if (!sort_fspec) {
-      return RedisModule_ReplyWithError(ctx,
-                                        "ERR SORTBY field not in schema");
+  // Use scored evaluation when WITHSCORES is requested
+  std::vector<ScoredResult> scored_results;
+  std::vector<std::string> result_ids;
+
+  if (opts.withscores) {
+    scored_results = EvaluateQueryScored(
+        parsed.root, entry.spec, entry.doc_store,
+        entry.tag_indices, entry.numeric_indices,
+        entry.text_indices, eval_error, opts.infields);
+    if (!eval_error.empty()) {
+      return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
-    bool numeric_sort = (sort_fspec->type == FieldType::kNumeric);
-    bool desc = opts.sortby_desc;
-    std::sort(result_ids.begin(), result_ids.end(),
-              [&](const std::string& a, const std::string& b) {
-                const auto* da = entry.doc_store.Get(a);
-                const auto* db = entry.doc_store.Get(b);
-                std::string va, vb;
-                if (da) {
-                  auto fa = da->fields.find(opts.sortby_field);
-                  if (fa != da->fields.end()) va = fa->second;
-                }
-                if (db) {
-                  auto fb = db->fields.find(opts.sortby_field);
-                  if (fb != db->fields.end()) vb = fb->second;
-                }
-                if (numeric_sort) {
-                  double na = 0, nb = 0;
-                  TryParseDouble(va, na);
-                  TryParseDouble(vb, nb);
-                  return desc ? na > nb : na < nb;
-                }
-                return desc ? va > vb : va < vb;
-              });
+  } else {
+    result_ids = EvaluateQuery(
+        parsed.root, entry.spec, entry.doc_store,
+        entry.tag_indices, entry.numeric_indices,
+        entry.text_indices, eval_error, opts.infields);
+    if (!eval_error.empty()) {
+      return RedisModule_ReplyWithError(ctx, eval_error.c_str());
+    }
   }
 
-  // LIMIT
-  if (opts.has_limit) {
-    long long total_before = static_cast<long long>(result_ids.size());
-    if (opts.limit_offset >= total_before) {
-      result_ids.clear();
+  // TIMEOUT check (coarse, post-evaluation)
+  if (opts.has_timeout) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long long elapsed_ms = (now.tv_sec - start_time.tv_sec) * 1000LL +
+                           (now.tv_nsec - start_time.tv_nsec) / 1000000LL;
+    if (elapsed_ms > opts.timeout_ms) {
+      return RedisModule_ReplyWithError(ctx, "ERR query timed out");
+    }
+  }
+
+  // INKEYS filter
+  if (opts.has_inkeys) {
+    std::unordered_set<std::string> allowed(opts.inkeys.begin(), opts.inkeys.end());
+    if (opts.withscores) {
+      scored_results.erase(
+          std::remove_if(scored_results.begin(), scored_results.end(),
+                         [&](const ScoredResult& r) {
+                           return allowed.find(r.doc_id) == allowed.end();
+                         }),
+          scored_results.end());
     } else {
-      auto begin = result_ids.begin() + opts.limit_offset;
-      auto end = (opts.limit_count >= 0 &&
-                  opts.limit_offset + opts.limit_count < total_before)
-                     ? result_ids.begin() + opts.limit_offset + opts.limit_count
-                     : result_ids.end();
-      result_ids = std::vector<std::string>(begin, end);
+      result_ids.erase(
+          std::remove_if(result_ids.begin(), result_ids.end(),
+                         [&](const std::string& id) {
+                           return allowed.find(id) == allowed.end();
+                         }),
+          result_ids.end());
     }
   }
 
-  long total = static_cast<long>(result_ids.size());
-  RedisModule_ReplyWithArray(ctx, 1 + total * 2);
-  RedisModule_ReplyWithLongLong(ctx, total);
+  if (opts.withscores) {
+    // SORTBY overrides score-based ordering; otherwise sort by score desc
+    if (opts.has_sortby) {
+      const auto* sort_fspec = entry.spec.FindField(opts.sortby_field);
+      if (!sort_fspec) {
+        return RedisModule_ReplyWithError(ctx, "ERR SORTBY field not in schema");
+      }
+      bool numeric_sort = (sort_fspec->type == FieldType::kNumeric);
+      bool desc = opts.sortby_desc;
+      std::sort(scored_results.begin(), scored_results.end(),
+                [&](const ScoredResult& a, const ScoredResult& b) {
+                  const auto* da = entry.doc_store.Get(a.doc_id);
+                  const auto* db = entry.doc_store.Get(b.doc_id);
+                  std::string va, vb;
+                  if (da) {
+                    auto fa = da->fields.find(opts.sortby_field);
+                    if (fa != da->fields.end()) va = fa->second;
+                  }
+                  if (db) {
+                    auto fb = db->fields.find(opts.sortby_field);
+                    if (fb != db->fields.end()) vb = fb->second;
+                  }
+                  if (numeric_sort) {
+                    double na = 0, nb = 0;
+                    TryParseDouble(va, na);
+                    TryParseDouble(vb, nb);
+                    return desc ? na > nb : na < nb;
+                  }
+                  return desc ? va > vb : va < vb;
+                });
+    } else {
+      std::sort(scored_results.begin(), scored_results.end(),
+                [](const ScoredResult& a, const ScoredResult& b) {
+                  if (a.score != b.score) return a.score > b.score;
+                  return a.doc_id < b.doc_id;
+                });
+    }
 
-  for (auto& rid : result_ids) {
-    RedisModule_ReplyWithCString(ctx, rid.c_str());
-    ReplyWithDocFields(ctx, entry.doc_store.Get(rid), opts, nullptr);
+    // LIMIT
+    if (opts.has_limit) {
+      long long total_before = static_cast<long long>(scored_results.size());
+      if (opts.limit_offset >= total_before) {
+        scored_results.clear();
+      } else {
+        auto begin = scored_results.begin() + opts.limit_offset;
+        auto end = (opts.limit_count >= 0 &&
+                    opts.limit_offset + opts.limit_count < total_before)
+                       ? scored_results.begin() + opts.limit_offset + opts.limit_count
+                       : scored_results.end();
+        scored_results = std::vector<ScoredResult>(begin, end);
+      }
+    }
+
+    long total = static_cast<long>(scored_results.size());
+    long multiplier = opts.nocontent ? 1 : 2;
+    RedisModule_ReplyWithArray(ctx, 1 + total * multiplier);
+    RedisModule_ReplyWithLongLong(ctx, total);
+
+    for (auto& sr : scored_results) {
+      RedisModule_ReplyWithCString(ctx, sr.doc_id.c_str());
+      if (!opts.nocontent) {
+        auto score_str = std::to_string(sr.score);
+        ReplyWithDocFields(ctx, entry.doc_store.Get(sr.doc_id), opts,
+                           &score_str, "__search_score");
+      }
+    }
+  } else {
+    // SORTBY
+    if (opts.has_sortby) {
+      const auto* sort_fspec = entry.spec.FindField(opts.sortby_field);
+      if (!sort_fspec) {
+        return RedisModule_ReplyWithError(ctx, "ERR SORTBY field not in schema");
+      }
+      bool numeric_sort = (sort_fspec->type == FieldType::kNumeric);
+      bool desc = opts.sortby_desc;
+      std::sort(result_ids.begin(), result_ids.end(),
+                [&](const std::string& a, const std::string& b) {
+                  const auto* da = entry.doc_store.Get(a);
+                  const auto* db = entry.doc_store.Get(b);
+                  std::string va, vb;
+                  if (da) {
+                    auto fa = da->fields.find(opts.sortby_field);
+                    if (fa != da->fields.end()) va = fa->second;
+                  }
+                  if (db) {
+                    auto fb = db->fields.find(opts.sortby_field);
+                    if (fb != db->fields.end()) vb = fb->second;
+                  }
+                  if (numeric_sort) {
+                    double na = 0, nb = 0;
+                    TryParseDouble(va, na);
+                    TryParseDouble(vb, nb);
+                    return desc ? na > nb : na < nb;
+                  }
+                  return desc ? va > vb : va < vb;
+                });
+    }
+
+    // LIMIT
+    if (opts.has_limit) {
+      long long total_before = static_cast<long long>(result_ids.size());
+      if (opts.limit_offset >= total_before) {
+        result_ids.clear();
+      } else {
+        auto begin = result_ids.begin() + opts.limit_offset;
+        auto end = (opts.limit_count >= 0 &&
+                    opts.limit_offset + opts.limit_count < total_before)
+                       ? result_ids.begin() + opts.limit_offset + opts.limit_count
+                       : result_ids.end();
+        result_ids = std::vector<std::string>(begin, end);
+      }
+    }
+
+    long total = static_cast<long>(result_ids.size());
+    long multiplier = opts.nocontent ? 1 : 2;
+    RedisModule_ReplyWithArray(ctx, 1 + total * multiplier);
+    RedisModule_ReplyWithLongLong(ctx, total);
+
+    for (auto& rid : result_ids) {
+      RedisModule_ReplyWithCString(ctx, rid.c_str());
+      if (!opts.nocontent) {
+        ReplyWithDocFields(ctx, entry.doc_store.Get(rid), opts, nullptr);
+      }
+    }
   }
 
   return REDISMODULE_OK;

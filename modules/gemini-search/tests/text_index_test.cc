@@ -81,9 +81,12 @@ TEST_F(TextIndexTest, LookupMissing) {
   EXPECT_TRUE(ids.empty());
 }
 
-TEST_F(TextIndexTest, LookupStopWordNotIndexed) {
+TEST_F(TextIndexTest, LookupStopWordIndexed) {
+  // Stop words are indexed (for NOSTOPWORDS support) but filtered at query time
   auto ids = idx.Lookup("the");
-  EXPECT_TRUE(ids.empty());
+  ASSERT_EQ(ids.size(), 2u);
+  EXPECT_EQ(ids[0], "d1");
+  EXPECT_EQ(ids[1], "d3");
 }
 
 TEST_F(TextIndexTest, SearchSingleTerm) {

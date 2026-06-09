@@ -42,8 +42,14 @@ struct ParsedQuery {
   std::string knn_param_name;
 };
 
+struct QueryOptions {
+  bool nostopwords = false;
+  std::vector<std::string> infields;
+};
+
 bool ParseQuery(const std::string& input, ParsedQuery& out,
-                std::string& error_msg);
+                std::string& error_msg,
+                const QueryOptions& qopts = {});
 
 std::vector<std::string> SetIntersect(const std::vector<std::string>& a,
                                        const std::vector<std::string>& b);
@@ -58,4 +64,17 @@ std::vector<std::string> EvaluateQuery(const QueryNode& node,
                                         const TagFieldIndices& tag_indices,
                                         const NumericFieldIndices& numeric_indices,
                                         const TextFieldIndices& text_indices,
-                                        std::string& error_msg);
+                                        std::string& error_msg,
+                                        const std::vector<std::string>& infields = {});
+
+struct ScoredResult {
+  std::string doc_id;
+  double score;
+};
+
+std::vector<ScoredResult> EvaluateQueryScored(
+    const QueryNode& node, const IndexSpec& spec,
+    const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
+    const NumericFieldIndices& numeric_indices,
+    const TextFieldIndices& text_indices, std::string& error_msg,
+    const std::vector<std::string>& infields = {});

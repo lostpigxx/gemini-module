@@ -32,6 +32,7 @@ class TextIndex {
   void Clear();
 
   static std::vector<std::string> Tokenize(const std::string& text);
+  static std::vector<std::string> TokenizeRaw(const std::string& text);
 };
 
 class TextFieldIndices {

@@ -13,7 +13,8 @@ static const std::unordered_set<std::string> kStopWords = {
     "with",
 };
 
-std::vector<std::string> TextIndex::Tokenize(const std::string& text) {
+static std::vector<std::string> TokenizeImpl(const std::string& text,
+                                              bool filter_stopwords) {
   std::vector<std::string> tokens;
   size_t i = 0;
   while (i < text.size()) {
@@ -26,11 +27,20 @@ std::vector<std::string> TextIndex::Tokenize(const std::string& text) {
     for (size_t j = start; j < i; j++) {
       token += static_cast<char>(std::tolower(static_cast<unsigned char>(text[j])));
     }
-    if (!token.empty() && kStopWords.find(token) == kStopWords.end()) {
+    if (!token.empty() &&
+        (!filter_stopwords || kStopWords.find(token) == kStopWords.end())) {
       tokens.push_back(std::move(token));
     }
   }
   return tokens;
+}
+
+std::vector<std::string> TextIndex::Tokenize(const std::string& text) {
+  return TokenizeImpl(text, true);
+}
+
+std::vector<std::string> TextIndex::TokenizeRaw(const std::string& text) {
+  return TokenizeImpl(text, false);
 }
 
 void TextIndex::UpdateAvgDocLen() {
@@ -45,7 +55,7 @@ void TextIndex::UpdateAvgDocLen() {
 
 void TextIndex::Add(const std::string& doc_id, const std::string& text) {
   Remove(doc_id);
-  auto tokens = Tokenize(text);
+  auto tokens = TokenizeRaw(text);
   doc_lengths_[doc_id] = static_cast<int>(tokens.size());
   UpdateAvgDocLen();
 

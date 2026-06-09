@@ -7,6 +7,7 @@
 #include <iterator>
 #include <limits>
 #include <set>
+#include <unordered_set>
 
 // =============================================================
 // Set operations on sorted vectors
@@ -44,7 +45,8 @@ std::vector<std::string> EvaluateQuery(
     const QueryNode& node, const IndexSpec& spec,
     const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
     const NumericFieldIndices& numeric_indices,
-    const TextFieldIndices& text_indices, std::string& error_msg) {
+    const TextFieldIndices& text_indices, std::string& error_msg,
+    const std::vector<std::string>& infields) {
   switch (node.type) {
     case QueryNode::Type::kMatchAll:
       return doc_store.AllIds();
@@ -104,8 +106,10 @@ std::vector<std::string> EvaluateQuery(
         return {merged.begin(), merged.end()};
       }
       std::set<std::string> merged;
+      std::unordered_set<std::string> infield_set(infields.begin(), infields.end());
       for (auto& f : spec.fields) {
         if (f.type != FieldType::kText) continue;
+        if (!infield_set.empty() && infield_set.find(f.name) == infield_set.end()) continue;
         const auto* idx = text_indices.Get(f.name);
         if (!idx) continue;
         for (auto& term : node.text_terms) {
@@ -122,10 +126,12 @@ std::vector<std::string> EvaluateQuery(
         return {};
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
-                                 tag_indices, numeric_indices, text_indices, error_msg);
+                                 tag_indices, numeric_indices, text_indices,
+                                 error_msg, infields);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
-                                  tag_indices, numeric_indices, text_indices, error_msg);
+                                  tag_indices, numeric_indices, text_indices,
+                                  error_msg, infields);
       if (!error_msg.empty()) return {};
       return SetIntersect(left, right);
     }
@@ -136,10 +142,12 @@ std::vector<std::string> EvaluateQuery(
         return {};
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
-                                 tag_indices, numeric_indices, text_indices, error_msg);
+                                 tag_indices, numeric_indices, text_indices,
+                                 error_msg, infields);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
-                                  tag_indices, numeric_indices, text_indices, error_msg);
+                                  tag_indices, numeric_indices, text_indices,
+                                  error_msg, infields);
       if (!error_msg.empty()) return {};
       return SetUnion(left, right);
     }
@@ -151,9 +159,188 @@ std::vector<std::string> EvaluateQuery(
       }
       auto all = doc_store.AllIds();
       auto child = EvaluateQuery(node.children[0], spec, doc_store,
-                                  tag_indices, numeric_indices, text_indices, error_msg);
+                                  tag_indices, numeric_indices, text_indices,
+                                  error_msg, infields);
       if (!error_msg.empty()) return {};
       return SetDifference(all, child);
+    }
+  }
+  error_msg = "ERR internal: unknown query node type";
+  return {};
+}
+
+// =============================================================
+// Score-aware query evaluation (for WITHSCORES)
+// =============================================================
+
+static std::vector<ScoredResult> ScoredIntersect(
+    const std::vector<ScoredResult>& a, const std::vector<ScoredResult>& b) {
+  std::unordered_map<std::string, double> b_map;
+  for (auto& r : b) b_map[r.doc_id] = r.score;
+  std::vector<ScoredResult> out;
+  for (auto& r : a) {
+    auto it = b_map.find(r.doc_id);
+    if (it != b_map.end()) {
+      out.push_back({r.doc_id, r.score + it->second});
+    }
+  }
+  std::sort(out.begin(), out.end(),
+            [](const ScoredResult& x, const ScoredResult& y) {
+              return x.doc_id < y.doc_id;
+            });
+  return out;
+}
+
+static std::vector<ScoredResult> ScoredUnion(
+    const std::vector<ScoredResult>& a, const std::vector<ScoredResult>& b) {
+  std::unordered_map<std::string, double> merged;
+  for (auto& r : a) merged[r.doc_id] += r.score;
+  for (auto& r : b) merged[r.doc_id] += r.score;
+  std::vector<ScoredResult> out;
+  out.reserve(merged.size());
+  for (auto& [id, sc] : merged) out.push_back({id, sc});
+  std::sort(out.begin(), out.end(),
+            [](const ScoredResult& x, const ScoredResult& y) {
+              return x.doc_id < y.doc_id;
+            });
+  return out;
+}
+
+static std::vector<ScoredResult> ScoredDifference(
+    const std::vector<ScoredResult>& a, const std::vector<ScoredResult>& b) {
+  std::unordered_set<std::string> b_set;
+  for (auto& r : b) b_set.insert(r.doc_id);
+  std::vector<ScoredResult> out;
+  for (auto& r : a) {
+    if (b_set.find(r.doc_id) == b_set.end()) out.push_back(r);
+  }
+  return out;
+}
+
+std::vector<ScoredResult> EvaluateQueryScored(
+    const QueryNode& node, const IndexSpec& spec,
+    const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
+    const NumericFieldIndices& numeric_indices,
+    const TextFieldIndices& text_indices, std::string& error_msg,
+    const std::vector<std::string>& infields) {
+  switch (node.type) {
+    case QueryNode::Type::kMatchAll: {
+      auto ids = doc_store.AllIds();
+      std::vector<ScoredResult> out;
+      out.reserve(ids.size());
+      for (auto& id : ids) out.push_back({id, 1.0});
+      return out;
+    }
+
+    case QueryNode::Type::kTagMatch: {
+      auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
+                               numeric_indices, text_indices, error_msg, infields);
+      if (!error_msg.empty()) return {};
+      std::vector<ScoredResult> out;
+      out.reserve(ids.size());
+      for (auto& id : ids) out.push_back({id, 1.0});
+      return out;
+    }
+
+    case QueryNode::Type::kNumericRange: {
+      auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
+                               numeric_indices, text_indices, error_msg, infields);
+      if (!error_msg.empty()) return {};
+      std::vector<ScoredResult> out;
+      out.reserve(ids.size());
+      for (auto& id : ids) out.push_back({id, 1.0});
+      return out;
+    }
+
+    case QueryNode::Type::kTextMatch: {
+      if (!node.field_name.empty()) {
+        const auto* fspec = spec.FindField(node.field_name);
+        if (!fspec) {
+          error_msg = "ERR query field not in schema";
+          return {};
+        }
+        if (fspec->type != FieldType::kText) {
+          error_msg = "ERR field is not a TEXT field";
+          return {};
+        }
+        const auto* idx = text_indices.Get(node.field_name);
+        if (!idx) return {};
+        auto results = idx->Search(node.text_terms);
+        std::vector<ScoredResult> out;
+        out.reserve(results.size());
+        for (auto& r : results) out.push_back({r.doc_id, r.score});
+        std::sort(out.begin(), out.end(),
+                  [](const ScoredResult& x, const ScoredResult& y) {
+                    return x.doc_id < y.doc_id;
+                  });
+        return out;
+      }
+      std::unordered_map<std::string, double> merged;
+      std::unordered_set<std::string> infield_set(infields.begin(), infields.end());
+      for (auto& f : spec.fields) {
+        if (f.type != FieldType::kText) continue;
+        if (!infield_set.empty() && infield_set.find(f.name) == infield_set.end()) continue;
+        const auto* idx = text_indices.Get(f.name);
+        if (!idx) continue;
+        auto results = idx->Search(node.text_terms);
+        for (auto& r : results) merged[r.doc_id] += r.score;
+      }
+      std::vector<ScoredResult> out;
+      out.reserve(merged.size());
+      for (auto& [id, sc] : merged) out.push_back({id, sc});
+      std::sort(out.begin(), out.end(),
+                [](const ScoredResult& x, const ScoredResult& y) {
+                  return x.doc_id < y.doc_id;
+                });
+      return out;
+    }
+
+    case QueryNode::Type::kAnd: {
+      if (node.children.size() != 2) {
+        error_msg = "ERR internal: AND requires 2 children";
+        return {};
+      }
+      auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
+                                       tag_indices, numeric_indices,
+                                       text_indices, error_msg, infields);
+      if (!error_msg.empty()) return {};
+      auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
+                                        tag_indices, numeric_indices,
+                                        text_indices, error_msg, infields);
+      if (!error_msg.empty()) return {};
+      return ScoredIntersect(left, right);
+    }
+
+    case QueryNode::Type::kOr: {
+      if (node.children.size() != 2) {
+        error_msg = "ERR internal: OR requires 2 children";
+        return {};
+      }
+      auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
+                                       tag_indices, numeric_indices,
+                                       text_indices, error_msg, infields);
+      if (!error_msg.empty()) return {};
+      auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
+                                        tag_indices, numeric_indices,
+                                        text_indices, error_msg, infields);
+      if (!error_msg.empty()) return {};
+      return ScoredUnion(left, right);
+    }
+
+    case QueryNode::Type::kNot: {
+      if (node.children.size() != 1) {
+        error_msg = "ERR internal: NOT requires 1 child";
+        return {};
+      }
+      auto all_ids = doc_store.AllIds();
+      std::vector<ScoredResult> all;
+      all.reserve(all_ids.size());
+      for (auto& id : all_ids) all.push_back({id, 1.0});
+      auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
+                                        tag_indices, numeric_indices,
+                                        text_indices, error_msg, infields);
+      if (!error_msg.empty()) return {};
+      return ScoredDifference(all, child);
     }
   }
   error_msg = "ERR internal: unknown query node type";
@@ -189,8 +376,10 @@ struct Parser {
   const std::string& input;
   size_t pos = 0;
   std::string& error_msg;
+  bool nostopwords = false;
 
-  Parser(const std::string& s, std::string& err) : input(s), error_msg(err) {}
+  Parser(const std::string& s, std::string& err, bool nostop = false)
+      : input(s), error_msg(err), nostopwords(nostop) {}
 
   char Peek() const {
     if (pos >= input.size()) return '\0';
@@ -339,7 +528,8 @@ struct Parser {
       }
       std::string body = input.substr(pos + 1, close - pos - 1);
       pos = close + 1;
-      auto terms = TextIndex::Tokenize(body);
+      auto terms = nostopwords ? TextIndex::TokenizeRaw(body)
+                               : TextIndex::Tokenize(body);
       if (terms.empty()) {
         error_msg = "ERR syntax error: empty text query";
         return false;
@@ -362,7 +552,8 @@ struct Parser {
         return false;
       }
       std::string raw = input.substr(term_start, pos - term_start);
-      auto terms = TextIndex::Tokenize(raw);
+      auto terms = nostopwords ? TextIndex::TokenizeRaw(raw)
+                               : TextIndex::Tokenize(raw);
       out.type = QueryNode::Type::kTextMatch;
       out.field_name = std::move(field_name);
       out.text_terms = std::move(terms);
@@ -401,9 +592,17 @@ struct Parser {
         pos++;
       }
       std::string raw = input.substr(term_start, pos - term_start);
-      auto terms = TextIndex::Tokenize(raw);
-      if (terms.empty()) {
+      auto raw_tokens = TextIndex::TokenizeRaw(raw);
+      if (raw_tokens.empty()) {
         out.type = QueryNode::Type::kMatchAll;
+        return true;
+      }
+      auto terms = nostopwords ? std::move(raw_tokens)
+                               : TextIndex::Tokenize(raw);
+      if (terms.empty()) {
+        out.type = QueryNode::Type::kTextMatch;
+        out.field_name = "";
+        out.text_terms = {};
         return true;
       }
       out.type = QueryNode::Type::kTextMatch;
@@ -541,7 +740,7 @@ static bool ParseKnnSuffix(const std::string& knn_str, ParsedQuery& out,
 }
 
 bool ParseQuery(const std::string& input, ParsedQuery& out,
-                std::string& error_msg) {
+                std::string& error_msg, const QueryOptions& qopts) {
   // Trim
   size_t start = input.find_first_not_of(" \t\r\n");
   if (start == std::string::npos) {
@@ -568,7 +767,7 @@ bool ParseQuery(const std::string& input, ParsedQuery& out,
     size_t fe = filter_part.find_last_not_of(" \t");
     filter_part = filter_part.substr(fs, fe - fs + 1);
 
-    Parser parser(filter_part, error_msg);
+    Parser parser(filter_part, error_msg, qopts.nostopwords);
     if (!parser.ParseOr(out.root)) return false;
     parser.SkipSpaces();
     if (parser.pos != filter_part.size()) {
@@ -579,7 +778,7 @@ bool ParseQuery(const std::string& input, ParsedQuery& out,
   }
 
   // No KNN — parse as regular query tree
-  Parser parser(trimmed, error_msg);
+  Parser parser(trimmed, error_msg, qopts.nostopwords);
   if (!parser.ParseOr(out.root)) return false;
   parser.SkipSpaces();
   if (parser.pos != trimmed.size()) {
