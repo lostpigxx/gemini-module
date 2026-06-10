@@ -9,6 +9,12 @@
 #include <string>
 #include <vector>
 
+struct TextTermModifier {
+  bool is_prefix = false;
+  int fuzzy_dist = 0;
+  bool is_optional = false;
+};
+
 struct QueryNode {
   enum class Type {
     kMatchAll,
@@ -18,6 +24,7 @@ struct QueryNode {
     kAnd,
     kOr,
     kNot,
+    kOptional,
   };
 
   Type type = Type::kMatchAll;
@@ -25,6 +32,7 @@ struct QueryNode {
   std::string field_name;
   std::vector<std::string> tag_values;
   std::vector<std::string> text_terms;
+  std::vector<TextTermModifier> text_term_mods;
 
   double range_min = 0;
   double range_max = 0;

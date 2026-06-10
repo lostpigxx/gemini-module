@@ -27,12 +27,17 @@ class TextIndex {
   void Remove(const std::string& doc_id);
   std::vector<TextSearchResult> Search(const std::vector<std::string>& terms) const;
   std::vector<std::string> Lookup(const std::string& term) const;
+  std::vector<std::string> PrefixLookup(const std::string& prefix) const;
+  std::vector<std::string> FuzzyLookup(const std::string& term, int max_dist) const;
+  std::vector<TextSearchResult> PrefixSearch(const std::string& prefix) const;
+  std::vector<TextSearchResult> FuzzySearch(const std::string& term, int max_dist) const;
   size_t NumTerms() const;
   size_t NumDocs() const;
   void Clear();
 
   static std::vector<std::string> Tokenize(const std::string& text);
   static std::vector<std::string> TokenizeRaw(const std::string& text);
+  static int LevenshteinDistance(const std::string& a, const std::string& b);
 };
 
 class TextFieldIndices {

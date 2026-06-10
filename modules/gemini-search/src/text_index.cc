@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <set>
 #include <unordered_set>
 
 static const std::unordered_set<std::string> kStopWords = {
@@ -127,6 +128,69 @@ std::vector<std::string> TextIndex::Lookup(const std::string& term) const {
   for (auto& p : it->second) ids.push_back(p.doc_id);
   std::sort(ids.begin(), ids.end());
   return ids;
+}
+
+std::vector<std::string> TextIndex::PrefixLookup(const std::string& prefix) const {
+  if (prefix.size() < 2) return {};
+  std::set<std::string> result;
+  for (auto& [term, posts] : postings_) {
+    if (term.size() >= prefix.size() &&
+        term.compare(0, prefix.size(), prefix) == 0) {
+      for (auto& p : posts) result.insert(p.doc_id);
+    }
+  }
+  return {result.begin(), result.end()};
+}
+
+std::vector<std::string> TextIndex::FuzzyLookup(const std::string& term, int max_dist) const {
+  if (max_dist < 1 || max_dist > 3) return {};
+  std::set<std::string> result;
+  for (auto& [posting_term, posts] : postings_) {
+    if (LevenshteinDistance(term, posting_term) <= max_dist) {
+      for (auto& p : posts) result.insert(p.doc_id);
+    }
+  }
+  return {result.begin(), result.end()};
+}
+
+std::vector<TextSearchResult> TextIndex::PrefixSearch(const std::string& prefix) const {
+  if (prefix.size() < 2 || doc_lengths_.empty()) return {};
+  std::vector<std::string> matching_terms;
+  for (auto& [term, posts] : postings_) {
+    if (term.size() >= prefix.size() &&
+        term.compare(0, prefix.size(), prefix) == 0) {
+      matching_terms.push_back(term);
+    }
+  }
+  return Search(matching_terms);
+}
+
+std::vector<TextSearchResult> TextIndex::FuzzySearch(const std::string& term, int max_dist) const {
+  if (max_dist < 1 || max_dist > 3 || doc_lengths_.empty()) return {};
+  std::vector<std::string> matching_terms;
+  for (auto& [posting_term, posts] : postings_) {
+    if (LevenshteinDistance(term, posting_term) <= max_dist) {
+      matching_terms.push_back(posting_term);
+    }
+  }
+  return Search(matching_terms);
+}
+
+int TextIndex::LevenshteinDistance(const std::string& a, const std::string& b) {
+  size_t m = a.size(), n = b.size();
+  if (m == 0) return static_cast<int>(n);
+  if (n == 0) return static_cast<int>(m);
+  std::vector<int> prev(n + 1), curr(n + 1);
+  for (size_t j = 0; j <= n; j++) prev[j] = static_cast<int>(j);
+  for (size_t i = 1; i <= m; i++) {
+    curr[0] = static_cast<int>(i);
+    for (size_t j = 1; j <= n; j++) {
+      int cost = (a[i - 1] == b[j - 1]) ? 0 : 1;
+      curr[j] = std::min({prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost});
+    }
+    std::swap(prev, curr);
+  }
+  return prev[n];
 }
 
 size_t TextIndex::NumTerms() const { return postings_.size(); }

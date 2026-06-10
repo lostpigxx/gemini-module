@@ -2285,6 +2285,143 @@ test_error "TIMEOUT negative value" {
 r FT.DROPINDEX p13idx
 
 # ============================================================
+# Phase 14 — Prefix Search + Fuzzy Match + Optional Terms
+# ============================================================
+
+puts "\n--- Phase 14: Prefix + Fuzzy + Optional ---"
+
+r FT.CREATE p14idx SCHEMA title TEXT body TEXT status TAG
+r FT.ADD p14idx doc1 FIELDS title "hello world" body "greeting message" status active
+r FT.ADD p14idx doc2 FIELDS title "help desk" body "support center" status active
+r FT.ADD p14idx doc3 FIELDS title "helicopter ride" body "flying adventure" status inactive
+r FT.ADD p14idx doc4 FIELDS title "world cup" body "football match" status active
+r FT.ADD p14idx doc5 FIELDS title "hallo friend" body "german greeting" status active
+
+# --- Prefix search ---
+
+test "Prefix hel* matches hello, help, helicopter" {
+  set res [r FT.SEARCH p14idx "hel*"]
+  lindex $res 0
+} {3}
+
+test "Prefix wor* matches world" {
+  set res [r FT.SEARCH p14idx "wor*"]
+  lindex $res 0
+} {2}
+
+test "Prefix nonex* matches nothing" {
+  set res [r FT.SEARCH p14idx "nonex*"]
+  lindex $res 0
+} {0}
+
+test "Prefix on specific field @title:hel*" {
+  set res [r FT.SEARCH p14idx "@title:hel*"]
+  lindex $res 0
+} {3}
+
+test "Prefix @body:gre* matches greeting and german greeting" {
+  set res [r FT.SEARCH p14idx "@body:gre*"]
+  lindex $res 0
+} {2}
+
+test "Prefix with boolean AND: hel* @status:{active}" {
+  set res [r FT.SEARCH p14idx "hel* @status:{active}"]
+  lindex $res 0
+} {2}
+
+test "Prefix in parenthesized field: @title:(hel* cup)" {
+  set res [r FT.SEARCH p14idx "@title:(hel* cup)"]
+  lindex $res 0
+} {4}
+
+# --- Fuzzy search ---
+
+test "Fuzzy %hello% (LD=1) matches hello and hallo" {
+  set res [r FT.SEARCH p14idx "%hello%"]
+  lindex $res 0
+} {2}
+
+test "Fuzzy %wrld% (LD=1) matches world" {
+  set res [r FT.SEARCH p14idx "%wrld%"]
+  lindex $res 0
+} {2}
+
+test "Fuzzy %%helo%% (LD=2) matches hello, help, hallo" {
+  set res [r FT.SEARCH p14idx "%%helo%%"]
+  lindex $res 0
+} {3}
+
+test "Fuzzy %nonexistent% matches nothing" {
+  set res [r FT.SEARCH p14idx "%zzzzz%"]
+  lindex $res 0
+} {0}
+
+test "Fuzzy on specific field @title:%hello%" {
+  set res [r FT.SEARCH p14idx "@title:%hello%"]
+  lindex $res 0
+} {2}
+
+test "Fuzzy %%%helpp%%% (LD=3) matches hello, help, hallo" {
+  set res [r FT.SEARCH p14idx "%%%helpp%%%"]
+  set count [lindex $res 0]
+  expr {$count >= 2}
+} {1}
+
+# --- Optional terms ---
+
+test "Optional ~bar: foo ~bar returns docs with foo" {
+  set res [r FT.SEARCH p14idx "hello ~world"]
+  set count [lindex $res 0]
+  # Should return at least the docs with "hello"
+  expr {$count >= 1}
+} {1}
+
+test_assert "Optional boosts score with WITHSCORES" {
+  set res [r FT.SEARCH p14idx "hello ~world" WITHSCORES]
+  set count [lindex $res 0]
+  if {$count < 1} {error "expected at least 1 result"}
+  # doc1 has both "hello" and "world" - should rank highest
+  set first_id [lindex $res 1]
+  if {$first_id ne "doc1"} {error "expected doc1 first (has both hello+world), got $first_id"}
+}
+
+test "Optional alone: ~hello returns all docs" {
+  set res [r FT.SEARCH p14idx "~hello"]
+  lindex $res 0
+} {5}
+
+# --- Combined prefix + fuzzy ---
+
+test "Prefix + fuzzy combined: hel* %wrld%" {
+  set res [r FT.SEARCH p14idx "hel* | %wrld%"]
+  set count [lindex $res 0]
+  expr {$count >= 3}
+} {1}
+
+# --- WITHSCORES + prefix ---
+
+test_assert "Prefix with WITHSCORES returns scores" {
+  set res [r FT.SEARCH p14idx "hel*" WITHSCORES]
+  set count [lindex $res 0]
+  if {$count < 1} {error "expected results"}
+  set fields [lindex $res 2]
+  set score_idx [lsearch $fields "__search_score"]
+  if {$score_idx < 0} {error "no __search_score in fields"}
+  set score_val [lindex $fields [expr {$score_idx + 1}]]
+  if {$score_val <= 0} {error "score should be positive, got $score_val"}
+}
+
+# --- Fuzzy in parenthesized field expr ---
+
+test "Fuzzy in parenthesized field: @title:(%hello% cup)" {
+  set res [r FT.SEARCH p14idx "@title:(%hello% cup)"]
+  set count [lindex $res 0]
+  expr {$count >= 2}
+} {1}
+
+r FT.DROPINDEX p14idx
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

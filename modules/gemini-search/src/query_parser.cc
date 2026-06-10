@@ -86,6 +86,14 @@ std::vector<std::string> EvaluateQuery(
     }
 
     case QueryNode::Type::kTextMatch: {
+      auto LookupWithMod = [](const TextIndex* idx, const std::string& term,
+                              const TextTermModifier& mod) -> std::vector<std::string> {
+        if (mod.is_prefix) return idx->PrefixLookup(term);
+        if (mod.fuzzy_dist > 0) return idx->FuzzyLookup(term, mod.fuzzy_dist);
+        return idx->Lookup(term);
+      };
+
+      TextTermModifier default_mod;
       if (!node.field_name.empty()) {
         const auto* fspec = spec.FindField(node.field_name);
         if (!fspec) {
@@ -99,8 +107,9 @@ std::vector<std::string> EvaluateQuery(
         const auto* idx = text_indices.Get(node.field_name);
         if (!idx) return {};
         std::set<std::string> merged;
-        for (auto& term : node.text_terms) {
-          auto ids = idx->Lookup(term);
+        for (size_t i = 0; i < node.text_terms.size(); i++) {
+          const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
+          auto ids = LookupWithMod(idx, node.text_terms[i], mod);
           merged.insert(ids.begin(), ids.end());
         }
         return {merged.begin(), merged.end()};
@@ -112,13 +121,17 @@ std::vector<std::string> EvaluateQuery(
         if (!infield_set.empty() && infield_set.find(f.name) == infield_set.end()) continue;
         const auto* idx = text_indices.Get(f.name);
         if (!idx) continue;
-        for (auto& term : node.text_terms) {
-          auto ids = idx->Lookup(term);
+        for (size_t i = 0; i < node.text_terms.size(); i++) {
+          const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
+          auto ids = LookupWithMod(idx, node.text_terms[i], mod);
           merged.insert(ids.begin(), ids.end());
         }
       }
       return {merged.begin(), merged.end()};
     }
+
+    case QueryNode::Type::kOptional:
+      return doc_store.AllIds();
 
     case QueryNode::Type::kAnd: {
       if (node.children.size() != 2) {
@@ -253,6 +266,14 @@ std::vector<ScoredResult> EvaluateQueryScored(
     }
 
     case QueryNode::Type::kTextMatch: {
+      auto SearchWithMod = [](const TextIndex* idx, const std::string& term,
+                              const TextTermModifier& mod) -> std::vector<TextSearchResult> {
+        if (mod.is_prefix) return idx->PrefixSearch(term);
+        if (mod.fuzzy_dist > 0) return idx->FuzzySearch(term, mod.fuzzy_dist);
+        return idx->Search({term});
+      };
+
+      TextTermModifier default_mod;
       if (!node.field_name.empty()) {
         const auto* fspec = spec.FindField(node.field_name);
         if (!fspec) {
@@ -265,10 +286,33 @@ std::vector<ScoredResult> EvaluateQueryScored(
         }
         const auto* idx = text_indices.Get(node.field_name);
         if (!idx) return {};
-        auto results = idx->Search(node.text_terms);
+        bool has_mods = !node.text_term_mods.empty();
+        bool any_mod = false;
+        if (has_mods) {
+          for (auto& m : node.text_term_mods) {
+            if (m.is_prefix || m.fuzzy_dist > 0) { any_mod = true; break; }
+          }
+        }
+        if (!any_mod) {
+          auto results = idx->Search(node.text_terms);
+          std::vector<ScoredResult> out;
+          out.reserve(results.size());
+          for (auto& r : results) out.push_back({r.doc_id, r.score});
+          std::sort(out.begin(), out.end(),
+                    [](const ScoredResult& x, const ScoredResult& y) {
+                      return x.doc_id < y.doc_id;
+                    });
+          return out;
+        }
+        std::unordered_map<std::string, double> score_map;
+        for (size_t i = 0; i < node.text_terms.size(); i++) {
+          const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
+          auto results = SearchWithMod(idx, node.text_terms[i], mod);
+          for (auto& r : results) score_map[r.doc_id] += r.score;
+        }
         std::vector<ScoredResult> out;
-        out.reserve(results.size());
-        for (auto& r : results) out.push_back({r.doc_id, r.score});
+        out.reserve(score_map.size());
+        for (auto& [id, sc] : score_map) out.push_back({id, sc});
         std::sort(out.begin(), out.end(),
                   [](const ScoredResult& x, const ScoredResult& y) {
                     return x.doc_id < y.doc_id;
@@ -277,17 +321,57 @@ std::vector<ScoredResult> EvaluateQueryScored(
       }
       std::unordered_map<std::string, double> merged;
       std::unordered_set<std::string> infield_set(infields.begin(), infields.end());
+      bool has_mods = !node.text_term_mods.empty();
+      bool any_mod = false;
+      if (has_mods) {
+        for (auto& m : node.text_term_mods) {
+          if (m.is_prefix || m.fuzzy_dist > 0) { any_mod = true; break; }
+        }
+      }
       for (auto& f : spec.fields) {
         if (f.type != FieldType::kText) continue;
         if (!infield_set.empty() && infield_set.find(f.name) == infield_set.end()) continue;
         const auto* idx = text_indices.Get(f.name);
         if (!idx) continue;
-        auto results = idx->Search(node.text_terms);
-        for (auto& r : results) merged[r.doc_id] += r.score;
+        if (!any_mod) {
+          auto results = idx->Search(node.text_terms);
+          for (auto& r : results) merged[r.doc_id] += r.score;
+        } else {
+          for (size_t i = 0; i < node.text_terms.size(); i++) {
+            const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
+            auto results = SearchWithMod(idx, node.text_terms[i], mod);
+            for (auto& r : results) merged[r.doc_id] += r.score;
+          }
+        }
       }
       std::vector<ScoredResult> out;
       out.reserve(merged.size());
       for (auto& [id, sc] : merged) out.push_back({id, sc});
+      std::sort(out.begin(), out.end(),
+                [](const ScoredResult& x, const ScoredResult& y) {
+                  return x.doc_id < y.doc_id;
+                });
+      return out;
+    }
+
+    case QueryNode::Type::kOptional: {
+      if (node.children.size() != 1) {
+        error_msg = "ERR internal: OPTIONAL requires 1 child";
+        return {};
+      }
+      auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
+                                        tag_indices, numeric_indices,
+                                        text_indices, error_msg, infields);
+      if (!error_msg.empty()) return {};
+      auto all_ids = doc_store.AllIds();
+      std::unordered_map<std::string, double> score_map;
+      for (auto& r : child) score_map[r.doc_id] = r.score;
+      std::vector<ScoredResult> out;
+      out.reserve(all_ids.size());
+      for (auto& id : all_ids) {
+        auto it = score_map.find(id);
+        out.push_back({id, it != score_map.end() ? it->second : 0.0});
+      }
       std::sort(out.begin(), out.end(),
                 [](const ScoredResult& x, const ScoredResult& y) {
                   return x.doc_id < y.doc_id;
@@ -403,6 +487,71 @@ struct Parser {
       }
     }
     return std::string::npos;
+  }
+
+  // Detect and strip prefix/fuzzy/optional modifiers from a raw token.
+  // Returns the cleaned base term and fills the modifier.
+  static std::string StripModifiers(const std::string& raw, TextTermModifier& mod) {
+    std::string s = raw;
+    mod = {};
+
+    // Optional: leading ~
+    if (!s.empty() && s[0] == '~') {
+      mod.is_optional = true;
+      s = s.substr(1);
+    }
+
+    // Fuzzy: wrapped in % pairs (1-3 deep)
+    int pct = 0;
+    while (s.size() >= 2 && s[0] == '%' && s.back() == '%') {
+      pct++;
+      s = s.substr(1, s.size() - 2);
+      if (pct >= 3) break;
+    }
+    if (pct > 0) mod.fuzzy_dist = pct;
+
+    // Prefix: trailing *
+    if (!s.empty() && s.back() == '*') {
+      mod.is_prefix = true;
+      s.pop_back();
+    }
+
+    // Lowercase the base
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+  }
+
+  // Parse a text body (possibly multi-word) into terms with modifiers.
+  // Used for @field:(term1 %term2% hel*) and bare terms.
+  void ParseTextTermsWithModifiers(const std::string& body,
+                                    std::vector<std::string>& terms,
+                                    std::vector<TextTermModifier>& mods) {
+    terms.clear();
+    mods.clear();
+    size_t i = 0;
+    while (i < body.size()) {
+      while (i < body.size() && (body[i] == ' ' || body[i] == '\t')) i++;
+      if (i >= body.size()) break;
+      size_t start = i;
+      while (i < body.size() && body[i] != ' ' && body[i] != '\t') i++;
+      std::string raw = body.substr(start, i - start);
+      TextTermModifier mod;
+      std::string base = StripModifiers(raw, mod);
+      if (base.empty()) continue;
+      if (!mod.is_prefix && !mod.fuzzy_dist && !mod.is_optional) {
+        // Plain term: apply stop word filter unless nostopwords
+        auto filtered = nostopwords ? TextIndex::TokenizeRaw(base)
+                                    : TextIndex::Tokenize(base);
+        for (auto& t : filtered) {
+          terms.push_back(std::move(t));
+          mods.push_back(mod);
+        }
+      } else {
+        // Modified term: don't filter (prefix/fuzzy/optional always kept)
+        terms.push_back(std::move(base));
+        mods.push_back(mod);
+      }
+    }
   }
 
   // Parse a @field:{...} or @field:[...] leaf, starting at '@'
@@ -528,8 +677,9 @@ struct Parser {
       }
       std::string body = input.substr(pos + 1, close - pos - 1);
       pos = close + 1;
-      auto terms = nostopwords ? TextIndex::TokenizeRaw(body)
-                               : TextIndex::Tokenize(body);
+      std::vector<std::string> terms;
+      std::vector<TextTermModifier> mods;
+      ParseTextTermsWithModifiers(body, terms, mods);
       if (terms.empty()) {
         error_msg = "ERR syntax error: empty text query";
         return false;
@@ -537,6 +687,7 @@ struct Parser {
       out.type = QueryNode::Type::kTextMatch;
       out.field_name = std::move(field_name);
       out.text_terms = std::move(terms);
+      out.text_term_mods = std::move(mods);
       return true;
     }
 
@@ -552,11 +703,13 @@ struct Parser {
         return false;
       }
       std::string raw = input.substr(term_start, pos - term_start);
-      auto terms = nostopwords ? TextIndex::TokenizeRaw(raw)
-                               : TextIndex::Tokenize(raw);
+      std::vector<std::string> terms;
+      std::vector<TextTermModifier> mods;
+      ParseTextTermsWithModifiers(raw, terms, mods);
       out.type = QueryNode::Type::kTextMatch;
       out.field_name = std::move(field_name);
       out.text_terms = std::move(terms);
+      out.text_term_mods = std::move(mods);
       return true;
     }
   }
@@ -583,8 +736,8 @@ struct Parser {
     if (Peek() == '@') {
       return ParseFieldExpr(out);
     }
-    // Bare term: full-text search across all TEXT fields
-    if (std::isalnum(static_cast<unsigned char>(Peek()))) {
+    // Bare term (including prefix hel*, fuzzy %hello%): full-text search
+    if (std::isalnum(static_cast<unsigned char>(Peek())) || Peek() == '%') {
       size_t term_start = pos;
       while (pos < input.size() && input[pos] != ' ' && input[pos] != '\t' &&
              input[pos] != ')' && input[pos] != '|' && input[pos] != '=' &&
@@ -592,29 +745,27 @@ struct Parser {
         pos++;
       }
       std::string raw = input.substr(term_start, pos - term_start);
-      auto raw_tokens = TextIndex::TokenizeRaw(raw);
-      if (raw_tokens.empty()) {
-        out.type = QueryNode::Type::kMatchAll;
-        return true;
-      }
-      auto terms = nostopwords ? std::move(raw_tokens)
-                               : TextIndex::Tokenize(raw);
+      std::vector<std::string> terms;
+      std::vector<TextTermModifier> mods;
+      ParseTextTermsWithModifiers(raw, terms, mods);
       if (terms.empty()) {
         out.type = QueryNode::Type::kTextMatch;
         out.field_name = "";
         out.text_terms = {};
+        out.text_term_mods = {};
         return true;
       }
       out.type = QueryNode::Type::kTextMatch;
       out.field_name = "";
       out.text_terms = std::move(terms);
+      out.text_term_mods = std::move(mods);
       return true;
     }
-    error_msg = "ERR syntax error: expected @, *, or (";
+    error_msg = "ERR syntax error: expected @, *, (, or term";
     return false;
   }
 
-  // Unary: '-' unary | primary
+  // Unary: '-' unary | '~' unary | primary
   bool ParseUnary(QueryNode& out) {
     SkipSpaces();
     if (Peek() == '-') {
@@ -622,6 +773,14 @@ struct Parser {
       QueryNode child;
       if (!ParseUnary(child)) return false;
       out.type = QueryNode::Type::kNot;
+      out.children.push_back(std::move(child));
+      return true;
+    }
+    if (Peek() == '~') {
+      pos++;
+      QueryNode child;
+      if (!ParsePrimary(child)) return false;
+      out.type = QueryNode::Type::kOptional;
       out.children.push_back(std::move(child));
       return true;
     }
