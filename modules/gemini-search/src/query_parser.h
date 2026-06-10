@@ -33,6 +33,7 @@ struct QueryNode {
   std::vector<std::string> tag_values;
   std::vector<std::string> text_terms;
   std::vector<TextTermModifier> text_term_mods;
+  bool is_phrase = false;
 
   double range_min = 0;
   double range_max = 0;
@@ -53,6 +54,8 @@ struct ParsedQuery {
 struct QueryOptions {
   bool nostopwords = false;
   std::vector<std::string> infields;
+  int slop = 0;
+  bool inorder = false;
 };
 
 bool ParseQuery(const std::string& input, ParsedQuery& out,
@@ -73,7 +76,7 @@ std::vector<std::string> EvaluateQuery(const QueryNode& node,
                                         const NumericFieldIndices& numeric_indices,
                                         const TextFieldIndices& text_indices,
                                         std::string& error_msg,
-                                        const std::vector<std::string>& infields = {});
+                                        const QueryOptions& qopts = {});
 
 struct ScoredResult {
   std::string doc_id;
@@ -85,4 +88,4 @@ std::vector<ScoredResult> EvaluateQueryScored(
     const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
     const NumericFieldIndices& numeric_indices,
     const TextFieldIndices& text_indices, std::string& error_msg,
-    const std::vector<std::string>& infields = {});
+    const QueryOptions& qopts = {});

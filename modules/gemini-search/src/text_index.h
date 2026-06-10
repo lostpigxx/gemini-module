@@ -14,6 +14,7 @@ class TextIndex {
   struct Posting {
     std::string doc_id;
     int tf;
+    std::vector<int> positions;
   };
 
   std::unordered_map<std::string, std::vector<Posting>> postings_;
@@ -31,6 +32,10 @@ class TextIndex {
   std::vector<std::string> FuzzyLookup(const std::string& term, int max_dist) const;
   std::vector<TextSearchResult> PrefixSearch(const std::string& prefix) const;
   std::vector<TextSearchResult> FuzzySearch(const std::string& term, int max_dist) const;
+  std::vector<std::string> PhraseLookup(const std::vector<std::string>& terms,
+                                         int slop, bool inorder) const;
+  std::vector<TextSearchResult> PhraseSearch(const std::vector<std::string>& terms,
+                                              int slop, bool inorder) const;
   size_t NumTerms() const;
   size_t NumDocs() const;
   void Clear();

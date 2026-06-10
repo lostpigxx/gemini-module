@@ -46,7 +46,7 @@ std::vector<std::string> EvaluateQuery(
     const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
     const NumericFieldIndices& numeric_indices,
     const TextFieldIndices& text_indices, std::string& error_msg,
-    const std::vector<std::string>& infields) {
+    const QueryOptions& qopts) {
   switch (node.type) {
     case QueryNode::Type::kMatchAll:
       return doc_store.AllIds();
@@ -106,6 +106,9 @@ std::vector<std::string> EvaluateQuery(
         }
         const auto* idx = text_indices.Get(node.field_name);
         if (!idx) return {};
+        if (node.is_phrase) {
+          return idx->PhraseLookup(node.text_terms, qopts.slop, qopts.inorder);
+        }
         std::set<std::string> merged;
         for (size_t i = 0; i < node.text_terms.size(); i++) {
           const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
@@ -115,16 +118,21 @@ std::vector<std::string> EvaluateQuery(
         return {merged.begin(), merged.end()};
       }
       std::set<std::string> merged;
-      std::unordered_set<std::string> infield_set(infields.begin(), infields.end());
+      std::unordered_set<std::string> infield_set(qopts.infields.begin(), qopts.infields.end());
       for (auto& f : spec.fields) {
         if (f.type != FieldType::kText) continue;
         if (!infield_set.empty() && infield_set.find(f.name) == infield_set.end()) continue;
         const auto* idx = text_indices.Get(f.name);
         if (!idx) continue;
-        for (size_t i = 0; i < node.text_terms.size(); i++) {
-          const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
-          auto ids = LookupWithMod(idx, node.text_terms[i], mod);
+        if (node.is_phrase) {
+          auto ids = idx->PhraseLookup(node.text_terms, qopts.slop, qopts.inorder);
           merged.insert(ids.begin(), ids.end());
+        } else {
+          for (size_t i = 0; i < node.text_terms.size(); i++) {
+            const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
+            auto ids = LookupWithMod(idx, node.text_terms[i], mod);
+            merged.insert(ids.begin(), ids.end());
+          }
         }
       }
       return {merged.begin(), merged.end()};
@@ -140,11 +148,11 @@ std::vector<std::string> EvaluateQuery(
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
                                  tag_indices, numeric_indices, text_indices,
-                                 error_msg, infields);
+                                 error_msg, qopts);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  error_msg, infields);
+                                  error_msg, qopts);
       if (!error_msg.empty()) return {};
       return SetIntersect(left, right);
     }
@@ -156,11 +164,11 @@ std::vector<std::string> EvaluateQuery(
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
                                  tag_indices, numeric_indices, text_indices,
-                                 error_msg, infields);
+                                 error_msg, qopts);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  error_msg, infields);
+                                  error_msg, qopts);
       if (!error_msg.empty()) return {};
       return SetUnion(left, right);
     }
@@ -173,7 +181,7 @@ std::vector<std::string> EvaluateQuery(
       auto all = doc_store.AllIds();
       auto child = EvaluateQuery(node.children[0], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  error_msg, infields);
+                                  error_msg, qopts);
       if (!error_msg.empty()) return {};
       return SetDifference(all, child);
     }
@@ -235,7 +243,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
     const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
     const NumericFieldIndices& numeric_indices,
     const TextFieldIndices& text_indices, std::string& error_msg,
-    const std::vector<std::string>& infields) {
+    const QueryOptions& qopts) {
   switch (node.type) {
     case QueryNode::Type::kMatchAll: {
       auto ids = doc_store.AllIds();
@@ -247,7 +255,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
 
     case QueryNode::Type::kTagMatch: {
       auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
-                               numeric_indices, text_indices, error_msg, infields);
+                               numeric_indices, text_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       std::vector<ScoredResult> out;
       out.reserve(ids.size());
@@ -257,7 +265,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
 
     case QueryNode::Type::kNumericRange: {
       auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
-                               numeric_indices, text_indices, error_msg, infields);
+                               numeric_indices, text_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       std::vector<ScoredResult> out;
       out.reserve(ids.size());
@@ -286,6 +294,17 @@ std::vector<ScoredResult> EvaluateQueryScored(
         }
         const auto* idx = text_indices.Get(node.field_name);
         if (!idx) return {};
+        if (node.is_phrase) {
+          auto results = idx->PhraseSearch(node.text_terms, qopts.slop, qopts.inorder);
+          std::vector<ScoredResult> out;
+          out.reserve(results.size());
+          for (auto& r : results) out.push_back({r.doc_id, r.score});
+          std::sort(out.begin(), out.end(),
+                    [](const ScoredResult& x, const ScoredResult& y) {
+                      return x.doc_id < y.doc_id;
+                    });
+          return out;
+        }
         bool has_mods = !node.text_term_mods.empty();
         bool any_mod = false;
         if (has_mods) {
@@ -320,7 +339,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
         return out;
       }
       std::unordered_map<std::string, double> merged;
-      std::unordered_set<std::string> infield_set(infields.begin(), infields.end());
+      std::unordered_set<std::string> infield_set(qopts.infields.begin(), qopts.infields.end());
       bool has_mods = !node.text_term_mods.empty();
       bool any_mod = false;
       if (has_mods) {
@@ -333,7 +352,10 @@ std::vector<ScoredResult> EvaluateQueryScored(
         if (!infield_set.empty() && infield_set.find(f.name) == infield_set.end()) continue;
         const auto* idx = text_indices.Get(f.name);
         if (!idx) continue;
-        if (!any_mod) {
+        if (node.is_phrase) {
+          auto results = idx->PhraseSearch(node.text_terms, qopts.slop, qopts.inorder);
+          for (auto& r : results) merged[r.doc_id] += r.score;
+        } else if (!any_mod) {
           auto results = idx->Search(node.text_terms);
           for (auto& r : results) merged[r.doc_id] += r.score;
         } else {
@@ -361,7 +383,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
       }
       auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
                                         tag_indices, numeric_indices,
-                                        text_indices, error_msg, infields);
+                                        text_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       auto all_ids = doc_store.AllIds();
       std::unordered_map<std::string, double> score_map;
@@ -386,11 +408,11 @@ std::vector<ScoredResult> EvaluateQueryScored(
       }
       auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
                                        tag_indices, numeric_indices,
-                                       text_indices, error_msg, infields);
+                                       text_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
                                         tag_indices, numeric_indices,
-                                        text_indices, error_msg, infields);
+                                        text_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       return ScoredIntersect(left, right);
     }
@@ -402,11 +424,11 @@ std::vector<ScoredResult> EvaluateQueryScored(
       }
       auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
                                        tag_indices, numeric_indices,
-                                       text_indices, error_msg, infields);
+                                       text_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
                                         tag_indices, numeric_indices,
-                                        text_indices, error_msg, infields);
+                                        text_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       return ScoredUnion(left, right);
     }
@@ -422,7 +444,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
       for (auto& id : all_ids) all.push_back({id, 1.0});
       auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
                                         tag_indices, numeric_indices,
-                                        text_indices, error_msg, infields);
+                                        text_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       return ScoredDifference(all, child);
     }
@@ -668,6 +690,29 @@ struct Parser {
       return true;
     }
 
+    // TEXT phrase match: @field:"phrase"
+    if (input[pos] == '"') {
+      pos++;
+      size_t start = pos;
+      while (pos < input.size() && input[pos] != '"') pos++;
+      if (pos >= input.size()) {
+        error_msg = "ERR syntax error: unclosed quote";
+        return false;
+      }
+      std::string body = input.substr(start, pos - start);
+      pos++;
+      auto terms = TextIndex::TokenizeRaw(body);
+      if (terms.empty()) {
+        error_msg = "ERR syntax error: empty phrase";
+        return false;
+      }
+      out.type = QueryNode::Type::kTextMatch;
+      out.field_name = std::move(field_name);
+      out.text_terms = std::move(terms);
+      out.is_phrase = true;
+      return true;
+    }
+
     // TEXT match: @field:term or @field:(term1 term2)
     if (input[pos] == '(') {
       size_t close = FindClosing('(', ')', pos + 1);
@@ -735,6 +780,28 @@ struct Parser {
     }
     if (Peek() == '@') {
       return ParseFieldExpr(out);
+    }
+    // Quoted phrase: "hello world"
+    if (Peek() == '"') {
+      pos++;
+      size_t start = pos;
+      while (pos < input.size() && input[pos] != '"') pos++;
+      if (pos >= input.size()) {
+        error_msg = "ERR syntax error: unclosed quote";
+        return false;
+      }
+      std::string body = input.substr(start, pos - start);
+      pos++;
+      auto terms = TextIndex::TokenizeRaw(body);
+      if (terms.empty()) {
+        error_msg = "ERR syntax error: empty phrase";
+        return false;
+      }
+      out.type = QueryNode::Type::kTextMatch;
+      out.field_name = "";
+      out.text_terms = std::move(terms);
+      out.is_phrase = true;
+      return true;
     }
     // Bare term (including prefix hel*, fuzzy %hello%): full-text search
     if (std::isalnum(static_cast<unsigned char>(Peek())) || Peek() == '%') {

@@ -530,6 +530,9 @@ struct SearchOptions {
   bool has_inkeys = false;
   long long timeout_ms = 0;
   bool has_timeout = false;
+  int slop = 0;
+  bool has_slop = false;
+  bool inorder = false;
 };
 
 static void ReplyWithDocFields(RedisModuleCtx* ctx, const Document* doc,
@@ -732,6 +735,24 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         opts.inkeys.emplace_back(ArgView(argv[arg_i]));
         arg_i++;
       }
+    } else if (MatchArg(kw, "SLOP")) {
+      arg_i++;
+      if (arg_i >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR SLOP requires value");
+      }
+      char* endptr = nullptr;
+      long slop_val =
+          std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
+      if (*endptr != '\0' || slop_val < 0) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR SLOP must be a non-negative integer");
+      }
+      opts.slop = static_cast<int>(slop_val);
+      opts.has_slop = true;
+      arg_i++;
+    } else if (MatchArg(kw, "INORDER")) {
+      opts.inorder = true;
+      arg_i++;
     } else if (MatchArg(kw, "TIMEOUT")) {
       arg_i++;
       if (arg_i >= argc) {
@@ -757,6 +778,8 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   QueryOptions qopts;
   qopts.nostopwords = opts.nostopwords || opts.verbatim;
   qopts.infields = opts.infields;
+  qopts.slop = opts.slop;
+  qopts.inorder = opts.inorder;
 
   ParsedQuery parsed;
   std::string parse_error;
@@ -801,7 +824,7 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         auto candidates = EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
                                         entry.tag_indices, entry.numeric_indices,
                                         entry.text_indices, filter_error,
-                                        opts.infields);
+                                        qopts);
         if (!filter_error.empty()) {
           return RedisModule_ReplyWithError(ctx, filter_error.c_str());
         }
@@ -878,7 +901,7 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     scored_results = EvaluateQueryScored(
         parsed.root, entry.spec, entry.doc_store,
         entry.tag_indices, entry.numeric_indices,
-        entry.text_indices, eval_error, opts.infields);
+        entry.text_indices, eval_error, qopts);
     if (!eval_error.empty()) {
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
@@ -886,7 +909,7 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     result_ids = EvaluateQuery(
         parsed.root, entry.spec, entry.doc_store,
         entry.tag_indices, entry.numeric_indices,
-        entry.text_indices, eval_error, opts.infields);
+        entry.text_indices, eval_error, qopts);
     if (!eval_error.empty()) {
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }

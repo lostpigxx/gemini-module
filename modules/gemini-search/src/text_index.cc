@@ -60,11 +60,19 @@ void TextIndex::Add(const std::string& doc_id, const std::string& text) {
   doc_lengths_[doc_id] = static_cast<int>(tokens.size());
   UpdateAvgDocLen();
 
-  std::unordered_map<std::string, int> tf_map;
-  for (auto& t : tokens) tf_map[t]++;
+  struct TermInfo {
+    int tf = 0;
+    std::vector<int> positions;
+  };
+  std::unordered_map<std::string, TermInfo> tf_map;
+  for (int i = 0; i < static_cast<int>(tokens.size()); i++) {
+    auto& info = tf_map[tokens[i]];
+    info.tf++;
+    info.positions.push_back(i);
+  }
 
-  for (auto& [term, tf] : tf_map) {
-    postings_[term].push_back({doc_id, tf});
+  for (auto& [term, info] : tf_map) {
+    postings_[term].push_back({doc_id, info.tf, std::move(info.positions)});
   }
 }
 
@@ -174,6 +182,108 @@ std::vector<TextSearchResult> TextIndex::FuzzySearch(const std::string& term, in
     }
   }
   return Search(matching_terms);
+}
+
+static bool CheckPhrasePositions(
+    const std::vector<std::vector<int>>& pos_lists,
+    int slop, bool inorder) {
+  if (pos_lists.empty()) return false;
+  if (pos_lists.size() == 1) return !pos_lists[0].empty();
+
+  // For each starting position of the first term, try to build a chain
+  for (int start_pos : pos_lists[0]) {
+    int prev = start_pos;
+    bool found = true;
+    for (size_t t = 1; t < pos_lists.size(); t++) {
+      bool term_found = false;
+      for (int p : pos_lists[t]) {
+        if (inorder || slop == 0) {
+          int gap = p - prev - 1;
+          if (gap < 0) continue;
+          if (gap <= slop) {
+            prev = p;
+            term_found = true;
+            break;
+          }
+        } else {
+          int gap = std::abs(p - prev) - 1;
+          if (gap <= slop && p != prev) {
+            prev = p;
+            term_found = true;
+            break;
+          }
+        }
+      }
+      if (!term_found) { found = false; break; }
+    }
+    if (found) return true;
+  }
+  return false;
+}
+
+std::vector<std::string> TextIndex::PhraseLookup(
+    const std::vector<std::string>& terms, int slop, bool inorder) const {
+  if (terms.empty()) return {};
+  if (terms.size() == 1) return Lookup(terms[0]);
+
+  // Get posting lists for all terms
+  std::vector<const std::vector<Posting>*> all_posts;
+  for (auto& term : terms) {
+    auto it = postings_.find(term);
+    if (it == postings_.end()) return {};
+    all_posts.push_back(&it->second);
+  }
+
+  // Build doc_id → position lists mapping for the first term
+  std::unordered_map<std::string, std::vector<int>> first_positions;
+  for (auto& p : *all_posts[0]) {
+    first_positions[p.doc_id] = p.positions;
+  }
+
+  // Intersect: find docs containing ALL terms, collect positions
+  std::vector<std::string> result;
+  for (auto& [doc_id, first_pos] : first_positions) {
+    std::vector<std::vector<int>> pos_lists;
+    pos_lists.push_back(first_pos);
+    bool has_all = true;
+    for (size_t t = 1; t < all_posts.size(); t++) {
+      bool found = false;
+      for (auto& p : *all_posts[t]) {
+        if (p.doc_id == doc_id) {
+          pos_lists.push_back(p.positions);
+          found = true;
+          break;
+        }
+      }
+      if (!found) { has_all = false; break; }
+    }
+    if (!has_all) continue;
+    if (CheckPhrasePositions(pos_lists, slop, inorder)) {
+      result.push_back(doc_id);
+    }
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
+
+std::vector<TextSearchResult> TextIndex::PhraseSearch(
+    const std::vector<std::string>& terms, int slop, bool inorder) const {
+  if (terms.empty() || doc_lengths_.empty()) return {};
+  if (terms.size() == 1) return Search(terms);
+
+  auto phrase_docs = PhraseLookup(terms, slop, inorder);
+  if (phrase_docs.empty()) return {};
+
+  std::unordered_set<std::string> phrase_set(phrase_docs.begin(), phrase_docs.end());
+  auto all_results = Search(terms);
+
+  std::vector<TextSearchResult> filtered;
+  for (auto& r : all_results) {
+    if (phrase_set.count(r.doc_id)) {
+      filtered.push_back(r);
+    }
+  }
+  return filtered;
 }
 
 int TextIndex::LevenshteinDistance(const std::string& a, const std::string& b) {

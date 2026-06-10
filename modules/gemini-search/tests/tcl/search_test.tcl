@@ -2422,6 +2422,168 @@ test "Fuzzy in parenthesized field: @title:(%hello% cup)" {
 r FT.DROPINDEX p14idx
 
 # ============================================================
+# Phase 15 — Exact Phrase + Proximity Search
+# ============================================================
+
+puts "\n--- Phase 15: Phrase + SLOP + INORDER ---"
+
+r FT.CREATE p15idx SCHEMA title TEXT body TEXT status TAG
+r FT.ADD p15idx doc1 FIELDS title "the quick brown fox" body "jumps over the lazy dog" status active
+r FT.ADD p15idx doc2 FIELDS title "quick fox runs" body "the brown bear sleeps" status active
+r FT.ADD p15idx doc3 FIELDS title "hello big world" body "greeting message here" status inactive
+r FT.ADD p15idx doc4 FIELDS title "hello world" body "exact phrase doc" status active
+r FT.ADD p15idx doc5 FIELDS title "world hello" body "reversed order" status active
+
+# --- Exact phrase ---
+
+test "Exact phrase: \"hello world\" matches only adjacent" {
+  set res [r FT.SEARCH p15idx "\"hello world\""]
+  lindex $res 0
+} {1}
+
+test_assert "Exact phrase result is doc4" {
+  set res [r FT.SEARCH p15idx "\"hello world\""]
+  set id [lindex $res 1]
+  if {$id ne "doc4"} {error "expected doc4, got $id"}
+}
+
+test "Exact phrase: \"world hello\" matches doc5" {
+  set res [r FT.SEARCH p15idx "\"world hello\""]
+  lindex $res 0
+} {1}
+
+test "Exact phrase: \"quick brown\" matches doc1" {
+  set res [r FT.SEARCH p15idx "\"quick brown\""]
+  lindex $res 0
+} {1}
+
+test "Exact phrase: \"brown quick\" matches nothing (wrong order)" {
+  set res [r FT.SEARCH p15idx "\"brown quick\""]
+  lindex $res 0
+} {0}
+
+test "Exact phrase: \"hello big world\" matches doc3" {
+  set res [r FT.SEARCH p15idx "\"hello big world\""]
+  lindex $res 0
+} {1}
+
+test "Exact phrase: \"hello world\" does NOT match \"hello big world\"" {
+  set res [r FT.SEARCH p15idx "\"hello world\""]
+  # Only doc4 has adjacent hello world
+  lindex $res 0
+} {1}
+
+# --- Field-specific phrase ---
+
+test "Field phrase: @title:\"quick brown\" matches doc1" {
+  set res [r FT.SEARCH p15idx "@title:\"quick brown\""]
+  lindex $res 0
+} {1}
+
+test "Field phrase: @body:\"lazy dog\" matches doc1" {
+  set res [r FT.SEARCH p15idx "@body:\"lazy dog\""]
+  lindex $res 0
+} {1}
+
+test "Field phrase: @title:\"lazy dog\" matches nothing (wrong field)" {
+  set res [r FT.SEARCH p15idx "@title:\"lazy dog\""]
+  lindex $res 0
+} {0}
+
+# --- Phrase + boolean ---
+
+test "Phrase + TAG: \"hello world\" @status:{active}" {
+  set res [r FT.SEARCH p15idx "\"hello world\" @status:{active}"]
+  lindex $res 0
+} {1}
+
+test "Phrase + TAG: \"quick brown\" @status:{active}" {
+  set res [r FT.SEARCH p15idx "\"quick brown\" @status:{active}"]
+  lindex $res 0
+} {1}
+
+# --- SLOP ---
+
+test "SLOP 1: \"hello world\" matches docs with gap <= 1" {
+  set res [r FT.SEARCH p15idx "\"hello world\"" SLOP 1]
+  set count [lindex $res 0]
+  # doc3 (hello big world), doc4 (hello world), doc5 (world hello, reversed)
+  expr {$count == 3}
+} {1}
+
+test "SLOP 0: same as exact phrase" {
+  set res [r FT.SEARCH p15idx "\"hello world\"" SLOP 0]
+  lindex $res 0
+} {1}
+
+test "SLOP 2: \"quick fox\" matches \"quick brown fox\"" {
+  set res [r FT.SEARCH p15idx "\"quick fox\"" SLOP 2]
+  set count [lindex $res 0]
+  expr {$count >= 1}
+} {1}
+
+# --- INORDER ---
+
+test "INORDER: \"hello world\" does not match \"world hello\"" {
+  set res [r FT.SEARCH p15idx "\"hello world\"" SLOP 10 INORDER]
+  # doc4 has "hello world" (correct order), doc3 has "hello big world" (correct order)
+  # doc5 has "world hello" — wrong order with INORDER
+  set count [lindex $res 0]
+  # doc4 and doc3 should match, doc5 should not
+  expr {$count == 2}
+} {1}
+
+# --- Phrase with stop words ---
+
+test "Phrase with stop words: \"the quick\" matches doc1" {
+  set res [r FT.SEARCH p15idx "\"the quick\""]
+  lindex $res 0
+} {1}
+
+test "Phrase with stop words: \"over the lazy\" matches doc1" {
+  set res [r FT.SEARCH p15idx "\"over the lazy\""]
+  lindex $res 0
+} {1}
+
+# --- Multi-word phrase ---
+
+test "Multi-word phrase: \"the quick brown fox\"" {
+  set res [r FT.SEARCH p15idx "\"the quick brown fox\""]
+  lindex $res 0
+} {1}
+
+# --- Single-word phrase ---
+
+test "Single-word phrase: \"hello\" acts as term search" {
+  set res [r FT.SEARCH p15idx "\"hello\""]
+  set count [lindex $res 0]
+  expr {$count >= 2}
+} {1}
+
+# --- Phrase with WITHSCORES ---
+
+test_assert "Phrase with WITHSCORES returns scores" {
+  set res [r FT.SEARCH p15idx "\"hello world\"" WITHSCORES]
+  set count [lindex $res 0]
+  if {$count < 1} {error "expected results"}
+  set fields [lindex $res 2]
+  set score_idx [lsearch $fields "__search_score"]
+  if {$score_idx < 0} {error "no __search_score in fields"}
+}
+
+# --- Error cases ---
+
+test_error "Unclosed quote" {
+  r FT.SEARCH p15idx "\"hello world"
+} {ERR*}
+
+test_error "SLOP without value" {
+  r FT.SEARCH p15idx "\"hello\"" SLOP
+} {ERR*}
+
+r FT.DROPINDEX p15idx
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 
