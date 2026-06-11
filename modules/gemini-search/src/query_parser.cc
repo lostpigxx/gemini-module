@@ -1,4 +1,5 @@
 #include "query_parser.h"
+#include "stemmer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -86,10 +87,14 @@ std::vector<std::string> EvaluateQuery(
     }
 
     case QueryNode::Type::kTextMatch: {
-      auto LookupWithMod = [](const TextIndex* idx, const std::string& term,
-                              const TextTermModifier& mod) -> std::vector<std::string> {
+      auto LookupWithMod = [&qopts](const TextIndex* idx, const std::string& term,
+                                     const TextTermModifier& mod,
+                                     bool nostem) -> std::vector<std::string> {
         if (mod.is_prefix) return idx->PrefixLookup(term);
         if (mod.fuzzy_dist > 0) return idx->FuzzyLookup(term, mod.fuzzy_dist);
+        if (qopts.stem && !nostem && qopts.language == "english") {
+          return idx->StemLookup(term);
+        }
         return idx->Lookup(term);
       };
 
@@ -112,7 +117,7 @@ std::vector<std::string> EvaluateQuery(
         std::set<std::string> merged;
         for (size_t i = 0; i < node.text_terms.size(); i++) {
           const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
-          auto ids = LookupWithMod(idx, node.text_terms[i], mod);
+          auto ids = LookupWithMod(idx, node.text_terms[i], mod, fspec->nostem);
           merged.insert(ids.begin(), ids.end());
         }
         return {merged.begin(), merged.end()};
@@ -130,7 +135,7 @@ std::vector<std::string> EvaluateQuery(
         } else {
           for (size_t i = 0; i < node.text_terms.size(); i++) {
             const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
-            auto ids = LookupWithMod(idx, node.text_terms[i], mod);
+            auto ids = LookupWithMod(idx, node.text_terms[i], mod, f.nostem);
             merged.insert(ids.begin(), ids.end());
           }
         }
@@ -274,10 +279,14 @@ std::vector<ScoredResult> EvaluateQueryScored(
     }
 
     case QueryNode::Type::kTextMatch: {
-      auto SearchWithMod = [](const TextIndex* idx, const std::string& term,
-                              const TextTermModifier& mod) -> std::vector<TextSearchResult> {
+      auto SearchWithMod = [&qopts](const TextIndex* idx, const std::string& term,
+                                     const TextTermModifier& mod,
+                                     bool nostem) -> std::vector<TextSearchResult> {
         if (mod.is_prefix) return idx->PrefixSearch(term);
         if (mod.fuzzy_dist > 0) return idx->FuzzySearch(term, mod.fuzzy_dist);
+        if (qopts.stem && !nostem && qopts.language == "english") {
+          return idx->StemSearch(term);
+        }
         return idx->Search({term});
       };
 
@@ -305,28 +314,10 @@ std::vector<ScoredResult> EvaluateQueryScored(
                     });
           return out;
         }
-        bool has_mods = !node.text_term_mods.empty();
-        bool any_mod = false;
-        if (has_mods) {
-          for (auto& m : node.text_term_mods) {
-            if (m.is_prefix || m.fuzzy_dist > 0) { any_mod = true; break; }
-          }
-        }
-        if (!any_mod) {
-          auto results = idx->Search(node.text_terms);
-          std::vector<ScoredResult> out;
-          out.reserve(results.size());
-          for (auto& r : results) out.push_back({r.doc_id, r.score});
-          std::sort(out.begin(), out.end(),
-                    [](const ScoredResult& x, const ScoredResult& y) {
-                      return x.doc_id < y.doc_id;
-                    });
-          return out;
-        }
         std::unordered_map<std::string, double> score_map;
         for (size_t i = 0; i < node.text_terms.size(); i++) {
           const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
-          auto results = SearchWithMod(idx, node.text_terms[i], mod);
+          auto results = SearchWithMod(idx, node.text_terms[i], mod, fspec->nostem);
           for (auto& r : results) score_map[r.doc_id] += r.score;
         }
         std::vector<ScoredResult> out;
@@ -340,13 +331,6 @@ std::vector<ScoredResult> EvaluateQueryScored(
       }
       std::unordered_map<std::string, double> merged;
       std::unordered_set<std::string> infield_set(qopts.infields.begin(), qopts.infields.end());
-      bool has_mods = !node.text_term_mods.empty();
-      bool any_mod = false;
-      if (has_mods) {
-        for (auto& m : node.text_term_mods) {
-          if (m.is_prefix || m.fuzzy_dist > 0) { any_mod = true; break; }
-        }
-      }
       for (auto& f : spec.fields) {
         if (f.type != FieldType::kText) continue;
         if (!infield_set.empty() && infield_set.find(f.name) == infield_set.end()) continue;
@@ -355,13 +339,10 @@ std::vector<ScoredResult> EvaluateQueryScored(
         if (node.is_phrase) {
           auto results = idx->PhraseSearch(node.text_terms, qopts.slop, qopts.inorder);
           for (auto& r : results) merged[r.doc_id] += r.score;
-        } else if (!any_mod) {
-          auto results = idx->Search(node.text_terms);
-          for (auto& r : results) merged[r.doc_id] += r.score;
         } else {
           for (size_t i = 0; i < node.text_terms.size(); i++) {
             const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
-            auto results = SearchWithMod(idx, node.text_terms[i], mod);
+            auto results = SearchWithMod(idx, node.text_terms[i], mod, f.nostem);
             for (auto& r : results) merged[r.doc_id] += r.score;
           }
         }

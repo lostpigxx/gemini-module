@@ -268,9 +268,9 @@ puts "\n=== FT.INFO ==="
 
 test_assert "FT.INFO returns correct schema" {
   set info [r FT.INFO myidx]
-  # info is a flat list: index_name <name> num_docs <n> fields <field_array>
-  if {[llength $info] != 6} {
-    error "Expected 6 elements, got [llength $info]: $info"
+  # info: index_name <name> num_docs <n> language <lang> fields <field_array>
+  if {[llength $info] != 8} {
+    error "Expected 8 elements, got [llength $info]: $info"
   }
   if {[lindex $info 0] ne "index_name"} {
     error "Expected 'index_name' label, got '[lindex $info 0]'"
@@ -281,10 +281,13 @@ test_assert "FT.INFO returns correct schema" {
   if {[lindex $info 2] ne "num_docs"} {
     error "Expected 'num_docs' label, got '[lindex $info 2]'"
   }
-  if {[lindex $info 4] ne "fields"} {
-    error "Expected 'fields' label, got '[lindex $info 4]'"
+  if {[lindex $info 4] ne "language"} {
+    error "Expected 'language' label, got '[lindex $info 4]'"
   }
-  set fields [lindex $info 5]
+  if {[lindex $info 6] ne "fields"} {
+    error "Expected 'fields' label, got '[lindex $info 6]'"
+  }
+  set fields [lindex $info 7]
   if {[llength $fields] != 2} {
     error "Expected 2 fields, got [llength $fields]"
   }
@@ -362,7 +365,7 @@ test "FT.CREATE re-create dropped index" {
 
 test_assert "FT.INFO re-created index has new schema" {
   set info [r FT.INFO tagonly]
-  set fields [lindex $info 5]
+  set fields [lindex $info 7]
   if {[llength $fields] != 1} {
     error "Expected 1 field, got [llength $fields]"
   }
@@ -380,7 +383,7 @@ test "FT.CREATE with lowercase type names" {
 
 test_assert "FT.INFO shows normalized type names" {
   set info [r FT.INFO case_idx]
-  set fields [lindex $info 5]
+  set fields [lindex $info 7]
   set f0 [lindex $fields 0]
   set f1 [lindex $fields 1]
   if {[lindex $f0 1] ne "TAG"} {
@@ -666,7 +669,7 @@ test "FT.CREATE with VECTOR FLAT field" {
 
 test_assert "FT.INFO shows VECTOR field params" {
   set info [r FT.INFO vecidx]
-  set fields [lindex $info 5]
+  set fields [lindex $info 7]
   # Second field is the VECTOR field
   set vf [lindex $fields 1]
   # Should have 8 elements: name VECTOR algorithm FLAT dim 3 distance_metric L2
@@ -1354,7 +1357,7 @@ test "FT.CREATE with TEXT field" {
 
 test_assert "FT.INFO shows TEXT field type" {
   set info [r FT.INFO textidx]
-  set fields [lindex $info 5]
+  set fields [lindex $info 7]
   set f0 [lindex $fields 0]
   if {[lindex $f0 0] ne "title"} { error "Expected field 'title'" }
   if {[lindex $f0 1] ne "TEXT"} { error "Expected type TEXT, got [lindex $f0 1]" }
@@ -1753,7 +1756,7 @@ test "FT.CREATE with HNSW VECTOR field" {
 
 test_assert "FT.INFO shows HNSW params" {
   set info [r FT.INFO hnswi]
-  set fields [lindex $info 5]
+  set fields [lindex $info 7]
   set vf [lindex $fields 1]
   if {[llength $vf] != 12} {
     error "Expected 12 elements for HNSW field, got [llength $vf]: $vf"
@@ -1773,7 +1776,7 @@ test "FT.CREATE HNSW with default M/EF" {
 
 test_assert "FT.INFO HNSW defaults M=16, EF=200" {
   set info [r FT.INFO hnswdef]
-  set fields [lindex $info 5]
+  set fields [lindex $info 7]
   set vf [lindex $fields 0]
   if {[lindex $vf 9] != 16} { error "Expected M=16, got [lindex $vf 9]" }
   if {[lindex $vf 11] != 200} { error "Expected ef=200, got [lindex $vf 11]" }
@@ -1866,7 +1869,7 @@ test_assert "HNSW survives BGSAVE + restart" {
   set redis_fd [redis_connect localhost $port]
 
   set info [r FT.INFO hnswpersist]
-  set fields [lindex $info 5]
+  set fields [lindex $info 7]
   set vf [lindex $fields 0]
   if {[lindex $vf 3] ne "HNSW"} { error "Expected HNSW after restart" }
   if {[lindex $vf 9] != 4} { error "Expected M=4, got [lindex $vf 9]" }
@@ -2582,6 +2585,159 @@ test_error "SLOP without value" {
 } {ERR*}
 
 r FT.DROPINDEX p15idx
+
+# ============================================================
+# Phase 16 — Stemming + Multi-Language Support
+# ============================================================
+
+puts "\n--- Phase 16: Stemming ---"
+
+r FT.CREATE p16idx SCHEMA title TEXT body TEXT exact TEXT NOSTEM status TAG
+
+r FT.ADD p16idx doc1 FIELDS title "running fast" body "the runners compete" exact "running fast" status active
+r FT.ADD p16idx doc2 FIELDS title "run slowly" body "a quick jog" exact "run slowly" status active
+r FT.ADD p16idx doc3 FIELDS title "swimming pool" body "swimmers dive deep" exact "swimming pool" status inactive
+r FT.ADD p16idx doc4 FIELDS title "jumped high" body "the jumper leaps" exact "jumped high" status active
+
+# --- Basic stemming ---
+
+test "Stemming: 'run' matches 'running' and 'run'" {
+  set res [r FT.SEARCH p16idx "run"]
+  set count [lindex $res 0]
+  expr {$count >= 2}
+} {1}
+
+test "Stemming: 'running' also matches 'run'" {
+  set res [r FT.SEARCH p16idx "running"]
+  set count [lindex $res 0]
+  expr {$count >= 2}
+} {1}
+
+test "Stemming: 'swimmers' matches 'swimming'" {
+  set res [r FT.SEARCH p16idx "swimmers"]
+  set count [lindex $res 0]
+  expr {$count >= 1}
+} {1}
+
+test "Stemming: 'jumped' matches 'jumper'" {
+  set res [r FT.SEARCH p16idx "jumped"]
+  set count [lindex $res 0]
+  expr {$count >= 1}
+} {1}
+
+# --- VERBATIM disables stemming ---
+
+test "VERBATIM: 'run' does NOT match 'running'" {
+  set res [r FT.SEARCH p16idx "run" VERBATIM]
+  set count [lindex $res 0]
+  # Only doc2 has exact "run"
+  expr {$count == 1}
+} {1}
+
+test "VERBATIM: 'running' does NOT match 'run'" {
+  set res [r FT.SEARCH p16idx "running" VERBATIM]
+  set count [lindex $res 0]
+  # Only doc1 has exact "running"
+  expr {$count == 1}
+} {1}
+
+# --- NOSTEM field ---
+
+test "NOSTEM field: 'run' does NOT match 'running' in NOSTEM field" {
+  set res [r FT.SEARCH p16idx "@exact:run"]
+  set count [lindex $res 0]
+  # Only doc2 has exact "run" in the exact field
+  expr {$count == 1}
+} {1}
+
+test "NOSTEM field: 'running' does NOT match 'run' in NOSTEM field" {
+  set res [r FT.SEARCH p16idx "@exact:running"]
+  set count [lindex $res 0]
+  expr {$count == 1}
+} {1}
+
+# --- Field-specific stemming ---
+
+test "Field stemming: @title:run matches running and run" {
+  set res [r FT.SEARCH p16idx "@title:run"]
+  set count [lindex $res 0]
+  expr {$count >= 2}
+} {1}
+
+# --- Phrase queries NOT affected by stemming ---
+
+test "Phrase not stemmed: \"running fast\" matches exactly" {
+  set res [r FT.SEARCH p16idx "\"running fast\""]
+  lindex $res 0
+} {1}
+
+# --- LANGUAGE option ---
+
+test "LANGUAGE english accepted in FT.CREATE" {
+  r FT.CREATE p16lang LANGUAGE english SCHEMA title TEXT
+  r FT.ADD p16lang d1 FIELDS title "running"
+  set res [r FT.SEARCH p16lang "run"]
+  set count [lindex $res 0]
+  r FT.DROPINDEX p16lang
+  expr {$count >= 1}
+} {1}
+
+test "LANGUAGE option in FT.SEARCH accepted" {
+  set res [r FT.SEARCH p16idx "run" LANGUAGE english]
+  set count [lindex $res 0]
+  expr {$count >= 2}
+} {1}
+
+# --- FT.INFO shows NOSTEM and language ---
+
+test_assert "FT.INFO shows language" {
+  set info [r FT.INFO p16idx]
+  set lang_idx -1
+  for {set i 0} {$i < [llength $info]} {incr i} {
+    if {[lindex $info $i] eq "language"} {
+      set lang_idx [expr {$i + 1}]
+      break
+    }
+  }
+  if {$lang_idx < 0} {error "language not found in FT.INFO"}
+  set lang [lindex $info $lang_idx]
+  if {$lang ne "english"} {error "expected english, got $lang"}
+}
+
+test_assert "FT.INFO shows NOSTEM on field" {
+  set info [r FT.INFO p16idx]
+  set fields_idx -1
+  for {set i 0} {$i < [llength $info]} {incr i} {
+    if {[lindex $info $i] eq "fields"} {
+      set fields_idx [expr {$i + 1}]
+      break
+    }
+  }
+  if {$fields_idx < 0} {error "fields not found in FT.INFO"}
+  set fields [lindex $info $fields_idx]
+  # Find the "exact" field — it should have NOSTEM
+  set found 0
+  foreach f $fields {
+    if {[lindex $f 0] eq "exact"} {
+      if {[llength $f] >= 3 && [lindex $f 2] eq "NOSTEM"} {
+        set found 1
+      } else {
+        error "exact field missing NOSTEM: $f"
+      }
+    }
+  }
+  if {!$found} {error "exact field not found"}
+}
+
+# --- WITHSCORES + stemming ---
+
+test_assert "WITHSCORES with stemming returns scores" {
+  set res [r FT.SEARCH p16idx "run" WITHSCORES]
+  set count [lindex $res 0]
+  if {$count < 2} {error "expected at least 2 results with stemming"}
+}
+
+r FT.DROPINDEX p16idx
 
 # ============================================================
 # Cleanup & Summary

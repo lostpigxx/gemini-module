@@ -163,6 +163,16 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
   }
 
+  std::string index_language = "english";
+  if (i < argc && MatchArg(ArgView(argv[i]), "LANGUAGE")) {
+    i++;
+    if (i >= argc) {
+      return RedisModule_ReplyWithError(ctx, "ERR LANGUAGE requires a value");
+    }
+    index_language = std::string(ArgView(argv[i]));
+    i++;
+  }
+
   if (i >= argc || !MatchArg(ArgView(argv[i]), "SCHEMA")) {
     return RedisModule_ReplyWithError(ctx, "ERR syntax error, expected SCHEMA keyword");
   }
@@ -279,6 +289,10 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
     } else if (MatchArg(ftype_str, "TEXT")) {
       fspec.type = FieldType::kText;
+      if (i < argc && MatchArg(ArgView(argv[i]), "NOSTEM")) {
+        fspec.nostem = true;
+        i++;
+      }
     } else {
       return RedisModule_ReplyWithError(
           ctx, "ERR unknown field type, expected TAG, NUMERIC, TEXT, or VECTOR");
@@ -303,7 +317,7 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (!inserted) {
     return RedisModule_ReplyWithError(ctx, "ERR index already exists");
   }
-  it->second.spec = IndexSpec{idx_str, std::move(fields), std::move(prefixes)};
+  it->second.spec = IndexSpec{idx_str, std::move(fields), std::move(prefixes), index_language};
 
   if (SearchModuleType) {
     auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
@@ -352,7 +366,7 @@ static int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   auto& entry = it->second;
 
-  long info_len = entry.spec.HasPrefixes() ? 8 : 6;
+  long info_len = entry.spec.HasPrefixes() ? 10 : 8;
   RedisModule_ReplyWithArray(ctx, info_len);
 
   RedisModule_ReplyWithSimpleString(ctx, "index_name");
@@ -361,6 +375,9 @@ static int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_ReplyWithSimpleString(ctx, "num_docs");
   RedisModule_ReplyWithLongLong(
       ctx, static_cast<long long>(entry.doc_store.Size()));
+
+  RedisModule_ReplyWithSimpleString(ctx, "language");
+  RedisModule_ReplyWithCString(ctx, entry.spec.language.c_str());
 
   if (entry.spec.HasPrefixes()) {
     RedisModule_ReplyWithSimpleString(ctx, "index_definition");
@@ -397,6 +414,11 @@ static int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         RedisModule_ReplyWithSimpleString(ctx, "ef_construction");
         RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(f.vector_params.ef_construction));
       }
+    } else if (f.type == FieldType::kText && f.nostem) {
+      RedisModule_ReplyWithArray(ctx, 3);
+      RedisModule_ReplyWithCString(ctx, f.name.c_str());
+      RedisModule_ReplyWithSimpleString(ctx, "TEXT");
+      RedisModule_ReplyWithSimpleString(ctx, "NOSTEM");
     } else {
       RedisModule_ReplyWithArray(ctx, 2);
       RedisModule_ReplyWithCString(ctx, f.name.c_str());
@@ -533,6 +555,8 @@ struct SearchOptions {
   int slop = 0;
   bool has_slop = false;
   bool inorder = false;
+  std::string language;
+  bool has_language = false;
 };
 
 static void ReplyWithDocFields(RedisModuleCtx* ctx, const Document* doc,
@@ -753,6 +777,14 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     } else if (MatchArg(kw, "INORDER")) {
       opts.inorder = true;
       arg_i++;
+    } else if (MatchArg(kw, "LANGUAGE")) {
+      arg_i++;
+      if (arg_i >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR LANGUAGE requires value");
+      }
+      opts.language = std::string(ArgView(argv[arg_i]));
+      opts.has_language = true;
+      arg_i++;
     } else if (MatchArg(kw, "TIMEOUT")) {
       arg_i++;
       if (arg_i >= argc) {
@@ -780,6 +812,8 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   qopts.infields = opts.infields;
   qopts.slop = opts.slop;
   qopts.inorder = opts.inorder;
+  qopts.stem = !opts.verbatim;
+  qopts.language = opts.has_language ? opts.language : entry.spec.language;
 
   ParsedQuery parsed;
   std::string parse_error;

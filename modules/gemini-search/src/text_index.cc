@@ -1,4 +1,5 @@
 #include "text_index.h"
+#include "stemmer.h"
 
 #include <algorithm>
 #include <cctype>
@@ -73,6 +74,10 @@ void TextIndex::Add(const std::string& doc_id, const std::string& text) {
 
   for (auto& [term, info] : tf_map) {
     postings_[term].push_back({doc_id, info.tf, std::move(info.positions)});
+    auto stemmed = StemEnglish(term);
+    if (stemmed != term) {
+      stem_map_[stemmed].insert(term);
+    }
   }
 }
 
@@ -286,6 +291,36 @@ std::vector<TextSearchResult> TextIndex::PhraseSearch(
   return filtered;
 }
 
+std::vector<std::string> TextIndex::StemLookup(const std::string& term) const {
+  auto stemmed = StemEnglish(term);
+  std::set<std::string> result;
+  auto ids = Lookup(term);
+  result.insert(ids.begin(), ids.end());
+  auto it = stem_map_.find(stemmed);
+  if (it != stem_map_.end()) {
+    for (auto& orig : it->second) {
+      auto orig_ids = Lookup(orig);
+      result.insert(orig_ids.begin(), orig_ids.end());
+    }
+  }
+  if (stemmed != term) {
+    auto stem_ids = Lookup(stemmed);
+    result.insert(stem_ids.begin(), stem_ids.end());
+  }
+  return {result.begin(), result.end()};
+}
+
+std::vector<TextSearchResult> TextIndex::StemSearch(const std::string& term) const {
+  auto stemmed = StemEnglish(term);
+  std::vector<std::string> search_terms = {term};
+  auto it = stem_map_.find(stemmed);
+  if (it != stem_map_.end()) {
+    for (auto& orig : it->second) search_terms.push_back(orig);
+  }
+  if (stemmed != term) search_terms.push_back(stemmed);
+  return Search(search_terms);
+}
+
 int TextIndex::LevenshteinDistance(const std::string& a, const std::string& b) {
   size_t m = a.size(), n = b.size();
   if (m == 0) return static_cast<int>(n);
@@ -309,6 +344,7 @@ size_t TextIndex::NumDocs() const { return doc_lengths_.size(); }
 
 void TextIndex::Clear() {
   postings_.clear();
+  stem_map_.clear();
   doc_lengths_.clear();
   avg_doc_len_ = 0;
 }

@@ -10,6 +10,7 @@ set(SEARCH_SOURCES
   src/vector_index.cc
   src/hnsw_index.cc
   src/search_rdb.cc
+  src/stemmer.cc
 )
 
 add_library(redis_search SHARED ${SEARCH_SOURCES})
@@ -120,6 +121,7 @@ if(GTest_FOUND)
   add_executable(text_index_test EXCLUDE_FROM_ALL
     tests/text_index_test.cc
     src/text_index.cc
+    src/stemmer.cc
   )
   target_include_directories(text_index_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -137,6 +139,7 @@ if(GTest_FOUND)
     src/document_store.cc
     src/tag_index.cc
     src/text_index.cc
+    src/stemmer.cc
     src/numeric_index.cc
   )
   target_include_directories(query_parser_test PRIVATE
@@ -161,6 +164,7 @@ if(GTest_FOUND)
     src/numeric_index.cc
     src/vector_index.cc
     src/hnsw_index.cc
+    src/stemmer.cc
   )
   target_include_directories(search_rdb_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -183,6 +187,7 @@ if(GTest_FOUND)
     src/numeric_index.cc
     src/vector_index.cc
     src/hnsw_index.cc
+    src/stemmer.cc
   )
   target_include_directories(search_asan_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

@@ -56,6 +56,8 @@ struct QueryOptions {
   std::vector<std::string> infields;
   int slop = 0;
   bool inorder = false;
+  bool stem = true;
+  std::string language = "english";
 };
 
 bool ParseQuery(const std::string& input, ParsedQuery& out,

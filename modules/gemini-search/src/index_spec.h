@@ -50,12 +50,14 @@ struct FieldSpec {
   std::string name;
   FieldType type;
   VectorFieldParams vector_params;
+  bool nostem = false;
 };
 
 struct IndexSpec {
   std::string name;
   std::vector<FieldSpec> fields;
   std::vector<std::string> prefixes;
+  std::string language = "english";
 
   bool HasPrefixes() const { return !prefixes.empty(); }
 

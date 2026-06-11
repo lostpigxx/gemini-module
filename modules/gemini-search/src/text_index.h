@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -18,6 +19,7 @@ class TextIndex {
   };
 
   std::unordered_map<std::string, std::vector<Posting>> postings_;
+  std::unordered_map<std::string, std::set<std::string>> stem_map_;
   std::unordered_map<std::string, int> doc_lengths_;
   double avg_doc_len_ = 0;
 
@@ -36,6 +38,8 @@ class TextIndex {
                                          int slop, bool inorder) const;
   std::vector<TextSearchResult> PhraseSearch(const std::vector<std::string>& terms,
                                               int slop, bool inorder) const;
+  std::vector<std::string> StemLookup(const std::string& term) const;
+  std::vector<TextSearchResult> StemSearch(const std::string& term) const;
   size_t NumTerms() const;
   size_t NumDocs() const;
   void Clear();
