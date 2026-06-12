@@ -91,6 +91,8 @@ static void RemoveDocFromIndices(IndexEntry& entry,
       entry.vector_indices.GetOrCreate(fname, fspec->vector_params).Remove(doc_id);
     } else if (fspec->type == FieldType::kText) {
       entry.text_indices.GetOrCreate(fname).Remove(doc_id);
+    } else if (fspec->type == FieldType::kGeo) {
+      entry.geo_indices.GetOrCreate(fname).Remove(doc_id);
     }
   }
 }
@@ -116,6 +118,11 @@ static void AddDocToIndices(
       }
     } else if (fspec->type == FieldType::kText) {
       entry.text_indices.GetOrCreate(fname).Add(doc_id, fval);
+    } else if (fspec->type == FieldType::kGeo) {
+      GeoCoord coord;
+      if (ParseGeoCoord(fval, coord)) {
+        entry.geo_indices.GetOrCreate(fname).Add(doc_id, coord.lon, coord.lat);
+      }
     }
   }
 }
@@ -293,9 +300,11 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         fspec.nostem = true;
         i++;
       }
+    } else if (MatchArg(ftype_str, "GEO")) {
+      fspec.type = FieldType::kGeo;
     } else {
       return RedisModule_ReplyWithError(
-          ctx, "ERR unknown field type, expected TAG, NUMERIC, TEXT, or VECTOR");
+          ctx, "ERR unknown field type, expected TAG, NUMERIC, TEXT, VECTOR, or GEO");
     }
 
     for (auto& existing : fields) {
@@ -557,6 +566,12 @@ struct SearchOptions {
   bool inorder = false;
   std::string language;
   bool has_language = false;
+  std::string geofilter_field;
+  double geofilter_lon = 0;
+  double geofilter_lat = 0;
+  double geofilter_radius = 0;
+  GeoUnit geofilter_unit = GeoUnit::kKm;
+  bool has_geofilter = false;
 };
 
 static void ReplyWithDocFields(RedisModuleCtx* ctx, const Document* doc,
@@ -800,6 +815,34 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       opts.timeout_ms = tms;
       opts.has_timeout = true;
       arg_i++;
+    } else if (MatchArg(kw, "GEOFILTER")) {
+      arg_i++;
+      if (arg_i + 4 >= argc) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR GEOFILTER requires field lon lat radius unit");
+      }
+      opts.geofilter_field = std::string(ArgView(argv[arg_i]));
+      arg_i++;
+      char* ep1 = nullptr;
+      char* ep2 = nullptr;
+      char* ep3 = nullptr;
+      opts.geofilter_lon = std::strtod(std::string(ArgView(argv[arg_i])).c_str(), &ep1);
+      arg_i++;
+      opts.geofilter_lat = std::strtod(std::string(ArgView(argv[arg_i])).c_str(), &ep2);
+      arg_i++;
+      opts.geofilter_radius = std::strtod(std::string(ArgView(argv[arg_i])).c_str(), &ep3);
+      arg_i++;
+      if (*ep1 != '\0' || *ep2 != '\0' || *ep3 != '\0' || opts.geofilter_radius < 0) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR GEOFILTER invalid numeric values");
+      }
+      std::string unit_s(ArgView(argv[arg_i]));
+      if (!ParseGeoUnit(unit_s, opts.geofilter_unit)) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR GEOFILTER unknown unit, expected m|km|mi|ft");
+      }
+      opts.has_geofilter = true;
+      arg_i++;
     } else {
       return RedisModule_ReplyWithError(ctx,
                                         "ERR unknown search option");
@@ -857,8 +900,8 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         std::string filter_error;
         auto candidates = EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
                                         entry.tag_indices, entry.numeric_indices,
-                                        entry.text_indices, filter_error,
-                                        qopts);
+                                        entry.text_indices, entry.geo_indices,
+                                        filter_error, qopts);
         if (!filter_error.empty()) {
           return RedisModule_ReplyWithError(ctx, filter_error.c_str());
         }
@@ -935,7 +978,7 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     scored_results = EvaluateQueryScored(
         parsed.root, entry.spec, entry.doc_store,
         entry.tag_indices, entry.numeric_indices,
-        entry.text_indices, eval_error, qopts);
+        entry.text_indices, entry.geo_indices, eval_error, qopts);
     if (!eval_error.empty()) {
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
@@ -943,7 +986,7 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     result_ids = EvaluateQuery(
         parsed.root, entry.spec, entry.doc_store,
         entry.tag_indices, entry.numeric_indices,
-        entry.text_indices, eval_error, qopts);
+        entry.text_indices, entry.geo_indices, eval_error, qopts);
     if (!eval_error.empty()) {
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
@@ -977,6 +1020,39 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                            return allowed.find(id) == allowed.end();
                          }),
           result_ids.end());
+    }
+  }
+
+  // GEOFILTER (legacy option)
+  if (opts.has_geofilter) {
+    const auto* gf_fspec = entry.spec.FindField(opts.geofilter_field);
+    if (!gf_fspec || gf_fspec->type != FieldType::kGeo) {
+      return RedisModule_ReplyWithError(ctx, "ERR GEOFILTER field is not a GEO field");
+    }
+    const auto* gidx = entry.geo_indices.Get(opts.geofilter_field);
+    if (gidx) {
+      double radius_m = opts.geofilter_radius * GeoUnitToMeters(opts.geofilter_unit);
+      auto geo_hits = gidx->RadiusQuery(opts.geofilter_lon, opts.geofilter_lat, radius_m);
+      std::unordered_set<std::string> geo_set;
+      for (auto& gr : geo_hits) geo_set.insert(gr.doc_id);
+      if (opts.withscores) {
+        scored_results.erase(
+            std::remove_if(scored_results.begin(), scored_results.end(),
+                           [&](const ScoredResult& r) {
+                             return geo_set.find(r.doc_id) == geo_set.end();
+                           }),
+            scored_results.end());
+      } else {
+        result_ids.erase(
+            std::remove_if(result_ids.begin(), result_ids.end(),
+                           [&](const std::string& id) {
+                             return geo_set.find(id) == geo_set.end();
+                           }),
+            result_ids.end());
+      }
+    } else {
+      scored_results.clear();
+      result_ids.clear();
     }
   }
 
@@ -1224,7 +1300,7 @@ static int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   auto result_ids =
       EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
                     entry.tag_indices, entry.numeric_indices,
-                    entry.text_indices, eval_error);
+                    entry.text_indices, entry.geo_indices, eval_error);
   if (!eval_error.empty()) {
     return RedisModule_ReplyWithError(ctx, eval_error.c_str());
   }

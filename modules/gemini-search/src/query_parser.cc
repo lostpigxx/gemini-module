@@ -46,7 +46,8 @@ std::vector<std::string> EvaluateQuery(
     const QueryNode& node, const IndexSpec& spec,
     const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
     const NumericFieldIndices& numeric_indices,
-    const TextFieldIndices& text_indices, std::string& error_msg,
+    const TextFieldIndices& text_indices,
+    const GeoFieldIndices& geo_indices, std::string& error_msg,
     const QueryOptions& qopts) {
   switch (node.type) {
     case QueryNode::Type::kMatchAll:
@@ -143,6 +144,27 @@ std::vector<std::string> EvaluateQuery(
       return {merged.begin(), merged.end()};
     }
 
+    case QueryNode::Type::kGeoFilter: {
+      const auto* fspec = spec.FindField(node.field_name);
+      if (!fspec) {
+        error_msg = "ERR query field not in schema";
+        return {};
+      }
+      if (fspec->type != FieldType::kGeo) {
+        error_msg = "ERR field is not a GEO field";
+        return {};
+      }
+      const auto* idx = geo_indices.Get(node.field_name);
+      if (!idx) return {};
+      double radius_m = node.geo_radius * GeoUnitToMeters(node.geo_unit);
+      auto geo_results = idx->RadiusQuery(node.geo_lon, node.geo_lat, radius_m);
+      std::vector<std::string> ids;
+      ids.reserve(geo_results.size());
+      for (auto& gr : geo_results) ids.push_back(gr.doc_id);
+      std::sort(ids.begin(), ids.end());
+      return ids;
+    }
+
     case QueryNode::Type::kOptional:
       return doc_store.AllIds();
 
@@ -153,11 +175,11 @@ std::vector<std::string> EvaluateQuery(
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
                                  tag_indices, numeric_indices, text_indices,
-                                 error_msg, qopts);
+                                 geo_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  error_msg, qopts);
+                                  geo_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       return SetIntersect(left, right);
     }
@@ -169,11 +191,11 @@ std::vector<std::string> EvaluateQuery(
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
                                  tag_indices, numeric_indices, text_indices,
-                                 error_msg, qopts);
+                                 geo_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  error_msg, qopts);
+                                  geo_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       return SetUnion(left, right);
     }
@@ -186,7 +208,7 @@ std::vector<std::string> EvaluateQuery(
       auto all = doc_store.AllIds();
       auto child = EvaluateQuery(node.children[0], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  error_msg, qopts);
+                                  geo_indices, error_msg, qopts);
       if (!error_msg.empty()) return {};
       return SetDifference(all, child);
     }
@@ -247,7 +269,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
     const QueryNode& node, const IndexSpec& spec,
     const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
     const NumericFieldIndices& numeric_indices,
-    const TextFieldIndices& text_indices, std::string& error_msg,
+    const TextFieldIndices& text_indices,
+    const GeoFieldIndices& geo_indices, std::string& error_msg,
     const QueryOptions& qopts) {
   switch (node.type) {
     case QueryNode::Type::kMatchAll: {
@@ -260,7 +283,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
 
     case QueryNode::Type::kTagMatch: {
       auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
-                               numeric_indices, text_indices, error_msg, qopts);
+                               numeric_indices, text_indices, geo_indices,
+                               error_msg, qopts);
       if (!error_msg.empty()) return {};
       std::vector<ScoredResult> out;
       out.reserve(ids.size());
@@ -270,7 +294,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
 
     case QueryNode::Type::kNumericRange: {
       auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
-                               numeric_indices, text_indices, error_msg, qopts);
+                               numeric_indices, text_indices, geo_indices,
+                               error_msg, qopts);
       if (!error_msg.empty()) return {};
       std::vector<ScoredResult> out;
       out.reserve(ids.size());
@@ -357,6 +382,17 @@ std::vector<ScoredResult> EvaluateQueryScored(
       return out;
     }
 
+    case QueryNode::Type::kGeoFilter: {
+      auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
+                               numeric_indices, text_indices, geo_indices,
+                               error_msg, qopts);
+      if (!error_msg.empty()) return {};
+      std::vector<ScoredResult> out;
+      out.reserve(ids.size());
+      for (auto& id : ids) out.push_back({id, 1.0});
+      return out;
+    }
+
     case QueryNode::Type::kOptional: {
       if (node.children.size() != 1) {
         error_msg = "ERR internal: OPTIONAL requires 1 child";
@@ -364,7 +400,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
       }
       auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
                                         tag_indices, numeric_indices,
-                                        text_indices, error_msg, qopts);
+                                        text_indices, geo_indices,
+                                        error_msg, qopts);
       if (!error_msg.empty()) return {};
       auto all_ids = doc_store.AllIds();
       std::unordered_map<std::string, double> score_map;
@@ -389,11 +426,13 @@ std::vector<ScoredResult> EvaluateQueryScored(
       }
       auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
                                        tag_indices, numeric_indices,
-                                       text_indices, error_msg, qopts);
+                                       text_indices, geo_indices,
+                                       error_msg, qopts);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
                                         tag_indices, numeric_indices,
-                                        text_indices, error_msg, qopts);
+                                        text_indices, geo_indices,
+                                        error_msg, qopts);
       if (!error_msg.empty()) return {};
       return ScoredIntersect(left, right);
     }
@@ -405,11 +444,13 @@ std::vector<ScoredResult> EvaluateQueryScored(
       }
       auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
                                        tag_indices, numeric_indices,
-                                       text_indices, error_msg, qopts);
+                                       text_indices, geo_indices,
+                                       error_msg, qopts);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
                                         tag_indices, numeric_indices,
-                                        text_indices, error_msg, qopts);
+                                        text_indices, geo_indices,
+                                        error_msg, qopts);
       if (!error_msg.empty()) return {};
       return ScoredUnion(left, right);
     }
@@ -425,7 +466,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
       for (auto& id : all_ids) all.push_back({id, 1.0});
       auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
                                         tag_indices, numeric_indices,
-                                        text_indices, error_msg, qopts);
+                                        text_indices, geo_indices,
+                                        error_msg, qopts);
       if (!error_msg.empty()) return {};
       return ScoredDifference(all, child);
     }
@@ -625,7 +667,7 @@ struct Parser {
     }
 
     if (input[pos] == '[') {
-      // Numeric range
+      // Numeric range or GEO filter
       size_t close = FindClosing('[', ']', pos + 1);
       if (close == std::string::npos) {
         error_msg = "ERR syntax error: expected closing ]";
@@ -635,29 +677,60 @@ struct Parser {
       pos = close + 1;
 
       if (body.empty()) {
-        error_msg = "ERR syntax error: empty numeric range";
+        error_msg = "ERR syntax error: empty range expression";
         return false;
       }
 
-      size_t space = body.find(' ');
-      if (space == std::string::npos) {
-        error_msg = "ERR syntax error: numeric range requires two bounds";
-        return false;
+      // Tokenize by spaces to distinguish numeric (2 tokens) from geo (4 tokens)
+      std::vector<std::string> tokens;
+      {
+        size_t ti = 0;
+        while (ti < body.size()) {
+          while (ti < body.size() && body[ti] == ' ') ti++;
+          if (ti >= body.size()) break;
+          size_t ts = ti;
+          while (ti < body.size() && body[ti] != ' ') ti++;
+          tokens.push_back(body.substr(ts, ti - ts));
+        }
       }
-      std::string min_tok = body.substr(0, space);
-      std::string max_tok = body.substr(space + 1);
-      if (min_tok.empty() || max_tok.empty()) {
-        error_msg = "ERR syntax error: empty numeric bound";
+
+      if (tokens.size() == 4) {
+        // GEO filter: @field:[lon lat radius unit]
+        char* ep1 = nullptr;
+        char* ep2 = nullptr;
+        char* ep3 = nullptr;
+        double lon = std::strtod(tokens[0].c_str(), &ep1);
+        double lat = std::strtod(tokens[1].c_str(), &ep2);
+        double radius = std::strtod(tokens[2].c_str(), &ep3);
+        GeoUnit unit;
+        if (*ep1 != '\0' || *ep2 != '\0' || *ep3 != '\0' ||
+            std::isnan(lon) || std::isnan(lat) || std::isnan(radius) ||
+            radius < 0 || !ParseGeoUnit(tokens[3], unit)) {
+          error_msg = "ERR syntax error: expected [lon lat radius m|km|mi|ft]";
+          return false;
+        }
+        out.type = QueryNode::Type::kGeoFilter;
+        out.field_name = std::move(field_name);
+        out.geo_lon = lon;
+        out.geo_lat = lat;
+        out.geo_radius = radius;
+        out.geo_unit = unit;
+        return true;
+      }
+
+      if (tokens.size() != 2) {
+        error_msg = "ERR syntax error: expected numeric range [min max] or geo filter [lon lat radius unit]";
         return false;
       }
 
+      // Numeric range (2 tokens)
       double min_val, max_val;
       bool min_excl, max_excl;
-      if (!ParseNumericBound(min_tok, min_val, min_excl)) {
+      if (!ParseNumericBound(tokens[0], min_val, min_excl)) {
         error_msg = "ERR syntax error: invalid numeric min value";
         return false;
       }
-      if (!ParseNumericBound(max_tok, max_val, max_excl)) {
+      if (!ParseNumericBound(tokens[1], max_val, max_excl)) {
         error_msg = "ERR syntax error: invalid numeric max value";
         return false;
       }

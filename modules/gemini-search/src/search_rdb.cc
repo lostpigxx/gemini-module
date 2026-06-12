@@ -62,7 +62,7 @@ static std::string LoadString(RedisModuleIO* rdb) {
 }
 
 void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
-  if (encver != 1 && encver != 2 && encver != kSearchEncVer) return nullptr;
+  if (encver < 1 || encver > kSearchEncVer) return nullptr;
 
   std::string index_name = LoadString(rdb);
 

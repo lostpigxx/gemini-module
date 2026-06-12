@@ -15,6 +15,7 @@ extern "C" {
 #endif
 
 #include "document_store.h"
+#include "geo_index.h"
 #include "index_spec.h"
 #include "numeric_index.h"
 #include "tag_index.h"
@@ -33,6 +34,7 @@ struct IndexEntry {
   NumericFieldIndices numeric_indices;
   VectorFieldIndices vector_indices;
   TextFieldIndices text_indices;
+  GeoFieldIndices geo_indices;
 };
 
 int RegisterSearchCommands(RedisModuleCtx* ctx);

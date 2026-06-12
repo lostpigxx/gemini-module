@@ -1,6 +1,7 @@
 #pragma once
 
 #include "document_store.h"
+#include "geo_index.h"
 #include "index_spec.h"
 #include "numeric_index.h"
 #include "tag_index.h"
@@ -21,6 +22,7 @@ struct QueryNode {
     kTagMatch,
     kNumericRange,
     kTextMatch,
+    kGeoFilter,
     kAnd,
     kOr,
     kNot,
@@ -39,6 +41,11 @@ struct QueryNode {
   double range_max = 0;
   bool min_exclusive = false;
   bool max_exclusive = false;
+
+  double geo_lon = 0;
+  double geo_lat = 0;
+  double geo_radius = 0;
+  GeoUnit geo_unit = GeoUnit::kKm;
 
   std::vector<QueryNode> children;
 };
@@ -77,6 +84,7 @@ std::vector<std::string> EvaluateQuery(const QueryNode& node,
                                         const TagFieldIndices& tag_indices,
                                         const NumericFieldIndices& numeric_indices,
                                         const TextFieldIndices& text_indices,
+                                        const GeoFieldIndices& geo_indices,
                                         std::string& error_msg,
                                         const QueryOptions& qopts = {});
 
@@ -89,5 +97,6 @@ std::vector<ScoredResult> EvaluateQueryScored(
     const QueryNode& node, const IndexSpec& spec,
     const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
     const NumericFieldIndices& numeric_indices,
-    const TextFieldIndices& text_indices, std::string& error_msg,
+    const TextFieldIndices& text_indices,
+    const GeoFieldIndices& geo_indices, std::string& error_msg,
     const QueryOptions& qopts = {});
