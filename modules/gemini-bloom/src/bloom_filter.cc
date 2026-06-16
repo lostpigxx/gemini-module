@@ -143,7 +143,7 @@ void BloomLayer::SetBit(uint64_t bitIndex) {
 // "Less Hashing, Same Performance" (ESA 2006).
 
 bool BloomLayer::Test(const HashPair& hp) const {
-  bool isPow2 = IsPowerOfTwo();
+  bool isPow2 = UseBitMasking();
   uint64_t mask = isPow2 ? ComputeModuloMask() : 0;
 
   for (uint32_t probe = 0; probe < hashCount_; probe++) {
@@ -154,7 +154,7 @@ bool BloomLayer::Test(const HashPair& hp) const {
 }
 
 bool BloomLayer::Insert(const HashPair& hp) {
-  bool isPow2 = IsPowerOfTwo();
+  bool isPow2 = UseBitMasking();
   uint64_t mask = isPow2 ? ComputeModuloMask() : 0;
   bool anyNew = false;
 

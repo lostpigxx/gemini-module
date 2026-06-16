@@ -135,6 +135,52 @@ TEST(ScalingBloomTest, BytesUsed) {
   free(mem);
 }
 
+// Bug regression: SetLayer must use placement new on calloc'd memory.
+// FromRdbShell allocates with calloc (zero-filled), then SetLayer
+// assigns into those slots. Without placement new, this is UB.
+TEST(ScalingBloomTest, FromRdbShellSetLayer) {
+  // Build a filter with data, then reconstruct via shell
+  auto* orig = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (orig) ScalingBloomFilter(100, 0.01, DefaultFlags(), 2);
+
+  std::vector<std::string> items;
+  for (int i = 0; i < 300; i++) {
+    items.push_back("shell_" + std::to_string(i));
+    orig->Put(ToSpan(items.back()));
+  }
+  EXPECT_GT(orig->NumLayers(), 1u);
+
+  // Reconstruct via FromRdbShell + SetLayer
+  ScalingBloomFilter::RdbShell shell{
+    .totalItems = orig->TotalItems(),
+    .numLayers = orig->NumLayers(),
+    .flags = orig->Flags(),
+    .expansionFactor = orig->ExpansionFactor(),
+  };
+  auto* rebuilt = ScalingBloomFilter::FromRdbShell(shell);
+  ASSERT_NE(rebuilt, nullptr);
+
+  for (size_t i = 0; i < orig->NumLayers(); i++) {
+    auto& src = orig->Layers()[i];
+    auto layer = BloomLayer::Create(
+      src.bloom.GetCapacity(), src.bloom.GetFpRate(), orig->Flags());
+    ASSERT_TRUE(layer.has_value());
+    std::memcpy(layer->GetBitArray(), src.bloom.GetBitArray(),
+                src.bloom.GetDataSize());
+    rebuilt->SetLayer(i, {std::move(*layer), src.itemCount});
+  }
+
+  for (const auto& item : items) {
+    EXPECT_TRUE(rebuilt->Contains(ToSpan(item)))
+      << "False negative after FromRdbShell+SetLayer: " << item;
+  }
+
+  orig->~ScalingBloomFilter();
+  free(orig);
+  rebuilt->~ScalingBloomFilter();
+  free(rebuilt);
+}
+
 // SerializeDeserializeHeader test is covered by TCL integration tests
 // (SCANDUMP/LOADCHUNK round-trip) since the serialization code depends
 // on the Redis Module API.

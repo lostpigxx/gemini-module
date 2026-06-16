@@ -539,6 +539,104 @@ TEST(BloomRdb, DifferentFpRates) {
 // Wire format: header size computation
 // ==================================================================
 
+// ==================================================================
+// Bug regression: SetLayer on calloc'd memory must use placement new,
+// not move-assignment on an unconstructed FilterLayer.
+// This test verifies that a wire-format deserialized filter survives
+// SetLayer and correctly answers membership queries.
+// ==================================================================
+
+TEST(BloomWire, SetLayerOnUninitializedMemory) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  std::vector<std::string> items;
+  for (int i = 0; i < 200; i++) {
+    items.push_back("setlayer_" + std::to_string(i));
+    filter->Put(ToSpan(items.back()));
+  }
+  EXPECT_GT(filter->NumLayers(), 1u);
+
+  size_t hdr_size = ComputeHeaderSize(*filter);
+  std::vector<uint8_t> hdr_buf(hdr_size);
+  SerializeHeader(*filter, hdr_buf.data());
+
+  std::vector<std::vector<uint8_t>> layer_data;
+  for (const auto& layer : filter->Layers()) {
+    layer_data.emplace_back(layer.bloom.GetBitArray(),
+                            layer.bloom.GetBitArray() + layer.bloom.GetDataSize());
+  }
+
+  auto* rebuilt = DeserializeHeader(hdr_buf.data(), hdr_buf.size());
+  ASSERT_NE(rebuilt, nullptr);
+
+  for (size_t i = 0; i < layer_data.size(); i++) {
+    auto& dest = rebuilt->Layers()[i].bloom;
+    ASSERT_EQ(dest.GetDataSize(), layer_data[i].size());
+    std::memcpy(dest.GetBitArray(), layer_data[i].data(), layer_data[i].size());
+  }
+
+  for (const auto& item : items) {
+    EXPECT_TRUE(rebuilt->Contains(ToSpan(item)))
+      << "False negative after SetLayer: " << item;
+  }
+
+  DestroyFilter(filter);
+  DestroyFilter(rebuilt);
+}
+
+// ==================================================================
+// Bug regression: RDB load must check r.Ok() after reading per-layer
+// item count. A truncated stream missing the item count should not
+// produce a filter with wrong data.
+// ==================================================================
+
+TEST(BloomRdb, TruncatedItemCountReturnsNull) {
+  auto* filter = CreateFilter(500, 0.01, DefaultFlags(), 2);
+  for (int i = 0; i < 100; i++) {
+    auto s = "trunc_" + std::to_string(i);
+    filter->Put(ToSpan(s));
+  }
+  ASSERT_EQ(filter->NumLayers(), 1u);
+
+  // Build a manually truncated RDB stream: write the filter header
+  // and the first layer's BloomLayer data, but omit the itemCount
+  // uint64 that follows it.
+  MockRdbStream truncStream;
+  auto* io = truncStream.IO();
+
+  // Filter-level header
+  Mock_SaveUnsigned(io, filter->TotalItems());
+  Mock_SaveUnsigned(io, 1);  // numLayers = 1
+  Mock_SaveUnsigned(io, ToUnderlying(filter->Flags()));
+  Mock_SaveUnsigned(io, filter->ExpansionFactor());
+
+  // Layer 0 BloomLayer fields (complete)
+  const auto& layer0 = filter->Layers()[0];
+  Mock_SaveUnsigned(io, layer0.bloom.GetCapacity());
+  Mock_SaveDouble(io, layer0.bloom.GetFpRate());
+  Mock_SaveUnsigned(io, layer0.bloom.GetHashCount());
+  Mock_SaveDouble(io, layer0.bloom.GetBitsPerEntry());
+  Mock_SaveUnsigned(io, layer0.bloom.GetTotalBits());
+  Mock_SaveUnsigned(io, layer0.bloom.GetLog2Bits());
+  Mock_SaveStringBuffer(io,
+    reinterpret_cast<const char*>(layer0.bloom.GetBitArray()),
+    layer0.bloom.GetDataSize());
+  // DELIBERATELY omit: Mock_SaveUnsigned(io, layer0.itemCount);
+
+  truncStream.Rewind();
+  auto* loaded = static_cast<ScalingBloomFilter*>(
+    RdbLoadBloom(truncStream.IO(), kCurrentEncVer));
+
+  // With the fix: the loader detects the truncated itemCount via
+  // r.Ok() and returns nullptr.
+  // Before the fix: itemCount silently reads 0 (default from
+  // GetUint's error path) and loading "succeeds" with wrong data.
+  EXPECT_EQ(loaded, nullptr)
+    << "Expected nullptr for stream truncated before itemCount";
+
+  if (loaded) DestroyFilter(loaded);
+  DestroyFilter(filter);
+}
+
 TEST(BloomWire, HeaderSizeScalesWithLayers) {
   auto* f1 = CreateFilter(100, 0.01, DefaultFlags(), 2);
   size_t s1 = ComputeHeaderSize(*f1);

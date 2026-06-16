@@ -19,13 +19,14 @@
 struct MockRdbStream {
   std::vector<uint8_t> buf;
   size_t read_pos = 0;
+  bool error = false;
 
   // Treat the stream struct itself as RedisModuleIO* — the mock functions
   // receive it via the opaque pointer and static_cast back.
   RedisModuleIO* IO() { return reinterpret_cast<RedisModuleIO*>(this); }
 
-  void Rewind() { read_pos = 0; }
-  void Clear()  { buf.clear(); read_pos = 0; }
+  void Rewind() { read_pos = 0; error = false; }
+  void Clear()  { buf.clear(); read_pos = 0; error = false; }
 
   // --- write helpers ---
   void WriteBytes(const void* data, size_t len) {
@@ -35,7 +36,7 @@ struct MockRdbStream {
 
   // --- read helpers ---
   bool ReadBytes(void* dst, size_t len) {
-    if (read_pos + len > buf.size()) return false;
+    if (read_pos + len > buf.size()) { error = true; return false; }
     std::memcpy(dst, buf.data() + read_pos, len);
     read_pos += len;
     return true;
@@ -98,6 +99,10 @@ static char* Mock_LoadStringBuffer(RedisModuleIO* io, size_t* lenptr) {
   return buf;
 }
 
+static int Mock_IsIOError(RedisModuleIO* io) {
+  return StreamOf(io)->error ? 1 : 0;
+}
+
 static void Mock_Free(void* ptr) {
   std::free(ptr);
 }
@@ -114,4 +119,5 @@ static inline void InstallMockRedisModuleIO() {
   RedisModule_SaveStringBuffer = Mock_SaveStringBuffer;
   RedisModule_LoadStringBuffer = Mock_LoadStringBuffer;
   RedisModule_Free            = Mock_Free;
+  RedisModule_IsIOError       = Mock_IsIOError;
 }

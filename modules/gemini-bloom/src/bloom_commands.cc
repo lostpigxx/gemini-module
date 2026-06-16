@@ -251,16 +251,20 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
     } else if (MatchArg(sv, "NONSCALING")) {
       opts.fixedSize = true;
     } else if (MatchArg(sv, "ITEMS")) {
-      if (opts.fixedSize && expansionSet) {
-        return RedisModule_ReplyWithError(ctx, "ERR NONSCALING and EXPANSION are mutually exclusive");
-      }
       opts.itemsStart = i + 1;
-      return -1;
+      break;
     } else {
       return RedisModule_ReplyWithError(ctx, "ERR unrecognized option");
     }
   }
-  return RedisModule_ReplyWithError(ctx, "ERR ITEMS keyword not found");
+
+  if (opts.fixedSize && expansionSet) {
+    return RedisModule_ReplyWithError(ctx, "ERR NONSCALING and EXPANSION are mutually exclusive");
+  }
+  if (opts.itemsStart < 0) {
+    return RedisModule_ReplyWithError(ctx, "ERR ITEMS keyword not found");
+  }
+  return -1;
 }
 
 static int CmdInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
@@ -466,21 +470,19 @@ static int CmdScandump(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
     return RedisModule_ReplyWithError(ctx, "ERR cursor must be non-negative");
   }
 
-  RedisModule_ReplyWithArray(ctx, 2);
-
   if (cursor == 0) {
     size_t hdrBytes = ComputeHeaderSize(*filter);
     auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
     if (!hdrBuf) {
-      RedisModule_ReplyWithLongLong(ctx, 0);
-      RedisModule_ReplyWithStringBuffer(ctx, "", 0);
-      return REDISMODULE_OK;
+      return RedisModule_ReplyWithError(ctx, "ERR allocation failure during SCANDUMP");
     }
+    RedisModule_ReplyWithArray(ctx, 2);
     SerializeHeader(*filter, hdrBuf);
     RedisModule_ReplyWithLongLong(ctx, 1);
     RedisModule_ReplyWithStringBuffer(ctx, hdrBuf, hdrBytes);
     RMFree(hdrBuf);
   } else if (cursor >= 1 && static_cast<size_t>(cursor - 1) < filter->NumLayers()) {
+    RedisModule_ReplyWithArray(ctx, 2);
     size_t idx = static_cast<size_t>(cursor - 1);
     const auto& layer = filter->Layers()[idx];
     RedisModule_ReplyWithLongLong(ctx, cursor + 1);
@@ -488,6 +490,7 @@ static int CmdScandump(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
       reinterpret_cast<const char*>(layer.bloom.GetBitArray()),
       layer.bloom.GetDataSize());
   } else {
+    RedisModule_ReplyWithArray(ctx, 2);
     RedisModule_ReplyWithLongLong(ctx, 0);
     RedisModule_ReplyWithStringBuffer(ctx, "", 0);
   }

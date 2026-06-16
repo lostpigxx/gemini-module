@@ -163,7 +163,7 @@ ScalingBloomFilter* ScalingBloomFilter::FromRdbShell(RdbShell shell) {
 
 void ScalingBloomFilter::SetLayer(size_t index, FilterLayer&& layer) {
   if (index < numLayers_) {
-    layers_[index] = {std::move(layer.bloom), layer.itemCount};
+    new (&layers_[index]) FilterLayer{std::move(layer.bloom), layer.itemCount};
   }
 }
 

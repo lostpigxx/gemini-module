@@ -136,7 +136,7 @@ private:
   bool TestBit(uint64_t bitIndex) const;
   void SetBit(uint64_t bitIndex);
   uint64_t ComputeModuloMask() const;
-  bool IsPowerOfTwo() const { return log2Bits_ > 0; }
+  bool UseBitMasking() const { return log2Bits_ > 0; }
 
   uint32_t hashCount_ = 0;
   uint8_t log2Bits_ = 0;

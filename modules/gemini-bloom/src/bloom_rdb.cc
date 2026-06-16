@@ -147,6 +147,12 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
       return nullptr;
     }
     size_t count = static_cast<size_t>(r.GetUint());
+    if (!r.Ok()) {
+      // maybeLayer still owns the BloomLayer; its destructor frees it
+      filter->~ScalingBloomFilter();
+      RMFree(filter);
+      return nullptr;
+    }
     filter->SetLayer(i, {std::move(*maybeLayer), count});
   }
 
@@ -256,7 +262,11 @@ void AofRewriteBloom(RedisModuleIO* aof, RedisModuleString* key, void* value) {
 
   size_t hdrBytes = ComputeHeaderSize(*filter);
   auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
-  if (!hdrBuf) return;
+  if (!hdrBuf) {
+    RedisModule_LogIOError(aof, "warning",
+      "GeminiBloom: AOF rewrite allocation failure, key omitted");
+    return;
+  }
   SerializeHeader(*filter, hdrBuf);
 
   RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, (long long)1, hdrBuf, hdrBytes);
