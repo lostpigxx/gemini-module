@@ -1,4 +1,5 @@
 #include "search_commands.h"
+#include "expr_engine.h"
 #include "query_parser.h"
 #include "search_rdb.h"
 
@@ -1273,11 +1274,292 @@ static int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event,
   return REDISMODULE_OK;
 }
 
-// FT.AGGREGATE <index> <query>
-//   [GROUPBY <nargs> @field ...]
-//   [REDUCE <func> <nargs> [@field ...] AS <alias>] ...
-//   [SORTBY <nargs> @field ASC|DESC ...]
-//   [LIMIT <offset> <count>]
+// =============================================================
+// FT.AGGREGATE pipeline
+// =============================================================
+
+enum class ReduceFunc {
+  kCount, kSum, kAvg, kMin, kMax, kCountDistinct,
+  kStddev, kQuantile, kTolist, kFirstValue, kRandomSample, kCountDistinctish
+};
+
+struct ReduceOp {
+  ReduceFunc func;
+  std::string field;
+  std::string alias;
+  double quantile_pct = 0.0;
+  std::string first_value_by;
+  bool first_value_desc = false;
+  long random_sample_count = 0;
+};
+
+enum class PipelineStageType {
+  kLoad, kApply, kFilter, kGroupby, kSortby, kLimit
+};
+
+struct PipelineStage {
+  PipelineStageType type;
+  // LOAD
+  std::vector<std::string> load_fields;
+  // APPLY
+  std::string apply_expr;
+  std::string apply_alias;
+  // FILTER
+  std::string filter_expr;
+  // GROUPBY + REDUCE
+  std::vector<std::string> groupby_fields;
+  std::vector<ReduceOp> reducers;
+  // SORTBY
+  std::string sortby_field;
+  bool sortby_desc = false;
+  // LIMIT
+  long long limit_offset = 0;
+  long long limit_count = 0;
+};
+
+using AggRow = std::unordered_map<std::string, std::string>;
+
+static void ApplyLimit(std::vector<AggRow>& rows, long long offset, long long count) {
+  long long total = static_cast<long long>(rows.size());
+  if (offset >= total) { rows.clear(); return; }
+  auto begin = rows.begin() + offset;
+  auto end = (count >= 0 && offset + count < total)
+                 ? rows.begin() + offset + count : rows.end();
+  rows = std::vector<AggRow>(begin, end);
+}
+
+static void ApplySortby(std::vector<AggRow>& rows,
+                        const std::string& field, bool desc) {
+  std::sort(rows.begin(), rows.end(),
+            [&](const AggRow& a, const AggRow& b) {
+              auto ait = a.find(field);
+              auto bit = b.find(field);
+              std::string va = (ait != a.end()) ? ait->second : "";
+              std::string vb = (bit != b.end()) ? bit->second : "";
+              double na = 0, nb = 0;
+              bool num = TryParseDouble(va, na) && TryParseDouble(vb, nb);
+              if (num) return desc ? na > nb : na < nb;
+              return desc ? va > vb : va < vb;
+            });
+}
+
+static void ApplyGroupby(std::vector<AggRow>& rows,
+                          const std::vector<std::string>& gb_fields,
+                          const std::vector<ReduceOp>& reducers) {
+  struct GroupAccum {
+    long long count = 0;
+    std::unordered_map<std::string, double> sum;
+    std::unordered_map<std::string, double> sum_sq;
+    std::unordered_map<std::string, long long> field_count;
+    std::unordered_map<std::string, double> min_val;
+    std::unordered_map<std::string, double> max_val;
+    std::unordered_map<std::string, std::unordered_set<std::string>> distinct;
+    std::unordered_map<std::string, std::vector<double>> values;
+    std::unordered_map<std::string, std::vector<std::string>> str_values;
+    std::unordered_map<std::string, std::string> first_val;
+    std::unordered_map<std::string, double> first_sort_val;
+    std::unordered_map<std::string, bool> first_set;
+  };
+
+  auto MakeKey = [&](const AggRow& row) -> std::string {
+    std::string key;
+    for (size_t i = 0; i < gb_fields.size(); i++) {
+      if (i > 0) key += "\x01";
+      auto fit = row.find(gb_fields[i]);
+      if (fit != row.end()) key += fit->second;
+    }
+    return key;
+  };
+
+  std::unordered_map<std::string, GroupAccum> groups;
+  std::unordered_map<std::string, AggRow> group_key_values;
+
+  for (auto& row : rows) {
+    std::string gk = MakeKey(row);
+    auto& accum = groups[gk];
+    accum.count++;
+
+    if (group_key_values.find(gk) == group_key_values.end()) {
+      AggRow kv;
+      for (auto& gf : gb_fields) {
+        auto fit = row.find(gf);
+        kv[gf] = (fit != row.end()) ? fit->second : "";
+      }
+      group_key_values[gk] = std::move(kv);
+    }
+
+    for (auto& r : reducers) {
+      if (r.func == ReduceFunc::kCount) continue;
+
+      auto fit = row.find(r.field);
+      if (fit == row.end()) continue;
+      const auto& fval = fit->second;
+
+      if (r.func == ReduceFunc::kCountDistinct || r.func == ReduceFunc::kCountDistinctish) {
+        accum.distinct[r.alias].insert(fval);
+        continue;
+      }
+      if (r.func == ReduceFunc::kTolist) {
+        accum.str_values[r.alias].push_back(fval);
+        continue;
+      }
+      if (r.func == ReduceFunc::kFirstValue) {
+        if (!r.first_value_by.empty()) {
+          auto sort_it = row.find(r.first_value_by);
+          double sv = 0;
+          if (sort_it != row.end()) TryParseDouble(sort_it->second, sv);
+          if (!accum.first_set[r.alias] ||
+              (r.first_value_desc ? sv > accum.first_sort_val[r.alias]
+                                  : sv < accum.first_sort_val[r.alias])) {
+            accum.first_val[r.alias] = fval;
+            accum.first_sort_val[r.alias] = sv;
+            accum.first_set[r.alias] = true;
+          }
+        } else if (!accum.first_set[r.alias]) {
+          accum.first_val[r.alias] = fval;
+          accum.first_set[r.alias] = true;
+        }
+        continue;
+      }
+      if (r.func == ReduceFunc::kRandomSample) {
+        accum.str_values[r.alias].push_back(fval);
+        continue;
+      }
+
+      double val = 0;
+      if (!TryParseDouble(fval, val)) continue;
+
+      accum.sum[r.alias] += val;
+      accum.sum_sq[r.alias] += val * val;
+      accum.field_count[r.alias]++;
+
+      if (r.func == ReduceFunc::kQuantile) {
+        accum.values[r.alias].push_back(val);
+      }
+
+      auto min_it = accum.min_val.find(r.alias);
+      if (min_it == accum.min_val.end() || val < min_it->second)
+        accum.min_val[r.alias] = val;
+      auto max_it = accum.max_val.find(r.alias);
+      if (max_it == accum.max_val.end() || val > max_it->second)
+        accum.max_val[r.alias] = val;
+    }
+  }
+
+  std::vector<AggRow> result;
+  result.reserve(groups.size());
+  for (auto& [gk, accum] : groups) {
+    AggRow row = group_key_values[gk];
+    for (auto& r : reducers) {
+      switch (r.func) {
+        case ReduceFunc::kCount:
+          row[r.alias] = std::to_string(accum.count);
+          break;
+        case ReduceFunc::kSum: {
+          auto sit = accum.sum.find(r.alias);
+          row[r.alias] = (sit != accum.sum.end()) ? std::to_string(sit->second) : "0";
+          break;
+        }
+        case ReduceFunc::kAvg: {
+          auto sit = accum.sum.find(r.alias);
+          auto cit = accum.field_count.find(r.alias);
+          if (sit != accum.sum.end() && cit != accum.field_count.end() && cit->second > 0)
+            row[r.alias] = std::to_string(sit->second / static_cast<double>(cit->second));
+          else
+            row[r.alias] = "0";
+          break;
+        }
+        case ReduceFunc::kMin: {
+          auto mit = accum.min_val.find(r.alias);
+          row[r.alias] = (mit != accum.min_val.end()) ? std::to_string(mit->second) : "0";
+          break;
+        }
+        case ReduceFunc::kMax: {
+          auto mit = accum.max_val.find(r.alias);
+          row[r.alias] = (mit != accum.max_val.end()) ? std::to_string(mit->second) : "0";
+          break;
+        }
+        case ReduceFunc::kCountDistinct:
+        case ReduceFunc::kCountDistinctish: {
+          auto dit = accum.distinct.find(r.alias);
+          long long dc = (dit != accum.distinct.end()) ? static_cast<long long>(dit->second.size()) : 0;
+          row[r.alias] = std::to_string(dc);
+          break;
+        }
+        case ReduceFunc::kStddev: {
+          auto sit = accum.sum.find(r.alias);
+          auto sqit = accum.sum_sq.find(r.alias);
+          auto cit = accum.field_count.find(r.alias);
+          if (sit != accum.sum.end() && sqit != accum.sum_sq.end() &&
+              cit != accum.field_count.end() && cit->second > 1) {
+            double n = static_cast<double>(cit->second);
+            double mean = sit->second / n;
+            double variance = (sqit->second / n) - (mean * mean);
+            if (variance < 0) variance = 0;
+            row[r.alias] = std::to_string(std::sqrt(variance));
+          } else {
+            row[r.alias] = "0";
+          }
+          break;
+        }
+        case ReduceFunc::kQuantile: {
+          auto vit = accum.values.find(r.alias);
+          if (vit != accum.values.end() && !vit->second.empty()) {
+            auto& vals = vit->second;
+            std::sort(vals.begin(), vals.end());
+            size_t idx = static_cast<size_t>(r.quantile_pct * static_cast<double>(vals.size() - 1));
+            if (idx >= vals.size()) idx = vals.size() - 1;
+            row[r.alias] = std::to_string(vals[idx]);
+          } else {
+            row[r.alias] = "0";
+          }
+          break;
+        }
+        case ReduceFunc::kTolist: {
+          auto lit = accum.str_values.find(r.alias);
+          if (lit != accum.str_values.end()) {
+            std::string joined;
+            for (size_t i = 0; i < lit->second.size(); i++) {
+              if (i > 0) joined += ",";
+              joined += lit->second[i];
+            }
+            row[r.alias] = std::move(joined);
+          } else {
+            row[r.alias] = "";
+          }
+          break;
+        }
+        case ReduceFunc::kFirstValue: {
+          auto fit = accum.first_val.find(r.alias);
+          row[r.alias] = (fit != accum.first_val.end()) ? fit->second : "";
+          break;
+        }
+        case ReduceFunc::kRandomSample: {
+          auto lit = accum.str_values.find(r.alias);
+          if (lit != accum.str_values.end() && !lit->second.empty()) {
+            long count = r.random_sample_count;
+            auto& vals = lit->second;
+            // Deterministic sampling: take evenly spaced elements
+            std::string sampled;
+            for (long si = 0; si < count && si < static_cast<long>(vals.size()); si++) {
+              size_t idx = static_cast<size_t>(
+                  si * static_cast<long>(vals.size()) / count);
+              if (si > 0) sampled += ",";
+              sampled += vals[idx];
+            }
+            row[r.alias] = std::move(sampled);
+          } else {
+            row[r.alias] = "";
+          }
+          break;
+        }
+      }
+    }
+    result.push_back(std::move(row));
+  }
+  rows = std::move(result);
+}
+
 static int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                               int argc) {
   if (argc < 3) return RedisModule_WrongArity(ctx);
@@ -1306,372 +1588,298 @@ static int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   // Parse pipeline stages
-  std::vector<std::string> groupby_fields;
-
-  enum class ReduceFunc { kCount, kSum, kAvg, kMin, kMax, kCountDistinct };
-  struct ReduceOp {
-    ReduceFunc func;
-    std::string field;
-    std::string alias;
-  };
-  std::vector<ReduceOp> reducers;
-
-  std::string sortby_field;
-  bool sortby_desc = false;
-  bool has_sortby = false;
-  long long limit_offset = 0;
-  long long limit_count = -1;
-  bool has_limit = false;
+  std::vector<PipelineStage> stages;
+  PipelineStage* pending_groupby = nullptr;
 
   int arg_i = 3;
   while (arg_i < argc) {
     auto kw = ArgView(argv[arg_i]);
 
-    if (MatchArg(kw, "GROUPBY")) {
+    if (MatchArg(kw, "LOAD")) {
+      pending_groupby = nullptr;
       arg_i++;
-      if (arg_i >= argc) {
-        return RedisModule_ReplyWithError(ctx, "ERR GROUPBY requires count");
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR LOAD requires count");
+      char* endptr = nullptr;
+      long ld_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
+      arg_i++;
+      if (*endptr != '\0' || ld_count < 0)
+        return RedisModule_ReplyWithError(ctx, "ERR LOAD count must be non-negative");
+      PipelineStage st;
+      st.type = PipelineStageType::kLoad;
+      for (long li = 0; li < ld_count; li++) {
+        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough LOAD fields");
+        auto fv = ArgView(argv[arg_i]);
+        arg_i++;
+        if (fv.empty() || fv[0] != '@')
+          return RedisModule_ReplyWithError(ctx, "ERR LOAD field must start with @");
+        st.load_fields.emplace_back(fv.substr(1));
       }
+      stages.push_back(std::move(st));
+    } else if (MatchArg(kw, "APPLY")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR APPLY requires expression");
+      std::string expr(ArgView(argv[arg_i]));
+      arg_i++;
+      if (arg_i >= argc || !MatchArg(ArgView(argv[arg_i]), "AS"))
+        return RedisModule_ReplyWithError(ctx, "ERR APPLY requires AS alias");
+      arg_i++;
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR APPLY AS requires alias name");
+      std::string alias(ArgView(argv[arg_i]));
+      arg_i++;
+      PipelineStage st;
+      st.type = PipelineStageType::kApply;
+      st.apply_expr = std::move(expr);
+      st.apply_alias = std::move(alias);
+      stages.push_back(std::move(st));
+    } else if (MatchArg(kw, "FILTER")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR FILTER requires expression");
+      PipelineStage st;
+      st.type = PipelineStageType::kFilter;
+      st.filter_expr = std::string(ArgView(argv[arg_i]));
+      arg_i++;
+      stages.push_back(std::move(st));
+    } else if (MatchArg(kw, "GROUPBY")) {
+      arg_i++;
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR GROUPBY requires count");
       char* endptr = nullptr;
       long gb_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
       arg_i++;
-      if (*endptr != '\0' || gb_count < 0) {
+      if (*endptr != '\0' || gb_count < 0)
         return RedisModule_ReplyWithError(ctx, "ERR GROUPBY count must be non-negative");
-      }
+      PipelineStage st;
+      st.type = PipelineStageType::kGroupby;
       for (long g = 0; g < gb_count; g++) {
-        if (arg_i >= argc) {
-          return RedisModule_ReplyWithError(ctx, "ERR not enough GROUPBY fields");
-        }
+        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough GROUPBY fields");
         auto fv = ArgView(argv[arg_i]);
         arg_i++;
-        if (fv.empty() || fv[0] != '@') {
+        if (fv.empty() || fv[0] != '@')
           return RedisModule_ReplyWithError(ctx, "ERR GROUPBY field must start with @");
-        }
-        groupby_fields.emplace_back(fv.substr(1));
+        st.groupby_fields.emplace_back(fv.substr(1));
       }
+      stages.push_back(std::move(st));
+      pending_groupby = &stages.back();
     } else if (MatchArg(kw, "REDUCE")) {
       arg_i++;
-      if (arg_i >= argc) {
-        return RedisModule_ReplyWithError(ctx, "ERR REDUCE requires function name");
-      }
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR REDUCE requires function name");
       auto func_str = ArgView(argv[arg_i]);
       arg_i++;
 
-      ReduceFunc func;
+      ReduceOp rop;
       bool needs_field = true;
       if (MatchArg(func_str, "COUNT")) {
-        func = ReduceFunc::kCount;
-        needs_field = false;
+        rop.func = ReduceFunc::kCount; needs_field = false;
       } else if (MatchArg(func_str, "SUM")) {
-        func = ReduceFunc::kSum;
+        rop.func = ReduceFunc::kSum;
       } else if (MatchArg(func_str, "AVG")) {
-        func = ReduceFunc::kAvg;
+        rop.func = ReduceFunc::kAvg;
       } else if (MatchArg(func_str, "MIN")) {
-        func = ReduceFunc::kMin;
+        rop.func = ReduceFunc::kMin;
       } else if (MatchArg(func_str, "MAX")) {
-        func = ReduceFunc::kMax;
+        rop.func = ReduceFunc::kMax;
       } else if (MatchArg(func_str, "COUNT_DISTINCT")) {
-        func = ReduceFunc::kCountDistinct;
+        rop.func = ReduceFunc::kCountDistinct;
+      } else if (MatchArg(func_str, "STDDEV")) {
+        rop.func = ReduceFunc::kStddev;
+      } else if (MatchArg(func_str, "QUANTILE")) {
+        rop.func = ReduceFunc::kQuantile;
+      } else if (MatchArg(func_str, "TOLIST")) {
+        rop.func = ReduceFunc::kTolist;
+      } else if (MatchArg(func_str, "FIRST_VALUE")) {
+        rop.func = ReduceFunc::kFirstValue;
+      } else if (MatchArg(func_str, "RANDOM_SAMPLE")) {
+        rop.func = ReduceFunc::kRandomSample;
+      } else if (MatchArg(func_str, "COUNT_DISTINCTISH")) {
+        rop.func = ReduceFunc::kCountDistinctish; needs_field = true;
       } else {
         return RedisModule_ReplyWithError(ctx, "ERR unknown REDUCE function");
       }
 
-      if (arg_i >= argc) {
-        return RedisModule_ReplyWithError(ctx, "ERR REDUCE requires nargs");
-      }
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR REDUCE requires nargs");
       char* endptr = nullptr;
       long nargs = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
       arg_i++;
-      if (*endptr != '\0' || nargs < 0) {
+      if (*endptr != '\0' || nargs < 0)
         return RedisModule_ReplyWithError(ctx, "ERR REDUCE nargs must be non-negative");
-      }
 
-      std::string reduce_field;
+      long consumed = 0;
       if (needs_field && nargs >= 1) {
-        if (arg_i >= argc) {
-          return RedisModule_ReplyWithError(ctx, "ERR REDUCE missing field argument");
-        }
+        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR REDUCE missing field argument");
         auto rf = ArgView(argv[arg_i]);
-        arg_i++;
-        if (rf.empty() || rf[0] != '@') {
+        arg_i++; consumed++;
+        if (rf.empty() || rf[0] != '@')
           return RedisModule_ReplyWithError(ctx, "ERR REDUCE field must start with @");
-        }
-        reduce_field = std::string(rf.substr(1));
-        for (long skip = 1; skip < nargs; skip++) {
-          if (arg_i < argc) arg_i++;
-        }
-      } else {
-        for (long skip = 0; skip < nargs; skip++) {
-          if (arg_i < argc) arg_i++;
-        }
+        rop.field = std::string(rf.substr(1));
       }
 
-      if (arg_i >= argc || !MatchArg(ArgView(argv[arg_i]), "AS")) {
+      // Parse extra args for specific reducers
+      if (rop.func == ReduceFunc::kQuantile && consumed < nargs) {
+        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR QUANTILE requires percentile");
+        char* ep = nullptr;
+        rop.quantile_pct = std::strtod(std::string(ArgView(argv[arg_i])).c_str(), &ep);
+        arg_i++; consumed++;
+      }
+      if (rop.func == ReduceFunc::kFirstValue && consumed < nargs) {
+        if (arg_i < argc && MatchArg(ArgView(argv[arg_i]), "BY")) {
+          arg_i++; consumed++;
+          if (arg_i < argc && consumed < nargs) {
+            auto by_f = ArgView(argv[arg_i]);
+            if (!by_f.empty() && by_f[0] == '@')
+              rop.first_value_by = std::string(by_f.substr(1));
+            arg_i++; consumed++;
+          }
+          if (arg_i < argc && consumed < nargs) {
+            auto dir = ArgView(argv[arg_i]);
+            if (MatchArg(dir, "DESC")) { rop.first_value_desc = true; arg_i++; consumed++; }
+            else if (MatchArg(dir, "ASC")) { arg_i++; consumed++; }
+          }
+        }
+      }
+      if (rop.func == ReduceFunc::kRandomSample && consumed < nargs) {
+        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR RANDOM_SAMPLE requires count");
+        char* ep = nullptr;
+        rop.random_sample_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &ep, 10);
+        arg_i++; consumed++;
+      }
+
+      // Skip any remaining args
+      for (long skip = consumed; skip < nargs; skip++) {
+        if (arg_i < argc) arg_i++;
+      }
+
+      if (arg_i >= argc || !MatchArg(ArgView(argv[arg_i]), "AS"))
         return RedisModule_ReplyWithError(ctx, "ERR REDUCE requires AS alias");
-      }
       arg_i++;
-      if (arg_i >= argc) {
-        return RedisModule_ReplyWithError(ctx, "ERR REDUCE AS requires alias name");
-      }
-      std::string alias(ArgView(argv[arg_i]));
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR REDUCE AS requires alias name");
+      rop.alias = std::string(ArgView(argv[arg_i]));
       arg_i++;
 
-      reducers.push_back({func, std::move(reduce_field), std::move(alias)});
-    } else if (MatchArg(kw, "SORTBY")) {
-      arg_i++;
-      if (arg_i >= argc) {
-        return RedisModule_ReplyWithError(ctx, "ERR SORTBY requires count");
+      if (pending_groupby) {
+        pending_groupby->reducers.push_back(std::move(rop));
+      } else {
+        // Implicit empty GROUPBY
+        PipelineStage st;
+        st.type = PipelineStageType::kGroupby;
+        st.reducers.push_back(std::move(rop));
+        stages.push_back(std::move(st));
+        pending_groupby = &stages.back();
       }
+    } else if (MatchArg(kw, "SORTBY")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SORTBY requires count");
       char* endptr = nullptr;
       long sb_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
       arg_i++;
-      if (*endptr != '\0' || sb_count < 2) {
+      if (*endptr != '\0' || sb_count < 2)
         return RedisModule_ReplyWithError(ctx, "ERR SORTBY count must be >= 2");
-      }
-      if (arg_i >= argc) {
-        return RedisModule_ReplyWithError(ctx, "ERR SORTBY requires field");
-      }
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SORTBY requires field");
       auto sf = ArgView(argv[arg_i]);
       arg_i++;
-      if (sf.empty() || sf[0] != '@') {
+      if (sf.empty() || sf[0] != '@')
         return RedisModule_ReplyWithError(ctx, "ERR SORTBY field must start with @");
-      }
-      sortby_field = std::string(sf.substr(1));
-      has_sortby = true;
+      PipelineStage st;
+      st.type = PipelineStageType::kSortby;
+      st.sortby_field = std::string(sf.substr(1));
       if (arg_i < argc) {
         auto dir = ArgView(argv[arg_i]);
-        if (MatchArg(dir, "ASC")) {
-          sortby_desc = false;
-          arg_i++;
-        } else if (MatchArg(dir, "DESC")) {
-          sortby_desc = true;
-          arg_i++;
-        }
+        if (MatchArg(dir, "ASC")) { st.sortby_desc = false; arg_i++; }
+        else if (MatchArg(dir, "DESC")) { st.sortby_desc = true; arg_i++; }
       }
       for (long skip = 2; skip < sb_count; skip++) {
         if (arg_i < argc) arg_i++;
       }
+      stages.push_back(std::move(st));
     } else if (MatchArg(kw, "LIMIT")) {
+      pending_groupby = nullptr;
       arg_i++;
-      if (arg_i + 1 >= argc) {
+      if (arg_i + 1 >= argc)
         return RedisModule_ReplyWithError(ctx, "ERR LIMIT requires offset and count");
-      }
       char* ep1 = nullptr;
       char* ep2 = nullptr;
       std::string off_s(ArgView(argv[arg_i]));
       std::string cnt_s(ArgView(argv[arg_i + 1]));
       long long off = std::strtoll(off_s.c_str(), &ep1, 10);
       long long cnt = std::strtoll(cnt_s.c_str(), &ep2, 10);
-      if (*ep1 != '\0' || *ep2 != '\0' || off < 0 || cnt < 0) {
+      if (*ep1 != '\0' || *ep2 != '\0' || off < 0 || cnt < 0)
         return RedisModule_ReplyWithError(ctx, "ERR LIMIT offset and count must be non-negative");
-      }
-      limit_offset = off;
-      limit_count = cnt;
-      has_limit = true;
+      PipelineStage st;
+      st.type = PipelineStageType::kLimit;
+      st.limit_offset = off;
+      st.limit_count = cnt;
+      stages.push_back(std::move(st));
       arg_i += 2;
     } else {
       return RedisModule_ReplyWithError(ctx, "ERR unknown AGGREGATE option");
     }
   }
 
-  // Execute aggregation pipeline
-  using Row = std::unordered_map<std::string, std::string>;
-
-  if (groupby_fields.empty() && reducers.empty()) {
-    // No GROUPBY/REDUCE: return raw document rows
-    std::vector<Row> rows;
-    for (auto& doc_id : result_ids) {
-      const auto* doc = entry.doc_store.Get(doc_id);
-      if (!doc) continue;
-      rows.push_back(doc->fields);
-    }
-
-    if (has_sortby) {
-      std::sort(rows.begin(), rows.end(),
-                [&](const Row& a, const Row& b) {
-                  auto ait = a.find(sortby_field);
-                  auto bit = b.find(sortby_field);
-                  std::string va = (ait != a.end()) ? ait->second : "";
-                  std::string vb = (bit != b.end()) ? bit->second : "";
-                  double na = 0, nb = 0;
-                  bool num = TryParseDouble(va, na) && TryParseDouble(vb, nb);
-                  if (num) return sortby_desc ? na > nb : na < nb;
-                  return sortby_desc ? va > vb : va < vb;
-                });
-    }
-
-    if (has_limit) {
-      long long total = static_cast<long long>(rows.size());
-      if (limit_offset >= total) {
-        rows.clear();
-      } else {
-        auto begin = rows.begin() + limit_offset;
-        auto end = (limit_count >= 0 && limit_offset + limit_count < total)
-                       ? rows.begin() + limit_offset + limit_count
-                       : rows.end();
-        rows = std::vector<Row>(begin, end);
-      }
-    }
-
-    RedisModule_ReplyWithArray(ctx, static_cast<long>(rows.size()));
-    for (auto& row : rows) {
-      std::vector<std::string> keys;
-      for (auto& [k, v] : row) keys.push_back(k);
-      std::sort(keys.begin(), keys.end());
-      RedisModule_ReplyWithArray(ctx, static_cast<long>(keys.size()) * 2);
-      for (auto& k : keys) {
-        RedisModule_ReplyWithCString(ctx, k.c_str());
-        RedisModule_ReplyWithCString(ctx, row.at(k).c_str());
-      }
-    }
-    return REDISMODULE_OK;
-  }
-
-  // GROUPBY + REDUCE
-  struct GroupAccum {
-    long long count = 0;
-    std::unordered_map<std::string, double> sum;
-    std::unordered_map<std::string, long long> field_count;
-    std::unordered_map<std::string, double> min_val;
-    std::unordered_map<std::string, double> max_val;
-    std::unordered_map<std::string, std::unordered_set<std::string>> distinct;
-  };
-
-  auto MakeGroupKey = [&](const Document* doc) -> std::string {
-    std::string key;
-    for (size_t i = 0; i < groupby_fields.size(); i++) {
-      if (i > 0) key += "\x01";
-      auto fit = doc->fields.find(groupby_fields[i]);
-      if (fit != doc->fields.end()) key += fit->second;
-    }
-    return key;
-  };
-
-  std::unordered_map<std::string, GroupAccum> groups;
-  std::unordered_map<std::string, Row> group_key_values;
-
+  // Build initial rows from query results
+  std::vector<AggRow> rows;
+  rows.reserve(result_ids.size());
   for (auto& doc_id : result_ids) {
     const auto* doc = entry.doc_store.Get(doc_id);
     if (!doc) continue;
-
-    std::string gk = MakeGroupKey(doc);
-    auto& accum = groups[gk];
-    accum.count++;
-
-    if (group_key_values.find(gk) == group_key_values.end()) {
-      Row kv;
-      for (auto& gf : groupby_fields) {
-        auto fit = doc->fields.find(gf);
-        kv[gf] = (fit != doc->fields.end()) ? fit->second : "";
-      }
-      group_key_values[gk] = std::move(kv);
-    }
-
-    for (auto& r : reducers) {
-      if (r.func == ReduceFunc::kCount) continue;
-      auto fit = doc->fields.find(r.field);
-      if (fit == doc->fields.end()) continue;
-
-      if (r.func == ReduceFunc::kCountDistinct) {
-        accum.distinct[r.alias].insert(fit->second);
-        continue;
-      }
-
-      double val = 0;
-      if (!TryParseDouble(fit->second, val)) continue;
-
-      accum.sum[r.alias] += val;
-      accum.field_count[r.alias]++;
-
-      auto min_it = accum.min_val.find(r.alias);
-      if (min_it == accum.min_val.end() || val < min_it->second) {
-        accum.min_val[r.alias] = val;
-      }
-      auto max_it = accum.max_val.find(r.alias);
-      if (max_it == accum.max_val.end() || val > max_it->second) {
-        accum.max_val[r.alias] = val;
-      }
-    }
+    rows.push_back(doc->fields);
   }
 
-  // Build result rows
-  std::vector<Row> result_rows;
-  result_rows.reserve(groups.size());
-  for (auto& [gk, accum] : groups) {
-    Row row = group_key_values[gk];
-    for (auto& r : reducers) {
-      switch (r.func) {
-        case ReduceFunc::kCount:
-          row[r.alias] = std::to_string(accum.count);
-          break;
-        case ReduceFunc::kSum: {
-          auto sit = accum.sum.find(r.alias);
-          row[r.alias] = (sit != accum.sum.end()) ? std::to_string(sit->second) : "0";
-          break;
+  // Execute pipeline stages
+  for (auto& stage : stages) {
+    switch (stage.type) {
+      case PipelineStageType::kLoad:
+        // LOAD adds fields from document store (for rows that still reference docs)
+        // In our model, rows already contain all doc fields from initial load
+        // LOAD is a no-op for additional fields already in the row
+        break;
+
+      case PipelineStageType::kApply: {
+        ExprNode expr;
+        std::string expr_err;
+        if (!ParseExpr(stage.apply_expr, expr, expr_err)) {
+          return RedisModule_ReplyWithError(ctx, expr_err.c_str());
         }
-        case ReduceFunc::kAvg: {
-          auto sit = accum.sum.find(r.alias);
-          auto cit = accum.field_count.find(r.alias);
-          if (sit != accum.sum.end() && cit != accum.field_count.end() && cit->second > 0) {
-            row[r.alias] = std::to_string(sit->second / static_cast<double>(cit->second));
-          } else {
-            row[r.alias] = "0";
-          }
-          break;
+        for (auto& row : rows) {
+          auto val = EvalExpr(expr, row);
+          row[stage.apply_alias] = val.AsString();
         }
-        case ReduceFunc::kMin: {
-          auto mit = accum.min_val.find(r.alias);
-          row[r.alias] = (mit != accum.min_val.end()) ? std::to_string(mit->second) : "0";
-          break;
-        }
-        case ReduceFunc::kMax: {
-          auto mit = accum.max_val.find(r.alias);
-          row[r.alias] = (mit != accum.max_val.end()) ? std::to_string(mit->second) : "0";
-          break;
-        }
-        case ReduceFunc::kCountDistinct: {
-          auto dit = accum.distinct.find(r.alias);
-          long long dc = (dit != accum.distinct.end()) ? static_cast<long long>(dit->second.size()) : 0;
-          row[r.alias] = std::to_string(dc);
-          break;
-        }
+        break;
       }
-    }
-    result_rows.push_back(std::move(row));
-  }
 
-  // SORTBY
-  if (has_sortby) {
-    std::sort(result_rows.begin(), result_rows.end(),
-              [&](const Row& a, const Row& b) {
-                auto ait = a.find(sortby_field);
-                auto bit = b.find(sortby_field);
-                std::string va = (ait != a.end()) ? ait->second : "";
-                std::string vb = (bit != b.end()) ? bit->second : "";
-                double na = 0, nb = 0;
-                bool num = TryParseDouble(va, na) && TryParseDouble(vb, nb);
-                if (num) return sortby_desc ? na > nb : na < nb;
-                return sortby_desc ? va > vb : va < vb;
-              });
-  }
+      case PipelineStageType::kFilter: {
+        ExprNode expr;
+        std::string expr_err;
+        if (!ParseExpr(stage.filter_expr, expr, expr_err)) {
+          return RedisModule_ReplyWithError(ctx, expr_err.c_str());
+        }
+        rows.erase(
+            std::remove_if(rows.begin(), rows.end(),
+                           [&](const AggRow& row) {
+                             return !EvalExpr(expr, row).Truthy();
+                           }),
+            rows.end());
+        break;
+      }
 
-  // LIMIT
-  if (has_limit) {
-    long long total = static_cast<long long>(result_rows.size());
-    if (limit_offset >= total) {
-      result_rows.clear();
-    } else {
-      auto begin = result_rows.begin() + limit_offset;
-      auto end = (limit_count >= 0 && limit_offset + limit_count < total)
-                     ? result_rows.begin() + limit_offset + limit_count
-                     : result_rows.end();
-      result_rows = std::vector<Row>(begin, end);
+      case PipelineStageType::kGroupby:
+        if (stage.groupby_fields.empty() && stage.reducers.empty()) break;
+        ApplyGroupby(rows, stage.groupby_fields, stage.reducers);
+        break;
+
+      case PipelineStageType::kSortby:
+        ApplySortby(rows, stage.sortby_field, stage.sortby_desc);
+        break;
+
+      case PipelineStageType::kLimit:
+        ApplyLimit(rows, stage.limit_offset, stage.limit_count);
+        break;
     }
   }
 
   // Reply
-  RedisModule_ReplyWithArray(ctx, static_cast<long>(result_rows.size()));
-  for (auto& row : result_rows) {
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(rows.size()));
+  for (auto& row : rows) {
     std::vector<std::string> keys;
     for (auto& [k, v] : row) keys.push_back(k);
     std::sort(keys.begin(), keys.end());

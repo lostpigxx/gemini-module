@@ -10,6 +10,7 @@ set(SEARCH_SOURCES
   src/vector_index.cc
   src/hnsw_index.cc
   src/geo_index.cc
+  src/expr_engine.cc
   src/search_rdb.cc
   src/stemmer.cc
 )
@@ -133,6 +134,19 @@ if(GTest_FOUND)
   target_compile_definitions(text_index_test PRIVATE GEMINI_SEARCH_TESTING)
   target_compile_options(text_index_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(expr_engine_test EXCLUDE_FROM_ALL
+    tests/expr_engine_test.cc
+    src/expr_engine.cc
+  )
+  target_include_directories(expr_engine_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(expr_engine_test PRIVATE
+    GTest::gtest_main
+  )
+  target_compile_definitions(expr_engine_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(expr_engine_test PRIVATE -Wall -Wextra -Wpedantic)
+
   add_executable(geo_index_test EXCLUDE_FROM_ALL
     tests/geo_index_test.cc
     src/geo_index.cc
@@ -180,6 +194,7 @@ if(GTest_FOUND)
     src/vector_index.cc
     src/hnsw_index.cc
     src/geo_index.cc
+    src/expr_engine.cc
     src/stemmer.cc
   )
   target_include_directories(search_rdb_test PRIVATE
@@ -225,9 +240,10 @@ if(GTest_FOUND)
     COMMAND vector_index_test --gtest_color=yes
     COMMAND hnsw_index_test --gtest_color=yes
     COMMAND geo_index_test --gtest_color=yes
+    COMMAND expr_engine_test --gtest_color=yes
     COMMAND query_parser_test --gtest_color=yes
     COMMAND search_rdb_test --gtest_color=yes
     COMMAND search_asan_test --gtest_color=yes
-    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test query_parser_test search_rdb_test search_asan_test
+    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test expr_engine_test query_parser_test search_rdb_test search_asan_test
   )
 endif()
