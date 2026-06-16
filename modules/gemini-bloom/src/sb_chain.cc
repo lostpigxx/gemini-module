@@ -64,8 +64,14 @@ ScalingBloomFilter& ScalingBloomFilter::operator=(ScalingBloomFilter&& other) no
 bool ScalingBloomFilter::AppendLayer(uint64_t cap, double rate) {
   if (numLayers_ >= layerCapacity_) {
     size_t newCap = std::max(layerCapacity_ * 2, size_t{4});
-    auto* expanded = static_cast<FilterLayer*>(RMRealloc(layers_, newCap * sizeof(FilterLayer)));
+    if (newCap > SIZE_MAX / sizeof(FilterLayer)) return false;
+    auto* expanded = static_cast<FilterLayer*>(RMAlloc(newCap * sizeof(FilterLayer)));
     if (!expanded) return false;
+    for (size_t i = 0; i < numLayers_; i++) {
+      new (&expanded[i]) FilterLayer{std::move(layers_[i].bloom), layers_[i].itemCount};
+      layers_[i].~FilterLayer();
+    }
+    if (layers_) RMFree(layers_);
     layers_ = expanded;
     layerCapacity_ = newCap;
   }

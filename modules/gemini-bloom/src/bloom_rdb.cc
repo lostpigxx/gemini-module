@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstring>
 
+constexpr uint32_t kMaxLayers = 1024;
+
 // --- RdbWriter / RdbReader ---
 
 void RdbWriter::PutUint(uint64_t v) { RedisModule_SaveUnsigned(io_, v); }
@@ -57,6 +59,8 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   layer.bitsPerEntry_ = r.GetFloat();
   layer.totalBits_ = r.GetUint();
   layer.log2Bits_ = static_cast<uint8_t>(r.GetUint());
+  if (layer.log2Bits_ >= 64) return std::nullopt;
+  if (layer.totalBits_ > UINT64_MAX - 7) return std::nullopt;
   layer.dataSize_ = (layer.totalBits_ > 0) ? ((layer.totalBits_ + 7) / 8) : 0;
   layer.use64Bit_ = HasFlag(filterFlags, BloomFlags::Use64Bit);
 
@@ -134,7 +138,7 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
     ? static_cast<unsigned>(r.GetUint())
     : 2;
 
-  if (!r.Ok() || shell.numLayers == 0) return nullptr;
+  if (!r.Ok() || shell.numLayers == 0 || shell.numLayers > kMaxLayers) return nullptr;
 
   auto* filter = FromRdbShell(shell);
   if (!filter) return nullptr;
@@ -183,11 +187,11 @@ size_t SerializeHeader(const ScalingBloomFilter& filter, void* output) {
   return sizeof(WireFilterHeader) + filter.NumLayers() * sizeof(WireLayerMeta);
 }
 
-constexpr uint32_t kMaxLayers = 1024;
-
 static bool ValidateLayerMeta(const WireLayerMeta& meta) {
   if (meta.hashCount == 0 && meta.totalBits > 0) return false;
   if (meta.totalBits == 0) return false;
+  if (meta.totalBits > UINT64_MAX - 7) return false;
+  if (meta.log2Bits >= 64) return false;
   uint64_t expectedSize = (meta.totalBits + 7) / 8;
   if (meta.dataSize < expectedSize) return false;
   if (!std::isfinite(meta.fpRate) || meta.fpRate <= 0.0) return false;

@@ -181,6 +181,45 @@ TEST(ScalingBloomTest, FromRdbShellSetLayer) {
   free(rebuilt);
 }
 
+// Bug regression: AppendLayer must safely move FilterLayer objects
+// during array growth instead of using realloc on non-trivial types.
+// This test forces multiple internal array expansions by inserting
+// far more items than the initial capacity with a small starting
+// layer array (initial layerCapacity_ = 4).
+TEST(ScalingBloomTest, AppendLayerSafeRelocation) {
+  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (mem) ScalingBloomFilter(10, 0.01, DefaultFlags(), 2);
+
+  std::vector<std::string> items;
+  for (int i = 0; i < 500; i++) {
+    auto item = "reloc_" + std::to_string(i);
+    auto result = mem->Put(ToSpan(item));
+    if (!result.has_value()) break;
+    items.push_back(std::move(item));
+  }
+  EXPECT_GT(mem->NumLayers(), 4u);
+
+  for (const auto& item : items) {
+    EXPECT_TRUE(mem->Contains(ToSpan(item)))
+      << "False negative after layer relocation: " << item;
+  }
+
+  mem->~ScalingBloomFilter();
+  free(mem);
+}
+
+// Bug regression: extreme capacity/fpRate should be rejected
+// instead of causing float-to-int overflow UB.
+TEST(ScalingBloomTest, ExtremeParamsRejected) {
+  auto layer = BloomLayer::Create(UINT64_MAX, 1e-300, DefaultFlags());
+  EXPECT_FALSE(layer.has_value())
+    << "Should reject extreme capacity * bitsPerEntry overflow";
+
+  auto layer2 = BloomLayer::Create(1ULL << 50, 1e-100, DefaultFlags());
+  EXPECT_FALSE(layer2.has_value())
+    << "Should reject large capacity with tiny fpRate";
+}
+
 // SerializeDeserializeHeader test is covered by TCL integration tests
 // (SCANDUMP/LOADCHUNK round-trip) since the serialization code depends
 // on the Redis Module API.

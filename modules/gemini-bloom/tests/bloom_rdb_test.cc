@@ -637,6 +637,96 @@ TEST(BloomRdb, TruncatedItemCountReturnsNull) {
   DestroyFilter(filter);
 }
 
+// ==================================================================
+// Bug regression: RDB with log2Bits >= 64 must be rejected.
+// Without the fix, ComputeModuloMask() does 1ULL << log2Bits
+// which is undefined behavior for values >= 64.
+// ==================================================================
+
+TEST(BloomRdb, RejectsInvalidLog2Bits) {
+  auto* filter = CreateFilter(500, 0.01, DefaultFlags(), 2);
+  filter->Put(AsBytes("x", 1));
+
+  // Build a stream with log2Bits = 64 (invalid)
+  MockRdbStream badStream;
+  auto* io = badStream.IO();
+
+  Mock_SaveUnsigned(io, filter->TotalItems());
+  Mock_SaveUnsigned(io, 1);  // numLayers
+  Mock_SaveUnsigned(io, ToUnderlying(filter->Flags()));
+  Mock_SaveUnsigned(io, filter->ExpansionFactor());
+
+  const auto& layer0 = filter->Layers()[0];
+  Mock_SaveUnsigned(io, layer0.bloom.GetCapacity());
+  Mock_SaveDouble(io, layer0.bloom.GetFpRate());
+  Mock_SaveUnsigned(io, layer0.bloom.GetHashCount());
+  Mock_SaveDouble(io, layer0.bloom.GetBitsPerEntry());
+  Mock_SaveUnsigned(io, layer0.bloom.GetTotalBits());
+  Mock_SaveUnsigned(io, 64);  // log2Bits = 64 (INVALID)
+  Mock_SaveStringBuffer(io,
+    reinterpret_cast<const char*>(layer0.bloom.GetBitArray()),
+    layer0.bloom.GetDataSize());
+  Mock_SaveUnsigned(io, layer0.itemCount);
+
+  badStream.Rewind();
+  auto* loaded = static_cast<ScalingBloomFilter*>(
+    RdbLoadBloom(badStream.IO(), kCurrentEncVer));
+
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject RDB with log2Bits >= 64";
+
+  if (loaded) DestroyFilter(loaded);
+  DestroyFilter(filter);
+}
+
+// ==================================================================
+// Bug regression: LOADCHUNK header with log2Bits >= 64 must be
+// rejected by ValidateLayerMeta.
+// ==================================================================
+
+TEST(BloomWire, RejectsHeaderWithBadLog2Bits) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  filter->Put(AsBytes("x", 1));
+
+  size_t hdr_size = ComputeHeaderSize(*filter);
+  std::vector<uint8_t> buf(hdr_size);
+  SerializeHeader(*filter, buf.data());
+
+  // Corrupt the first layer's log2Bits to 65
+  auto* meta = reinterpret_cast<WireLayerMeta*>(buf.data() + sizeof(WireFilterHeader));
+  meta[0].log2Bits = 65;
+
+  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject header with log2Bits >= 64";
+
+  if (loaded) DestroyFilter(loaded);
+  DestroyFilter(filter);
+}
+
+// ==================================================================
+// Bug regression: RDB numLayers must be capped at kMaxLayers.
+// ==================================================================
+
+TEST(BloomRdb, RejectsExcessiveNumLayers) {
+  MockRdbStream bigStream;
+  auto* io = bigStream.IO();
+
+  Mock_SaveUnsigned(io, 0);      // totalItems
+  Mock_SaveUnsigned(io, 9999);   // numLayers (way over kMaxLayers=1024)
+  Mock_SaveUnsigned(io, ToUnderlying(DefaultFlags()));
+  Mock_SaveUnsigned(io, 2);      // expansion
+
+  bigStream.Rewind();
+  auto* loaded = static_cast<ScalingBloomFilter*>(
+    RdbLoadBloom(bigStream.IO(), kCurrentEncVer));
+
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject RDB with numLayers > kMaxLayers";
+
+  if (loaded) DestroyFilter(loaded);
+}
+
 TEST(BloomWire, HeaderSizeScalesWithLayers) {
   auto* f1 = CreateFilter(100, 0.01, DefaultFlags(), 2);
   size_t s1 = ComputeHeaderSize(*f1);

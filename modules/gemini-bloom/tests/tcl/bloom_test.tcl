@@ -218,7 +218,7 @@ test "BF.RESERVE creates a new filter" {
 
 test_error "BF.RESERVE on existing key returns error" {
   r BF.RESERVE reserve_basic 0.01 1000
-} {ERR*key already exists*}
+} {ERR*item exists*}
 
 test_error "BF.RESERVE with invalid error rate (0)" {
   r BF.RESERVE reserve_err0 0 1000
@@ -682,6 +682,28 @@ test_error "BF.INSERT NONSCALING filter rejects when full" {
   }
   r BF.INSERT insert_ns_full NOCREATE ITEMS new_overflow
 } {ERR*capacity*}
+
+puts "\n=== EXPANSION overflow / truncation ==="
+
+test_error "BF.RESERVE EXPANSION 4294967296 should be rejected" {
+  r BF.RESERVE exp_overflow 0.01 100 EXPANSION 4294967296
+} {ERR*}
+
+test_error "BF.INSERT EXPANSION 4294967296 should be rejected" {
+  r BF.INSERT exp_overflow2 EXPANSION 4294967296 ITEMS a
+} {ERR*}
+
+puts "\n=== BF.RESERVE wrong type distinction ==="
+
+test_error "BF.RESERVE on string key returns WRONGTYPE" {
+  r SET reserve_str_key hello
+  r BF.RESERVE reserve_str_key 0.01 100
+} {WRONGTYPE*}
+
+test_error "BF.RESERVE on existing bloom key returns item exists" {
+  r BF.RESERVE reserve_exist_bf 0.01 100
+  r BF.RESERVE reserve_exist_bf 0.01 100
+} {ERR*item exists*}
 
 puts "\n=== Multi-layer behavior ==="
 

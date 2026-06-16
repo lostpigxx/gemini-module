@@ -4,6 +4,7 @@
 #include "sb_chain.h"
 #include "rm_alloc.h"
 
+#include <climits>
 #include <cstring>
 #include <strings.h>
 #include <string_view>
@@ -118,7 +119,8 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       if (++i >= argc)
         return RedisModule_ReplyWithError(ctx, "ERR EXPANSION expects a numeric argument");
       long long val;
-      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val < 1) {
+      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
+          val < 1 || val > UINT_MAX) {
         return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value must be a positive integer");
       }
       expansion = static_cast<unsigned>(val);
@@ -136,8 +138,11 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   auto* key = static_cast<RedisModuleKey*>(
     RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
-  if (RedisModule_KeyType(key) != REDISMODULE_KEYTYPE_EMPTY) {
-    return RedisModule_ReplyWithError(ctx, "ERR key already exists");
+  int keyType = RedisModule_KeyType(key);
+  if (keyType != REDISMODULE_KEYTYPE_EMPTY) {
+    if (keyType == REDISMODULE_KEYTYPE_MODULE && GetFilter(key))
+      return RedisModule_ReplyWithError(ctx, "ERR item exists");
+    return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
   }
 
   auto* filter = AllocFilter(static_cast<uint64_t>(cap), rate, expansion, fixed);
@@ -241,7 +246,8 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
     } else if (MatchArg(sv, "EXPANSION")) {
       if (++i >= argc) return RedisModule_WrongArity(ctx);
       long long val;
-      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val < 1) {
+      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
+          val < 1 || val > UINT_MAX) {
         return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value must be a positive integer");
       }
       opts.expansion = static_cast<unsigned>(val);

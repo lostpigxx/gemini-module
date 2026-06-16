@@ -1,5 +1,6 @@
 #include "bloom_config.h"
 
+#include <climits>
 #include <cstring>
 
 BloomConfig g_bloomConfig;
@@ -40,7 +41,7 @@ int BloomConfigLoad(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       }
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
-          val < 1) {
+          val < 1 || val > UINT_MAX) {
         RedisModule_Log(ctx, "warning", "Invalid EXPANSION (must be >= 1)");
         return REDISMODULE_ERR;
       }
