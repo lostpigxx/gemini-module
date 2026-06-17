@@ -21,6 +21,8 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
     RedisModule_SaveStringBuffer(rdb, p.c_str(), p.size());
   }
 
+  RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(spec.source_type));
+
   RedisModule_SaveUnsigned(rdb, spec.fields.size());
   for (auto& f : spec.fields) {
     RedisModule_SaveStringBuffer(rdb, f.name.c_str(), f.name.size());
@@ -34,6 +36,7 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
       RedisModule_SaveUnsigned(rdb, f.vector_params.m);
       RedisModule_SaveUnsigned(rdb, f.vector_params.ef_construction);
     }
+    RedisModule_SaveStringBuffer(rdb, f.json_path.c_str(), f.json_path.size());
   }
 
   auto all_ids = entry->doc_store.AllIds();
@@ -74,6 +77,11 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
     }
   }
 
+  IndexSourceType source_type = IndexSourceType::kHash;
+  if (encver >= 5) {
+    source_type = static_cast<IndexSourceType>(RedisModule_LoadUnsigned(rdb));
+  }
+
   uint64_t field_count = RedisModule_LoadUnsigned(rdb);
   std::vector<FieldSpec> fields;
   for (uint64_t i = 0; i < field_count; i++) {
@@ -90,6 +98,9 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
         f.vector_params.m = static_cast<size_t>(RedisModule_LoadUnsigned(rdb));
         f.vector_params.ef_construction = static_cast<size_t>(RedisModule_LoadUnsigned(rdb));
       }
+    }
+    if (encver >= 5) {
+      f.json_path = LoadString(rdb);
     }
     fields.push_back(std::move(f));
   }
@@ -109,7 +120,7 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
     docs.emplace_back(std::move(doc_id), std::move(doc_fields));
   }
 
-  IndexSpec spec{index_name, std::move(fields), std::move(prefixes)};
+  IndexSpec spec{index_name, std::move(fields), std::move(prefixes), "english", source_type};
   CreateIndexFromRdb(index_name, std::move(spec), docs);
 
   return new std::string(std::move(index_name));
@@ -174,13 +185,17 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key,
   std::vector<std::string> create_args;
   if (!spec.prefixes.empty()) {
     create_args.push_back("ON");
-    create_args.push_back("HASH");
+    create_args.push_back(spec.source_type == IndexSourceType::kJson ? "JSON" : "HASH");
     create_args.push_back("PREFIX");
     create_args.push_back(std::to_string(spec.prefixes.size()));
     for (auto& p : spec.prefixes) create_args.push_back(p);
   }
   create_args.push_back("SCHEMA");
   for (auto& f : spec.fields) {
+    if (!f.json_path.empty()) {
+      create_args.push_back(f.json_path);
+      create_args.push_back("AS");
+    }
     create_args.push_back(f.name);
     create_args.push_back(FieldTypeName(f.type));
     if (f.type == FieldType::kVector) {

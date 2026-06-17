@@ -131,8 +131,10 @@ static void AddDocToIndices(
 static void ScanExistingKeys(RedisModuleCtx* ctx, IndexEntry& entry);
 static void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry,
                          const std::string& key_name);
+static void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry,
+                         const std::string& key_name);
 
-// FT.CREATE <index_name> [ON HASH PREFIX <count> <prefix> ...] SCHEMA <field> <type> [params...]
+// FT.CREATE <index_name> [ON HASH|JSON PREFIX <count> <prefix> ...] SCHEMA <field> <type> [params...]
 static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                            int argc) {
   if (argc < 5) return RedisModule_WrongArity(ctx);
@@ -142,15 +144,23 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   int i = 2;
   std::vector<std::string> prefixes;
+  IndexSourceType source_type = IndexSourceType::kHash;
 
   if (i < argc && MatchArg(ArgView(argv[i]), "ON")) {
     i++;
-    if (i >= argc || !MatchArg(ArgView(argv[i]), "HASH")) {
-      return RedisModule_ReplyWithError(ctx, "ERR only HASH is supported for ON");
+    if (i >= argc) {
+      return RedisModule_ReplyWithError(ctx, "ERR ON requires HASH or JSON");
+    }
+    if (MatchArg(ArgView(argv[i]), "HASH")) {
+      source_type = IndexSourceType::kHash;
+    } else if (MatchArg(ArgView(argv[i]), "JSON")) {
+      source_type = IndexSourceType::kJson;
+    } else {
+      return RedisModule_ReplyWithError(ctx, "ERR ON requires HASH or JSON");
     }
     i++;
     if (i >= argc || !MatchArg(ArgView(argv[i]), "PREFIX")) {
-      return RedisModule_ReplyWithError(ctx, "ERR expected PREFIX after ON HASH");
+      return RedisModule_ReplyWithError(ctx, "ERR expected PREFIX after ON HASH/JSON");
     }
     i++;
     if (i >= argc) {
@@ -194,11 +204,27 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
 
     auto fname = ArgView(argv[i]);
-    auto ftype_str = ArgView(argv[i + 1]);
-    i += 2;
+    i++;
 
     FieldSpec fspec;
     fspec.name = std::string(fname);
+
+    // JSON schema: $.path AS alias TYPE
+    if (source_type == IndexSourceType::kJson && !fname.empty() && fname[0] == '$') {
+      fspec.json_path = std::string(fname);
+      if (i + 2 >= argc || !MatchArg(ArgView(argv[i]), "AS")) {
+        return RedisModule_ReplyWithError(ctx, "ERR JSON field requires AS alias");
+      }
+      i++;
+      fspec.name = std::string(ArgView(argv[i]));
+      i++;
+    }
+
+    if (i >= argc) {
+      return RedisModule_ReplyWithError(ctx, "ERR syntax error, missing field type");
+    }
+    auto ftype_str = ArgView(argv[i]);
+    i++;
 
     if (MatchArg(ftype_str, "TAG")) {
       fspec.type = FieldType::kTag;
@@ -327,7 +353,7 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (!inserted) {
     return RedisModule_ReplyWithError(ctx, "ERR index already exists");
   }
-  it->second.spec = IndexSpec{idx_str, std::move(fields), std::move(prefixes), index_language};
+  it->second.spec = IndexSpec{idx_str, std::move(fields), std::move(prefixes), index_language, source_type};
 
   if (SearchModuleType) {
     auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
@@ -394,7 +420,8 @@ static int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     long def_len = 2 + static_cast<long>(entry.spec.prefixes.size());
     RedisModule_ReplyWithArray(ctx, def_len);
     RedisModule_ReplyWithSimpleString(ctx, "key_type");
-    RedisModule_ReplyWithSimpleString(ctx, "HASH");
+    RedisModule_ReplyWithSimpleString(
+        ctx, entry.spec.source_type == IndexSourceType::kJson ? "JSON" : "HASH");
     for (auto& p : entry.spec.prefixes) {
       RedisModule_ReplyWithCString(ctx, p.c_str());
     }
@@ -429,6 +456,12 @@ static int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       RedisModule_ReplyWithCString(ctx, f.name.c_str());
       RedisModule_ReplyWithSimpleString(ctx, "TEXT");
       RedisModule_ReplyWithSimpleString(ctx, "NOSTEM");
+    } else if (!f.json_path.empty()) {
+      RedisModule_ReplyWithArray(ctx, 4);
+      RedisModule_ReplyWithCString(ctx, f.name.c_str());
+      RedisModule_ReplyWithSimpleString(ctx, FieldTypeName(f.type));
+      RedisModule_ReplyWithSimpleString(ctx, "json_path");
+      RedisModule_ReplyWithCString(ctx, f.json_path.c_str());
     } else {
       RedisModule_ReplyWithArray(ctx, 2);
       RedisModule_ReplyWithCString(ctx, f.name.c_str());
@@ -1491,6 +1524,100 @@ static void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry,
   AddDocToIndices(entry, key_name, doc_fields);
 }
 
+static std::string StripJsonQuotes(const std::string& s) {
+  if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
+    return s.substr(1, s.size() - 2);
+  return s;
+}
+
+static std::string ExtractJsonScalar(const std::string& raw) {
+  std::string trimmed = raw;
+  while (!trimmed.empty() && (trimmed.front() == ' ' || trimmed.front() == '\t'))
+    trimmed.erase(trimmed.begin());
+  while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t'))
+    trimmed.pop_back();
+  if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']')
+    trimmed = trimmed.substr(1, trimmed.size() - 2);
+  while (!trimmed.empty() && (trimmed.front() == ' ' || trimmed.front() == '\t'))
+    trimmed.erase(trimmed.begin());
+  while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t'))
+    trimmed.pop_back();
+  return StripJsonQuotes(trimmed);
+}
+
+static std::vector<std::string> ExtractJsonArray(const std::string& raw) {
+  std::string trimmed = raw;
+  while (!trimmed.empty() && (trimmed.front() == ' ' || trimmed.front() == '\t'))
+    trimmed.erase(trimmed.begin());
+  while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t'))
+    trimmed.pop_back();
+  if (trimmed.size() < 2 || trimmed.front() != '[' || trimmed.back() != ']')
+    return {StripJsonQuotes(trimmed)};
+
+  std::vector<std::string> results;
+  size_t i = 1;
+  while (i < trimmed.size() - 1) {
+    while (i < trimmed.size() - 1 && (trimmed[i] == ' ' || trimmed[i] == ',')) i++;
+    if (i >= trimmed.size() - 1) break;
+    if (trimmed[i] == '"') {
+      i++;
+      size_t start = i;
+      while (i < trimmed.size() - 1 && trimmed[i] != '"') i++;
+      results.push_back(trimmed.substr(start, i - start));
+      if (i < trimmed.size() - 1) i++;
+    } else {
+      size_t start = i;
+      while (i < trimmed.size() - 1 && trimmed[i] != ',' && trimmed[i] != ']') i++;
+      std::string val = trimmed.substr(start, i - start);
+      while (!val.empty() && val.back() == ' ') val.pop_back();
+      if (val != "null") results.push_back(std::move(val));
+    }
+  }
+  return results;
+}
+
+static void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry,
+                         const std::string& key_name) {
+  std::unordered_map<std::string, std::string> doc_fields;
+
+  for (auto& fspec : entry.spec.fields) {
+    if (fspec.type == FieldType::kVector) continue;
+    const std::string& path = fspec.json_path.empty() ? fspec.name : fspec.json_path;
+
+    RedisModuleString* rms_key = RedisModule_CreateString(ctx, key_name.c_str(), key_name.size());
+    RedisModuleString* rms_path = RedisModule_CreateString(ctx, path.c_str(), path.size());
+    RedisModuleCallReply* reply = RedisModule_Call(ctx, "JSON.GET", "ss", rms_key, rms_path);
+
+    if (!reply || RedisModule_CallReplyType(reply) != REDISMODULE_REPLY_STRING)
+      continue;
+
+    size_t len = 0;
+    const char* data = RedisModule_CallReplyStringPtr(reply, &len);
+    if (!data || len == 0) continue;
+    std::string raw(data, len);
+
+    if (fspec.type == FieldType::kTag) {
+      auto vals = ExtractJsonArray(raw);
+      for (auto& v : vals) {
+        if (!v.empty()) {
+          if (doc_fields.find(fspec.name) == doc_fields.end())
+            doc_fields[fspec.name] = v;
+          else
+            doc_fields[fspec.name] += "," + v;
+        }
+      }
+    } else {
+      doc_fields[fspec.name] = ExtractJsonScalar(raw);
+    }
+  }
+
+  if (doc_fields.empty()) return;
+
+  RemoveDocFromIndices(entry, key_name);
+  entry.doc_store.Add(key_name, doc_fields);
+  AddDocToIndices(entry, key_name, doc_fields);
+}
+
 static void RemoveHashKey(IndexEntry& entry, const std::string& key_name) {
   if (!entry.doc_store.Contains(key_name)) return;
   RemoveDocFromIndices(entry, key_name);
@@ -1509,7 +1636,10 @@ static void ScanCallback(RedisModuleCtx* /*ctx*/, RedisModuleString* keyname,
   const char* data = RedisModule_StringPtrLen(keyname, &len);
   std::string key_str(data, len);
   if (pd->entry->spec.MatchesPrefix(key_str)) {
-    IndexHashKey(pd->ctx, *pd->entry, key_str);
+    if (pd->entry->spec.source_type == IndexSourceType::kJson)
+      IndexJsonKey(pd->ctx, *pd->entry, key_str);
+    else
+      IndexHashKey(pd->ctx, *pd->entry, key_str);
   }
 }
 
@@ -1532,6 +1662,10 @@ static int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event,
   bool is_hash_write = (strcmp(event, "hset") == 0 || strcmp(event, "hdel") == 0 ||
                         strcmp(event, "hincrby") == 0 || strcmp(event, "hincrbyfloat") == 0 ||
                         strcmp(event, "hmset") == 0 || strcmp(event, "hsetnx") == 0);
+  bool is_json_write = (strcmp(event, "json.set") == 0 || strcmp(event, "json.del") == 0 ||
+                        strcmp(event, "json.arrappend") == 0 || strcmp(event, "json.arrinsert") == 0 ||
+                        strcmp(event, "json.numincrby") == 0 || strcmp(event, "json.strappend") == 0);
+  bool is_json_del = (strcmp(event, "json.del") == 0);
 
   for (auto& [idx_name, entry] : g_indices) {
     if (!entry.spec.HasPrefixes()) continue;
@@ -1539,6 +1673,12 @@ static int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event,
 
     if (is_del) {
       RemoveHashKey(entry, key_str);
+    } else if (entry.spec.source_type == IndexSourceType::kJson) {
+      if (is_json_del) {
+        RemoveHashKey(entry, key_str);
+      } else if (is_json_write) {
+        IndexJsonKey(ctx, entry, key_str);
+      }
     } else if (is_hash_write) {
       IndexHashKey(ctx, entry, key_str);
     }
@@ -2194,7 +2334,9 @@ int RegisterSearchCommands(RedisModuleCtx* ctx) {
   }
 
   if (RedisModule_SubscribeToKeyspaceEvents(
-          ctx, REDISMODULE_NOTIFY_HASH | REDISMODULE_NOTIFY_GENERIC,
+          ctx,
+          REDISMODULE_NOTIFY_HASH | REDISMODULE_NOTIFY_GENERIC |
+          REDISMODULE_NOTIFY_MODULE,
           OnKeyspaceEvent) == REDISMODULE_ERR) {
     RedisModule_Log(ctx, "warning", "Failed to subscribe to keyspace events");
   }

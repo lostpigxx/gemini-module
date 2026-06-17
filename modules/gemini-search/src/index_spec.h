@@ -39,6 +39,8 @@ inline const char* VectorAlgorithmName(VectorAlgorithm a) {
   return "UNKNOWN";
 }
 
+enum class IndexSourceType { kHash, kJson };
+
 struct VectorFieldParams {
   VectorAlgorithm algorithm = VectorAlgorithm::kFlat;
   size_t dim = 0;
@@ -52,6 +54,7 @@ struct FieldSpec {
   FieldType type;
   VectorFieldParams vector_params;
   bool nostem = false;
+  std::string json_path;
 };
 
 struct IndexSpec {
@@ -59,6 +62,7 @@ struct IndexSpec {
   std::vector<FieldSpec> fields;
   std::vector<std::string> prefixes;
   std::string language = "english";
+  IndexSourceType source_type = IndexSourceType::kHash;
 
   bool HasPrefixes() const { return !prefixes.empty(); }
 
