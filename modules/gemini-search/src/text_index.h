@@ -45,6 +45,8 @@ class TextIndex {
   void Clear();
 
   static std::vector<std::string> Tokenize(const std::string& text);
+  static std::vector<std::string> Tokenize(const std::string& text,
+                                            const std::vector<std::string>& stopwords);
   static std::vector<std::string> TokenizeRaw(const std::string& text);
   static int LevenshteinDistance(const std::string& a, const std::string& b);
 };

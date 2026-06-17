@@ -88,7 +88,7 @@ static void RemoveDocFromIndices(IndexEntry& entry,
   if (!doc) return;
   for (auto& [fname, fval] : doc->fields) {
     const auto* fspec = entry.spec.FindField(fname);
-    if (!fspec) continue;
+    if (!fspec || fspec->noindex) continue;
     if (fspec->type == FieldType::kTag) {
       entry.tag_indices.GetOrCreate(fname).Remove(fval, doc_id);
     } else if (fspec->type == FieldType::kNumeric) {
@@ -111,7 +111,7 @@ static void AddDocToIndices(
     const std::unordered_map<std::string, std::string>& fields) {
   for (auto& [fname, fval] : fields) {
     const auto* fspec = entry.spec.FindField(fname);
-    if (!fspec) continue;
+    if (!fspec || fspec->noindex) continue;
     if (fspec->type == FieldType::kTag) {
       entry.tag_indices.GetOrCreate(fname).Add(fval, doc_id);
     } else if (fspec->type == FieldType::kNumeric) {
@@ -190,13 +190,56 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   std::string index_language = "english";
-  if (i < argc && MatchArg(ArgView(argv[i]), "LANGUAGE")) {
-    i++;
-    if (i >= argc) {
-      return RedisModule_ReplyWithError(ctx, "ERR LANGUAGE requires a value");
+  std::vector<std::string> custom_stopwords;
+  bool has_custom_stopwords = false;
+  bool idx_nofreqs = false;
+  bool idx_nooffsets = false;
+  bool idx_nohl = false;
+  int idx_temporary = 0;
+
+  while (i < argc && !MatchArg(ArgView(argv[i]), "SCHEMA")) {
+    auto opt = ArgView(argv[i]);
+    if (MatchArg(opt, "LANGUAGE")) {
+      i++;
+      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR LANGUAGE requires a value");
+      index_language = std::string(ArgView(argv[i]));
+      i++;
+    } else if (MatchArg(opt, "STOPWORDS")) {
+      i++;
+      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR STOPWORDS requires count");
+      char* ep = nullptr;
+      long sw_count = std::strtol(std::string(ArgView(argv[i])).c_str(), &ep, 10);
+      i++;
+      if (*ep != '\0' || sw_count < 0)
+        return RedisModule_ReplyWithError(ctx, "ERR STOPWORDS count must be non-negative");
+      has_custom_stopwords = true;
+      for (long sw = 0; sw < sw_count; sw++) {
+        if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough STOPWORDS");
+        custom_stopwords.emplace_back(ArgView(argv[i]));
+        i++;
+      }
+    } else if (MatchArg(opt, "NOFREQS")) {
+      idx_nofreqs = true;
+      i++;
+    } else if (MatchArg(opt, "NOOFFSETS")) {
+      idx_nooffsets = true;
+      i++;
+    } else if (MatchArg(opt, "NOHL")) {
+      idx_nohl = true;
+      i++;
+    } else if (MatchArg(opt, "TEMPORARY")) {
+      i++;
+      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR TEMPORARY requires seconds");
+      char* ep = nullptr;
+      idx_temporary = static_cast<int>(std::strtol(std::string(ArgView(argv[i])).c_str(), &ep, 10));
+      if (*ep != '\0' || idx_temporary < 0)
+        return RedisModule_ReplyWithError(ctx, "ERR TEMPORARY must be non-negative");
+      i++;
+    } else if (MatchArg(opt, "MAXTEXTFIELDS")) {
+      i++;
+    } else {
+      break;
     }
-    index_language = std::string(ArgView(argv[i]));
-    i++;
   }
 
   if (i >= argc || !MatchArg(ArgView(argv[i]), "SCHEMA")) {
@@ -331,15 +374,36 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
     } else if (MatchArg(ftype_str, "TEXT")) {
       fspec.type = FieldType::kText;
-      if (i < argc && MatchArg(ArgView(argv[i]), "NOSTEM")) {
-        fspec.nostem = true;
-        i++;
-      }
     } else if (MatchArg(ftype_str, "GEO")) {
       fspec.type = FieldType::kGeo;
     } else {
       return RedisModule_ReplyWithError(
           ctx, "ERR unknown field type, expected TAG, NUMERIC, TEXT, VECTOR, or GEO");
+    }
+
+    // Parse field-level attributes: SORTABLE, NOINDEX, NOSTEM, WEIGHT
+    while (i < argc) {
+      auto attr = ArgView(argv[i]);
+      if (MatchArg(attr, "SORTABLE")) {
+        fspec.sortable = true;
+        i++;
+      } else if (MatchArg(attr, "NOINDEX")) {
+        fspec.noindex = true;
+        i++;
+      } else if (MatchArg(attr, "NOSTEM") && fspec.type == FieldType::kText) {
+        fspec.nostem = true;
+        i++;
+      } else if (MatchArg(attr, "WEIGHT") && fspec.type == FieldType::kText) {
+        i++;
+        if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR WEIGHT requires a value");
+        char* ep = nullptr;
+        fspec.weight = std::strtod(std::string(ArgView(argv[i])).c_str(), &ep);
+        if (*ep != '\0' || fspec.weight < 0)
+          return RedisModule_ReplyWithError(ctx, "ERR WEIGHT must be a non-negative number");
+        i++;
+      } else {
+        break;
+      }
     }
 
     for (auto& existing : fields) {
@@ -361,7 +425,10 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (!inserted) {
     return RedisModule_ReplyWithError(ctx, "ERR index already exists");
   }
-  it->second.spec = IndexSpec{idx_str, std::move(fields), std::move(prefixes), index_language, source_type};
+  it->second.spec = IndexSpec{idx_str, std::move(fields), std::move(prefixes),
+                              index_language, source_type,
+                              std::move(custom_stopwords), has_custom_stopwords,
+                              idx_nofreqs, idx_nooffsets, idx_nohl, idx_temporary};
 
   if (SearchModuleType) {
     auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
@@ -464,21 +531,27 @@ static int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         RedisModule_ReplyWithSimpleString(ctx, "ef_construction");
         RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(f.vector_params.ef_construction));
       }
-    } else if (f.type == FieldType::kText && f.nostem) {
-      RedisModule_ReplyWithArray(ctx, 3);
-      RedisModule_ReplyWithCString(ctx, f.name.c_str());
-      RedisModule_ReplyWithSimpleString(ctx, "TEXT");
-      RedisModule_ReplyWithSimpleString(ctx, "NOSTEM");
-    } else if (!f.json_path.empty()) {
-      RedisModule_ReplyWithArray(ctx, 4);
-      RedisModule_ReplyWithCString(ctx, f.name.c_str());
-      RedisModule_ReplyWithSimpleString(ctx, FieldTypeName(f.type));
-      RedisModule_ReplyWithSimpleString(ctx, "json_path");
-      RedisModule_ReplyWithCString(ctx, f.json_path.c_str());
     } else {
-      RedisModule_ReplyWithArray(ctx, 2);
+      long attr_count = 2;
+      if (f.nostem) attr_count++;
+      if (f.sortable) attr_count++;
+      if (f.noindex) attr_count++;
+      if (f.weight != 1.0) attr_count += 2;
+      if (!f.json_path.empty()) attr_count += 2;
+      RedisModule_ReplyWithArray(ctx, attr_count);
       RedisModule_ReplyWithCString(ctx, f.name.c_str());
       RedisModule_ReplyWithSimpleString(ctx, FieldTypeName(f.type));
+      if (f.nostem) RedisModule_ReplyWithSimpleString(ctx, "NOSTEM");
+      if (f.sortable) RedisModule_ReplyWithSimpleString(ctx, "SORTABLE");
+      if (f.noindex) RedisModule_ReplyWithSimpleString(ctx, "NOINDEX");
+      if (f.weight != 1.0) {
+        RedisModule_ReplyWithSimpleString(ctx, "WEIGHT");
+        RedisModule_ReplyWithCString(ctx, std::to_string(f.weight).c_str());
+      }
+      if (!f.json_path.empty()) {
+        RedisModule_ReplyWithSimpleString(ctx, "json_path");
+        RedisModule_ReplyWithCString(ctx, f.json_path.c_str());
+      }
     }
   }
 

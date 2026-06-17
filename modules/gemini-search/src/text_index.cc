@@ -41,6 +41,26 @@ std::vector<std::string> TextIndex::Tokenize(const std::string& text) {
   return TokenizeImpl(text, true);
 }
 
+std::vector<std::string> TextIndex::Tokenize(const std::string& text,
+                                              const std::vector<std::string>& stopwords) {
+  std::unordered_set<std::string> sw_set(stopwords.begin(), stopwords.end());
+  std::vector<std::string> tokens;
+  size_t i = 0;
+  while (i < text.size()) {
+    while (i < text.size() && !std::isalnum(static_cast<unsigned char>(text[i]))) i++;
+    if (i >= text.size()) break;
+    size_t start = i;
+    while (i < text.size() && std::isalnum(static_cast<unsigned char>(text[i]))) i++;
+    std::string token;
+    token.reserve(i - start);
+    for (size_t j = start; j < i; j++)
+      token += static_cast<char>(std::tolower(static_cast<unsigned char>(text[j])));
+    if (!token.empty() && sw_set.find(token) == sw_set.end())
+      tokens.push_back(std::move(token));
+  }
+  return tokens;
+}
+
 std::vector<std::string> TextIndex::TokenizeRaw(const std::string& text) {
   return TokenizeImpl(text, false);
 }

@@ -37,7 +37,22 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
       RedisModule_SaveUnsigned(rdb, f.vector_params.ef_construction);
     }
     RedisModule_SaveStringBuffer(rdb, f.json_path.c_str(), f.json_path.size());
+    RedisModule_SaveUnsigned(rdb, f.sortable ? 1 : 0);
+    RedisModule_SaveUnsigned(rdb, f.noindex ? 1 : 0);
+    RedisModule_SaveDouble(rdb, f.weight);
   }
+
+  // Index-level options (encver >= 6)
+  RedisModule_SaveUnsigned(rdb, spec.has_custom_stopwords ? 1 : 0);
+  if (spec.has_custom_stopwords) {
+    RedisModule_SaveUnsigned(rdb, spec.custom_stopwords.size());
+    for (auto& sw : spec.custom_stopwords)
+      RedisModule_SaveStringBuffer(rdb, sw.c_str(), sw.size());
+  }
+  RedisModule_SaveUnsigned(rdb, spec.nofreqs ? 1 : 0);
+  RedisModule_SaveUnsigned(rdb, spec.nooffsets ? 1 : 0);
+  RedisModule_SaveUnsigned(rdb, spec.nohl ? 1 : 0);
+  RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(spec.temporary_ttl));
 
   auto all_ids = entry->doc_store.AllIds();
   RedisModule_SaveUnsigned(rdb, all_ids.size());
@@ -102,7 +117,30 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
     if (encver >= 5) {
       f.json_path = LoadString(rdb);
     }
+    if (encver >= 6) {
+      f.sortable = RedisModule_LoadUnsigned(rdb) != 0;
+      f.noindex = RedisModule_LoadUnsigned(rdb) != 0;
+      f.weight = RedisModule_LoadDouble(rdb);
+    }
     fields.push_back(std::move(f));
+  }
+
+  // Index-level options
+  std::vector<std::string> custom_stopwords;
+  bool has_custom_stopwords = false;
+  bool nofreqs = false, nooffsets = false, nohl = false;
+  int temporary_ttl = 0;
+  if (encver >= 6) {
+    has_custom_stopwords = RedisModule_LoadUnsigned(rdb) != 0;
+    if (has_custom_stopwords) {
+      uint64_t sw_count = RedisModule_LoadUnsigned(rdb);
+      for (uint64_t si = 0; si < sw_count; si++)
+        custom_stopwords.push_back(LoadString(rdb));
+    }
+    nofreqs = RedisModule_LoadUnsigned(rdb) != 0;
+    nooffsets = RedisModule_LoadUnsigned(rdb) != 0;
+    nohl = RedisModule_LoadUnsigned(rdb) != 0;
+    temporary_ttl = static_cast<int>(RedisModule_LoadUnsigned(rdb));
   }
 
   uint64_t doc_count = RedisModule_LoadUnsigned(rdb);
@@ -120,7 +158,9 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
     docs.emplace_back(std::move(doc_id), std::move(doc_fields));
   }
 
-  IndexSpec spec{index_name, std::move(fields), std::move(prefixes), "english", source_type};
+  IndexSpec spec{index_name, std::move(fields), std::move(prefixes),
+                 "english", source_type, std::move(custom_stopwords),
+                 has_custom_stopwords, nofreqs, nooffsets, nohl, temporary_ttl};
   CreateIndexFromRdb(index_name, std::move(spec), docs);
 
   return new std::string(std::move(index_name));
@@ -190,6 +230,15 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key,
     create_args.push_back(std::to_string(spec.prefixes.size()));
     for (auto& p : spec.prefixes) create_args.push_back(p);
   }
+  if (spec.has_custom_stopwords) {
+    create_args.push_back("STOPWORDS");
+    create_args.push_back(std::to_string(spec.custom_stopwords.size()));
+    for (auto& sw : spec.custom_stopwords) create_args.push_back(sw);
+  }
+  if (spec.nofreqs) create_args.push_back("NOFREQS");
+  if (spec.nooffsets) create_args.push_back("NOOFFSETS");
+  if (spec.nohl) create_args.push_back("NOHL");
+
   create_args.push_back("SCHEMA");
   for (auto& f : spec.fields) {
     if (!f.json_path.empty()) {
@@ -210,6 +259,13 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key,
         create_args.push_back("EF_CONSTRUCTION");
         create_args.push_back(std::to_string(f.vector_params.ef_construction));
       }
+    }
+    if (f.nostem) create_args.push_back("NOSTEM");
+    if (f.sortable) create_args.push_back("SORTABLE");
+    if (f.noindex) create_args.push_back("NOINDEX");
+    if (f.weight != 1.0) {
+      create_args.push_back("WEIGHT");
+      create_args.push_back(std::to_string(f.weight));
     }
   }
   EmitAofCreate(aof, key, create_args);

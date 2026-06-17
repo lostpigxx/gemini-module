@@ -55,6 +55,9 @@ struct FieldSpec {
   VectorFieldParams vector_params;
   bool nostem = false;
   std::string json_path;
+  bool sortable = false;
+  bool noindex = false;
+  double weight = 1.0;
 };
 
 struct IndexSpec {
@@ -63,6 +66,12 @@ struct IndexSpec {
   std::vector<std::string> prefixes;
   std::string language = "english";
   IndexSourceType source_type = IndexSourceType::kHash;
+  std::vector<std::string> custom_stopwords;
+  bool has_custom_stopwords = false;
+  bool nofreqs = false;
+  bool nooffsets = false;
+  bool nohl = false;
+  int temporary_ttl = 0;
 
   bool HasPrefixes() const { return !prefixes.empty(); }
 
