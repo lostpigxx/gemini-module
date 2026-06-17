@@ -17,9 +17,17 @@
 #include <vector>
 
 static std::unordered_map<std::string, IndexEntry> g_indices;
+static std::unordered_map<std::string, std::string> g_aliases;
+
+static std::string ResolveAlias(const std::string& name) {
+  auto it = g_aliases.find(name);
+  if (it != g_aliases.end()) return it->second;
+  return name;
+}
 
 IndexEntry* GetIndexEntry(const std::string& name) {
-  auto it = g_indices.find(name);
+  auto resolved = ResolveAlias(name);
+  auto it = g_indices.find(resolved);
   if (it == g_indices.end()) return nullptr;
   return &it->second;
 }
@@ -375,9 +383,14 @@ static int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc != 2) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string idx_str(ArgView(argv[1]));
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
   if (g_indices.erase(idx_str) == 0) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+  // Remove any aliases pointing to this index
+  for (auto ait = g_aliases.begin(); ait != g_aliases.end(); ) {
+    if (ait->second == idx_str) ait = g_aliases.erase(ait);
+    else ++ait;
   }
 
   if (SearchModuleType) {
@@ -395,7 +408,7 @@ static int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc != 2) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string idx_str(ArgView(argv[1]));
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
   auto it = g_indices.find(idx_str);
   if (it == g_indices.end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
@@ -558,7 +571,7 @@ static int FtDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc != 3) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string idx_str(ArgView(argv[1]));
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
   auto it = g_indices.find(idx_str);
   if (it == g_indices.end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
@@ -777,7 +790,7 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc < 3) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string idx_str(ArgView(argv[1]));
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
   auto it = g_indices.find(idx_str);
   if (it == g_indices.end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
@@ -1423,7 +1436,7 @@ static int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc < 6) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string idx_str(ArgView(argv[1]));
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
   auto it = g_indices.find(idx_str);
   if (it == g_indices.end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
@@ -1490,6 +1503,221 @@ static int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+// FT.ALIASADD <alias> <index>
+static int FtAliasAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                             int argc) {
+  if (argc != 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string alias(ArgView(argv[1]));
+  std::string idx(ArgView(argv[2]));
+
+  if (g_indices.find(idx) == g_indices.end()) {
+    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+  if (g_aliases.find(alias) != g_aliases.end()) {
+    return RedisModule_ReplyWithError(ctx, "ERR alias already exists");
+  }
+  g_aliases[alias] = idx;
+  return RedisModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+// FT.ALIASDEL <alias>
+static int FtAliasDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                             int argc) {
+  if (argc != 2) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string alias(ArgView(argv[1]));
+  if (g_aliases.erase(alias) == 0) {
+    return RedisModule_ReplyWithError(ctx, "ERR alias not found");
+  }
+  return RedisModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+// FT.ALIASUPDATE <alias> <index>
+static int FtAliasUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                                int argc) {
+  if (argc != 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string alias(ArgView(argv[1]));
+  std::string idx(ArgView(argv[2]));
+
+  if (g_indices.find(idx) == g_indices.end()) {
+    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+  g_aliases[alias] = idx;
+  return RedisModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+// FT.TAGVALS <index> <field>
+static int FtTagvalsCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                            int argc) {
+  if (argc != 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  auto it = g_indices.find(idx_str);
+  if (it == g_indices.end()) {
+    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+  auto& entry = it->second;
+
+  std::string field_name(ArgView(argv[2]));
+  const auto* fspec = entry.spec.FindField(field_name);
+  if (!fspec) {
+    return RedisModule_ReplyWithError(ctx, "ERR field not in schema");
+  }
+  if (fspec->type != FieldType::kTag) {
+    return RedisModule_ReplyWithError(ctx, "ERR field is not a TAG field");
+  }
+
+  const auto* tidx = entry.tag_indices.Get(field_name);
+  if (!tidx) {
+    RedisModule_ReplyWithArray(ctx, 0);
+    return REDISMODULE_OK;
+  }
+
+  auto tags = tidx->AllTags();
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(tags.size()));
+  for (auto& t : tags) {
+    RedisModule_ReplyWithCString(ctx, t.c_str());
+  }
+  return REDISMODULE_OK;
+}
+
+// Query tree serializer for EXPLAIN
+static std::string ExplainNode(const QueryNode& node, int indent) {
+  std::string pad(static_cast<size_t>(indent * 2), ' ');
+  std::string result;
+
+  switch (node.type) {
+    case QueryNode::Type::kMatchAll:
+      result = pad + "*\n";
+      break;
+    case QueryNode::Type::kTagMatch:
+      result = pad + "TAG @" + node.field_name + ":{";
+      for (size_t i = 0; i < node.tag_values.size(); i++) {
+        if (i > 0) result += " | ";
+        result += node.tag_values[i];
+      }
+      result += "}\n";
+      break;
+    case QueryNode::Type::kNumericRange:
+      result = pad + "NUMERIC @" + node.field_name + ":[" +
+               (node.min_exclusive ? "(" : "") + std::to_string(node.range_min) +
+               " " +
+               (node.max_exclusive ? "(" : "") + std::to_string(node.range_max) +
+               "]\n";
+      break;
+    case QueryNode::Type::kTextMatch:
+      result = pad + "TEXT";
+      if (!node.field_name.empty()) result += " @" + node.field_name;
+      if (node.is_phrase) result += " PHRASE";
+      result += ":";
+      for (size_t i = 0; i < node.text_terms.size(); i++) {
+        result += " " + node.text_terms[i];
+      }
+      result += "\n";
+      break;
+    case QueryNode::Type::kGeoFilter:
+      result = pad + "GEO @" + node.field_name + ":[" +
+               std::to_string(node.geo_lon) + " " +
+               std::to_string(node.geo_lat) + " " +
+               std::to_string(node.geo_radius) + "]\n";
+      break;
+    case QueryNode::Type::kAnd:
+      result = pad + "AND\n";
+      for (auto& c : node.children) result += ExplainNode(c, indent + 1);
+      break;
+    case QueryNode::Type::kOr:
+      result = pad + "OR\n";
+      for (auto& c : node.children) result += ExplainNode(c, indent + 1);
+      break;
+    case QueryNode::Type::kNot:
+      result = pad + "NOT\n";
+      for (auto& c : node.children) result += ExplainNode(c, indent + 1);
+      break;
+    case QueryNode::Type::kOptional:
+      result = pad + "OPTIONAL\n";
+      for (auto& c : node.children) result += ExplainNode(c, indent + 1);
+      break;
+  }
+  return result;
+}
+
+// FT.EXPLAIN <index> <query>
+static int FtExplainCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                            int argc) {
+  if (argc < 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  if (g_indices.find(idx_str) == g_indices.end()) {
+    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+
+  ParsedQuery parsed;
+  std::string parse_error;
+  if (!ParseQuery(std::string(ArgView(argv[2])), parsed, parse_error)) {
+    return RedisModule_ReplyWithError(ctx, parse_error.c_str());
+  }
+
+  std::string plan = ExplainNode(parsed.root, 0);
+  if (parsed.has_knn) {
+    plan += "KNN k=" + std::to_string(parsed.knn_k) +
+            " @" + parsed.knn_field +
+            " $" + parsed.knn_param_name + "\n";
+  }
+
+  // Remove trailing newline
+  while (!plan.empty() && plan.back() == '\n') plan.pop_back();
+
+  return RedisModule_ReplyWithCString(ctx, plan.c_str());
+}
+
+// FT.EXPLAINCLI <index> <query>
+static int FtExplainCliCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                               int argc) {
+  if (argc < 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  if (g_indices.find(idx_str) == g_indices.end()) {
+    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+
+  ParsedQuery parsed;
+  std::string parse_error;
+  if (!ParseQuery(std::string(ArgView(argv[2])), parsed, parse_error)) {
+    return RedisModule_ReplyWithError(ctx, parse_error.c_str());
+  }
+
+  std::string plan = ExplainNode(parsed.root, 0);
+  if (parsed.has_knn) {
+    plan += "KNN k=" + std::to_string(parsed.knn_k) +
+            " @" + parsed.knn_field +
+            " $" + parsed.knn_param_name + "\n";
+  }
+
+  // Split into lines and reply as array
+  std::vector<std::string> lines;
+  size_t pos = 0;
+  while (pos < plan.size()) {
+    size_t nl = plan.find('\n', pos);
+    if (nl == std::string::npos) nl = plan.size();
+    if (nl > pos) lines.push_back(plan.substr(pos, nl - pos));
+    pos = nl + 1;
+  }
+
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(lines.size()));
+  for (auto& line : lines) {
+    RedisModule_ReplyWithCString(ctx, line.c_str());
+  }
+  return REDISMODULE_OK;
 }
 
 // FT._DEBUG
@@ -1978,7 +2206,7 @@ static int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc < 3) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string idx_str(ArgView(argv[1]));
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
   auto it = g_indices.find(idx_str);
   if (it == g_indices.end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
@@ -2323,6 +2551,12 @@ int RegisterSearchCommands(RedisModuleCtx* ctx) {
       {"FT.SEARCH", FtSearchCommand, "readonly"},
       {"FT.AGGREGATE", FtAggregateCommand, "readonly"},
       {"FT.ALTER", FtAlterCommand, "write"},
+      {"FT.ALIASADD", FtAliasAddCommand, "write"},
+      {"FT.ALIASDEL", FtAliasDelCommand, "write"},
+      {"FT.ALIASUPDATE", FtAliasUpdateCommand, "write"},
+      {"FT.TAGVALS", FtTagvalsCommand, "readonly"},
+      {"FT.EXPLAIN", FtExplainCommand, "readonly"},
+      {"FT.EXPLAINCLI", FtExplainCliCommand, "readonly"},
       {"FT._DEBUG", FtDebugCommand, "readonly"},
   };
 

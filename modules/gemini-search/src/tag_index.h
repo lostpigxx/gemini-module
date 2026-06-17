@@ -15,6 +15,7 @@ class TagIndex {
   std::vector<std::string> Lookup(const std::string& tag_value) const;
   std::vector<std::string> LookupOr(
       const std::vector<std::string>& values) const;
+  std::vector<std::string> AllTags() const;
   size_t NumTags() const;
   void Clear();
 };

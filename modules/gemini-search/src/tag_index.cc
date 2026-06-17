@@ -1,5 +1,7 @@
 #include "tag_index.h"
 
+#include <algorithm>
+
 void TagIndex::Add(const std::string& tag_value, const std::string& doc_id) {
   postings_[tag_value].insert(doc_id);
 }
@@ -30,6 +32,14 @@ std::vector<std::string> TagIndex::LookupOr(
     }
   }
   return {merged.begin(), merged.end()};
+}
+
+std::vector<std::string> TagIndex::AllTags() const {
+  std::vector<std::string> tags;
+  tags.reserve(postings_.size());
+  for (auto& [tag, docs] : postings_) tags.push_back(tag);
+  std::sort(tags.begin(), tags.end());
+  return tags;
 }
 
 size_t TagIndex::NumTags() const { return postings_.size(); }
