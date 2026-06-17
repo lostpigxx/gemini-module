@@ -573,11 +573,119 @@ struct SearchOptions {
   double geofilter_radius = 0;
   GeoUnit geofilter_unit = GeoUnit::kKm;
   bool has_geofilter = false;
+  bool has_highlight = false;
+  std::vector<std::string> highlight_fields;
+  std::string highlight_open = "<b>";
+  std::string highlight_close = "</b>";
+  bool has_summarize = false;
+  std::vector<std::string> summarize_fields;
+  int summarize_frags = 3;
+  int summarize_len = 20;
+  std::string summarize_separator = "...";
 };
+
+static void CollectQueryTerms(const QueryNode& node,
+                              std::unordered_set<std::string>& terms) {
+  if (node.type == QueryNode::Type::kTextMatch) {
+    for (auto& t : node.text_terms) terms.insert(t);
+  }
+  for (auto& child : node.children) CollectQueryTerms(child, terms);
+}
+
+static std::string ApplyHighlight(const std::string& text,
+                                  const std::unordered_set<std::string>& terms,
+                                  const std::string& open_tag,
+                                  const std::string& close_tag) {
+  std::string result;
+  for (size_t i = 0; i < text.size(); ) {
+    if (std::isalnum(static_cast<unsigned char>(text[i]))) {
+      size_t start = i;
+      while (i < text.size() && std::isalnum(static_cast<unsigned char>(text[i]))) i++;
+      std::string word = text.substr(start, i - start);
+      std::string lower = word;
+      for (auto& c : lower)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (terms.count(lower)) {
+        result += open_tag + word + close_tag;
+      } else {
+        result += word;
+      }
+    } else {
+      result += text[i];
+      i++;
+    }
+  }
+  return result;
+}
+
+static std::string ApplySummarize(const std::string& text,
+                                  const std::unordered_set<std::string>& terms,
+                                  int max_frags, int frag_len,
+                                  const std::string& separator) {
+  // Tokenize into words preserving their positions
+  std::vector<std::string> words;
+  std::vector<bool> is_match;
+  size_t i = 0;
+  while (i < text.size()) {
+    while (i < text.size() && !std::isalnum(static_cast<unsigned char>(text[i]))) i++;
+    if (i >= text.size()) break;
+    size_t start = i;
+    while (i < text.size() && std::isalnum(static_cast<unsigned char>(text[i]))) i++;
+    std::string word = text.substr(start, i - start);
+    std::string lower = word;
+    for (auto& c : lower)
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    words.push_back(word);
+    is_match.push_back(terms.count(lower) > 0);
+  }
+
+  if (words.empty()) return text;
+
+  // Find match positions, extract fragments around them
+  std::vector<std::string> fragments;
+  std::set<int> used_positions;
+
+  for (int wi = 0; wi < static_cast<int>(words.size()) && static_cast<int>(fragments.size()) < max_frags; wi++) {
+    if (!is_match[wi] || used_positions.count(wi)) continue;
+
+    int half = frag_len / 2;
+    int frag_start = std::max(0, wi - half);
+    int frag_end = std::min(static_cast<int>(words.size()), frag_start + frag_len);
+    if (frag_end - frag_start < frag_len && frag_end == static_cast<int>(words.size()))
+      frag_start = std::max(0, frag_end - frag_len);
+
+    std::string frag;
+    for (int fi = frag_start; fi < frag_end; fi++) {
+      if (fi > frag_start) frag += " ";
+      frag += words[fi];
+      used_positions.insert(fi);
+    }
+    fragments.push_back(std::move(frag));
+  }
+
+  if (fragments.empty()) {
+    // No matches found — return first frag_len words
+    std::string frag;
+    int limit = std::min(frag_len, static_cast<int>(words.size()));
+    for (int fi = 0; fi < limit; fi++) {
+      if (fi > 0) frag += " ";
+      frag += words[fi];
+    }
+    return frag + separator;
+  }
+
+  std::string result;
+  for (size_t fi = 0; fi < fragments.size(); fi++) {
+    if (fi > 0) result += separator;
+    result += fragments[fi];
+  }
+  return result;
+}
 
 static void ReplyWithDocFields(RedisModuleCtx* ctx, const Document* doc,
                                const SearchOptions& opts,
                                const std::string* score_val,
+                               const std::unordered_set<std::string>& query_terms,
                                const char* score_name = "__vec_score") {
   if (!doc) {
     RedisModule_ReplyWithEmptyArray(ctx);
@@ -603,11 +711,27 @@ static void ReplyWithDocFields(RedisModuleCtx* ctx, const Document* doc,
     RedisModule_ReplyWithCString(ctx, score_name);
     RedisModule_ReplyWithCString(ctx, score_val->c_str());
   }
+
+  std::unordered_set<std::string> hl_set(opts.highlight_fields.begin(),
+                                          opts.highlight_fields.end());
+  std::unordered_set<std::string> sm_set(opts.summarize_fields.begin(),
+                                          opts.summarize_fields.end());
+
   for (auto& k : keys) {
     RedisModule_ReplyWithCString(ctx, k.c_str());
     auto fit = doc->fields.find(k);
     if (fit != doc->fields.end()) {
-      RedisModule_ReplyWithCString(ctx, fit->second.c_str());
+      std::string val = fit->second;
+      bool do_hl = opts.has_highlight && (hl_set.empty() || hl_set.count(k));
+      bool do_sm = opts.has_summarize && (sm_set.empty() || sm_set.count(k));
+      if (do_sm && !query_terms.empty()) {
+        val = ApplySummarize(val, query_terms, opts.summarize_frags,
+                             opts.summarize_len, opts.summarize_separator);
+      }
+      if (do_hl && !query_terms.empty()) {
+        val = ApplyHighlight(val, query_terms, opts.highlight_open, opts.highlight_close);
+      }
+      RedisModule_ReplyWithCString(ctx, val.c_str());
     } else {
       RedisModule_ReplyWithCString(ctx, "");
     }
@@ -816,6 +940,74 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       opts.timeout_ms = tms;
       opts.has_timeout = true;
       arg_i++;
+    } else if (MatchArg(kw, "HIGHLIGHT")) {
+      opts.has_highlight = true;
+      arg_i++;
+      if (arg_i < argc && MatchArg(ArgView(argv[arg_i]), "FIELDS")) {
+        arg_i++;
+        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR HIGHLIGHT FIELDS requires count");
+        char* endptr = nullptr;
+        long hf_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
+        arg_i++;
+        if (*endptr != '\0' || hf_count < 0)
+          return RedisModule_ReplyWithError(ctx, "ERR HIGHLIGHT FIELDS count must be non-negative");
+        for (long hf = 0; hf < hf_count; hf++) {
+          if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough HIGHLIGHT FIELDS");
+          opts.highlight_fields.emplace_back(ArgView(argv[arg_i]));
+          arg_i++;
+        }
+      }
+      if (arg_i < argc && MatchArg(ArgView(argv[arg_i]), "TAGS")) {
+        arg_i++;
+        if (arg_i + 1 >= argc)
+          return RedisModule_ReplyWithError(ctx, "ERR HIGHLIGHT TAGS requires open and close tags");
+        opts.highlight_open = std::string(ArgView(argv[arg_i]));
+        arg_i++;
+        opts.highlight_close = std::string(ArgView(argv[arg_i]));
+        arg_i++;
+      }
+    } else if (MatchArg(kw, "SUMMARIZE")) {
+      opts.has_summarize = true;
+      arg_i++;
+      if (arg_i < argc && MatchArg(ArgView(argv[arg_i]), "FIELDS")) {
+        arg_i++;
+        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SUMMARIZE FIELDS requires count");
+        char* endptr = nullptr;
+        long sf_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
+        arg_i++;
+        if (*endptr != '\0' || sf_count < 0)
+          return RedisModule_ReplyWithError(ctx, "ERR SUMMARIZE FIELDS count must be non-negative");
+        for (long sf = 0; sf < sf_count; sf++) {
+          if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough SUMMARIZE FIELDS");
+          opts.summarize_fields.emplace_back(ArgView(argv[arg_i]));
+          arg_i++;
+        }
+      }
+      while (arg_i < argc) {
+        auto sub = ArgView(argv[arg_i]);
+        if (MatchArg(sub, "FRAGS")) {
+          arg_i++;
+          if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SUMMARIZE FRAGS requires value");
+          char* ep = nullptr;
+          opts.summarize_frags = static_cast<int>(
+              std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &ep, 10));
+          arg_i++;
+        } else if (MatchArg(sub, "LEN")) {
+          arg_i++;
+          if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SUMMARIZE LEN requires value");
+          char* ep = nullptr;
+          opts.summarize_len = static_cast<int>(
+              std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &ep, 10));
+          arg_i++;
+        } else if (MatchArg(sub, "SEPARATOR")) {
+          arg_i++;
+          if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SUMMARIZE SEPARATOR requires value");
+          opts.summarize_separator = std::string(ArgView(argv[arg_i]));
+          arg_i++;
+        } else {
+          break;
+        }
+      }
     } else if (MatchArg(kw, "GEOFILTER")) {
       arg_i++;
       if (arg_i + 4 >= argc) {
@@ -863,6 +1055,12 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::string parse_error;
   if (!ParseQuery(query_str, parsed, parse_error, qopts)) {
     return RedisModule_ReplyWithError(ctx, parse_error.c_str());
+  }
+
+  // Collect query terms for HIGHLIGHT/SUMMARIZE
+  std::unordered_set<std::string> query_terms;
+  if (opts.has_highlight || opts.has_summarize) {
+    CollectQueryTerms(parsed.root, query_terms);
   }
 
   // Record start time for TIMEOUT
@@ -961,7 +1159,7 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (!opts.nocontent) {
         auto score_str = std::to_string(kr.score);
         ReplyWithDocFields(ctx, entry.doc_store.Get(kr.doc_id), opts,
-                           &score_str);
+                           &score_str, query_terms);
       }
     }
 
@@ -1120,7 +1318,7 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (!opts.nocontent) {
         auto score_str = std::to_string(sr.score);
         ReplyWithDocFields(ctx, entry.doc_store.Get(sr.doc_id), opts,
-                           &score_str, "__search_score");
+                           &score_str, query_terms, "__search_score");
       }
     }
   } else {
@@ -1178,12 +1376,87 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     for (auto& rid : result_ids) {
       RedisModule_ReplyWithCString(ctx, rid.c_str());
       if (!opts.nocontent) {
-        ReplyWithDocFields(ctx, entry.doc_store.Get(rid), opts, nullptr);
+        ReplyWithDocFields(ctx, entry.doc_store.Get(rid), opts, nullptr, query_terms);
       }
     }
   }
 
   return REDISMODULE_OK;
+}
+
+// FT.ALTER <index> SCHEMA ADD <field> <type> [params...] [<field> <type> ...]
+static int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                          int argc) {
+  if (argc < 6) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string idx_str(ArgView(argv[1]));
+  auto it = g_indices.find(idx_str);
+  if (it == g_indices.end()) {
+    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+  auto& entry = it->second;
+
+  if (!MatchArg(ArgView(argv[2]), "SCHEMA") || !MatchArg(ArgView(argv[3]), "ADD")) {
+    return RedisModule_ReplyWithError(ctx, "ERR syntax error, expected SCHEMA ADD");
+  }
+
+  int i = 4;
+  std::vector<FieldSpec> new_fields;
+  while (i < argc) {
+    if (i + 1 >= argc) {
+      return RedisModule_ReplyWithError(ctx, "ERR syntax error, missing field type");
+    }
+    auto fname = ArgView(argv[i]);
+    auto ftype_str = ArgView(argv[i + 1]);
+    i += 2;
+
+    FieldSpec fspec;
+    fspec.name = std::string(fname);
+
+    if (entry.spec.FindField(fspec.name)) {
+      return RedisModule_ReplyWithError(ctx, "ERR field already exists in schema");
+    }
+    for (auto& nf : new_fields) {
+      if (nf.name == fspec.name) {
+        return RedisModule_ReplyWithError(ctx, "ERR duplicate field name");
+      }
+    }
+
+    if (MatchArg(ftype_str, "TAG")) {
+      fspec.type = FieldType::kTag;
+    } else if (MatchArg(ftype_str, "NUMERIC")) {
+      fspec.type = FieldType::kNumeric;
+    } else if (MatchArg(ftype_str, "TEXT")) {
+      fspec.type = FieldType::kText;
+      if (i < argc && MatchArg(ArgView(argv[i]), "NOSTEM")) {
+        fspec.nostem = true;
+        i++;
+      }
+    } else if (MatchArg(ftype_str, "GEO")) {
+      fspec.type = FieldType::kGeo;
+    } else {
+      return RedisModule_ReplyWithError(
+          ctx, "ERR unknown field type in ALTER, expected TAG, NUMERIC, TEXT, or GEO");
+    }
+
+    new_fields.push_back(std::move(fspec));
+  }
+
+  if (new_fields.empty()) {
+    return RedisModule_ReplyWithError(ctx, "ERR SCHEMA ADD requires at least one field");
+  }
+
+  for (auto& nf : new_fields) {
+    entry.spec.fields.push_back(std::move(nf));
+  }
+
+  // Re-scan existing docs for new fields if ON HASH
+  if (entry.spec.HasPrefixes()) {
+    ScanExistingKeys(ctx, entry);
+  }
+
+  return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
 // FT._DEBUG
@@ -1909,6 +2182,7 @@ int RegisterSearchCommands(RedisModuleCtx* ctx) {
       {"FT.DEL", FtDelCommand, "write"},
       {"FT.SEARCH", FtSearchCommand, "readonly"},
       {"FT.AGGREGATE", FtAggregateCommand, "readonly"},
+      {"FT.ALTER", FtAlterCommand, "write"},
       {"FT._DEBUG", FtDebugCommand, "readonly"},
   };
 
