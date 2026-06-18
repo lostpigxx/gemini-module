@@ -2,6 +2,7 @@
 #include "expr_engine.h"
 #include "query_parser.h"
 #include "search_rdb.h"
+#include "suggest_dict.h"
 
 #include <algorithm>
 #include <cmath>
@@ -28,6 +29,9 @@ struct AggCursor {
 
 static std::unordered_map<uint64_t, AggCursor> g_cursors;
 static uint64_t g_next_cursor_id = 1;
+
+static std::unordered_map<std::string, SuggestDict> g_suggest_dicts;
+static std::unordered_map<std::string, TermDict> g_term_dicts;
 
 static void ReplyCursorBatch(RedisModuleCtx* ctx, uint64_t cursor_id,
                              AggCursor& cursor) {
@@ -1881,6 +1885,340 @@ static int FtCursorCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   return RedisModule_ReplyWithError(ctx, "ERR unknown CURSOR subcommand, expected READ or DEL");
 }
 
+// FT.SUGADD <dict> <string> <score> [INCR] [PAYLOAD <payload>]
+static int FtSugAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                           int argc) {
+  if (argc < 4) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string dict_name(ArgView(argv[1]));
+  std::string str(ArgView(argv[2]));
+  char* ep = nullptr;
+  double score = std::strtod(std::string(ArgView(argv[3])).c_str(), &ep);
+  if (*ep != '\0') return RedisModule_ReplyWithError(ctx, "ERR invalid score");
+
+  bool incr = false;
+  std::string payload;
+  for (int i = 4; i < argc; i++) {
+    if (MatchArg(ArgView(argv[i]), "INCR")) {
+      incr = true;
+    } else if (MatchArg(ArgView(argv[i]), "PAYLOAD") && i + 1 < argc) {
+      i++;
+      payload = std::string(ArgView(argv[i]));
+    }
+  }
+
+  g_suggest_dicts[dict_name].Add(str, score, incr, payload);
+  return RedisModule_ReplyWithLongLong(
+      ctx, static_cast<long long>(g_suggest_dicts[dict_name].Len()));
+}
+
+// FT.SUGGET <dict> <prefix> [FUZZY] [WITHSCORES] [WITHPAYLOADS] [MAX <n>]
+static int FtSugGetCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                           int argc) {
+  if (argc < 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string dict_name(ArgView(argv[1]));
+  std::string prefix(ArgView(argv[2]));
+
+  bool fuzzy = false;
+  bool withscores = false;
+  bool withpayloads = false;
+  size_t max_results = 5;
+
+  for (int i = 3; i < argc; i++) {
+    if (MatchArg(ArgView(argv[i]), "FUZZY")) fuzzy = true;
+    else if (MatchArg(ArgView(argv[i]), "WITHSCORES")) withscores = true;
+    else if (MatchArg(ArgView(argv[i]), "WITHPAYLOADS")) withpayloads = true;
+    else if (MatchArg(ArgView(argv[i]), "MAX") && i + 1 < argc) {
+      i++;
+      char* ep = nullptr;
+      long v = std::strtol(std::string(ArgView(argv[i])).c_str(), &ep, 10);
+      if (*ep == '\0' && v > 0) max_results = static_cast<size_t>(v);
+    }
+  }
+
+  auto it = g_suggest_dicts.find(dict_name);
+  if (it == g_suggest_dicts.end()) {
+    RedisModule_ReplyWithArray(ctx, 0);
+    return REDISMODULE_OK;
+  }
+
+  auto results = it->second.Get(prefix, fuzzy, max_results);
+  long multiplier = 1;
+  if (withscores) multiplier++;
+  if (withpayloads) multiplier++;
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(results.size()) * multiplier);
+  for (auto& entry : results) {
+    RedisModule_ReplyWithCString(ctx, entry.str.c_str());
+    if (withscores) RedisModule_ReplyWithCString(ctx, std::to_string(entry.score).c_str());
+    if (withpayloads) RedisModule_ReplyWithCString(ctx, entry.payload.c_str());
+  }
+  return REDISMODULE_OK;
+}
+
+// FT.SUGDEL <dict> <string>
+static int FtSugDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                           int argc) {
+  if (argc != 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string dict_name(ArgView(argv[1]));
+  std::string str(ArgView(argv[2]));
+
+  auto it = g_suggest_dicts.find(dict_name);
+  if (it == g_suggest_dicts.end()) {
+    return RedisModule_ReplyWithLongLong(ctx, 0);
+  }
+  return RedisModule_ReplyWithLongLong(ctx, it->second.Del(str) ? 1 : 0);
+}
+
+// FT.SUGLEN <dict>
+static int FtSugLenCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                           int argc) {
+  if (argc != 2) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string dict_name(ArgView(argv[1]));
+  auto it = g_suggest_dicts.find(dict_name);
+  size_t len = (it != g_suggest_dicts.end()) ? it->second.Len() : 0;
+  return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(len));
+}
+
+// FT.DICTADD <dict> <term> [term ...]
+static int FtDictAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                            int argc) {
+  if (argc < 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string dict_name(ArgView(argv[1]));
+  std::vector<std::string> terms;
+  for (int i = 2; i < argc; i++) terms.emplace_back(ArgView(argv[i]));
+  size_t added = g_term_dicts[dict_name].Add(terms);
+  return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(added));
+}
+
+// FT.DICTDEL <dict> <term> [term ...]
+static int FtDictDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                            int argc) {
+  if (argc < 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string dict_name(ArgView(argv[1]));
+  auto it = g_term_dicts.find(dict_name);
+  if (it == g_term_dicts.end()) return RedisModule_ReplyWithLongLong(ctx, 0);
+  std::vector<std::string> terms;
+  for (int i = 2; i < argc; i++) terms.emplace_back(ArgView(argv[i]));
+  size_t removed = it->second.Del(terms);
+  return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(removed));
+}
+
+// FT.DICTDUMP <dict>
+static int FtDictDumpCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                             int argc) {
+  if (argc != 2) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string dict_name(ArgView(argv[1]));
+  auto it = g_term_dicts.find(dict_name);
+  if (it == g_term_dicts.end()) {
+    RedisModule_ReplyWithArray(ctx, 0);
+    return REDISMODULE_OK;
+  }
+  auto terms = it->second.Dump();
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(terms.size()));
+  for (auto& t : terms) RedisModule_ReplyWithCString(ctx, t.c_str());
+  return REDISMODULE_OK;
+}
+
+// FT.SYNUPDATE <index> <group_id> <term> [term ...]
+static int FtSynUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                               int argc) {
+  if (argc < 4) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  auto it = g_indices.find(idx_str);
+  if (it == g_indices.end()) return RedisModule_ReplyWithError(ctx, "ERR index not found");
+
+  std::string group_id(ArgView(argv[2]));
+  std::vector<std::string> terms;
+  for (int i = 3; i < argc; i++) terms.emplace_back(ArgView(argv[i]));
+
+  it->second.synonyms.Update(group_id, terms);
+  return RedisModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+// FT.SYNDUMP <index>
+static int FtSynDumpCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                            int argc) {
+  if (argc != 2) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  auto it = g_indices.find(idx_str);
+  if (it == g_indices.end()) return RedisModule_ReplyWithError(ctx, "ERR index not found");
+
+  auto groups = it->second.synonyms.Dump();
+  long total = 0;
+  for (auto& [gid, terms] : groups) total += 1 + static_cast<long>(terms.size());
+  RedisModule_ReplyWithArray(ctx, total);
+  for (auto& [gid, terms] : groups) {
+    RedisModule_ReplyWithCString(ctx, gid.c_str());
+    for (auto& t : terms) RedisModule_ReplyWithCString(ctx, t.c_str());
+  }
+  return REDISMODULE_OK;
+}
+
+// FT.SPELLCHECK <index> <query> [DISTANCE <d>] [TERMS INCLUDE|EXCLUDE <dict>]
+static int FtSpellCheckCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                               int argc) {
+  if (argc < 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  auto it = g_indices.find(idx_str);
+  if (it == g_indices.end()) return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  auto& entry = it->second;
+
+  std::string query_str(ArgView(argv[2]));
+  int max_dist = 1;
+  std::vector<std::string> include_dicts;
+  std::vector<std::string> exclude_dicts;
+
+  for (int i = 3; i < argc; i++) {
+    if (MatchArg(ArgView(argv[i]), "DISTANCE") && i + 1 < argc) {
+      i++;
+      char* ep = nullptr;
+      max_dist = static_cast<int>(std::strtol(std::string(ArgView(argv[i])).c_str(), &ep, 10));
+    } else if (MatchArg(ArgView(argv[i]), "TERMS") && i + 2 < argc) {
+      i++;
+      bool is_include = MatchArg(ArgView(argv[i]), "INCLUDE");
+      i++;
+      std::string dict_name(ArgView(argv[i]));
+      if (is_include) include_dicts.push_back(dict_name);
+      else exclude_dicts.push_back(dict_name);
+    }
+  }
+
+  // Tokenize query
+  auto terms = TextIndex::Tokenize(query_str);
+
+  // Collect known terms from index
+  std::unordered_set<std::string> index_terms;
+  for (auto& f : entry.spec.fields) {
+    if (f.type != FieldType::kText) continue;
+    const auto* tidx = entry.text_indices.Get(f.name);
+    if (!tidx) continue;
+    for (auto& term : terms) {
+      auto docs = tidx->Lookup(term);
+      if (!docs.empty()) index_terms.insert(term);
+    }
+  }
+
+  // Collect terms from include dicts
+  for (auto& dname : include_dicts) {
+    auto dit = g_term_dicts.find(dname);
+    if (dit != g_term_dicts.end()) {
+      for (auto& term : terms) {
+        if (dit->second.Contains(term)) index_terms.insert(term);
+      }
+    }
+  }
+
+  // Collect terms to exclude
+  std::unordered_set<std::string> excluded;
+  for (auto& dname : exclude_dicts) {
+    auto dit = g_term_dicts.find(dname);
+    if (dit != g_term_dicts.end()) {
+      for (auto& term : terms) {
+        if (dit->second.Contains(term)) excluded.insert(term);
+      }
+    }
+  }
+
+  // For each misspelled term, find suggestions from index
+  struct SpellSuggestion {
+    std::string term;
+    std::vector<std::pair<double, std::string>> suggestions;
+  };
+  std::vector<SpellSuggestion> results;
+
+  for (auto& term : terms) {
+    if (index_terms.count(term) || excluded.count(term)) continue;
+
+    SpellSuggestion ss;
+    ss.term = term;
+
+    for (auto& f : entry.spec.fields) {
+      if (f.type != FieldType::kText) continue;
+      const auto* tidx = entry.text_indices.Get(f.name);
+      if (!tidx) continue;
+      auto fuzzy_docs = tidx->FuzzyLookup(term, max_dist);
+      (void)fuzzy_docs;
+    }
+
+    // Use fuzzy lookup on the text index to find candidate terms
+    std::unordered_set<std::string> seen;
+    for (auto& f : entry.spec.fields) {
+      if (f.type != FieldType::kText) continue;
+      const auto* tidx = entry.text_indices.Get(f.name);
+      if (!tidx) continue;
+      auto candidates = tidx->FuzzyLookup(term, max_dist);
+      for (auto& doc_id : candidates) {
+        (void)doc_id;
+      }
+    }
+
+    // Simpler approach: collect all suggestions via StemLookup and FuzzyLookup
+    std::unordered_map<std::string, double> suggestion_scores;
+    for (auto& f : entry.spec.fields) {
+      if (f.type != FieldType::kText) continue;
+      const auto* tidx = entry.text_indices.Get(f.name);
+      if (!tidx) continue;
+      auto stem_results = tidx->StemSearch(term);
+      for (auto& r : stem_results) suggestion_scores[r.doc_id] += r.score;
+      auto fuzzy_results = tidx->FuzzySearch(term, max_dist);
+      for (auto& r : fuzzy_results) suggestion_scores[r.doc_id] += r.score;
+    }
+
+    // Include suggestions from include dicts
+    for (auto& dname : include_dicts) {
+      auto dit = g_term_dicts.find(dname);
+      if (dit == g_term_dicts.end()) continue;
+      for (auto& dt : dit->second.Dump()) {
+        int dist = TextIndex::LevenshteinDistance(term, dt);
+        if (dist <= max_dist && dist > 0) {
+          suggestion_scores[dt] += 1.0 / static_cast<double>(dist);
+        }
+      }
+    }
+
+    for (auto& [sug, score] : suggestion_scores) {
+      if (!excluded.count(sug))
+        ss.suggestions.emplace_back(score, sug);
+    }
+    std::sort(ss.suggestions.begin(), ss.suggestions.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    results.push_back(std::move(ss));
+  }
+
+  // Reply: array of [TERM, term, suggestions_array]
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(results.size()));
+  for (auto& ss : results) {
+    long entry_len = 2 + static_cast<long>(ss.suggestions.size());
+    RedisModule_ReplyWithArray(ctx, entry_len);
+    RedisModule_ReplyWithSimpleString(ctx, "TERM");
+    RedisModule_ReplyWithCString(ctx, ss.term.c_str());
+    for (auto& [score, sug] : ss.suggestions) {
+      RedisModule_ReplyWithCString(ctx, sug.c_str());
+    }
+  }
+  return REDISMODULE_OK;
+}
+
 // FT._DEBUG
 static int FtDebugCommand(RedisModuleCtx* ctx, RedisModuleString** /*argv*/,
                           int /*argc*/) {
@@ -2758,6 +3096,16 @@ int RegisterSearchCommands(RedisModuleCtx* ctx) {
       {"FT.EXPLAIN", FtExplainCommand, "readonly"},
       {"FT.EXPLAINCLI", FtExplainCliCommand, "readonly"},
       {"FT.CURSOR", FtCursorCommand, "readonly"},
+      {"FT.SUGADD", FtSugAddCommand, "write deny-oom"},
+      {"FT.SUGGET", FtSugGetCommand, "readonly"},
+      {"FT.SUGDEL", FtSugDelCommand, "write"},
+      {"FT.SUGLEN", FtSugLenCommand, "readonly"},
+      {"FT.DICTADD", FtDictAddCommand, "write deny-oom"},
+      {"FT.DICTDEL", FtDictDelCommand, "write"},
+      {"FT.DICTDUMP", FtDictDumpCommand, "readonly"},
+      {"FT.SYNUPDATE", FtSynUpdateCommand, "write"},
+      {"FT.SYNDUMP", FtSynDumpCommand, "readonly"},
+      {"FT.SPELLCHECK", FtSpellCheckCommand, "readonly"},
       {"FT._DEBUG", FtDebugCommand, "readonly"},
   };
 
