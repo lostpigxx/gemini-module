@@ -160,7 +160,7 @@ ScalingBloomFilter* ScalingBloomFilter::FromRdbShell(RdbShell shell) {
     return nullptr;
   }
   filter->totalItems_ = shell.totalItems;
-  filter->numLayers_ = shell.numLayers;
+  filter->numLayers_ = 0;
   filter->layerCapacity_ = shell.numLayers;
   filter->flags_ = shell.flags;
   filter->expansionFactor_ = shell.expansionFactor;
@@ -168,8 +168,9 @@ ScalingBloomFilter* ScalingBloomFilter::FromRdbShell(RdbShell shell) {
 }
 
 void ScalingBloomFilter::SetLayer(size_t index, FilterLayer&& layer) {
-  if (index < numLayers_) {
+  if (index < layerCapacity_) {
     new (&layers_[index]) FilterLayer{std::move(layer.bloom), layer.itemCount};
+    if (index >= numLayers_) numLayers_ = index + 1;
   }
 }
 

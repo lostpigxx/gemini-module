@@ -79,11 +79,17 @@ static bool MatchArg(std::string_view arg, std::string_view target) {
 }
 
 // Executes a Put and replies with the result. Returns true if the item was new.
+static const char* FilterFullError(const ScalingBloomFilter* filter) {
+  return HasFlag(filter->Flags(), BloomFlags::FixedSize)
+    ? "ERR non scaling filter is full"
+    : "ERR filter expansion failed";
+}
+
 static bool PutAndReply(RedisModuleCtx* ctx, ScalingBloomFilter* filter,
                          const char* item, size_t len) {
   auto result = filter->Put(AsBytes(item, len));
   if (!result.has_value()) {
-    RedisModule_ReplyWithError(ctx, "ERR reached capacity limit (non-scaling mode)");
+    RedisModule_ReplyWithError(ctx, FilterFullError(filter));
     return false;
   }
   RedisModule_ReplyWithLongLong(ctx, *result ? 1 : 0);
@@ -120,11 +126,15 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
         return RedisModule_ReplyWithError(ctx, "ERR EXPANSION expects a numeric argument");
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
-          val < 1 || val > UINT_MAX) {
-        return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value must be a positive integer");
+          val < 0 || val > UINT_MAX) {
+        return RedisModule_ReplyWithError(ctx, "ERR bad expansion");
       }
-      expansion = static_cast<unsigned>(val);
-      expansionSet = true;
+      if (val == 0) {
+        fixed = true;
+      } else {
+        expansion = static_cast<unsigned>(val);
+        expansionSet = true;
+      }
     } else if (MatchArg(sv, "NONSCALING")) {
       fixed = true;
     } else {
@@ -133,7 +143,7 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   }
 
   if (fixed && expansionSet) {
-    return RedisModule_ReplyWithError(ctx, "ERR NONSCALING and EXPANSION are mutually exclusive");
+    return RedisModule_ReplyWithError(ctx, "ERR Nonscaling filters cannot expand");
   }
 
   auto* key = static_cast<RedisModuleKey*>(
@@ -174,7 +184,7 @@ static int CmdAdd(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   auto result = filter->Put(AsBytes(item, len));
 
   if (!result.has_value()) {
-    return RedisModule_ReplyWithError(ctx, "ERR reached capacity limit (non-scaling mode)");
+    return RedisModule_ReplyWithError(ctx, FilterFullError(filter));
   }
 
   if (*result || created) RedisModule_ReplicateVerbatim(ctx);
@@ -222,6 +232,8 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
   opts.capacity = g_bloomConfig.defaultCapacity;
   opts.expansion = g_bloomConfig.defaultExpansion;
   bool expansionSet = false;
+  bool capacitySet = false;
+  bool errorSet = false;
 
   for (int i = 2; i < argc; i++) {
     size_t len;
@@ -236,6 +248,7 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
         return RedisModule_ReplyWithError(ctx, "ERR false positive rate must be in (0, 1)");
       }
       opts.errorRate = val;
+      errorSet = true;
     } else if (MatchArg(sv, "CAPACITY")) {
       if (++i >= argc) return RedisModule_WrongArity(ctx);
       long long val;
@@ -243,15 +256,20 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
         return RedisModule_ReplyWithError(ctx, "ERR expected a positive capacity value");
       }
       opts.capacity = static_cast<uint64_t>(val);
+      capacitySet = true;
     } else if (MatchArg(sv, "EXPANSION")) {
       if (++i >= argc) return RedisModule_WrongArity(ctx);
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
-          val < 1 || val > UINT_MAX) {
-        return RedisModule_ReplyWithError(ctx, "ERR EXPANSION value must be a positive integer");
+          val < 0 || val > UINT_MAX) {
+        return RedisModule_ReplyWithError(ctx, "ERR bad expansion");
       }
-      opts.expansion = static_cast<unsigned>(val);
-      expansionSet = true;
+      if (val == 0) {
+        opts.fixedSize = true;
+      } else {
+        opts.expansion = static_cast<unsigned>(val);
+        expansionSet = true;
+      }
     } else if (MatchArg(sv, "NOCREATE")) {
       opts.noCreate = true;
     } else if (MatchArg(sv, "NONSCALING")) {
@@ -267,6 +285,9 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (opts.fixedSize && expansionSet) {
     return RedisModule_ReplyWithError(ctx, "ERR NONSCALING and EXPANSION are mutually exclusive");
   }
+  if (opts.noCreate && (capacitySet || errorSet)) {
+    return RedisModule_ReplyWithError(ctx, "ERR NOCREATE cannot be used with CAPACITY or ERROR");
+  }
   if (opts.itemsStart < 0) {
     return RedisModule_ReplyWithError(ctx, "ERR ITEMS keyword not found");
   }
@@ -281,7 +302,7 @@ static int CmdInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   int parseResult = ParseInsertOptions(ctx, argv, argc, opts);
   if (parseResult != -1) return parseResult;
   if (opts.itemsStart >= argc) {
-    return RedisModule_ReplyWithError(ctx, "ERR ITEMS keyword not found");
+    return RedisModule_WrongArity(ctx);
   }
 
   int count = argc - opts.itemsStart;

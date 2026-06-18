@@ -575,17 +575,22 @@ test_error "BF.SCANDUMP on string key returns WRONGTYPE" {
 
 puts "\n=== EXPANSION validation ==="
 
-test_error "BF.RESERVE EXPANSION 0 should be rejected" {
-  r BF.RESERVE exp0_test 0.01 100 EXPANSION 0
-} {ERR*}
+test_assert "BF.RESERVE EXPANSION 0 maps to NONSCALING" {
+  set result [r BF.RESERVE exp0_test 0.01 100 EXPANSION 0]
+  if {$result ne "OK"} { error "expected OK, got $result" }
+  set exp [r BF.INFO exp0_test Expansion]
+  if {$exp ne "(nil)"} { error "expected null expansion (NONSCALING), got $exp" }
+}
 
 test_error "BF.RESERVE NONSCALING and EXPANSION together should be rejected" {
   r BF.RESERVE ns_exp_test 0.01 100 NONSCALING EXPANSION 2
 } {ERR*}
 
-test_error "BF.INSERT EXPANSION 0 should be rejected" {
-  r BF.INSERT exp0_ins EXPANSION 0 ITEMS a
-} {ERR*}
+test_assert "BF.INSERT EXPANSION 0 maps to NONSCALING" {
+  set result [r BF.INSERT exp0_ins EXPANSION 0 ITEMS a]
+  set exp [r BF.INFO exp0_ins Expansion]
+  if {$exp ne "(nil)"} { error "expected null expansion (NONSCALING), got $exp" }
+}
 
 test_error "BF.INSERT NONSCALING and EXPANSION together should be rejected" {
   r BF.INSERT ns_exp_ins NONSCALING EXPANSION 2 ITEMS a
@@ -681,7 +686,23 @@ test_error "BF.INSERT NONSCALING filter rejects when full" {
     catch {r BF.ADD insert_ns_full "item_$i"}
   }
   r BF.INSERT insert_ns_full NOCREATE ITEMS new_overflow
-} {ERR*capacity*}
+} {ERR*non scaling*full*}
+
+puts "\n=== NOCREATE mutual exclusion ==="
+
+test_error "BF.INSERT NOCREATE + CAPACITY should be rejected" {
+  r BF.INSERT nocreate_cap NOCREATE CAPACITY 100 ITEMS a
+} {ERR*NOCREATE*}
+
+test_error "BF.INSERT NOCREATE + ERROR should be rejected" {
+  r BF.INSERT nocreate_err NOCREATE ERROR 0.01 ITEMS a
+} {ERR*NOCREATE*}
+
+puts "\n=== BF.INSERT ITEMS edge cases ==="
+
+test_error "BF.INSERT ITEMS with no items returns wrong arity" {
+  r BF.INSERT items_empty ITEMS
+} {ERR*wrong*}
 
 puts "\n=== EXPANSION overflow / truncation ==="
 

@@ -2,6 +2,7 @@
 
 #include <climits>
 #include <cstring>
+#include <strings.h>
 
 BloomConfig g_bloomConfig;
 

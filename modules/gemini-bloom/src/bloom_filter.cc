@@ -90,6 +90,11 @@ static uint32_t OptimalHashCount(double bitsPerEntry) {
 
 std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveRate,
                                               BloomFlags flags) {
+  if (cap == 0 || !std::isfinite(falsePositiveRate) ||
+      falsePositiveRate <= 0.0 || falsePositiveRate >= 1.0) {
+    return std::nullopt;
+  }
+
   BloomLayer layer;
   layer.capacity_ = cap;
   layer.fpRate_ = falsePositiveRate;
@@ -114,7 +119,11 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
     layer.log2Bits_ = static_cast<uint8_t>(std::bit_width(layer.totalBits_) - 1);
   }
 
-  layer.dataSize_ = (layer.totalBits_ + 7) / 8;
+  // Align bytes to 8-byte boundary, then set totalBits = bytes * 8.
+  // This matches RedisBloom's bloom_init() alignment.
+  uint64_t bytes = (layer.totalBits_ + 63) / 64 * 8;
+  layer.totalBits_ = bytes * 8;
+  layer.dataSize_ = bytes;
   if (layer.dataSize_ == 0) return std::nullopt;
 
   layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
@@ -162,8 +171,10 @@ bool BloomLayer::Insert(const HashPair& hp) {
 
   for (uint32_t probe = 0; probe < hashCount_; probe++) {
     uint64_t pos = ProbePosition(hp, probe, mask, totalBits_, isPow2);
-    if (!TestBit(pos)) {
-      SetBit(pos);
+    auto [byteOff, bitMask] = ResolveBit(pos);
+    uint8_t old = bitArray_[byteOff];
+    if ((old & bitMask) == 0) {
+      bitArray_[byteOff] = old | bitMask;
       anyNew = true;
     }
   }

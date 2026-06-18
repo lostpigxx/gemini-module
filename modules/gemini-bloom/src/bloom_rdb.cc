@@ -60,6 +60,8 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   layer.totalBits_ = r.GetUint();
   layer.log2Bits_ = static_cast<uint8_t>(r.GetUint());
   if (layer.log2Bits_ >= 64) return std::nullopt;
+  if (layer.log2Bits_ > 0 && layer.totalBits_ != (1ULL << layer.log2Bits_))
+    return std::nullopt;
   if (layer.totalBits_ > UINT64_MAX - 7) return std::nullopt;
   layer.dataSize_ = (layer.totalBits_ > 0) ? ((layer.totalBits_ + 7) / 8) : 0;
   layer.use64Bit_ = HasFlag(filterFlags, BloomFlags::Use64Bit);
@@ -139,6 +141,8 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
     : 2;
 
   if (!r.Ok() || shell.numLayers == 0 || shell.numLayers > kMaxLayers) return nullptr;
+  if (!HasFlag(shell.flags, BloomFlags::FixedSize) && shell.expansionFactor == 0)
+    return nullptr;
 
   auto* filter = FromRdbShell(shell);
   if (!filter) return nullptr;
@@ -192,8 +196,9 @@ static bool ValidateLayerMeta(const WireLayerMeta& meta) {
   if (meta.totalBits == 0) return false;
   if (meta.totalBits > UINT64_MAX - 7) return false;
   if (meta.log2Bits >= 64) return false;
+  if (meta.log2Bits > 0 && meta.totalBits != (1ULL << meta.log2Bits)) return false;
   uint64_t expectedSize = (meta.totalBits + 7) / 8;
-  if (meta.dataSize < expectedSize) return false;
+  if (meta.dataSize != expectedSize) return false;
   if (!std::isfinite(meta.fpRate) || meta.fpRate <= 0.0) return false;
   if (!std::isfinite(meta.bitsPerEntry) || meta.bitsPerEntry < 0.0) return false;
   return true;
@@ -205,7 +210,7 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   const auto* hdr = static_cast<const WireFilterHeader*>(data);
   if (hdr->numLayers == 0 || hdr->numLayers > kMaxLayers) return nullptr;
   size_t required = sizeof(WireFilterHeader) + hdr->numLayers * sizeof(WireLayerMeta);
-  if (length < required) return nullptr;
+  if (length != required) return nullptr;
 
   if (!HasFlag(FromUnderlying(hdr->flags), BloomFlags::FixedSize) &&
       hdr->expansionFactor == 0) {
