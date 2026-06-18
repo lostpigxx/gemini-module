@@ -19,6 +19,46 @@
 static std::unordered_map<std::string, IndexEntry> g_indices;
 static std::unordered_map<std::string, std::string> g_aliases;
 
+struct AggCursor {
+  std::string index_name;
+  std::vector<std::unordered_map<std::string, std::string>> rows;
+  size_t pos = 0;
+  size_t batch_size = 1000;
+};
+
+static std::unordered_map<uint64_t, AggCursor> g_cursors;
+static uint64_t g_next_cursor_id = 1;
+
+static void ReplyCursorBatch(RedisModuleCtx* ctx, uint64_t cursor_id,
+                             AggCursor& cursor) {
+  size_t end = std::min(cursor.pos + cursor.batch_size, cursor.rows.size());
+  size_t count = end - cursor.pos;
+
+  // Reply: [results_array, cursor_id]
+  RedisModule_ReplyWithArray(ctx, 2);
+
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(count));
+  for (size_t ri = cursor.pos; ri < end; ri++) {
+    auto& row = cursor.rows[ri];
+    std::vector<std::string> keys;
+    for (auto& [k, v] : row) keys.push_back(k);
+    std::sort(keys.begin(), keys.end());
+    RedisModule_ReplyWithArray(ctx, static_cast<long>(keys.size()) * 2);
+    for (auto& k : keys) {
+      RedisModule_ReplyWithCString(ctx, k.c_str());
+      RedisModule_ReplyWithCString(ctx, row.at(k).c_str());
+    }
+  }
+
+  cursor.pos = end;
+  if (cursor.pos >= cursor.rows.size()) {
+    g_cursors.erase(cursor_id);
+    RedisModule_ReplyWithLongLong(ctx, 0);
+  } else {
+    RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(cursor_id));
+  }
+}
+
 static std::string ResolveAlias(const std::string& name) {
   auto it = g_aliases.find(name);
   if (it != g_aliases.end()) return it->second;
@@ -1793,6 +1833,54 @@ static int FtExplainCliCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   return REDISMODULE_OK;
 }
 
+// FT.CURSOR READ <index> <cursor_id> [COUNT <n>]
+// FT.CURSOR DEL <index> <cursor_id>
+static int FtCursorCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                           int argc) {
+  if (argc < 4) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  auto sub = ArgView(argv[1]);
+
+  if (MatchArg(sub, "READ")) {
+    if (argc < 4) return RedisModule_WrongArity(ctx);
+    char* ep = nullptr;
+    uint64_t cid = static_cast<uint64_t>(
+        std::strtoull(std::string(ArgView(argv[3])).c_str(), &ep, 10));
+    if (*ep != '\0') return RedisModule_ReplyWithError(ctx, "ERR invalid cursor id");
+
+    auto it = g_cursors.find(cid);
+    if (it == g_cursors.end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR cursor not found");
+    }
+
+    if (argc >= 6 && MatchArg(ArgView(argv[4]), "COUNT")) {
+      char* ep2 = nullptr;
+      long cnt = std::strtol(std::string(ArgView(argv[5])).c_str(), &ep2, 10);
+      if (*ep2 == '\0' && cnt > 0)
+        it->second.batch_size = static_cast<size_t>(cnt);
+    }
+
+    ReplyCursorBatch(ctx, cid, it->second);
+    return REDISMODULE_OK;
+  }
+
+  if (MatchArg(sub, "DEL")) {
+    if (argc < 4) return RedisModule_WrongArity(ctx);
+    char* ep = nullptr;
+    uint64_t cid = static_cast<uint64_t>(
+        std::strtoull(std::string(ArgView(argv[3])).c_str(), &ep, 10));
+    if (*ep != '\0') return RedisModule_ReplyWithError(ctx, "ERR invalid cursor id");
+
+    if (g_cursors.erase(cid) == 0) {
+      return RedisModule_ReplyWithError(ctx, "ERR cursor not found");
+    }
+    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+  }
+
+  return RedisModule_ReplyWithError(ctx, "ERR unknown CURSOR subcommand, expected READ or DEL");
+}
+
 // FT._DEBUG
 static int FtDebugCommand(RedisModuleCtx* ctx, RedisModuleString** /*argv*/,
                           int /*argc*/) {
@@ -2525,8 +2613,36 @@ static int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       st.limit_count = cnt;
       stages.push_back(std::move(st));
       arg_i += 2;
+    } else if (MatchArg(kw, "WITHCURSOR")) {
+      pending_groupby = nullptr;
+      arg_i++;
+    } else if (MatchArg(kw, "COUNT")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc)
+        return RedisModule_ReplyWithError(ctx, "ERR COUNT requires a value");
+      arg_i++;
+    } else if (MatchArg(kw, "MAXIDLE")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc)
+        return RedisModule_ReplyWithError(ctx, "ERR MAXIDLE requires a value");
+      arg_i++;
     } else {
       return RedisModule_ReplyWithError(ctx, "ERR unknown AGGREGATE option");
+    }
+  }
+
+  // Check for WITHCURSOR — re-scan args for it
+  bool with_cursor = false;
+  size_t cursor_count = 1000;
+  for (int ci = 3; ci < argc; ci++) {
+    if (MatchArg(ArgView(argv[ci]), "WITHCURSOR")) {
+      with_cursor = true;
+    } else if (MatchArg(ArgView(argv[ci]), "COUNT") && ci + 1 < argc) {
+      char* ep = nullptr;
+      long cv = std::strtol(std::string(ArgView(argv[ci + 1])).c_str(), &ep, 10);
+      if (*ep == '\0' && cv > 0) cursor_count = static_cast<size_t>(cv);
     }
   }
 
@@ -2592,15 +2708,26 @@ static int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   // Reply
-  RedisModule_ReplyWithArray(ctx, static_cast<long>(rows.size()));
-  for (auto& row : rows) {
-    std::vector<std::string> keys;
-    for (auto& [k, v] : row) keys.push_back(k);
-    std::sort(keys.begin(), keys.end());
-    RedisModule_ReplyWithArray(ctx, static_cast<long>(keys.size()) * 2);
-    for (auto& k : keys) {
-      RedisModule_ReplyWithCString(ctx, k.c_str());
-      RedisModule_ReplyWithCString(ctx, row.at(k).c_str());
+  if (with_cursor) {
+    uint64_t cid = g_next_cursor_id++;
+    AggCursor cursor;
+    cursor.index_name = idx_str;
+    cursor.rows = std::move(rows);
+    cursor.pos = 0;
+    cursor.batch_size = cursor_count;
+    g_cursors[cid] = std::move(cursor);
+    ReplyCursorBatch(ctx, cid, g_cursors[cid]);
+  } else {
+    RedisModule_ReplyWithArray(ctx, static_cast<long>(rows.size()));
+    for (auto& row : rows) {
+      std::vector<std::string> keys;
+      for (auto& [k, v] : row) keys.push_back(k);
+      std::sort(keys.begin(), keys.end());
+      RedisModule_ReplyWithArray(ctx, static_cast<long>(keys.size()) * 2);
+      for (auto& k : keys) {
+        RedisModule_ReplyWithCString(ctx, k.c_str());
+        RedisModule_ReplyWithCString(ctx, row.at(k).c_str());
+      }
     }
   }
 
@@ -2630,6 +2757,7 @@ int RegisterSearchCommands(RedisModuleCtx* ctx) {
       {"FT.TAGVALS", FtTagvalsCommand, "readonly"},
       {"FT.EXPLAIN", FtExplainCommand, "readonly"},
       {"FT.EXPLAINCLI", FtExplainCliCommand, "readonly"},
+      {"FT.CURSOR", FtCursorCommand, "readonly"},
       {"FT._DEBUG", FtDebugCommand, "readonly"},
   };
 
