@@ -2,6 +2,7 @@
 
 #include "document_store.h"
 #include "geo_index.h"
+#include "geoshape_index.h"
 #include "index_spec.h"
 #include "numeric_index.h"
 #include "tag_index.h"
@@ -23,6 +24,7 @@ struct QueryNode {
     kNumericRange,
     kTextMatch,
     kGeoFilter,
+    kGeoShapeQuery,
     kAnd,
     kOr,
     kNot,
@@ -46,6 +48,9 @@ struct QueryNode {
   double geo_lat = 0;
   double geo_radius = 0;
   GeoUnit geo_unit = GeoUnit::kKm;
+
+  GeoShapeOp geoshape_op = GeoShapeOp::kWithin;
+  std::string geoshape_param_name;
 
   std::vector<QueryNode> children;
 };
@@ -78,15 +83,16 @@ std::vector<std::string> SetUnion(const std::vector<std::string>& a,
 std::vector<std::string> SetDifference(const std::vector<std::string>& a,
                                         const std::vector<std::string>& b);
 
-std::vector<std::string> EvaluateQuery(const QueryNode& node,
-                                        const IndexSpec& spec,
-                                        const DocumentStore& doc_store,
-                                        const TagFieldIndices& tag_indices,
-                                        const NumericFieldIndices& numeric_indices,
-                                        const TextFieldIndices& text_indices,
-                                        const GeoFieldIndices& geo_indices,
-                                        std::string& error_msg,
-                                        const QueryOptions& qopts = {});
+std::vector<std::string> EvaluateQuery(
+    const QueryNode& node, const IndexSpec& spec,
+    const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
+    const NumericFieldIndices& numeric_indices,
+    const TextFieldIndices& text_indices,
+    const GeoFieldIndices& geo_indices,
+    std::string& error_msg,
+    const QueryOptions& qopts = {},
+    const GeoShapeFieldIndices* geoshape_indices = nullptr,
+    const std::unordered_map<std::string, std::string>* params = nullptr);
 
 struct ScoredResult {
   std::string doc_id;
@@ -99,4 +105,6 @@ std::vector<ScoredResult> EvaluateQueryScored(
     const NumericFieldIndices& numeric_indices,
     const TextFieldIndices& text_indices,
     const GeoFieldIndices& geo_indices, std::string& error_msg,
-    const QueryOptions& qopts = {});
+    const QueryOptions& qopts = {},
+    const GeoShapeFieldIndices* geoshape_indices = nullptr,
+    const std::unordered_map<std::string, std::string>* params = nullptr);

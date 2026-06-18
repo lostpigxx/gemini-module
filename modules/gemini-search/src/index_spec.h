@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
-enum class FieldType { kTag, kNumeric, kVector, kText, kGeo };
+enum class FieldType { kTag, kNumeric, kVector, kText, kGeo, kGeoShape };
 
 inline const char* FieldTypeName(FieldType t) {
   switch (t) {
@@ -14,6 +14,7 @@ inline const char* FieldTypeName(FieldType t) {
     case FieldType::kVector: return "VECTOR";
     case FieldType::kText: return "TEXT";
     case FieldType::kGeo: return "GEO";
+    case FieldType::kGeoShape: return "GEOSHAPE";
   }
   return "UNKNOWN";
 }

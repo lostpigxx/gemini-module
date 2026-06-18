@@ -10,6 +10,7 @@ set(SEARCH_SOURCES
   src/vector_index.cc
   src/hnsw_index.cc
   src/geo_index.cc
+  src/geoshape_index.cc
   src/expr_engine.cc
   src/suggest_dict.cc
   src/search_rdb.cc
@@ -135,6 +136,19 @@ if(GTest_FOUND)
   target_compile_definitions(text_index_test PRIVATE GEMINI_SEARCH_TESTING)
   target_compile_options(text_index_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(geoshape_index_test EXCLUDE_FROM_ALL
+    tests/geoshape_index_test.cc
+    src/geoshape_index.cc
+  )
+  target_include_directories(geoshape_index_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(geoshape_index_test PRIVATE
+    GTest::gtest_main
+  )
+  target_compile_definitions(geoshape_index_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(geoshape_index_test PRIVATE -Wall -Wextra -Wpedantic)
+
   add_executable(suggest_dict_test EXCLUDE_FROM_ALL
     tests/suggest_dict_test.cc
     src/suggest_dict.cc
@@ -184,6 +198,7 @@ if(GTest_FOUND)
     src/stemmer.cc
     src/numeric_index.cc
     src/geo_index.cc
+    src/geoshape_index.cc
   )
   target_include_directories(query_parser_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -208,6 +223,7 @@ if(GTest_FOUND)
     src/vector_index.cc
     src/hnsw_index.cc
     src/geo_index.cc
+    src/geoshape_index.cc
     src/expr_engine.cc
     src/suggest_dict.cc
     src/stemmer.cc
@@ -234,6 +250,7 @@ if(GTest_FOUND)
     src/vector_index.cc
     src/hnsw_index.cc
     src/geo_index.cc
+    src/geoshape_index.cc
     src/stemmer.cc
   )
   target_include_directories(search_asan_test PRIVATE
@@ -255,11 +272,12 @@ if(GTest_FOUND)
     COMMAND vector_index_test --gtest_color=yes
     COMMAND hnsw_index_test --gtest_color=yes
     COMMAND geo_index_test --gtest_color=yes
+    COMMAND geoshape_index_test --gtest_color=yes
     COMMAND suggest_dict_test --gtest_color=yes
     COMMAND expr_engine_test --gtest_color=yes
     COMMAND query_parser_test --gtest_color=yes
     COMMAND search_rdb_test --gtest_color=yes
     COMMAND search_asan_test --gtest_color=yes
-    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test suggest_dict_test expr_engine_test query_parser_test search_rdb_test search_asan_test
+    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test geoshape_index_test suggest_dict_test expr_engine_test query_parser_test search_rdb_test search_asan_test
   )
 endif()

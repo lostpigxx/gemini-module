@@ -48,7 +48,9 @@ std::vector<std::string> EvaluateQuery(
     const NumericFieldIndices& numeric_indices,
     const TextFieldIndices& text_indices,
     const GeoFieldIndices& geo_indices, std::string& error_msg,
-    const QueryOptions& qopts) {
+    const QueryOptions& qopts,
+    const GeoShapeFieldIndices* geoshape_indices,
+    const std::unordered_map<std::string, std::string>* params) {
   switch (node.type) {
     case QueryNode::Type::kMatchAll:
       return doc_store.AllIds();
@@ -165,6 +167,21 @@ std::vector<std::string> EvaluateQuery(
       return ids;
     }
 
+    case QueryNode::Type::kGeoShapeQuery: {
+      const auto* fspec = spec.FindField(node.field_name);
+      if (!fspec) { error_msg = "ERR query field not in schema"; return {}; }
+      if (fspec->type != FieldType::kGeoShape) { error_msg = "ERR field is not a GEOSHAPE field"; return {}; }
+      if (!geoshape_indices) return {};
+      const auto* idx = geoshape_indices->Get(node.field_name);
+      if (!idx) return {};
+      if (!params || node.geoshape_param_name.empty()) { error_msg = "ERR GEOSHAPE query requires $param"; return {}; }
+      auto pit = params->find(node.geoshape_param_name);
+      if (pit == params->end()) { error_msg = "ERR GEOSHAPE param not found"; return {}; }
+      GeoShape query_shape;
+      if (!ParseWkt(pit->second, query_shape)) { error_msg = "ERR invalid WKT in GEOSHAPE param"; return {}; }
+      return idx->Query(node.geoshape_op, query_shape);
+    }
+
     case QueryNode::Type::kOptional:
       return doc_store.AllIds();
 
@@ -175,11 +192,11 @@ std::vector<std::string> EvaluateQuery(
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
                                  tag_indices, numeric_indices, text_indices,
-                                 geo_indices, error_msg, qopts);
+                                 geo_indices, error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  geo_indices, error_msg, qopts);
+                                  geo_indices, error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       return SetIntersect(left, right);
     }
@@ -191,11 +208,11 @@ std::vector<std::string> EvaluateQuery(
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
                                  tag_indices, numeric_indices, text_indices,
-                                 geo_indices, error_msg, qopts);
+                                 geo_indices, error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  geo_indices, error_msg, qopts);
+                                  geo_indices, error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       return SetUnion(left, right);
     }
@@ -208,7 +225,7 @@ std::vector<std::string> EvaluateQuery(
       auto all = doc_store.AllIds();
       auto child = EvaluateQuery(node.children[0], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  geo_indices, error_msg, qopts);
+                                  geo_indices, error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       return SetDifference(all, child);
     }
@@ -271,7 +288,9 @@ std::vector<ScoredResult> EvaluateQueryScored(
     const NumericFieldIndices& numeric_indices,
     const TextFieldIndices& text_indices,
     const GeoFieldIndices& geo_indices, std::string& error_msg,
-    const QueryOptions& qopts) {
+    const QueryOptions& qopts,
+    const GeoShapeFieldIndices* geoshape_indices,
+    const std::unordered_map<std::string, std::string>* params) {
   switch (node.type) {
     case QueryNode::Type::kMatchAll: {
       auto ids = doc_store.AllIds();
@@ -385,7 +404,18 @@ std::vector<ScoredResult> EvaluateQueryScored(
     case QueryNode::Type::kGeoFilter: {
       auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
                                numeric_indices, text_indices, geo_indices,
-                               error_msg, qopts);
+                               error_msg, qopts, geoshape_indices, params);
+      if (!error_msg.empty()) return {};
+      std::vector<ScoredResult> out;
+      out.reserve(ids.size());
+      for (auto& id : ids) out.push_back({id, 1.0});
+      return out;
+    }
+
+    case QueryNode::Type::kGeoShapeQuery: {
+      auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
+                               numeric_indices, text_indices, geo_indices,
+                               error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       std::vector<ScoredResult> out;
       out.reserve(ids.size());
@@ -401,7 +431,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts);
+                                        error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       auto all_ids = doc_store.AllIds();
       std::unordered_map<std::string, double> score_map;
@@ -427,12 +457,12 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
                                        tag_indices, numeric_indices,
                                        text_indices, geo_indices,
-                                       error_msg, qopts);
+                                       error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts);
+                                        error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       return ScoredIntersect(left, right);
     }
@@ -445,12 +475,12 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
                                        tag_indices, numeric_indices,
                                        text_indices, geo_indices,
-                                       error_msg, qopts);
+                                       error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts);
+                                        error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       return ScoredUnion(left, right);
     }
@@ -467,7 +497,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts);
+                                        error_msg, qopts, geoshape_indices, params);
       if (!error_msg.empty()) return {};
       return ScoredDifference(all, child);
     }
@@ -716,6 +746,26 @@ struct Parser {
         out.geo_radius = radius;
         out.geo_unit = unit;
         return true;
+      }
+
+      if (tokens.size() == 2) {
+        // Check for GEOSHAPE query: @field:[WITHIN|CONTAINS|INTERSECTS|DISJOINT $param]
+        std::string op_upper = tokens[0];
+        for (auto& c : op_upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if ((op_upper == "WITHIN" || op_upper == "CONTAINS" ||
+             op_upper == "INTERSECTS" || op_upper == "DISJOINT") &&
+            !tokens[1].empty() && tokens[1][0] == '$') {
+          GeoShapeOp gs_op;
+          if (op_upper == "WITHIN") gs_op = GeoShapeOp::kWithin;
+          else if (op_upper == "CONTAINS") gs_op = GeoShapeOp::kContains;
+          else if (op_upper == "INTERSECTS") gs_op = GeoShapeOp::kIntersects;
+          else gs_op = GeoShapeOp::kDisjoint;
+          out.type = QueryNode::Type::kGeoShapeQuery;
+          out.field_name = std::move(field_name);
+          out.geoshape_op = gs_op;
+          out.geoshape_param_name = tokens[1].substr(1);
+          return true;
+        }
       }
 
       if (tokens.size() != 2) {

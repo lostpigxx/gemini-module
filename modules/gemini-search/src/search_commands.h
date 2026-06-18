@@ -16,6 +16,7 @@ extern "C" {
 
 #include "document_store.h"
 #include "geo_index.h"
+#include "geoshape_index.h"
 #include "index_spec.h"
 #include "numeric_index.h"
 #include "suggest_dict.h"
@@ -36,6 +37,7 @@ struct IndexEntry {
   VectorFieldIndices vector_indices;
   TextFieldIndices text_indices;
   GeoFieldIndices geo_indices;
+  GeoShapeFieldIndices geoshape_indices;
   SynonymMap synonyms;
 };
 

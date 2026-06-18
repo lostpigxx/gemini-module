@@ -146,6 +146,8 @@ static void RemoveDocFromIndices(IndexEntry& entry,
       entry.text_indices.GetOrCreate(fname).Remove(doc_id);
     } else if (fspec->type == FieldType::kGeo) {
       entry.geo_indices.GetOrCreate(fname).Remove(doc_id);
+    } else if (fspec->type == FieldType::kGeoShape) {
+      entry.geoshape_indices.GetOrCreate(fname).Remove(doc_id);
     }
   }
 }
@@ -175,6 +177,11 @@ static void AddDocToIndices(
       GeoCoord coord;
       if (ParseGeoCoord(fval, coord)) {
         entry.geo_indices.GetOrCreate(fname).Add(doc_id, coord.lon, coord.lat);
+      }
+    } else if (fspec->type == FieldType::kGeoShape) {
+      GeoShape shape;
+      if (ParseWkt(fval, shape)) {
+        entry.geoshape_indices.GetOrCreate(fname).Add(doc_id, shape);
       }
     }
   }
@@ -420,9 +427,11 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       fspec.type = FieldType::kText;
     } else if (MatchArg(ftype_str, "GEO")) {
       fspec.type = FieldType::kGeo;
+    } else if (MatchArg(ftype_str, "GEOSHAPE")) {
+      fspec.type = FieldType::kGeoShape;
     } else {
       return RedisModule_ReplyWithError(
-          ctx, "ERR unknown field type, expected TAG, NUMERIC, TEXT, VECTOR, or GEO");
+          ctx, "ERR unknown field type, expected TAG, NUMERIC, TEXT, VECTOR, GEO, or GEOSHAPE");
     }
 
     // Parse field-level attributes: SORTABLE, NOINDEX, NOSTEM, WEIGHT
@@ -1263,7 +1272,8 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         auto candidates = EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
                                         entry.tag_indices, entry.numeric_indices,
                                         entry.text_indices, entry.geo_indices,
-                                        filter_error, qopts);
+                                        filter_error, qopts,
+                                        &entry.geoshape_indices, &params);
         if (!filter_error.empty()) {
           return RedisModule_ReplyWithError(ctx, filter_error.c_str());
         }
@@ -1340,7 +1350,8 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     scored_results = EvaluateQueryScored(
         parsed.root, entry.spec, entry.doc_store,
         entry.tag_indices, entry.numeric_indices,
-        entry.text_indices, entry.geo_indices, eval_error, qopts);
+        entry.text_indices, entry.geo_indices, eval_error, qopts,
+        &entry.geoshape_indices, &params);
     if (!eval_error.empty()) {
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
@@ -1348,7 +1359,8 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     result_ids = EvaluateQuery(
         parsed.root, entry.spec, entry.doc_store,
         entry.tag_indices, entry.numeric_indices,
-        entry.text_indices, entry.geo_indices, eval_error, qopts);
+        entry.text_indices, entry.geo_indices, eval_error, qopts,
+        &entry.geoshape_indices, &params);
     if (!eval_error.empty()) {
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
@@ -1746,6 +1758,15 @@ static std::string ExplainNode(const QueryNode& node, int indent) {
                std::to_string(node.geo_lat) + " " +
                std::to_string(node.geo_radius) + "]\n";
       break;
+    case QueryNode::Type::kGeoShapeQuery: {
+      const char* op_name = "WITHIN";
+      if (node.geoshape_op == GeoShapeOp::kContains) op_name = "CONTAINS";
+      else if (node.geoshape_op == GeoShapeOp::kIntersects) op_name = "INTERSECTS";
+      else if (node.geoshape_op == GeoShapeOp::kDisjoint) op_name = "DISJOINT";
+      result = pad + "GEOSHAPE @" + node.field_name + ":[" +
+               op_name + " $" + node.geoshape_param_name + "]\n";
+      break;
+    }
     case QueryNode::Type::kAnd:
       result = pad + "AND\n";
       for (auto& c : node.children) result += ExplainNode(c, indent + 1);
@@ -2722,7 +2743,8 @@ static int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   auto result_ids =
       EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
                     entry.tag_indices, entry.numeric_indices,
-                    entry.text_indices, entry.geo_indices, eval_error);
+                    entry.text_indices, entry.geo_indices, eval_error,
+                    {}, &entry.geoshape_indices);
   if (!eval_error.empty()) {
     return RedisModule_ReplyWithError(ctx, eval_error.c_str());
   }
