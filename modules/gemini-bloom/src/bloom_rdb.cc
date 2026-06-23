@@ -60,6 +60,7 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   layer.totalBits_ = r.GetUint();
   layer.log2Bits_ = static_cast<uint8_t>(r.GetUint());
   if (layer.log2Bits_ >= 64) return std::nullopt;
+  if (layer.hashCount_ == 0 && layer.totalBits_ > 0) return std::nullopt;
   if (layer.log2Bits_ > 0 && layer.totalBits_ != (1ULL << layer.log2Bits_))
     return std::nullopt;
   if (layer.totalBits_ > UINT64_MAX - 7) return std::nullopt;
@@ -96,7 +97,7 @@ WireLayerMeta BloomLayer::ToWireMeta(size_t itemCount) const {
   };
 }
 
-BloomLayer BloomLayer::FromWireMeta(const WireLayerMeta& meta, BloomFlags filterFlags) {
+std::optional<BloomLayer> BloomLayer::FromWireMeta(const WireLayerMeta& meta, BloomFlags filterFlags) {
   BloomLayer layer;
   layer.hashCount_ = meta.hashCount;
   layer.log2Bits_ = meta.log2Bits;
@@ -107,6 +108,7 @@ BloomLayer BloomLayer::FromWireMeta(const WireLayerMeta& meta, BloomFlags filter
   layer.totalBits_ = meta.totalBits;
   layer.dataSize_ = meta.dataSize;
   layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
+  if (!layer.bitArray_) return std::nullopt;
   return layer;
 }
 
@@ -236,12 +238,12 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
 
   for (size_t i = 0; i < hdr->numLayers; i++) {
     auto layer = BloomLayer::FromWireMeta(meta[i], filterFlags);
-    if (!layer.GetBitArray()) {
+    if (!layer) {
       filter->~ScalingBloomFilter();
       RMFree(filter);
       return nullptr;
     }
-    filter->SetLayer(i, {std::move(layer), meta[i].itemCount});
+    filter->SetLayer(i, {std::move(*layer), meta[i].itemCount});
   }
 
   return filter;

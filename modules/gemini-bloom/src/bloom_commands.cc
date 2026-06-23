@@ -226,8 +226,9 @@ struct InsertOptions {
   int itemsStart = -1;
 };
 
-static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
-                               int argc, InsertOptions& opts) {
+// Returns true on success; on failure, replies to the client and returns false.
+static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
+                                int argc, InsertOptions& opts) {
   opts.errorRate = g_bloomConfig.defaultErrorRate;
   opts.capacity = g_bloomConfig.defaultCapacity;
   opts.expansion = g_bloomConfig.defaultExpansion;
@@ -241,28 +242,31 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
     auto sv = std::string_view{arg, len};
 
     if (MatchArg(sv, "ERROR")) {
-      if (++i >= argc) return RedisModule_WrongArity(ctx);
+      if (++i >= argc) { RedisModule_WrongArity(ctx); return false; }
       double val;
       if (RedisModule_StringToDouble(argv[i], &val) != REDISMODULE_OK ||
           val <= 0.0 || val >= 1.0) {
-        return RedisModule_ReplyWithError(ctx, "ERR false positive rate must be in (0, 1)");
+        RedisModule_ReplyWithError(ctx, "ERR false positive rate must be in (0, 1)");
+        return false;
       }
       opts.errorRate = val;
       errorSet = true;
     } else if (MatchArg(sv, "CAPACITY")) {
-      if (++i >= argc) return RedisModule_WrongArity(ctx);
+      if (++i >= argc) { RedisModule_WrongArity(ctx); return false; }
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val <= 0) {
-        return RedisModule_ReplyWithError(ctx, "ERR expected a positive capacity value");
+        RedisModule_ReplyWithError(ctx, "ERR expected a positive capacity value");
+        return false;
       }
       opts.capacity = static_cast<uint64_t>(val);
       capacitySet = true;
     } else if (MatchArg(sv, "EXPANSION")) {
-      if (++i >= argc) return RedisModule_WrongArity(ctx);
+      if (++i >= argc) { RedisModule_WrongArity(ctx); return false; }
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
           val < 0 || val > UINT_MAX) {
-        return RedisModule_ReplyWithError(ctx, "ERR bad expansion");
+        RedisModule_ReplyWithError(ctx, "ERR bad expansion");
+        return false;
       }
       if (val == 0) {
         opts.fixedSize = true;
@@ -278,20 +282,24 @@ static int ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
       opts.itemsStart = i + 1;
       break;
     } else {
-      return RedisModule_ReplyWithError(ctx, "ERR unrecognized option");
+      RedisModule_ReplyWithError(ctx, "ERR unrecognized option");
+      return false;
     }
   }
 
   if (opts.fixedSize && expansionSet) {
-    return RedisModule_ReplyWithError(ctx, "ERR NONSCALING and EXPANSION are mutually exclusive");
+    RedisModule_ReplyWithError(ctx, "ERR NONSCALING and EXPANSION are mutually exclusive");
+    return false;
   }
   if (opts.noCreate && (capacitySet || errorSet)) {
-    return RedisModule_ReplyWithError(ctx, "ERR NOCREATE cannot be used with CAPACITY or ERROR");
+    RedisModule_ReplyWithError(ctx, "ERR NOCREATE cannot be used with CAPACITY or ERROR");
+    return false;
   }
   if (opts.itemsStart < 0) {
-    return RedisModule_ReplyWithError(ctx, "ERR ITEMS keyword not found");
+    RedisModule_ReplyWithError(ctx, "ERR ITEMS keyword not found");
+    return false;
   }
-  return -1;
+  return true;
 }
 
 static int CmdInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
@@ -299,8 +307,7 @@ static int CmdInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   RedisModule_AutoMemory(ctx);
 
   InsertOptions opts;
-  int parseResult = ParseInsertOptions(ctx, argv, argc, opts);
-  if (parseResult != -1) return parseResult;
+  if (!ParseInsertOptions(ctx, argv, argc, opts)) return REDISMODULE_OK;
   if (opts.itemsStart >= argc) {
     return RedisModule_WrongArity(ctx);
   }

@@ -417,11 +417,12 @@ TEST(BloomWire, LayerMetaRoundTrip) {
   EXPECT_DOUBLE_EQ(meta.bitsPerEntry, layer->GetBitsPerEntry());
 
   auto restored = BloomLayer::FromWireMeta(meta, DefaultFlags());
-  EXPECT_EQ(restored.GetCapacity(), layer->GetCapacity());
-  EXPECT_DOUBLE_EQ(restored.GetFpRate(), layer->GetFpRate());
-  EXPECT_EQ(restored.GetHashCount(), layer->GetHashCount());
-  EXPECT_EQ(restored.GetTotalBits(), layer->GetTotalBits());
-  EXPECT_EQ(restored.GetDataSize(), layer->GetDataSize());
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->GetCapacity(), layer->GetCapacity());
+  EXPECT_DOUBLE_EQ(restored->GetFpRate(), layer->GetFpRate());
+  EXPECT_EQ(restored->GetHashCount(), layer->GetHashCount());
+  EXPECT_EQ(restored->GetTotalBits(), layer->GetTotalBits());
+  EXPECT_EQ(restored->GetDataSize(), layer->GetDataSize());
 }
 
 // ==================================================================

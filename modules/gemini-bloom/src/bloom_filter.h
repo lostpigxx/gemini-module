@@ -116,7 +116,7 @@ public:
 
   // Wire format conversion for SCANDUMP/LOADCHUNK
   WireLayerMeta ToWireMeta(size_t itemCount) const;
-  static BloomLayer FromWireMeta(const WireLayerMeta& meta, BloomFlags filterFlags);
+  static std::optional<BloomLayer> FromWireMeta(const WireLayerMeta& meta, BloomFlags filterFlags);
 
   bool Test(const HashPair& hp) const;
   bool Insert(const HashPair& hp);
