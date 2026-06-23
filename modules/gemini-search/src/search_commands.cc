@@ -32,6 +32,12 @@ static uint64_t g_next_cursor_id = 1;
 
 static std::unordered_map<std::string, SuggestDict> g_suggest_dicts;
 static std::unordered_map<std::string, TermDict> g_term_dicts;
+static std::unordered_map<std::string, std::string> g_config = {
+    {"DEFAULT_DIALECT", "1"},
+    {"TIMEOUT", "500"},
+    {"MAXEXPANSIONS", "200"},
+    {"MINSTEMLEN", "4"},
+};
 
 static void ReplyCursorBatch(RedisModuleCtx* ctx, uint64_t cursor_id,
                              AggCursor& cursor) {
@@ -172,7 +178,7 @@ static void AddDocToIndices(
         vidx.Add(doc_id, reinterpret_cast<const float*>(fval.data()));
       }
     } else if (fspec->type == FieldType::kText) {
-      entry.text_indices.GetOrCreate(fname).Add(doc_id, fval);
+      entry.text_indices.GetOrCreate(fname).Add(doc_id, fval, !fspec->phonetic.empty());
     } else if (fspec->type == FieldType::kGeo) {
       GeoCoord coord;
       if (ParseGeoCoord(fval, coord)) {
@@ -453,6 +459,11 @@ static int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         fspec.weight = std::strtod(std::string(ArgView(argv[i])).c_str(), &ep);
         if (*ep != '\0' || fspec.weight < 0)
           return RedisModule_ReplyWithError(ctx, "ERR WEIGHT must be a non-negative number");
+        i++;
+      } else if (MatchArg(attr, "PHONETIC") && fspec.type == FieldType::kText) {
+        i++;
+        if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR PHONETIC requires a matcher");
+        fspec.phonetic = std::string(ArgView(argv[i]));
         i++;
       } else {
         break;
@@ -754,6 +765,8 @@ struct SearchOptions {
   int summarize_frags = 3;
   int summarize_len = 20;
   std::string summarize_separator = "...";
+  int dialect = 0;
+  bool has_dialect = false;
 };
 
 static void CollectQueryTerms(const QueryNode& node,
@@ -1111,6 +1124,15 @@ static int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
       opts.timeout_ms = tms;
       opts.has_timeout = true;
+      arg_i++;
+    } else if (MatchArg(kw, "DIALECT")) {
+      arg_i++;
+      if (arg_i >= argc)
+        return RedisModule_ReplyWithError(ctx, "ERR DIALECT requires value");
+      char* ep = nullptr;
+      opts.dialect = static_cast<int>(
+          std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &ep, 10));
+      opts.has_dialect = true;
       arg_i++;
     } else if (MatchArg(kw, "HIGHLIGHT")) {
       opts.has_highlight = true;
@@ -2240,6 +2262,128 @@ static int FtSpellCheckCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   return REDISMODULE_OK;
 }
 
+// FT.CONFIG GET|SET <param> [value]
+static int FtConfigCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                           int argc) {
+  if (argc < 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  auto sub = ArgView(argv[1]);
+  std::string param(ArgView(argv[2]));
+  for (auto& c : param) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+  if (MatchArg(sub, "GET")) {
+    if (param == "*") {
+      RedisModule_ReplyWithArray(ctx, static_cast<long>(g_config.size()) * 2);
+      for (auto& [k, v] : g_config) {
+        RedisModule_ReplyWithCString(ctx, k.c_str());
+        RedisModule_ReplyWithCString(ctx, v.c_str());
+      }
+      return REDISMODULE_OK;
+    }
+    auto it = g_config.find(param);
+    if (it == g_config.end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR unknown config parameter");
+    }
+    RedisModule_ReplyWithArray(ctx, 2);
+    RedisModule_ReplyWithCString(ctx, it->first.c_str());
+    RedisModule_ReplyWithCString(ctx, it->second.c_str());
+    return REDISMODULE_OK;
+  }
+
+  if (MatchArg(sub, "SET")) {
+    if (argc < 4) return RedisModule_WrongArity(ctx);
+    auto it = g_config.find(param);
+    if (it == g_config.end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR unknown config parameter");
+    }
+    it->second = std::string(ArgView(argv[3]));
+    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+  }
+
+  return RedisModule_ReplyWithError(ctx, "ERR FT.CONFIG requires GET or SET");
+}
+
+// FT.PROFILE <index> SEARCH|AGGREGATE <query> [options...]
+static int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                            int argc) {
+  if (argc < 4) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  auto it = g_indices.find(idx_str);
+  if (it == g_indices.end()) {
+    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+  auto& entry = it->second;
+
+  auto mode = ArgView(argv[2]);
+  bool is_search = MatchArg(mode, "SEARCH");
+  bool is_aggregate = MatchArg(mode, "AGGREGATE");
+  if (!is_search && !is_aggregate) {
+    return RedisModule_ReplyWithError(ctx, "ERR FT.PROFILE requires SEARCH or AGGREGATE");
+  }
+
+  if (argc < 4) return RedisModule_WrongArity(ctx);
+  std::string query_str(ArgView(argv[3]));
+
+  struct timespec t_start, t_parse, t_eval, t_end;
+  clock_gettime(CLOCK_MONOTONIC, &t_start);
+
+  ParsedQuery parsed;
+  std::string parse_error;
+  if (!ParseQuery(query_str, parsed, parse_error)) {
+    return RedisModule_ReplyWithError(ctx, parse_error.c_str());
+  }
+  clock_gettime(CLOCK_MONOTONIC, &t_parse);
+
+  std::string eval_error;
+  auto result_ids = EvaluateQuery(
+      parsed.root, entry.spec, entry.doc_store,
+      entry.tag_indices, entry.numeric_indices,
+      entry.text_indices, entry.geo_indices, eval_error,
+      {}, &entry.geoshape_indices);
+  if (!eval_error.empty()) {
+    return RedisModule_ReplyWithError(ctx, eval_error.c_str());
+  }
+  clock_gettime(CLOCK_MONOTONIC, &t_eval);
+
+  auto ElapsedUs = [](const struct timespec& a, const struct timespec& b) -> double {
+    return static_cast<double>((b.tv_sec - a.tv_sec) * 1000000LL +
+                               (b.tv_nsec - a.tv_nsec) / 1000LL);
+  };
+
+  clock_gettime(CLOCK_MONOTONIC, &t_end);
+
+  double parse_us = ElapsedUs(t_start, t_parse);
+  double eval_us = ElapsedUs(t_parse, t_eval);
+  double total_us = ElapsedUs(t_start, t_end);
+
+  // Reply: [results, profile_info]
+  RedisModule_ReplyWithArray(ctx, 2);
+
+  // Results
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(result_ids.size()));
+  for (auto& rid : result_ids) {
+    RedisModule_ReplyWithCString(ctx, rid.c_str());
+  }
+
+  // Profile info
+  RedisModule_ReplyWithArray(ctx, 10);
+  RedisModule_ReplyWithSimpleString(ctx, "parse_time_us");
+  RedisModule_ReplyWithCString(ctx, std::to_string(parse_us).c_str());
+  RedisModule_ReplyWithSimpleString(ctx, "eval_time_us");
+  RedisModule_ReplyWithCString(ctx, std::to_string(eval_us).c_str());
+  RedisModule_ReplyWithSimpleString(ctx, "total_time_us");
+  RedisModule_ReplyWithCString(ctx, std::to_string(total_us).c_str());
+  RedisModule_ReplyWithSimpleString(ctx, "total_docs");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(entry.doc_store.Size()));
+  RedisModule_ReplyWithSimpleString(ctx, "result_count");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(result_ids.size()));
+
+  return REDISMODULE_OK;
+}
+
 // FT._DEBUG
 static int FtDebugCommand(RedisModuleCtx* ctx, RedisModuleString** /*argv*/,
                           int /*argc*/) {
@@ -3128,6 +3272,8 @@ int RegisterSearchCommands(RedisModuleCtx* ctx) {
       {"FT.SYNUPDATE", FtSynUpdateCommand, "write"},
       {"FT.SYNDUMP", FtSynDumpCommand, "readonly"},
       {"FT.SPELLCHECK", FtSpellCheckCommand, "readonly"},
+      {"FT.CONFIG", FtConfigCommand, "readonly"},
+      {"FT.PROFILE", FtProfileCommand, "readonly"},
       {"FT._DEBUG", FtDebugCommand, "readonly"},
   };
 

@@ -59,6 +59,7 @@ struct FieldSpec {
   bool sortable = false;
   bool noindex = false;
   double weight = 1.0;
+  std::string phonetic;
 };
 
 struct IndexSpec {

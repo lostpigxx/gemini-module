@@ -20,13 +20,15 @@ class TextIndex {
 
   std::unordered_map<std::string, std::vector<Posting>> postings_;
   std::unordered_map<std::string, std::set<std::string>> stem_map_;
+  std::unordered_map<std::string, std::set<std::string>> phonetic_map_;
   std::unordered_map<std::string, int> doc_lengths_;
   double avg_doc_len_ = 0;
 
   void UpdateAvgDocLen();
 
  public:
-  void Add(const std::string& doc_id, const std::string& text);
+  void Add(const std::string& doc_id, const std::string& text,
+           bool phonetic = false);
   void Remove(const std::string& doc_id);
   std::vector<TextSearchResult> Search(const std::vector<std::string>& terms) const;
   std::vector<std::string> Lookup(const std::string& term) const;
@@ -40,6 +42,8 @@ class TextIndex {
                                               int slop, bool inorder) const;
   std::vector<std::string> StemLookup(const std::string& term) const;
   std::vector<TextSearchResult> StemSearch(const std::string& term) const;
+  std::vector<std::string> PhoneticLookup(const std::string& term) const;
+  std::vector<TextSearchResult> PhoneticSearch(const std::string& term) const;
   size_t NumTerms() const;
   size_t NumDocs() const;
   void Clear();

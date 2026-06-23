@@ -1,4 +1,5 @@
 #include "text_index.h"
+#include "phonetic.h"
 #include "stemmer.h"
 
 #include <algorithm>
@@ -75,7 +76,8 @@ void TextIndex::UpdateAvgDocLen() {
   avg_doc_len_ = total / static_cast<double>(doc_lengths_.size());
 }
 
-void TextIndex::Add(const std::string& doc_id, const std::string& text) {
+void TextIndex::Add(const std::string& doc_id, const std::string& text,
+                    bool phonetic) {
   Remove(doc_id);
   auto tokens = TokenizeRaw(text);
   doc_lengths_[doc_id] = static_cast<int>(tokens.size());
@@ -97,6 +99,11 @@ void TextIndex::Add(const std::string& doc_id, const std::string& text) {
     auto stemmed = StemEnglish(term);
     if (stemmed != term) {
       stem_map_[stemmed].insert(term);
+    }
+    if (phonetic) {
+      auto [p1, p2] = DoubleMetaphone(term);
+      if (!p1.empty()) phonetic_map_[p1].insert(term);
+      if (!p2.empty() && p2 != p1) phonetic_map_[p2].insert(term);
     }
   }
 }
@@ -338,6 +345,35 @@ std::vector<TextSearchResult> TextIndex::StemSearch(const std::string& term) con
     for (auto& orig : it->second) search_terms.push_back(orig);
   }
   if (stemmed != term) search_terms.push_back(stemmed);
+  return Search(search_terms);
+}
+
+std::vector<std::string> TextIndex::PhoneticLookup(const std::string& term) const {
+  std::set<std::string> result;
+  auto ids = Lookup(term);
+  result.insert(ids.begin(), ids.end());
+  auto [p1, p2] = DoubleMetaphone(term);
+  for (auto& code : {p1, p2}) {
+    if (code.empty()) continue;
+    auto it = phonetic_map_.find(code);
+    if (it == phonetic_map_.end()) continue;
+    for (auto& orig : it->second) {
+      auto orig_ids = Lookup(orig);
+      result.insert(orig_ids.begin(), orig_ids.end());
+    }
+  }
+  return {result.begin(), result.end()};
+}
+
+std::vector<TextSearchResult> TextIndex::PhoneticSearch(const std::string& term) const {
+  auto [p1, p2] = DoubleMetaphone(term);
+  std::vector<std::string> search_terms = {term};
+  for (auto& code : {p1, p2}) {
+    if (code.empty()) continue;
+    auto it = phonetic_map_.find(code);
+    if (it == phonetic_map_.end()) continue;
+    for (auto& orig : it->second) search_terms.push_back(orig);
+  }
   return Search(search_terms);
 }
 
