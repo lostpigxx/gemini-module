@@ -109,6 +109,52 @@ proc r_nothrow {args} {
   return [redis_read_reply_nothrow $redis_fd]
 }
 
+proc redis_read_raw_reply {fd} {
+  gets $fd line
+  set type [string index $line 0]
+  set data [string range $line 1 end]
+  set data [string trimright $data "\r"]
+
+  switch -- $type {
+    "+" { return [list $type $data] }
+    "-" { return [list $type $data] }
+    ":" { return [list $type $data] }
+    "," { return [list $type $data] }
+    "#" { return [list $type $data] }
+    "_" { return [list $type ""] }
+    "$" {
+      set len $data
+      if {$len == -1} { return [list $type "(nil)"] }
+      set payload [read $fd [expr {$len + 2}]]
+      return [list $type [string range $payload 0 end-2]]
+    }
+    "*" - "%" {
+      set count $data
+      if {$count == -1} { return [list $type "(nil)"] }
+      set result {}
+      set elems $count
+      if {$type eq "%"} { set elems [expr {$count * 2}] }
+      for {set i 0} {$i < $elems} {incr i} {
+        lappend result [redis_read_raw_reply $fd]
+      }
+      return [list $type $result]
+    }
+    default {
+      error "Unknown raw reply type: $type ($line)"
+    }
+  }
+}
+
+proc raw_command_reply {fd args} {
+  set cmd "*[llength $args]\r\n"
+  foreach arg $args {
+    append cmd "\$[string length $arg]\r\n$arg\r\n"
+  }
+  puts -nonewline $fd $cmd
+  flush $fd
+  return [redis_read_raw_reply $fd]
+}
+
 # ============================================================
 # Test framework
 # ============================================================
@@ -214,6 +260,56 @@ proc start_redis {module_path port} {
   error "redis-server failed to start on port $port"
 }
 
+proc wait_redis_ready {host port} {
+  for {set i 0} {$i < 100} {incr i} {
+    if {![catch {
+      set fd [redis_connect $host $port]
+      set pong [redis_command $fd PING]
+      close $fd
+      set pong
+    } result] && $result eq "PONG"} {
+      return
+    }
+    catch {close $fd}
+    after 100
+  }
+  error "redis-server did not become ready on port $port"
+}
+
+proc module_load_should_fail {name args} {
+  global module_path
+  set cfg_port [find_free_port]
+  set cfg_dir "/tmp/bloom_bad_cfg_$cfg_port"
+  file delete -force $cfg_dir
+  file mkdir $cfg_dir
+
+  set cmd [list redis-server \
+    --port $cfg_port \
+    --daemonize yes \
+    --loglevel warning \
+    --logfile $cfg_dir/redis.log \
+    --dbfilename dump.rdb \
+    --dir $cfg_dir \
+    --loadmodule $module_path]
+  foreach arg $args { lappend cmd $arg }
+
+  catch {exec {*}$cmd} err
+  after 300
+  if {![catch {set fd [redis_connect localhost $cfg_port]}]} {
+    set module_accepted 0
+    if {![catch {redis_command $fd BF.ADD bad_cfg_probe item}]} {
+      set module_accepted 1
+    }
+    catch {redis_command $fd SHUTDOWN NOSAVE}
+    catch {close $fd}
+    if {$module_accepted} {
+      file delete -force $cfg_dir
+      error "$name: module load unexpectedly succeeded"
+    }
+  }
+  file delete -force $cfg_dir
+}
+
 proc stop_redis {fd} {
   catch {redis_command $fd SHUTDOWN NOSAVE}
   catch {close $fd}
@@ -248,6 +344,7 @@ puts "Module: $module_path"
 set port [find_free_port]
 puts "Starting redis-server on port $port..."
 start_redis $module_path $port
+wait_redis_ready localhost $port
 set redis_fd [redis_connect localhost $port]
 puts "Connected.\n"
 
@@ -435,6 +532,84 @@ test_assert "BF.INFO NONSCALING filter shows null expansion" {
   if {$val ne "(nil)"} { error "Expected nil but got: $val" }
 }
 
+puts "\n=== RESP3 reply shapes ==="
+
+test_assert "EXPECTED RESP3 GAP: BF.ADD returns boolean type" {
+  global port
+  set fd [redis_connect localhost $port]
+  raw_command_reply $fd HELLO 3
+  set reply [raw_command_reply $fd BF.ADD resp3_add item]
+  close $fd
+  set type [lindex $reply 0]
+  if {$type ne "#"} { error "expected RESP3 boolean '#', got '$type' reply=$reply" }
+}
+
+test_assert "EXPECTED RESP3 GAP: BF.EXISTS returns boolean type" {
+  global port
+  r BF.ADD resp3_exists item
+  set fd [redis_connect localhost $port]
+  raw_command_reply $fd HELLO 3
+  set reply [raw_command_reply $fd BF.EXISTS resp3_exists item]
+  close $fd
+  set type [lindex $reply 0]
+  if {$type ne "#"} { error "expected RESP3 boolean '#', got '$type' reply=$reply" }
+}
+
+test_assert "EXPECTED RESP3 GAP: BF.MADD returns array of booleans" {
+  global port
+  set fd [redis_connect localhost $port]
+  raw_command_reply $fd HELLO 3
+  set reply [raw_command_reply $fd BF.MADD resp3_madd a b]
+  close $fd
+  set type [lindex $reply 0]
+  if {$type ne "*"} { error "expected RESP3 array '*', got '$type' reply=$reply" }
+  foreach elem [lindex $reply 1] {
+    set elem_type [lindex $elem 0]
+    if {$elem_type ne "#"} { error "expected RESP3 boolean element, got '$elem_type' reply=$reply" }
+  }
+}
+
+test_assert "EXPECTED RESP3 GAP: BF.MEXISTS returns array of booleans" {
+  global port
+  r BF.MADD resp3_mexists a b
+  set fd [redis_connect localhost $port]
+  raw_command_reply $fd HELLO 3
+  set reply [raw_command_reply $fd BF.MEXISTS resp3_mexists a missing]
+  close $fd
+  set type [lindex $reply 0]
+  if {$type ne "*"} { error "expected RESP3 array '*', got '$type' reply=$reply" }
+  foreach elem [lindex $reply 1] {
+    set elem_type [lindex $elem 0]
+    if {$elem_type ne "#"} { error "expected RESP3 boolean element, got '$elem_type' reply=$reply" }
+  }
+}
+
+test_assert "EXPECTED RESP3 GAP: BF.INFO full response returns map type" {
+  global port
+  r BF.RESERVE resp3_info 0.01 100
+  set fd [redis_connect localhost $port]
+  raw_command_reply $fd HELLO 3
+  set reply [raw_command_reply $fd BF.INFO resp3_info]
+  close $fd
+  set type [lindex $reply 0]
+  if {$type ne "%"} { error "expected RESP3 map '%', got '$type' reply=$reply" }
+}
+
+test_assert "RESP3 BF.INFO single Capacity remains integer scalar" {
+  global port
+  r DEL resp3_info_capacity
+  r BF.RESERVE resp3_info_capacity 0.01 100
+  set fd [redis_connect localhost $port]
+  raw_command_reply $fd HELLO 3
+  set reply [raw_command_reply $fd BF.INFO resp3_info_capacity CAPACITY]
+  close $fd
+  set type [lindex $reply 0]
+  set value [lindex $reply 1]
+  if {$type ne ":" || $value != 100} {
+    error "expected RESP3 integer capacity 100, got reply=$reply"
+  }
+}
+
 puts "\n=== BF.CARD ==="
 
 test "BF.CARD returns inserted count" {
@@ -556,6 +731,52 @@ test_assert "SCANDUMP/LOADCHUNK using returned iterator directly (official proto
   for {set i 0} {$i < 200} {incr i} {
     set exists [r BF.EXISTS proto_dst "proto_item_$i"]
     if {$exists != 1} { error "False negative for proto_item_$i" }
+  }
+}
+
+test_assert "SCANDUMP/LOADCHUNK preserves binary chunk payloads" {
+  r DEL dump_bin_src dump_bin_dst
+  r BF.RESERVE dump_bin_src 0.01 50
+  set binary_items [list "null\x00byte" "line\r\nbreak" "brace\{value\}" "slash\\value"]
+  foreach item $binary_items {
+    r BF.ADD dump_bin_src $item
+  }
+
+  set cursor 0
+  while {1} {
+    set reply [r BF.SCANDUMP dump_bin_src $cursor]
+    set next_cursor [lindex $reply 0]
+    set chunk_data [lindex $reply 1]
+
+    if {$next_cursor == 0 && [string length $chunk_data] == 0} break
+
+    r BF.LOADCHUNK dump_bin_dst $next_cursor $chunk_data
+    set cursor $next_cursor
+  }
+
+  foreach item $binary_items {
+    set exists [r BF.EXISTS dump_bin_dst $item]
+    if {$exists != 1} { error "False negative after binary LOADCHUNK for <$item>" }
+  }
+}
+
+test_assert "EXPECTED COMPAT GAP: SCANDUMP layer cursor should advance by byte length" {
+  r DEL cursor_bytes
+  r BF.RESERVE cursor_bytes 0.01 10
+  for {set i 0} {$i < 30} {incr i} {
+    r BF.ADD cursor_bytes "cursor_bytes_$i"
+  }
+
+  set first [r BF.SCANDUMP cursor_bytes 0]
+  set first_cursor [lindex $first 0]
+  if {$first_cursor != 1} { error "first cursor should be 1, got $first_cursor" }
+
+  set second [r BF.SCANDUMP cursor_bytes $first_cursor]
+  set next_cursor [lindex $second 0]
+  set layer_data [lindex $second 1]
+  set expected [expr {$first_cursor + [string length $layer_data]}]
+  if {$next_cursor != $expected} {
+    error "expected byte-offset cursor $expected, got $next_cursor"
   }
 }
 
@@ -749,6 +970,48 @@ test_error "BF.INSERT ITEMS with no items returns wrong arity" {
   r BF.INSERT items_empty ITEMS
 } {ERR*wrong*}
 
+puts "\n=== Parser missing value and numeric validation ==="
+
+test_error "BF.RESERVE EXPANSION missing value rejected" {
+  r BF.RESERVE reserve_exp_missing 0.01 100 EXPANSION
+} {ERR*EXPANSION*}
+
+test_error "BF.RESERVE EXPANSION non-numeric rejected" {
+  r BF.RESERVE reserve_exp_nan 0.01 100 EXPANSION nope
+} {ERR*}
+
+test_error "BF.INSERT ERROR missing value rejected" {
+  r BF.INSERT insert_error_missing ERROR
+} {ERR*wrong*}
+
+test_error "BF.INSERT ERROR non-numeric rejected" {
+  r BF.INSERT insert_error_nan ERROR nope ITEMS a
+} {ERR*rate*}
+
+test_error "BF.INSERT ERROR out of range high rejected" {
+  r BF.INSERT insert_error_high ERROR 1 ITEMS a
+} {ERR*rate*}
+
+test_error "BF.INSERT CAPACITY missing value rejected" {
+  r BF.INSERT insert_capacity_missing CAPACITY
+} {ERR*wrong*}
+
+test_error "BF.INSERT CAPACITY non-numeric rejected" {
+  r BF.INSERT insert_capacity_nan CAPACITY nope ITEMS a
+} {ERR*capacity*}
+
+test_error "BF.INSERT EXPANSION missing value rejected" {
+  r BF.INSERT insert_exp_missing EXPANSION
+} {ERR*wrong*}
+
+test_error "BF.INSERT EXPANSION non-numeric rejected" {
+  r BF.INSERT insert_exp_nan EXPANSION nope ITEMS a
+} {ERR*}
+
+test_error "BF.INSERT unknown option before ITEMS rejected" {
+  r BF.INSERT insert_unknown FOOBAR ITEMS a
+} {ERR*unrecognized*}
+
 puts "\n=== EXPANSION overflow / truncation ==="
 
 test_error "BF.RESERVE EXPANSION 4294967296 should be rejected" {
@@ -856,6 +1119,7 @@ test_assert "Data survives BGSAVE + restart" {
   after 1000
 
   start_redis $module_path $port
+  wait_redis_ready localhost $port
   set redis_fd [redis_connect localhost $port]
 
   set e1 [r BF.EXISTS persist_test alpha]
@@ -901,6 +1165,7 @@ test_assert "Data survives AOF rewrite + restart" {
     }
     after 100
   }
+  wait_redis_ready localhost $port
   set redis_fd [redis_connect localhost $port]
 
   r DEL aof_test
@@ -935,6 +1200,7 @@ test_assert "Data survives AOF rewrite + restart" {
     }
     after 100
   }
+  wait_redis_ready localhost $port
   set redis_fd [redis_connect localhost $port]
 
   set card [r BF.CARD aof_test]
@@ -970,16 +1236,19 @@ test_error "BF.INSERT expansion exceeding 32768 rejected" {
 } {ERR*}
 
 test "BF.RESERVE capacity at limit 1<<30 succeeds" {
+  r DEL limit_cap_ok
   r BF.RESERVE limit_cap_ok 0.01 1073741824
 } {OK}
 
 test "BF.RESERVE expansion at limit 32768 succeeds" {
+  r DEL limit_exp_ok
   r BF.RESERVE limit_exp_ok 0.01 100 EXPANSION 32768
 } {OK}
 
 puts "\n=== MADD/INSERT partial failure (BUG-05) ==="
 
 test_assert "BF.MADD on full NONSCALING filter returns errors" {
+  r DEL madd_full
   r BF.RESERVE madd_full 0.01 5 NONSCALING
   for {set i 0} {$i < 5} {incr i} {
     catch {r BF.ADD madd_full "fill_$i"}
@@ -995,6 +1264,7 @@ test_assert "BF.MADD on full NONSCALING filter returns errors" {
 }
 
 test_assert "BF.CARD after partial MADD matches actual insertions" {
+  r DEL partial_test
   r BF.RESERVE partial_test 0.01 3 NONSCALING
   r BF.ADD partial_test a
   r BF.ADD partial_test b
@@ -1012,6 +1282,7 @@ test_assert "BF.CARD after partial MADD matches actual insertions" {
 }
 
 test_assert "BF.INSERT on full filter stops and returns errors" {
+  r DEL insert_full
   r BF.RESERVE insert_full 0.01 3 NONSCALING
   r BF.ADD insert_full a
   r BF.ADD insert_full b
@@ -1068,6 +1339,72 @@ test_assert "Default config creates filter with expected defaults" {
   set idx [lsearch $info "Expansion rate"]
   set exp [lindex $info [expr {$idx + 1}]]
   if {$exp != 2} { error "Default expansion should be 2, got $exp" }
+}
+
+test_assert "Module load args override default ERROR_RATE INITIAL_SIZE and EXPANSION" {
+  global module_path
+  set cfg_port [find_free_port]
+  set cfg_dir "/tmp/bloom_cfg_$cfg_port"
+  file delete -force $cfg_dir
+  file mkdir $cfg_dir
+
+  catch {
+    exec redis-server \
+      --port $cfg_port \
+      --daemonize yes \
+      --loglevel warning \
+      --logfile $cfg_dir/redis.log \
+      --dbfilename dump.rdb \
+      --dir $cfg_dir \
+      --loadmodule $module_path ERROR_RATE 0.02 INITIAL_SIZE 123 EXPANSION 3
+  } err
+  wait_redis_ready localhost $cfg_port
+  set cfg_fd [redis_connect localhost $cfg_port]
+
+  set old_fd $::redis_fd
+  set ::redis_fd $cfg_fd
+  r BF.ADD cfg_override item
+  set info [r BF.INFO cfg_override]
+  set idx [lsearch $info "Capacity"]
+  set cap [lindex $info [expr {$idx + 1}]]
+  set idx [lsearch $info "Expansion rate"]
+  set exp [lindex $info [expr {$idx + 1}]]
+  set ::redis_fd $old_fd
+
+  catch {redis_command $cfg_fd SHUTDOWN NOSAVE}
+  catch {close $cfg_fd}
+  file delete -force $cfg_dir
+
+  if {$cap != 123} { error "configured capacity should be 123, got $cap" }
+  if {$exp != 3} { error "configured expansion should be 3, got $exp" }
+}
+
+test_assert "Module load rejects ERROR_RATE missing value" {
+  module_load_should_fail "missing ERROR_RATE" ERROR_RATE
+}
+
+test_assert "Module load rejects ERROR_RATE out of range" {
+  module_load_should_fail "bad ERROR_RATE" ERROR_RATE 1.0
+}
+
+test_assert "Module load rejects INITIAL_SIZE missing value" {
+  module_load_should_fail "missing INITIAL_SIZE" INITIAL_SIZE
+}
+
+test_assert "Module load rejects INITIAL_SIZE zero" {
+  module_load_should_fail "bad INITIAL_SIZE" INITIAL_SIZE 0
+}
+
+test_assert "Module load rejects EXPANSION missing value" {
+  module_load_should_fail "missing EXPANSION" EXPANSION
+}
+
+test_assert "Module load rejects EXPANSION zero" {
+  module_load_should_fail "bad EXPANSION" EXPANSION 0
+}
+
+test_assert "Module load rejects unknown config argument" {
+  module_load_should_fail "unknown config" UNKNOWN 1
 }
 
 puts "\n=== LOADCHUNK half-restore safety (DESIGN-02) ==="
@@ -1155,6 +1492,61 @@ test_assert "COMMAND INFO BF.SCANDUMP shows write flag" {
   set cmd_str [join $info " "]
   if {[string first "write" $cmd_str] < 0} {
     error "BF.SCANDUMP should have write flag, got: $cmd_str"
+  }
+}
+
+test_assert "COMMAND INFO exposes expected flags for all bloom commands" {
+  set expectations {
+    BF.RESERVE write
+    BF.ADD write
+    BF.MADD write
+    BF.INSERT write
+    BF.EXISTS readonly
+    BF.MEXISTS readonly
+    BF.INFO readonly
+    BF.CARD readonly
+    BF.SCANDUMP write
+    BF.LOADCHUNK write
+  }
+  foreach {cmd expected} $expectations {
+    set info [r COMMAND INFO $cmd]
+    set cmd_str [join $info " "]
+    if {[string first $expected $cmd_str] < 0} {
+      error "$cmd should include $expected flag, got: $cmd_str"
+    }
+  }
+}
+
+test "COMMAND GETKEYS BF.ADD returns the filter key" {
+  r COMMAND GETKEYS BF.ADD cmd_key item
+} {cmd_key}
+
+test "COMMAND GETKEYS BF.SCANDUMP returns the filter key" {
+  r COMMAND GETKEYS BF.SCANDUMP cmd_key 0
+} {cmd_key}
+
+test "COMMAND GETKEYS BF.RESERVE returns the filter key" {
+  r COMMAND GETKEYS BF.RESERVE cmd_key 0.01 100
+} {cmd_key}
+
+test "COMMAND GETKEYS BF.LOADCHUNK returns the filter key" {
+  r COMMAND GETKEYS BF.LOADCHUNK cmd_key 1 data
+} {cmd_key}
+
+test "COMMAND GETKEYS BF.INFO returns the filter key" {
+  r COMMAND GETKEYS BF.INFO cmd_key
+} {cmd_key}
+
+test_assert "ACL DRYRUN accepts bloom commands when supported" {
+  if {[catch {r ACL DRYRUN default BF.ADD acl_key item} err]} {
+    if {[string match -nocase "*unknown subcommand*" $err] ||
+        [string match -nocase "*syntax*" $err]} {
+      set unsupported 1
+    } else {
+      error $err
+    }
+  } else {
+    set unsupported 0
   }
 }
 

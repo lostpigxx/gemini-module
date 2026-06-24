@@ -43,6 +43,23 @@ TEST(ScalingBloomTest, PutAndContains) {
   free(mem);
 }
 
+TEST(ScalingBloomTest, Uses32BitHashWhenFlagIsAbsent) {
+  auto flags = BloomFlags::NoRound;
+  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (mem) ScalingBloomFilter(1000, 0.01, flags, 2);
+
+  ASSERT_TRUE(mem->IsValid());
+  EXPECT_EQ(mem->Flags(), flags);
+  auto r1 = mem->Put(AsBytes("hash32", 6));
+  ASSERT_TRUE(r1.has_value());
+  EXPECT_TRUE(*r1);
+  EXPECT_TRUE(mem->Contains(AsBytes("hash32", 6)));
+  EXPECT_FALSE(mem->Contains(AsBytes("hash64", 6)));
+
+  mem->~ScalingBloomFilter();
+  free(mem);
+}
+
 TEST(ScalingBloomTest, NoFalseNegatives) {
   auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
   new (mem) ScalingBloomFilter(5000, 0.01, DefaultFlags(), 2);
@@ -119,6 +136,28 @@ TEST(ScalingBloomTest, OptionalReturnSemantics) {
   free(mem);
 }
 
+TEST(ScalingBloomTest, FixedSizeDuplicateDoesNotConsumeCapacity) {
+  auto flg = DefaultFlags() | BloomFlags::FixedSize;
+  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (mem) ScalingBloomFilter(2, 0.01, flg, 2);
+
+  ASSERT_TRUE(mem->Put(AsBytes("a", 1)).has_value());
+  for (int i = 0; i < 5; i++) {
+    auto duplicate = mem->Put(AsBytes("a", 1));
+    ASSERT_TRUE(duplicate.has_value());
+    EXPECT_FALSE(*duplicate);
+  }
+
+  auto b = mem->Put(AsBytes("b", 1));
+  ASSERT_TRUE(b.has_value());
+  EXPECT_TRUE(*b);
+  EXPECT_EQ(mem->TotalItems(), 2u);
+  EXPECT_FALSE(mem->Put(AsBytes("c", 1)).has_value());
+
+  mem->~ScalingBloomFilter();
+  free(mem);
+}
+
 TEST(ScalingBloomTest, TotalCapacity) {
   auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
   new (mem) ScalingBloomFilter(1000, 0.01, DefaultFlags(), 2);
@@ -131,6 +170,45 @@ TEST(ScalingBloomTest, BytesUsed) {
   auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
   new (mem) ScalingBloomFilter(1000, 0.01, DefaultFlags(), 2);
   EXPECT_GT(mem->BytesUsed(), sizeof(ScalingBloomFilter));
+  mem->~ScalingBloomFilter();
+  free(mem);
+}
+
+TEST(ScalingBloomTest, MoveAssignmentTransfersOwnership) {
+  auto* leftMem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  auto* rightMem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (leftMem) ScalingBloomFilter(10, 0.01, DefaultFlags(), 2);
+  new (rightMem) ScalingBloomFilter(20, 0.001, DefaultFlags(), 4);
+
+  rightMem->Put(AsBytes("moved", 5));
+  *leftMem = std::move(*rightMem);
+
+  EXPECT_TRUE(leftMem->Contains(AsBytes("moved", 5)));
+  EXPECT_EQ(leftMem->ExpansionFactor(), 4u);
+  EXPECT_EQ(leftMem->TotalItems(), 1u);
+  EXPECT_FALSE(rightMem->IsValid());
+
+  leftMem->~ScalingBloomFilter();
+  rightMem->~ScalingBloomFilter();
+  free(leftMem);
+  free(rightMem);
+}
+
+TEST(ScalingBloomTest, ExpansionOneAddsSameSizedLayers) {
+  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (mem) ScalingBloomFilter(10, 0.01, DefaultFlags(), 1);
+
+  for (int i = 0; i < 35; i++) {
+    auto item = "exp1_" + std::to_string(i);
+    mem->Put(ToSpan(item));
+  }
+
+  ASSERT_GT(mem->NumLayers(), 1u);
+  for (const auto& layer : mem->Layers()) {
+    EXPECT_EQ(layer.bloom.GetCapacity(), 10u);
+  }
+  EXPECT_EQ(mem->TotalCapacity(), mem->NumLayers() * 10u);
+
   mem->~ScalingBloomFilter();
   free(mem);
 }
