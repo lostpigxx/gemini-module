@@ -745,7 +745,9 @@ struct CustomLayerFields {
   size_t itemCount = 1;
 };
 
-static ScalingBloomFilter* LoadCustomRdb(const CustomLayerFields& f) {
+static ScalingBloomFilter* LoadCustomRdb(const CustomLayerFields& f,
+                                         size_t blobSizeOverride =
+                                           std::numeric_limits<size_t>::max()) {
   uint64_t dataSize = (f.totalBits > 0) ? ((f.totalBits + 7) / 8) : 0;
   MockRdbStream stream;
   auto* io = stream.IO();
@@ -762,7 +764,10 @@ static ScalingBloomFilter* LoadCustomRdb(const CustomLayerFields& f) {
   Mock_SaveUnsigned(io, f.totalBits);
   Mock_SaveUnsigned(io, f.log2Bits);
 
-  std::vector<char> bits(dataSize, 0);
+  size_t blobSize = blobSizeOverride == std::numeric_limits<size_t>::max()
+    ? static_cast<size_t>(dataSize)
+    : blobSizeOverride;
+  std::vector<char> bits(blobSize, 0);
   Mock_SaveStringBuffer(io, bits.data(), bits.size());
   Mock_SaveUnsigned(io, f.itemCount);
 
@@ -833,6 +838,22 @@ TEST(BloomRdb, RejectsBitsPerEntryNaN) {
   if (loaded) DestroyFilter(loaded);
 }
 
+TEST(BloomRdb, RejectsBitsPerEntryInf) {
+  CustomLayerFields f;
+  f.bitsPerEntry = std::numeric_limits<double>::infinity();
+  auto* loaded = LoadCustomRdb(f);
+  EXPECT_EQ(loaded, nullptr) << "Should reject bitsPerEntry=Inf";
+  if (loaded) DestroyFilter(loaded);
+}
+
+TEST(BloomRdb, RejectsBitsPerEntryZero) {
+  CustomLayerFields f;
+  f.bitsPerEntry = 0.0;
+  auto* loaded = LoadCustomRdb(f);
+  EXPECT_EQ(loaded, nullptr) << "Should reject bitsPerEntry=0";
+  if (loaded) DestroyFilter(loaded);
+}
+
 TEST(BloomRdb, RejectsBitsPerEntryNegative) {
   CustomLayerFields f;
   f.bitsPerEntry = -1.0;
@@ -854,6 +875,16 @@ TEST(BloomRdb, RejectsHashCountZero) {
   f.hashCount = 0;
   auto* loaded = LoadCustomRdb(f);
   EXPECT_EQ(loaded, nullptr) << "Should reject hashCount==0";
+  if (loaded) DestroyFilter(loaded);
+}
+
+TEST(BloomRdb, RejectsHashCountInconsistentWithBitsPerEntry) {
+  CustomLayerFields f;
+  f.bitsPerEntry = 9.97;
+  f.hashCount = 1;
+  auto* loaded = LoadCustomRdb(f);
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject hashCount that does not match ceil(ln2 * bitsPerEntry)";
   if (loaded) DestroyFilter(loaded);
 }
 
@@ -891,6 +922,49 @@ TEST(BloomRdb, AcceptsConsistentItemCounts) {
   EXPECT_NE(loaded, nullptr)
     << "Should accept consistent totalItems == sum(itemCount)";
   if (loaded) DestroyFilter(loaded);
+}
+
+TEST(BloomRdb, RejectsShortLayerBlob) {
+  CustomLayerFields f;
+  size_t expectedSize = static_cast<size_t>((f.totalBits + 7) / 8);
+  ASSERT_GT(expectedSize, 1u);
+
+  auto* loaded = LoadCustomRdb(f, expectedSize - 1);
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject RDB layer blob shorter than metadata dataSize";
+  if (loaded) DestroyFilter(loaded);
+}
+
+TEST(BloomRdb, RejectsLongLayerBlob) {
+  CustomLayerFields f;
+  size_t expectedSize = static_cast<size_t>((f.totalBits + 7) / 8);
+
+  auto* loaded = LoadCustomRdb(f, expectedSize + 1);
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject RDB layer blob longer than metadata dataSize";
+  if (loaded) DestroyFilter(loaded);
+}
+
+TEST(BloomRdb, RejectsScalingExpansionZero) {
+  CustomLayerFields f;
+  f.expansion = 0;
+  f.flags = ToUnderlying(DefaultFlags());
+  auto* loaded = LoadCustomRdb(f);
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject scalable RDB filters with expansion=0";
+  if (loaded) DestroyFilter(loaded);
+}
+
+TEST(BloomRdb, AcceptsFixedExpansionZero) {
+  CustomLayerFields f;
+  f.expansion = 0;
+  f.flags = ToUnderlying(DefaultFlags() | BloomFlags::FixedSize);
+  auto* loaded = LoadCustomRdb(f);
+  ASSERT_NE(loaded, nullptr)
+    << "Fixed-size RDB filters may encode expansion=0";
+  EXPECT_TRUE(HasFlag(loaded->Flags(), BloomFlags::FixedSize));
+  EXPECT_EQ(loaded->ExpansionFactor(), 0u);
+  DestroyFilter(loaded);
 }
 
 // ==================================================================
@@ -992,6 +1066,115 @@ TEST(BloomWire, RejectsInvalidFpRate) {
   EXPECT_EQ(loaded, nullptr)
     << "Should reject wire header with fpRate=0";
   if (loaded) DestroyFilter(loaded);
+  DestroyFilter(filter);
+}
+
+TEST(BloomWire, RejectsBitsPerEntryInf) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  filter->Put(AsBytes("x", 1));
+  size_t hdr_size = ComputeHeaderSize(*filter);
+  std::vector<uint8_t> buf(hdr_size);
+  SerializeHeader(*filter, buf.data());
+
+  auto* meta = reinterpret_cast<WireLayerMeta*>(
+    buf.data() + sizeof(WireFilterHeader));
+  meta[0].bitsPerEntry = std::numeric_limits<double>::infinity();
+
+  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject wire header with bitsPerEntry=Inf";
+  if (loaded) DestroyFilter(loaded);
+  DestroyFilter(filter);
+}
+
+TEST(BloomWire, RejectsBitsPerEntryZero) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  filter->Put(AsBytes("x", 1));
+  size_t hdr_size = ComputeHeaderSize(*filter);
+  std::vector<uint8_t> buf(hdr_size);
+  SerializeHeader(*filter, buf.data());
+
+  auto* meta = reinterpret_cast<WireLayerMeta*>(
+    buf.data() + sizeof(WireFilterHeader));
+  meta[0].bitsPerEntry = 0.0;
+
+  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject wire header with bitsPerEntry=0";
+  if (loaded) DestroyFilter(loaded);
+  DestroyFilter(filter);
+}
+
+TEST(BloomWire, RejectsDataSizeMismatch) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  filter->Put(AsBytes("x", 1));
+  size_t hdr_size = ComputeHeaderSize(*filter);
+  std::vector<uint8_t> buf(hdr_size);
+  SerializeHeader(*filter, buf.data());
+
+  auto* meta = reinterpret_cast<WireLayerMeta*>(
+    buf.data() + sizeof(WireFilterHeader));
+  ASSERT_GT(meta[0].dataSize, 1u);
+  meta[0].dataSize -= 1;
+
+  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject wire header when dataSize != ceil(totalBits/8)";
+  if (loaded) DestroyFilter(loaded);
+  DestroyFilter(filter);
+}
+
+TEST(BloomWire, RejectsHashCountInconsistentWithBitsPerEntry) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  filter->Put(AsBytes("x", 1));
+  size_t hdr_size = ComputeHeaderSize(*filter);
+  std::vector<uint8_t> buf(hdr_size);
+  SerializeHeader(*filter, buf.data());
+
+  auto* meta = reinterpret_cast<WireLayerMeta*>(
+    buf.data() + sizeof(WireFilterHeader));
+  meta[0].hashCount = 1;
+
+  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject wire header hashCount inconsistent with bitsPerEntry";
+  if (loaded) DestroyFilter(loaded);
+  DestroyFilter(filter);
+}
+
+TEST(BloomWire, RejectsScalingExpansionZero) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  size_t hdr_size = ComputeHeaderSize(*filter);
+  std::vector<uint8_t> buf(hdr_size);
+  SerializeHeader(*filter, buf.data());
+
+  auto* hdr = reinterpret_cast<WireFilterHeader*>(buf.data());
+  hdr->expansionFactor = 0;
+
+  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject scalable wire header with expansion=0";
+  if (loaded) DestroyFilter(loaded);
+  DestroyFilter(filter);
+}
+
+TEST(BloomWire, AcceptsFixedExpansionZero) {
+  auto* filter = CreateFilter(100, 0.01,
+    DefaultFlags() | BloomFlags::FixedSize, 2);
+  size_t hdr_size = ComputeHeaderSize(*filter);
+  std::vector<uint8_t> buf(hdr_size);
+  SerializeHeader(*filter, buf.data());
+
+  auto* hdr = reinterpret_cast<WireFilterHeader*>(buf.data());
+  hdr->expansionFactor = 0;
+
+  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+  ASSERT_NE(loaded, nullptr)
+    << "Fixed-size wire headers may encode expansion=0";
+  EXPECT_TRUE(HasFlag(loaded->Flags(), BloomFlags::FixedSize));
+  EXPECT_EQ(loaded->ExpansionFactor(), 0u);
+
+  DestroyFilter(loaded);
   DestroyFilter(filter);
 }
 

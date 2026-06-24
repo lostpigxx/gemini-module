@@ -2,7 +2,9 @@
 #include "bloom_filter.h"
 #include "murmur2.h"
 
+#include <bit>
 #include <cstring>
+#include <limits>
 #include <string>
 
 static std::span<const std::byte> ToSpan(const std::string& s) {
@@ -68,6 +70,22 @@ TEST(BloomLayerTest, MoveSemantics) {
   EXPECT_EQ(layer->GetBitArray(), nullptr);
 }
 
+TEST(BloomLayerTest, MoveAssignmentReleasesOldStorage) {
+  auto first = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
+  auto second = BloomLayer::Create(2000, 0.001, BloomFlags::Use64Bit);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+
+  uint64_t secondCapacity = second->GetCapacity();
+  uint64_t secondBits = second->GetTotalBits();
+  *first = std::move(*second);
+
+  EXPECT_EQ(first->GetCapacity(), secondCapacity);
+  EXPECT_EQ(first->GetTotalBits(), secondBits);
+  EXPECT_NE(first->GetBitArray(), nullptr);
+  EXPECT_EQ(second->GetBitArray(), nullptr);
+}
+
 TEST(BloomLayerTest, InsertAndTest) {
   auto layer = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
   ASSERT_TRUE(layer.has_value());
@@ -109,6 +127,28 @@ TEST(BloomLayerTest, PowerOfTwoViaBitCeil) {
   ASSERT_TRUE(layer.has_value());
   EXPECT_GT(layer->GetLog2Bits(), 0);
   EXPECT_EQ(layer->GetTotalBits(), 1ULL << layer->GetLog2Bits());
+}
+
+TEST(BloomLayerTest, NoRoundUsesAlignedNonPowerOfTwoBits) {
+  auto layer = BloomLayer::Create(1000, 0.01,
+    BloomFlags::Use64Bit | BloomFlags::NoRound);
+  ASSERT_TRUE(layer.has_value());
+
+  EXPECT_EQ(layer->GetLog2Bits(), 0);
+  EXPECT_EQ(layer->GetTotalBits() % 64, 0u);
+  EXPECT_EQ(layer->GetDataSize(), layer->GetTotalBits() / 8);
+  EXPECT_NE(layer->GetTotalBits(), 1ULL << std::bit_width(layer->GetTotalBits() - 1));
+}
+
+TEST(BloomLayerTest, RejectsInvalidCreateParameters) {
+  EXPECT_FALSE(BloomLayer::Create(0, 0.01, BloomFlags::Use64Bit).has_value());
+  EXPECT_FALSE(BloomLayer::Create(100, 0.0, BloomFlags::Use64Bit).has_value());
+  EXPECT_FALSE(BloomLayer::Create(100, 1.0, BloomFlags::Use64Bit).has_value());
+  EXPECT_FALSE(BloomLayer::Create(100, -0.01, BloomFlags::Use64Bit).has_value());
+  EXPECT_FALSE(BloomLayer::Create(100,
+    std::numeric_limits<double>::quiet_NaN(), BloomFlags::Use64Bit).has_value());
+  EXPECT_FALSE(BloomLayer::Create(100,
+    std::numeric_limits<double>::infinity(), BloomFlags::Use64Bit).has_value());
 }
 
 TEST(BloomFlagsTest, EnumClassOperators) {
@@ -200,4 +240,26 @@ TEST(HashPolicyTest, Hash64BinaryWithNulls) {
   auto hp = Hash64Policy::Compute(AsBytes(bin, 11));
   EXPECT_EQ(hp.primary, 0xdcd0bc9f75315849ULL);
   EXPECT_EQ(hp.secondary, 0xcf5f620f7200160dULL);
+}
+
+TEST(BitAddressTest, ResolveBitMapsLinearIndexToLittleEndianByteBit) {
+  auto b0 = ResolveBit(0);
+  EXPECT_EQ(b0.byteOffset, 0u);
+  EXPECT_EQ(b0.mask, 0x01u);
+
+  auto b7 = ResolveBit(7);
+  EXPECT_EQ(b7.byteOffset, 0u);
+  EXPECT_EQ(b7.mask, 0x80u);
+
+  auto b8 = ResolveBit(8);
+  EXPECT_EQ(b8.byteOffset, 1u);
+  EXPECT_EQ(b8.mask, 0x01u);
+}
+
+TEST(ProbePositionTest, UsesMaskForPowerOfTwoAndModuloOtherwise) {
+  HashPair hp{0x1234, 0x55};
+  EXPECT_EQ(ProbePosition(hp, 3, 0xff, 256, true),
+            (hp.primary + 3 * hp.secondary) & 0xff);
+  EXPECT_EQ(ProbePosition(hp, 3, 0, 1000, false),
+            (hp.primary + 3 * hp.secondary) % 1000);
 }
