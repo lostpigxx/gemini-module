@@ -1,0 +1,5686 @@
+{
+  "envs": {
+    "redis-6.2-redisbloom-v2.8.20": {
+      "command_oracle": {
+        "gemini_fixed_insert_reserve": "OK",
+        "gemini_fixed_reserve": "OK",
+        "gemini_info_capacity": 100,
+        "gemini_info_full": [
+          "Capacity",
+          100,
+          "Size",
+          440,
+          "Number of filters",
+          1,
+          "Number of items inserted",
+          1,
+          "Expansion rate",
+          2
+        ],
+        "gemini_info_size": 440,
+        "gemini_insert_nocreate_capacity": {
+          "error": "ERR NOCREATE cannot be used with CAPACITY or ERROR"
+        },
+        "gemini_insert_overflow": [
+          1,
+          1,
+          {
+            "error": "ERR non scaling filter is full"
+          },
+          {
+            "error": "ERR non scaling filter is full"
+          }
+        ],
+        "gemini_madd_overflow": [
+          1,
+          1,
+          {
+            "error": "ERR non scaling filter is full"
+          },
+          {
+            "error": "ERR non scaling filter is full"
+          }
+        ],
+        "gemini_module": [
+          [
+            {
+              "bytes": 4,
+              "hex": "6e616d65"
+            },
+            {
+              "bytes": 11,
+              "hex": "47656d696e69426c6f6f6d"
+            },
+            {
+              "bytes": 3,
+              "hex": "766572"
+            },
+            1
+          ]
+        ],
+        "redisbloom_fixed_insert_reserve": "OK",
+        "redisbloom_fixed_reserve": "OK",
+        "redisbloom_info_capacity": [
+          100
+        ],
+        "redisbloom_info_full": [
+          "Capacity",
+          100,
+          "Size",
+          240,
+          "Number of filters",
+          1,
+          "Number of items inserted",
+          1,
+          "Expansion rate",
+          2
+        ],
+        "redisbloom_info_size": [
+          240
+        ],
+        "redisbloom_insert_nocreate_capacity": {
+          "error": "ERR not found"
+        },
+        "redisbloom_insert_overflow": [
+          1,
+          1,
+          {
+            "error": "ERR non scaling filter is full"
+          }
+        ],
+        "redisbloom_madd_overflow": [
+          1,
+          1,
+          {
+            "error": "ERR non scaling filter is full"
+          }
+        ],
+        "redisbloom_module": [
+          [
+            {
+              "bytes": 4,
+              "hex": "6e616d65"
+            },
+            {
+              "bytes": 2,
+              "hex": "6266"
+            },
+            {
+              "bytes": 3,
+              "hex": "766572"
+            },
+            20820
+          ]
+        ]
+      },
+      "corpora": {
+        "binary_items": {
+          "aof_command_gemini_to_rb": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 0,
+              "missing_count": 6,
+              "missing_samples": [
+                "0:",
+                "1:6e756c3a003a696e73696465",
+                "2:63726c663a0d0a3a696e73696465",
+                "3:737061636520616e6420746162096974",
+                "4:74636c3a7b6c6973747d5c6368617273"
+              ]
+            },
+            "critical_log_count": 1,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_command_rb_to_gemini": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 0,
+              "missing_count": 6,
+              "missing_samples": [
+                "0:",
+                "1:6e756c3a003a696e73696465",
+                "2:63726c663a0d0a3a696e73696465",
+                "3:737061636520616e6420746162096974",
+                "4:74636c3a7b6c6973747d5c6368617273"
+              ]
+            },
+            "critical_log_count": 1,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_gemini_to_rb": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_rb_to_gemini": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_gemini_to_rb": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 161,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_rb_to_gemini": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 133,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "expected_items": 6,
+          "note": "raw RESP binary item coverage",
+          "rdb_gemini_to_rb": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "rdb_rb_to_gemini": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_gemini_to_rb": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_rb_to_gemini": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_gemini_to_rb": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_rb_to_gemini": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_gemini_to_rb": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 0,
+              "missing_count": 6,
+              "missing_samples": [
+                "0:",
+                "1:6e756c3a003a696e73696465",
+                "2:63726c663a0d0a3a696e73696465",
+                "3:737061636520616e6420746162096974",
+                "4:74636c3a7b6c6973747d5c6368617273"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                2,
+                128
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR received bad data"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_rb_to_gemini": {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 0,
+              "missing_count": 6,
+              "missing_samples": [
+                "0:",
+                "1:6e756c3a003a696e73696465",
+                "2:63726c663a0d0a3a696e73696465",
+                "3:737061636520616e6420746162096974",
+                "4:74636c3a7b6c6973747d5c6368617273"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                73,
+                72
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR cursor exceeds layer count"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 6,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          }
+        },
+        "empty_scaling": {
+          "aof_command_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 1,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_command_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 1,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 73,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 73,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "expected_items": 0,
+          "note": "empty scaling filter",
+          "rdb_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "rdb_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                2,
+                144
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR received bad data"
+              }
+            ],
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                145,
+                144
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR cursor exceeds layer count"
+              }
+            ],
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          }
+        },
+        "expansion1": {
+          "aof_command_gemini_to_rb": {
+            "check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 0,
+              "missing_count": 20,
+              "missing_samples": [
+                "0:657870313a30",
+                "1:657870313a31",
+                "2:657870313a32",
+                "3:657870313a33",
+                "4:657870313a34"
+              ]
+            },
+            "critical_log_count": 4,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_command_rb_to_gemini": {
+            "check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 0,
+              "missing_count": 20,
+              "missing_samples": [
+                "0:657870313a30",
+                "1:657870313a31",
+                "2:657870313a32",
+                "3:657870313a33",
+                "4:657870313a34"
+              ]
+            },
+            "critical_log_count": 4,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_gemini_to_rb": {
+            "check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_rb_to_gemini": {
+            "check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_gemini_to_rb": {
+            "check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 564,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_rb_to_gemini": {
+            "check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 201,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "expected_items": 20,
+          "note": "many same-sized layers",
+          "rdb_gemini_to_rb": {
+            "check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "rdb_rb_to_gemini": {
+            "check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_gemini_to_rb": {
+            "check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_rb_to_gemini": {
+            "check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_gemini_to_rb": {
+            "check": {
+              "card": 19,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_rb_to_gemini": {
+            "check": {
+              "card": 20,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_gemini_to_rb": {
+            "check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 0,
+              "missing_count": 20,
+              "missing_samples": [
+                "0:657870313a30",
+                "1:657870313a31",
+                "2:657870313a32",
+                "3:657870313a33",
+                "4:657870313a34"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                232
+              ],
+              [
+                2,
+                128
+              ],
+              [
+                3,
+                128
+              ],
+              [
+                4,
+                128
+              ],
+              [
+                5,
+                128
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR received bad data"
+              },
+              {
+                "error": "ERR received bad data"
+              },
+              {
+                "error": "ERR received bad data"
+              },
+              {
+                "error": "ERR received bad data"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_rb_to_gemini": {
+            "check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 0,
+              "missing_count": 20,
+              "missing_samples": [
+                "0:657870313a30",
+                "1:657870313a31",
+                "2:657870313a32",
+                "3:657870313a33",
+                "4:657870313a34"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                232
+              ],
+              [
+                9,
+                8
+              ],
+              [
+                17,
+                8
+              ],
+              [
+                33,
+                16
+              ],
+              [
+                49,
+                16
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR cursor exceeds layer count"
+              },
+              {
+                "error": "ERR cursor exceeds layer count"
+              },
+              {
+                "error": "ERR cursor exceeds layer count"
+              },
+              {
+                "error": "ERR cursor exceeds layer count"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 19,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          }
+        },
+        "expansion4": {
+          "aof_command_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:657870343a30",
+                "1:657870343a31",
+                "2:657870343a32",
+                "3:657870343a33",
+                "4:657870343a34"
+              ]
+            },
+            "critical_log_count": 3,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_command_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:657870343a30",
+                "1:657870343a31",
+                "2:657870343a32",
+                "3:657870343a33",
+                "4:657870343a34"
+              ]
+            },
+            "critical_log_count": 3,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 486,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 306,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "expected_items": 40,
+          "note": "larger expansion",
+          "rdb_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "rdb_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:657870343a30",
+                "1:657870343a31",
+                "2:657870343a32",
+                "3:657870343a33",
+                "4:657870343a34"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                179
+              ],
+              [
+                2,
+                128
+              ],
+              [
+                3,
+                128
+              ],
+              [
+                4,
+                144
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR received bad data"
+              },
+              {
+                "error": "ERR received bad data"
+              },
+              {
+                "error": "ERR received bad data"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:657870343a30",
+                "1:657870343a31",
+                "2:657870343a32",
+                "3:657870343a33",
+                "4:657870343a34"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                179
+              ],
+              [
+                9,
+                8
+              ],
+              [
+                41,
+                32
+              ],
+              [
+                185,
+                144
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR cursor exceeds layer count"
+              },
+              {
+                "error": "ERR cursor exceeds layer count"
+              },
+              {
+                "error": "ERR cursor exceeds layer count"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          }
+        },
+        "fixed_full": {
+          "aof_command_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:66697865643a30",
+                "1:66697865643a31",
+                "2:66697865643a32",
+                "3:66697865643a33",
+                "4:66697865643a34"
+              ]
+            },
+            "critical_log_count": 1,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_command_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:66697865643a30",
+                "1:66697865643a31",
+                "2:66697865643a32",
+                "3:66697865643a33",
+                "4:66697865643a34"
+              ]
+            },
+            "critical_log_count": 1,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 173,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 76,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "expected_items": 8,
+          "note": "fixed filter at capacity",
+          "rdb_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "rdb_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:66697865643a30",
+                "1:66697865643a31",
+                "2:66697865643a32",
+                "3:66697865643a33",
+                "4:66697865643a34"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                2,
+                128
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR received bad data"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:66697865643a30",
+                "1:66697865643a31",
+                "2:66697865643a32",
+                "3:66697865643a33",
+                "4:66697865643a34"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                17,
+                16
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR cursor exceeds layer count"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          }
+        },
+        "large_empty_16mb": {
+          "aof_command_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 1,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_command_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 2,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 235052,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 235052,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "expected_items": 0,
+          "note": "empty large filter intended to force RedisBloom 16MB SCANDUMP split",
+          "rdb_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "rdb_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_gemini_to_rb": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                2,
+                20677040
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR received bad data"
+              }
+            ],
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_rb_to_gemini": {
+            "check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                16777217,
+                16777216
+              ],
+              [
+                20677041,
+                3899824
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR cursor exceeds layer count"
+              },
+              {
+                "error": "ERR cursor exceeds layer count"
+              }
+            ],
+            "populate": {
+              "adds": [],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 0,
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          }
+        },
+        "long_item": {
+          "aof_command_gemini_to_rb": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 0,
+              "missing_count": 1,
+              "missing_samples": [
+                "0:6c6f6e673a7878787878787878787878"
+              ]
+            },
+            "critical_log_count": 1,
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_command_rb_to_gemini": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 0,
+              "missing_count": 1,
+              "missing_samples": [
+                "0:6c6f6e673a7878787878787878787878"
+              ]
+            },
+            "critical_log_count": 1,
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_gemini_to_rb": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_rb_to_gemini": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_gemini_to_rb": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 83,
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_rb_to_gemini": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 93,
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "expected_items": 1,
+          "note": "large item payload",
+          "rdb_gemini_to_rb": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "rdb_rb_to_gemini": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_gemini_to_rb": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_rb_to_gemini": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_gemini_to_rb": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_rb_to_gemini": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_gemini_to_rb": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 0,
+              "missing_count": 1,
+              "missing_samples": [
+                "0:6c6f6e673a7878787878787878787878"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                2,
+                128
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR received bad data"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_rb_to_gemini": {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 0,
+              "missing_count": 1,
+              "missing_samples": [
+                "0:6c6f6e673a7878787878787878787878"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                73,
+                72
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR cursor exceeds layer count"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 1,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          }
+        },
+        "multi_exp2": {
+          "aof_command_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:6974656d3a30",
+                "1:6974656d3a31",
+                "2:6974656d3a32",
+                "3:6974656d3a33",
+                "4:6974656d3a34"
+              ]
+            },
+            "critical_log_count": 3,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_command_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:6974656d3a30",
+                "1:6974656d3a31",
+                "2:6974656d3a32",
+                "3:6974656d3a33",
+                "4:6974656d3a34"
+              ]
+            },
+            "critical_log_count": 3,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 504,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 243,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "expected_items": 40,
+          "note": "multi-layer expansion 2",
+          "rdb_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "rdb_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_gemini_to_rb": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:6974656d3a30",
+                "1:6974656d3a31",
+                "2:6974656d3a32",
+                "3:6974656d3a33",
+                "4:6974656d3a34"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                179
+              ],
+              [
+                2,
+                128
+              ],
+              [
+                3,
+                128
+              ],
+              [
+                4,
+                128
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR received bad data"
+              },
+              {
+                "error": "ERR received bad data"
+              },
+              {
+                "error": "ERR received bad data"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_rb_to_gemini": {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:6974656d3a30",
+                "1:6974656d3a31",
+                "2:6974656d3a32",
+                "3:6974656d3a33",
+                "4:6974656d3a34"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                179
+              ],
+              [
+                17,
+                16
+              ],
+              [
+                49,
+                32
+              ],
+              [
+                121,
+                72
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR cursor exceeds layer count"
+              },
+              {
+                "error": "ERR cursor exceeds layer count"
+              },
+              {
+                "error": "ERR cursor exceeds layer count"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 40,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          }
+        },
+        "single_layer": {
+          "aof_command_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:73696e676c653a30",
+                "1:73696e676c653a31",
+                "2:73696e676c653a32",
+                "3:73696e676c653a33",
+                "4:73696e676c653a34"
+              ]
+            },
+            "critical_log_count": 1,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_command_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:73696e676c653a30",
+                "1:73696e676c653a31",
+                "2:73696e676c653a32",
+                "3:73696e676c653a33",
+                "4:73696e676c653a34"
+              ]
+            },
+            "critical_log_count": 1,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "aof_rdb_preamble_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 189,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "dump_restore_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "dump_len": 189,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "restore": "OK",
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "expected_items": 8,
+          "note": "single layer",
+          "rdb_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "rdb_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "save": "OK",
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_fullsync_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "repl_live_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "critical_log_count": 0,
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "replicaof": "OK",
+            "replication": {
+              "master_link_status": "up",
+              "master_sync_in_progress": "0"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_gemini_to_rb": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:73696e676c653a30",
+                "1:73696e676c653a31",
+                "2:73696e676c653a32",
+                "3:73696e676c653a33",
+                "4:73696e676c653a34"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                2,
+                144
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR received bad data"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          },
+          "scandump_rb_to_gemini": {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:73696e676c653a30",
+                "1:73696e676c653a31",
+                "2:73696e676c653a32",
+                "3:73696e676c653a33",
+                "4:73696e676c653a34"
+              ]
+            },
+            "chunks": [
+              [
+                1,
+                73
+              ],
+              [
+                145,
+                144
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "load_replies": [
+              "OK",
+              {
+                "error": "ERR cursor exceeds layer count"
+              }
+            ],
+            "populate": {
+              "adds": [
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1
+              ],
+              "reserve": "OK"
+            },
+            "source_check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 8,
+              "missing_count": 0,
+              "missing_samples": []
+            }
+          }
+        }
+      },
+      "env": {
+        "module_ver": "20820",
+        "name": "redis-6.2-redisbloom-v2.8.20",
+        "redis_server": "/workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server",
+        "redis_tag": "6.2.17",
+        "redisbloom_module": "/tmp/redisbloom-v2.8.20/bin/linux-x64-release/redisbloom.so",
+        "redisbloom_tag": "v2.8.20"
+      }
+    }
+  },
+  "summary": {
+    "redis-6.2-redisbloom-v2.8.20": {
+      "error": 0,
+      "fail": 38,
+      "pass": 88
+    }
+  }
+}
