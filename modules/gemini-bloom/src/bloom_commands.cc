@@ -647,7 +647,7 @@ int RegisterBloomCommands(RedisModuleCtx* ctx) {
     {"BF.MEXISTS",   CmdMexists,   "readonly"},
     {"BF.INFO",      CmdInfo,      "readonly"},
     {"BF.CARD",      CmdCard,      "readonly"},
-    {"BF.SCANDUMP",  CmdScandump,  "readonly"},
+    {"BF.SCANDUMP",  CmdScandump,  "write"},
     {"BF.LOADCHUNK", CmdLoadchunk, "write deny-oom"},
   };
 

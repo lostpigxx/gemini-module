@@ -1014,6 +1014,28 @@ TEST(BloomWire, RejectsTotalBitsZero) {
   DestroyFilter(filter);
 }
 
+TEST(BloomWire, RejectsExcessiveTotalDataSize) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  filter->Put(AsBytes("x", 1));
+  size_t hdr_size = ComputeHeaderSize(*filter);
+  std::vector<uint8_t> buf(hdr_size);
+  SerializeHeader(*filter, buf.data());
+
+  auto* meta = reinterpret_cast<WireLayerMeta*>(
+    buf.data() + sizeof(WireFilterHeader));
+  // Set dataSize to 5GB — exceeds the 4GB cap
+  uint64_t hugeSize = 5ULL * 1024 * 1024 * 1024;
+  meta[0].dataSize = hugeSize;
+  meta[0].totalBits = hugeSize * 8;
+  meta[0].log2Bits = 0;
+
+  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject wire header with excessive totalDataSize";
+  if (loaded) DestroyFilter(loaded);
+  DestroyFilter(filter);
+}
+
 TEST(BloomWire, HeaderSizeScalesWithLayers) {
   auto* f1 = CreateFilter(100, 0.01, DefaultFlags(), 2);
   size_t s1 = ComputeHeaderSize(*f1);

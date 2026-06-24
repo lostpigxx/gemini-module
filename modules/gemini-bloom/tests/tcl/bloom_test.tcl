@@ -1150,11 +1150,11 @@ test_assert "COMMAND INFO BF.EXISTS shows readonly flag" {
   }
 }
 
-test_assert "COMMAND INFO BF.SCANDUMP shows readonly flag" {
+test_assert "COMMAND INFO BF.SCANDUMP shows write flag" {
   set info [r COMMAND INFO BF.SCANDUMP]
   set cmd_str [join $info " "]
-  if {[string first "readonly" $cmd_str] < 0} {
-    error "BF.SCANDUMP should have readonly flag, got: $cmd_str"
+  if {[string first "write" $cmd_str] < 0} {
+    error "BF.SCANDUMP should have write flag, got: $cmd_str"
   }
 }
 

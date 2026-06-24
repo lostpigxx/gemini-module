@@ -261,11 +261,15 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   const auto* meta = reinterpret_cast<const WireLayerMeta*>(
     static_cast<const char*>(data) + sizeof(WireFilterHeader));
 
+  constexpr uint64_t kMaxTotalDataSize = 4ULL * 1024 * 1024 * 1024;
   uint64_t itemSum = 0;
+  uint64_t totalDataSize = 0;
   for (size_t i = 0; i < hdr->numLayers; i++) {
     if (!ValidateLayerMeta(meta[i])) return nullptr;
     if (meta[i].itemCount > meta[i].capacity) return nullptr;
     itemSum += meta[i].itemCount;
+    totalDataSize += meta[i].dataSize;
+    if (totalDataSize > kMaxTotalDataSize) return nullptr;
   }
   if (itemSum != hdr->totalItems) return nullptr;
 
