@@ -43,6 +43,18 @@ constexpr BloomFlags FromUnderlying(unsigned v) {
   return static_cast<BloomFlags>(v);
 }
 
+constexpr unsigned kSupportedFlags =
+  ToUnderlying(BloomFlags::NoRound) |
+  ToUnderlying(BloomFlags::Use64Bit) |
+  ToUnderlying(BloomFlags::FixedSize);
+
+constexpr bool ValidateFlags(unsigned raw) {
+  return (raw & ~kSupportedFlags) == 0;
+}
+
+constexpr uint64_t kMaxCapacity = 1ULL << 30;
+constexpr unsigned kMaxExpansion = 32768;
+
 // --- Hash pair produced by double-hashing ---
 struct HashPair {
   uint64_t primary;

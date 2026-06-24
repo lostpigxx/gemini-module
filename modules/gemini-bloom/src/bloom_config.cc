@@ -1,4 +1,5 @@
 #include "bloom_config.h"
+#include "bloom_filter.h"
 
 #include <climits>
 #include <cstring>
@@ -30,7 +31,7 @@ int BloomConfigLoad(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       }
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
-          val <= 0) {
+          val <= 0 || static_cast<uint64_t>(val) > kMaxCapacity) {
         RedisModule_Log(ctx, "warning", "Invalid INITIAL_SIZE");
         return REDISMODULE_ERR;
       }
@@ -42,7 +43,7 @@ int BloomConfigLoad(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       }
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
-          val < 1 || val > UINT_MAX) {
+          val < 1 || static_cast<unsigned long long>(val) > kMaxExpansion) {
         RedisModule_Log(ctx, "warning", "Invalid EXPANSION (must be >= 1)");
         return REDISMODULE_ERR;
       }

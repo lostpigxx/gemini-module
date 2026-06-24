@@ -64,6 +64,51 @@ proc r {args} {
   return [redis_command $redis_fd {*}$args]
 }
 
+# Like redis_read_reply but returns errors as "ERR:..." strings instead of throwing.
+# Useful for reading arrays that may contain per-element errors.
+proc redis_read_reply_nothrow {fd} {
+  gets $fd line
+  set type [string index $line 0]
+  set data [string range $line 1 end]
+  set data [string trimright $data "\r"]
+
+  switch $type {
+    "+" { return $data }
+    "-" { return "ERR:$data" }
+    ":" { return [expr {int($data)}] }
+    "$" {
+      set len $data
+      if {$len == -1} { return "(nil)" }
+      set payload [read $fd [expr {$len + 2}]]
+      return [string range $payload 0 end-2]
+    }
+    "*" {
+      set count $data
+      if {$count == -1} { return "(nil)" }
+      set result {}
+      for {set i 0} {$i < $count} {incr i} {
+        lappend result [redis_read_reply_nothrow $fd]
+      }
+      return $result
+    }
+    default {
+      error "Unknown reply type: $type ($line)"
+    }
+  }
+}
+
+# Send a raw command and read the reply without throwing on per-element errors.
+proc r_nothrow {args} {
+  global redis_fd
+  set cmd "*[llength $args]\r\n"
+  foreach arg $args {
+    append cmd "\$[string length $arg]\r\n$arg\r\n"
+  }
+  puts -nonewline $redis_fd $cmd
+  flush $redis_fd
+  return [redis_read_reply_nothrow $redis_fd]
+}
+
 # ============================================================
 # Test framework
 # ============================================================
@@ -904,6 +949,213 @@ test_assert "Data survives AOF rewrite + restart" {
   r CONFIG SET appendonly no
   catch {file delete -force {*}[glob -nocomplain /tmp/appendonlydir/*]}
   catch {file delete -force /tmp/appendonlydir}
+}
+
+puts "\n=== Resource limits (BUG-04) ==="
+
+test_error "BF.RESERVE capacity exceeding 1<<30 rejected" {
+  r BF.RESERVE limit_cap 0.01 1073741825
+} {ERR*capacity*}
+
+test_error "BF.RESERVE expansion exceeding 32768 rejected" {
+  r BF.RESERVE limit_exp 0.01 100 EXPANSION 32769
+} {ERR*}
+
+test_error "BF.INSERT capacity exceeding 1<<30 rejected" {
+  r BF.INSERT limit_cap_ins CAPACITY 1073741825 ITEMS a
+} {ERR*capacity*}
+
+test_error "BF.INSERT expansion exceeding 32768 rejected" {
+  r BF.INSERT limit_exp_ins EXPANSION 32769 ITEMS a
+} {ERR*}
+
+test "BF.RESERVE capacity at limit 1<<30 succeeds" {
+  r BF.RESERVE limit_cap_ok 0.01 1073741824
+} {OK}
+
+test "BF.RESERVE expansion at limit 32768 succeeds" {
+  r BF.RESERVE limit_exp_ok 0.01 100 EXPANSION 32768
+} {OK}
+
+puts "\n=== MADD/INSERT partial failure (BUG-05) ==="
+
+test_assert "BF.MADD on full NONSCALING filter returns errors" {
+  r BF.RESERVE madd_full 0.01 5 NONSCALING
+  for {set i 0} {$i < 5} {incr i} {
+    catch {r BF.ADD madd_full "fill_$i"}
+  }
+  set result [r_nothrow BF.MADD madd_full new1 new2 new3]
+  set err_count 0
+  foreach elem $result {
+    if {[string match "ERR:*" $elem]} { incr err_count }
+  }
+  if {$err_count != 3} { error "Expected 3 errors, got $err_count (result: $result)" }
+  set card [r BF.CARD madd_full]
+  if {$card < 5} { error "Expected CARD>=5, got $card" }
+}
+
+test_assert "BF.CARD after partial MADD matches actual insertions" {
+  r BF.RESERVE partial_test 0.01 3 NONSCALING
+  r BF.ADD partial_test a
+  r BF.ADD partial_test b
+  # 2 items in, capacity=3, add batch of 3: first succeeds, rest fail
+  set result [r_nothrow BF.MADD partial_test c d e]
+  set first [lindex $result 0]
+  if {$first != 1} { error "First item should succeed (1), got $first" }
+  set err_count 0
+  foreach elem [lrange $result 1 end] {
+    if {[string match "ERR:*" $elem]} { incr err_count }
+  }
+  if {$err_count != 2} { error "Expected 2 errors after first success, got $err_count" }
+  set card [r BF.CARD partial_test]
+  if {$card != 3} { error "Expected CARD=3 but got $card" }
+}
+
+test_assert "BF.INSERT on full filter stops and returns errors" {
+  r BF.RESERVE insert_full 0.01 3 NONSCALING
+  r BF.ADD insert_full a
+  r BF.ADD insert_full b
+  r BF.ADD insert_full c
+  set result [r_nothrow BF.INSERT insert_full NOCREATE ITEMS d e]
+  set err_count 0
+  foreach elem $result {
+    if {[string match "ERR:*" $elem]} { incr err_count }
+  }
+  if {$err_count != 2} { error "Expected 2 errors, got $err_count (result: $result)" }
+  set card [r BF.CARD insert_full]
+  if {$card != 3} { error "Expected CARD=3 but got $card" }
+}
+
+puts "\n=== Parser duplicate options (IMPL-08) ==="
+
+test_error "BF.RESERVE duplicate EXPANSION rejected" {
+  r BF.RESERVE dup_exp 0.01 100 EXPANSION 2 EXPANSION 4
+} {ERR*duplicate*}
+
+test_error "BF.RESERVE duplicate NONSCALING rejected" {
+  r BF.RESERVE dup_ns 0.01 100 NONSCALING NONSCALING
+} {ERR*duplicate*}
+
+test_error "BF.INSERT duplicate ERROR rejected" {
+  r BF.INSERT dup_err ERROR 0.01 ERROR 0.02 ITEMS a
+} {ERR*duplicate*}
+
+test_error "BF.INSERT duplicate CAPACITY rejected" {
+  r BF.INSERT dup_cap CAPACITY 100 CAPACITY 200 ITEMS a
+} {ERR*duplicate*}
+
+test_error "BF.INSERT duplicate EXPANSION rejected" {
+  r BF.INSERT dup_exp_ins EXPANSION 2 EXPANSION 4 ITEMS a
+} {ERR*duplicate*}
+
+test_error "BF.INSERT duplicate NONSCALING rejected" {
+  r BF.INSERT dup_ns_ins NONSCALING NONSCALING ITEMS a
+} {ERR*duplicate*}
+
+puts "\n=== Module config tests (TEST-07) ==="
+
+# Module config is tested via module load args.
+# We can't reload the module mid-test, but we can verify the module
+# loaded successfully with default config and that the defaults work.
+
+test_assert "Default config creates filter with expected defaults" {
+  r DEL cfg_default
+  r BF.ADD cfg_default test
+  set info [r BF.INFO cfg_default]
+  set idx [lsearch $info "Capacity"]
+  set cap [lindex $info [expr {$idx + 1}]]
+  if {$cap != 100} { error "Default capacity should be 100, got $cap" }
+  set idx [lsearch $info "Expansion rate"]
+  set exp [lindex $info [expr {$idx + 1}]]
+  if {$exp != 2} { error "Default expansion should be 2, got $exp" }
+}
+
+puts "\n=== LOADCHUNK half-restore safety (DESIGN-02) ==="
+
+test_assert "Half-restored filter returns 0 for EXISTS" {
+  # Create a filter with data
+  r DEL half_src half_dst
+  r BF.RESERVE half_src 0.01 100
+  r BF.ADD half_src testitem
+
+  # Only load header, skip data chunks
+  set reply [r BF.SCANDUMP half_src 0]
+  set hdr_cursor [lindex $reply 0]
+  set hdr_data [lindex $reply 1]
+  r BF.LOADCHUNK half_dst $hdr_cursor $hdr_data
+
+  # The filter exists but bit arrays are zeros
+  set exists [r BF.EXISTS half_dst testitem]
+  if {$exists != 0} { error "Half-restored filter should return 0 for EXISTS, got $exists" }
+
+  # BF.CARD still shows header-declared count
+  set card [r BF.CARD half_dst]
+  if {$card != 1} { error "Half-restored CARD should be 1, got $card" }
+}
+
+puts "\n=== SCANDUMP cursor protocol documentation (COMPAT-01) ==="
+
+test_assert "SCANDUMP uses layer-index cursor protocol" {
+  r DEL cursor_test
+  r BF.RESERVE cursor_test 0.01 10
+  for {set i 0} {$i < 30} {incr i} {
+    r BF.ADD cursor_test "cursor_$i"
+  }
+  set info [r BF.INFO cursor_test]
+  set idx [lsearch $info "Number of filters"]
+  set nlayers [lindex $info [expr {$idx + 1}]]
+
+  # cursor=0 -> returns next=1
+  set reply [r BF.SCANDUMP cursor_test 0]
+  set next [lindex $reply 0]
+  if {$next != 1} { error "First SCANDUMP should return cursor=1, got $next" }
+
+  # Iterate through all layers collecting cursors
+  set cursor 1
+  for {set c 0} {$c < $nlayers} {incr c} {
+    set reply [r BF.SCANDUMP cursor_test $cursor]
+    set next [lindex $reply 0]
+    if {$c < $nlayers - 1} {
+      set expected [expr {$cursor + 1}]
+      if {$next != $expected} {
+        error "SCANDUMP cursor=$cursor should return $expected, got $next"
+      }
+    }
+    set cursor $next
+  }
+
+  # After iterating all layers, next cursor should point past end
+  # Querying with that cursor returns [0, ""]
+  set reply [r BF.SCANDUMP cursor_test $cursor]
+  set next [lindex $reply 0]
+  if {$next != 0} { error "Final SCANDUMP should return cursor=0, got $next" }
+}
+
+puts "\n=== Command flags (IMPL-09, TEST-08) ==="
+
+test_assert "COMMAND INFO BF.ADD shows write flag" {
+  # COMMAND INFO returns: [[name, arity, [flags...], first-key, last-key, step]]
+  set info [r COMMAND INFO BF.ADD]
+  set cmd_str [join $info " "]
+  if {[string first "write" $cmd_str] < 0} {
+    error "BF.ADD should have write flag, got: $cmd_str"
+  }
+}
+
+test_assert "COMMAND INFO BF.EXISTS shows readonly flag" {
+  set info [r COMMAND INFO BF.EXISTS]
+  set cmd_str [join $info " "]
+  if {[string first "readonly" $cmd_str] < 0} {
+    error "BF.EXISTS should have readonly flag, got: $cmd_str"
+  }
+}
+
+test_assert "COMMAND INFO BF.SCANDUMP shows readonly flag" {
+  set info [r COMMAND INFO BF.SCANDUMP]
+  set cmd_str [join $info " "]
+  if {[string first "readonly" $cmd_str] < 0} {
+    error "BF.SCANDUMP should have readonly flag, got: $cmd_str"
+  }
 }
 
 # ============================================================

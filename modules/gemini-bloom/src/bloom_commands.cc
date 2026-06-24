@@ -78,22 +78,10 @@ static bool MatchArg(std::string_view arg, std::string_view target) {
   return strncasecmp(arg.data(), target.data(), arg.size()) == 0;
 }
 
-// Executes a Put and replies with the result. Returns true if the item was new.
 static const char* FilterFullError(const ScalingBloomFilter* filter) {
   return HasFlag(filter->Flags(), BloomFlags::FixedSize)
     ? "ERR non scaling filter is full"
     : "ERR filter expansion failed";
-}
-
-static bool PutAndReply(RedisModuleCtx* ctx, ScalingBloomFilter* filter,
-                         const char* item, size_t len) {
-  auto result = filter->Put(AsBytes(item, len));
-  if (!result.has_value()) {
-    RedisModule_ReplyWithError(ctx, FilterFullError(filter));
-    return false;
-  }
-  RedisModule_ReplyWithLongLong(ctx, *result ? 1 : 0);
-  return *result;
 }
 
 // --- BF.RESERVE ---
@@ -108,13 +96,16 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   }
 
   long long cap;
-  if (RedisModule_StringToLongLong(argv[3], &cap) != REDISMODULE_OK || cap <= 0) {
+  if (RedisModule_StringToLongLong(argv[3], &cap) != REDISMODULE_OK || cap <= 0 ||
+      static_cast<uint64_t>(cap) > kMaxCapacity) {
     return RedisModule_ReplyWithError(ctx, "ERR expected a positive capacity value");
   }
 
   unsigned expansion = g_bloomConfig.defaultExpansion;
   bool fixed = false;
+  bool expansionSeen = false;
   bool expansionSet = false;
+  bool nonscalingSet = false;
 
   for (int i = 4; i < argc; i++) {
     size_t len;
@@ -122,11 +113,14 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     auto sv = std::string_view{arg, len};
 
     if (MatchArg(sv, "EXPANSION")) {
+      if (expansionSeen)
+        return RedisModule_ReplyWithError(ctx, "ERR duplicate EXPANSION option");
+      expansionSeen = true;
       if (++i >= argc)
         return RedisModule_ReplyWithError(ctx, "ERR EXPANSION expects a numeric argument");
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
-          val < 0 || val > UINT_MAX) {
+          val < 0 || static_cast<unsigned long long>(val) > kMaxExpansion) {
         return RedisModule_ReplyWithError(ctx, "ERR bad expansion");
       }
       if (val == 0) {
@@ -136,6 +130,9 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
         expansionSet = true;
       }
     } else if (MatchArg(sv, "NONSCALING")) {
+      if (nonscalingSet)
+        return RedisModule_ReplyWithError(ctx, "ERR duplicate NONSCALING option");
+      nonscalingSet = true;
       fixed = true;
     } else {
       return RedisModule_ReplyWithError(ctx, "ERR unrecognized option");
@@ -205,10 +202,22 @@ static int CmdMadd(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   RedisModule_ReplyWithArray(ctx, count);
 
   bool changed = created;
+  bool full = false;
   for (int i = 0; i < count; i++) {
+    if (full) {
+      RedisModule_ReplyWithError(ctx, FilterFullError(filter));
+      continue;
+    }
     size_t len;
     const char* item = RedisModule_StringPtrLen(argv[i + 2], &len);
-    if (PutAndReply(ctx, filter, item, len)) changed = true;
+    auto result = filter->Put(AsBytes(item, len));
+    if (!result.has_value()) {
+      RedisModule_ReplyWithError(ctx, FilterFullError(filter));
+      full = true;
+    } else {
+      RedisModule_ReplyWithLongLong(ctx, *result ? 1 : 0);
+      if (*result) changed = true;
+    }
   }
 
   if (changed) RedisModule_ReplicateVerbatim(ctx);
@@ -235,6 +244,7 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
   bool expansionSet = false;
   bool capacitySet = false;
   bool errorSet = false;
+  bool nonscalingSet = false;
 
   for (int i = 2; i < argc; i++) {
     size_t len;
@@ -242,6 +252,10 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
     auto sv = std::string_view{arg, len};
 
     if (MatchArg(sv, "ERROR")) {
+      if (errorSet) {
+        RedisModule_ReplyWithError(ctx, "ERR duplicate ERROR option");
+        return false;
+      }
       if (++i >= argc) { RedisModule_WrongArity(ctx); return false; }
       double val;
       if (RedisModule_StringToDouble(argv[i], &val) != REDISMODULE_OK ||
@@ -252,19 +266,28 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
       opts.errorRate = val;
       errorSet = true;
     } else if (MatchArg(sv, "CAPACITY")) {
+      if (capacitySet) {
+        RedisModule_ReplyWithError(ctx, "ERR duplicate CAPACITY option");
+        return false;
+      }
       if (++i >= argc) { RedisModule_WrongArity(ctx); return false; }
       long long val;
-      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val <= 0) {
+      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val <= 0 ||
+          static_cast<uint64_t>(val) > kMaxCapacity) {
         RedisModule_ReplyWithError(ctx, "ERR expected a positive capacity value");
         return false;
       }
       opts.capacity = static_cast<uint64_t>(val);
       capacitySet = true;
     } else if (MatchArg(sv, "EXPANSION")) {
+      if (expansionSet) {
+        RedisModule_ReplyWithError(ctx, "ERR duplicate EXPANSION option");
+        return false;
+      }
       if (++i >= argc) { RedisModule_WrongArity(ctx); return false; }
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
-          val < 0 || val > UINT_MAX) {
+          val < 0 || static_cast<unsigned long long>(val) > kMaxExpansion) {
         RedisModule_ReplyWithError(ctx, "ERR bad expansion");
         return false;
       }
@@ -277,6 +300,11 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
     } else if (MatchArg(sv, "NOCREATE")) {
       opts.noCreate = true;
     } else if (MatchArg(sv, "NONSCALING")) {
+      if (nonscalingSet) {
+        RedisModule_ReplyWithError(ctx, "ERR duplicate NONSCALING option");
+        return false;
+      }
+      nonscalingSet = true;
       opts.fixedSize = true;
     } else if (MatchArg(sv, "ITEMS")) {
       opts.itemsStart = i + 1;
@@ -343,10 +371,22 @@ static int CmdInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   RedisModule_ReplyWithArray(ctx, count);
 
   bool changed = (keyType == REDISMODULE_KEYTYPE_EMPTY);
+  bool full = false;
   for (int i = 0; i < count; i++) {
+    if (full) {
+      RedisModule_ReplyWithError(ctx, FilterFullError(filter));
+      continue;
+    }
     size_t len;
     const char* item = RedisModule_StringPtrLen(argv[opts.itemsStart + i], &len);
-    if (PutAndReply(ctx, filter, item, len)) changed = true;
+    auto result = filter->Put(AsBytes(item, len));
+    if (!result.has_value()) {
+      RedisModule_ReplyWithError(ctx, FilterFullError(filter));
+      full = true;
+    } else {
+      RedisModule_ReplyWithLongLong(ctx, *result ? 1 : 0);
+      if (*result) changed = true;
+    }
   }
 
   if (changed) RedisModule_ReplicateVerbatim(ctx);

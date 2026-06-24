@@ -2,6 +2,7 @@
 #include "bloom_filter.h"
 #include "murmur2.h"
 
+#include <cstring>
 #include <string>
 
 static std::span<const std::byte> ToSpan(const std::string& s) {
@@ -116,4 +117,87 @@ TEST(BloomFlagsTest, EnumClassOperators) {
   EXPECT_TRUE(HasFlag(combined, BloomFlags::NoRound));
   EXPECT_FALSE(HasFlag(combined, BloomFlags::FixedSize));
   EXPECT_EQ(ToUnderlying(combined), 5u);
+}
+
+// --- Phase 3: Flags validation tests ---
+
+TEST(BloomFlagsTest, ValidateFlagsAcceptsSupportedCombinations) {
+  EXPECT_TRUE(ValidateFlags(0));
+  EXPECT_TRUE(ValidateFlags(ToUnderlying(BloomFlags::NoRound)));
+  EXPECT_TRUE(ValidateFlags(ToUnderlying(BloomFlags::Use64Bit)));
+  EXPECT_TRUE(ValidateFlags(ToUnderlying(BloomFlags::FixedSize)));
+  EXPECT_TRUE(ValidateFlags(ToUnderlying(BloomFlags::Use64Bit | BloomFlags::NoRound)));
+  EXPECT_TRUE(ValidateFlags(
+    ToUnderlying(BloomFlags::Use64Bit | BloomFlags::NoRound | BloomFlags::FixedSize)));
+}
+
+TEST(BloomFlagsTest, ValidateFlagsRejectsUnknownBits) {
+  EXPECT_FALSE(ValidateFlags(0x80));
+  EXPECT_FALSE(ValidateFlags(0x10));
+  EXPECT_FALSE(ValidateFlags(0xFF));
+}
+
+TEST(BloomFlagsTest, ValidateFlagsRejectsRawBits) {
+  EXPECT_FALSE(ValidateFlags(ToUnderlying(BloomFlags::RawBits)));
+  EXPECT_FALSE(ValidateFlags(
+    ToUnderlying(BloomFlags::Use64Bit | BloomFlags::RawBits)));
+}
+
+TEST(BloomLayerTest, RawBitsCreatesZeroHashCount) {
+  auto layer = BloomLayer::Create(1024, 0.01, BloomFlags::RawBits);
+  ASSERT_TRUE(layer.has_value());
+  EXPECT_EQ(layer->GetHashCount(), 0u);
+  auto hp = Hash32Policy::Compute(AsBytes("test", 4));
+  EXPECT_TRUE(layer->Test(hp)) << "hashCount=0 makes Test() always true";
+}
+
+TEST(BloomFlagsTest, ResourceLimitConstants) {
+  EXPECT_EQ(kMaxCapacity, 1ULL << 30);
+  EXPECT_EQ(kMaxExpansion, 32768u);
+}
+
+// --- Phase 6: Hash exact golden vectors ---
+
+TEST(MurmurHash2Test, ExactVectors) {
+  EXPECT_EQ(MurmurHash2("", 0, 0x9747b28c), 0x106e08d9u);
+  EXPECT_EQ(MurmurHash2("a", 1, 0x9747b28c), 0xa2d0b27cu);
+  EXPECT_EQ(MurmurHash2("hello", 5, 0x9747b28c), 0x7f1ddbbdu);
+
+  char bin[] = "hello\0world";
+  EXPECT_EQ(MurmurHash2(bin, 11, 0x9747b28c), 0xd8e4f032u);
+}
+
+TEST(MurmurHash64ATest, ExactVectors) {
+  EXPECT_EQ(MurmurHash64A("", 0, 0xc6a4a7935bd1e995ULL), 0x1ab11ea5a7b2c56eULL);
+  EXPECT_EQ(MurmurHash64A("a", 1, 0xc6a4a7935bd1e995ULL), 0x4292cee227b9150aULL);
+  EXPECT_EQ(MurmurHash64A("hello", 5, 0xc6a4a7935bd1e995ULL), 0x5ba5b8a59803e699ULL);
+
+  char bin[] = "hello\0world";
+  EXPECT_EQ(MurmurHash64A(bin, 11, 0xc6a4a7935bd1e995ULL), 0xdcd0bc9f75315849ULL);
+}
+
+TEST(HashPolicyTest, Hash32ExactVectors) {
+  auto hp = Hash32Policy::Compute(AsBytes("hello", 5));
+  EXPECT_EQ(hp.primary, 0x7f1ddbbdu);
+  EXPECT_EQ(hp.secondary, 0xed999d2du);
+}
+
+TEST(HashPolicyTest, Hash64ExactVectors) {
+  auto hp = Hash64Policy::Compute(AsBytes("hello", 5));
+  EXPECT_EQ(hp.primary, 0x5ba5b8a59803e699ULL);
+  EXPECT_EQ(hp.secondary, 0xa7d451d588a0c2a4ULL);
+}
+
+TEST(HashPolicyTest, Hash32BinaryWithNulls) {
+  char bin[] = "hello\0world";
+  auto hp = Hash32Policy::Compute(AsBytes(bin, 11));
+  EXPECT_EQ(hp.primary, 0xd8e4f032u);
+  EXPECT_EQ(hp.secondary, 0x2117a707u);
+}
+
+TEST(HashPolicyTest, Hash64BinaryWithNulls) {
+  char bin[] = "hello\0world";
+  auto hp = Hash64Policy::Compute(AsBytes(bin, 11));
+  EXPECT_EQ(hp.primary, 0xdcd0bc9f75315849ULL);
+  EXPECT_EQ(hp.secondary, 0xcf5f620f7200160dULL);
 }

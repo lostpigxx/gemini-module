@@ -36,6 +36,33 @@ std::pair<char*, size_t> RdbReader::GetBlob() {
   return {buf, len};
 }
 
+// --- Canonical layer field validation ---
+// Used by both RDB and wire deserialization paths. Rejects states that
+// would cause UB (divide-by-zero, shift overflow) or silent corruption.
+struct LayerFields {
+  uint64_t capacity;
+  double fpRate;
+  uint32_t hashCount;
+  double bitsPerEntry;
+  uint64_t totalBits;
+  uint8_t log2Bits;
+  uint64_t dataSize;
+};
+
+static bool ValidateLayerFields(const LayerFields& f) {
+  if (f.capacity == 0) return false;
+  if (f.totalBits == 0) return false;
+  if (f.hashCount == 0) return false;
+  if (f.totalBits > UINT64_MAX - 7) return false;
+  if (f.log2Bits >= 64) return false;
+  if (f.log2Bits > 0 && f.totalBits != (1ULL << f.log2Bits)) return false;
+  uint64_t expectedSize = (f.totalBits + 7) / 8;
+  if (f.dataSize != expectedSize) return false;
+  if (!std::isfinite(f.fpRate) || f.fpRate <= 0.0 || f.fpRate >= 1.0) return false;
+  if (!std::isfinite(f.bitsPerEntry) || f.bitsPerEntry < 0.0) return false;
+  return true;
+}
+
 // --- BloomLayer serialization (lives here to access Redis Module API) ---
 // Field order is intended to match the RedisBloom RDB wire format for
 // bloom filter persistence. Full interoperability has not been verified
@@ -59,15 +86,16 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   layer.bitsPerEntry_ = r.GetFloat();
   layer.totalBits_ = r.GetUint();
   layer.log2Bits_ = static_cast<uint8_t>(r.GetUint());
-  if (layer.log2Bits_ >= 64) return std::nullopt;
-  if (layer.hashCount_ == 0 && layer.totalBits_ > 0) return std::nullopt;
-  if (layer.log2Bits_ > 0 && layer.totalBits_ != (1ULL << layer.log2Bits_))
-    return std::nullopt;
-  if (layer.totalBits_ > UINT64_MAX - 7) return std::nullopt;
+
+  if (!r.Ok()) return std::nullopt;
+
   layer.dataSize_ = (layer.totalBits_ > 0) ? ((layer.totalBits_ + 7) / 8) : 0;
   layer.use64Bit_ = HasFlag(filterFlags, BloomFlags::Use64Bit);
 
-  if (!r.Ok()) return std::nullopt;
+  LayerFields fields{layer.capacity_, layer.fpRate_, layer.hashCount_,
+                     layer.bitsPerEntry_, layer.totalBits_, layer.log2Bits_,
+                     layer.dataSize_};
+  if (!ValidateLayerFields(fields)) return std::nullopt;
 
   auto [buf, bufLen] = r.GetBlob();
   if (!r.Ok() || !buf || bufLen != static_cast<size_t>(layer.dataSize_)) {
@@ -134,9 +162,12 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
   shell.totalItems = r.GetUint();
   shell.numLayers = static_cast<size_t>(r.GetUint());
 
-  shell.flags = (encver >= kEncVerWithFlags)
-    ? FromUnderlying(static_cast<unsigned>(r.GetUint()))
-    : (BloomFlags::Use64Bit | BloomFlags::NoRound);
+  unsigned rawFlags = (encver >= kEncVerWithFlags)
+    ? static_cast<unsigned>(r.GetUint())
+    : ToUnderlying(BloomFlags::Use64Bit | BloomFlags::NoRound);
+
+  if (!ValidateFlags(rawFlags)) return nullptr;
+  shell.flags = FromUnderlying(rawFlags);
 
   shell.expansionFactor = (encver >= kEncVerWithExpansion)
     ? static_cast<unsigned>(r.GetUint())
@@ -149,6 +180,7 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
   auto* filter = FromRdbShell(shell);
   if (!filter) return nullptr;
 
+  uint64_t itemSum = 0;
   for (size_t i = 0; i < shell.numLayers; i++) {
     auto maybeLayer = BloomLayer::ReadFrom(r, shell.flags);
     if (!maybeLayer) {
@@ -158,12 +190,23 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
     }
     size_t count = static_cast<size_t>(r.GetUint());
     if (!r.Ok()) {
-      // maybeLayer still owns the BloomLayer; its destructor frees it
       filter->~ScalingBloomFilter();
       RMFree(filter);
       return nullptr;
     }
+    if (count > maybeLayer->GetCapacity()) {
+      filter->~ScalingBloomFilter();
+      RMFree(filter);
+      return nullptr;
+    }
+    itemSum += count;
     filter->SetLayer(i, {std::move(*maybeLayer), count});
+  }
+
+  if (itemSum != shell.totalItems) {
+    filter->~ScalingBloomFilter();
+    RMFree(filter);
+    return nullptr;
   }
 
   return filter;
@@ -194,16 +237,9 @@ size_t SerializeHeader(const ScalingBloomFilter& filter, void* output) {
 }
 
 static bool ValidateLayerMeta(const WireLayerMeta& meta) {
-  if (meta.hashCount == 0 && meta.totalBits > 0) return false;
-  if (meta.totalBits == 0) return false;
-  if (meta.totalBits > UINT64_MAX - 7) return false;
-  if (meta.log2Bits >= 64) return false;
-  if (meta.log2Bits > 0 && meta.totalBits != (1ULL << meta.log2Bits)) return false;
-  uint64_t expectedSize = (meta.totalBits + 7) / 8;
-  if (meta.dataSize != expectedSize) return false;
-  if (!std::isfinite(meta.fpRate) || meta.fpRate <= 0.0) return false;
-  if (!std::isfinite(meta.bitsPerEntry) || meta.bitsPerEntry < 0.0) return false;
-  return true;
+  return ValidateLayerFields({meta.capacity, meta.fpRate, meta.hashCount,
+                              meta.bitsPerEntry, meta.totalBits, meta.log2Bits,
+                              meta.dataSize});
 }
 
 ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
@@ -214,19 +250,24 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   size_t required = sizeof(WireFilterHeader) + hdr->numLayers * sizeof(WireLayerMeta);
   if (length != required) return nullptr;
 
-  if (!HasFlag(FromUnderlying(hdr->flags), BloomFlags::FixedSize) &&
-      hdr->expansionFactor == 0) {
-    return nullptr;
-  }
+  if (!ValidateFlags(hdr->flags)) return nullptr;
 
   auto filterFlags = FromUnderlying(hdr->flags);
+
+  if (!HasFlag(filterFlags, BloomFlags::FixedSize) && hdr->expansionFactor == 0) {
+    return nullptr;
+  }
 
   const auto* meta = reinterpret_cast<const WireLayerMeta*>(
     static_cast<const char*>(data) + sizeof(WireFilterHeader));
 
+  uint64_t itemSum = 0;
   for (size_t i = 0; i < hdr->numLayers; i++) {
     if (!ValidateLayerMeta(meta[i])) return nullptr;
+    if (meta[i].itemCount > meta[i].capacity) return nullptr;
+    itemSum += meta[i].itemCount;
   }
+  if (itemSum != hdr->totalItems) return nullptr;
 
   auto* filter = ScalingBloomFilter::FromRdbShell({
     .totalItems = hdr->totalItems,
