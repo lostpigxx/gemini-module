@@ -4,8 +4,8 @@
 Run inside the Docker test container, for example:
 
   python3 doc/code_review/gemini-bloom/v5/redisbloom_interop_probe.py \
-    --gemini-module /tmp/gemini-module-v5-docker-build/redis_bloom.so \
-    --redisbloom-module /tmp/redisbloom-v2.8.20/bin/linux-x64-release/redisbloom.so
+    --gemini-module /tmp/gemini-module-v5-2420-build/redis_bloom.so \
+    --redisbloom-module /tmp/redisbloom-v2.4.20/bin/linux-x64-release/redisbloom.so
 
 The probe intentionally uses a minimal RESP2 client so SCANDUMP/LOADCHUNK
 binary payloads are preserved exactly.

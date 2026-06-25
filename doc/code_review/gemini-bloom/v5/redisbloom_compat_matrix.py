@@ -796,13 +796,17 @@ def main() -> int:
     parser.add_argument("--only-env", action="append", help="Limit to one environment name; may repeat")
     parser.add_argument("--redis-server", type=Path, help="Explicit redis-server path for a single custom environment")
     parser.add_argument("--redisbloom-module", type=Path, help="Explicit RedisBloom module path for a single custom environment")
-    parser.add_argument("--env-name", default="redis-6.2-redisbloom-v2.8.20")
+    parser.add_argument("--env-name", default="redis-6.2-redisbloom-v2.4.20")
     parser.add_argument("--redis-tag", default="6.2.17")
-    parser.add_argument("--redisbloom-tag", default="v2.8.20")
-    parser.add_argument("--module-ver", default="20820")
+    parser.add_argument("--redisbloom-tag", default="v2.4.20")
+    parser.add_argument("--module-ver", default="20420")
     parser.add_argument("--base-port", default=47500, type=int)
     parser.add_argument("--include-large", action="store_true")
-    parser.add_argument("--output", default=Path("doc/code_review/gemini-bloom/v5/compat_matrix_results.json"), type=Path)
+    parser.add_argument(
+        "--output",
+        default=Path("doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2420.json"),
+        type=Path,
+    )
     args = parser.parse_args()
 
     if not args.gemini_module.exists():

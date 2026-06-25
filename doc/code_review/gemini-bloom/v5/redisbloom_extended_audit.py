@@ -571,14 +571,14 @@ def main() -> int:
     parser.add_argument("--gemini-module", required=True, type=Path)
     parser.add_argument("--redis-server", required=True, type=Path)
     parser.add_argument("--redisbloom-module", required=True, type=Path)
-    parser.add_argument("--env-name", default="redis-6.2-redisbloom-v2.8.20")
+    parser.add_argument("--env-name", default="redis-6.2-redisbloom-v2.4.20")
     parser.add_argument("--redis-tag", default="6.2.17")
-    parser.add_argument("--redisbloom-tag", default="v2.8.20")
-    parser.add_argument("--module-ver", default="20820")
+    parser.add_argument("--redisbloom-tag", default="v2.4.20")
+    parser.add_argument("--module-ver", default="20420")
     parser.add_argument("--base-port", default=49500, type=int)
     parser.add_argument(
         "--output",
-        default=Path("doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2820.json"),
+        default=Path("doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2420.json"),
         type=Path,
     )
     args = parser.parse_args()

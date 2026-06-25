@@ -1,32 +1,34 @@
-# 06 - Redis 6.2 + RedisBloom v2.8.20 兼容性测试结果
+# 06 - Redis 6.2 + RedisBloom v2.4.20 兼容性测试结果
 
 本文件固化本轮兼容性测试覆盖范围和结果。兼容性目标固定为：
 
 ```text
-gemini side:     Redis 6.2.17 + /tmp/gemini-module-v5-docker-build/redis_bloom.so
-RedisBloom side: Redis 6.2.17 + RedisBloom v2.8.20, MODULE LIST ver=20820
+gemini side:     Redis 6.2.17 + /tmp/gemini-module-v5-2420-build/redis_bloom.so
+RedisBloom side: Redis 6.2.17 + RedisBloom v2.4.20, MODULE LIST ver=20420
 container:       974d83bcff5c (strange_feynman)
 workspace:       /workspace/projects/VibeCoding/gemini-module
-result JSON:     doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2820.json
-extended JSON:   doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2820.json
+result JSON:     doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2420.json
+extended JSON:   doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2420.json
 ```
 
 RESP3 不属于本轮必需兼容目标。RedisBloom 其他版本、Redis 8 内置 Bloom 不属于本文件结论范围。
+
+本文件只覆盖正常 corpus 的兼容性矩阵和补充命令审计；随机 fuzz、恶意 RDB/wire payload、黑盒 `BF.LOADCHUNK` payload 结果见 `07_fuzz_and_malicious_payload_results.md`。
 
 ## 运行命令
 
 ```text
 docker exec 974d83bcff5c \
   python3 /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/redisbloom_compat_matrix.py \
-    --gemini-module /tmp/gemini-module-v5-docker-build/redis_bloom.so \
+    --gemini-module /tmp/gemini-module-v5-2420-build/redis_bloom.so \
     --redis-server /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server \
-    --redisbloom-module /tmp/redisbloom-v2.8.20/bin/linux-x64-release/redisbloom.so \
-    --env-name redis-6.2-redisbloom-v2.8.20 \
+    --redisbloom-module /tmp/redisbloom-v2.4.20/bin/linux-x64-release/redisbloom.so \
+    --env-name redis-6.2-redisbloom-v2.4.20 \
     --redis-tag 6.2.17 \
-    --redisbloom-tag v2.8.20 \
-    --module-ver 20820 \
+    --redisbloom-tag v2.4.20 \
+    --module-ver 20420 \
     --include-large \
-    --output /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2820.json
+    --output /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2420.json
 ```
 
 脚本语法检查：
@@ -41,14 +43,14 @@ docker exec 974d83bcff5c \
 ```text
 docker exec 974d83bcff5c \
   python3 /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/redisbloom_extended_audit.py \
-    --gemini-module /tmp/gemini-module-v5-docker-build/redis_bloom.so \
+    --gemini-module /tmp/gemini-module-v5-2420-build/redis_bloom.so \
     --redis-server /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server \
-    --redisbloom-module /tmp/redisbloom-v2.8.20/bin/linux-x64-release/redisbloom.so \
-    --env-name redis-6.2-redisbloom-v2.8.20 \
+    --redisbloom-module /tmp/redisbloom-v2.4.20/bin/linux-x64-release/redisbloom.so \
+    --env-name redis-6.2-redisbloom-v2.4.20 \
     --redis-tag 6.2.17 \
-    --redisbloom-tag v2.8.20 \
-    --module-ver 20820 \
-    --output /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2820.json
+    --redisbloom-tag v2.4.20 \
+    --module-ver 20420 \
+    --output /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2420.json
 
 docker exec 974d83bcff5c \
   python3 -m py_compile /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/redisbloom_extended_audit.py
@@ -89,7 +91,7 @@ fullsync replication snapshot         RedisBloom master -> gemini replica, gemin
 - 目标端不能有 Redis error reply、AOF-loading-client critical log 或脚本级 error。
 - 目标端 `BF.CARD` 必须等于源端迁移前 `BF.CARD`。
 - 所有 inserted items 在目标端必须 `BF.EXISTS == 1`。
-- `BF.CARD` 不强制等于 inserted item 数，因为 Bloom filter 可能因 false positive 使 `BF.ADD` 返回 0；例如 RedisBloom v2.8.20 在 `expansion1` corpus 中源端 `BF.CARD=19`，但 20 个 inserted items 都可查到。
+- `BF.CARD` 不强制等于 inserted item 数，因为 Bloom filter 可能因 false positive 使 `BF.ADD` 返回 0；例如 RedisBloom v2.4.20 在 `expansion1` corpus 中源端 `BF.CARD=19`，但 20 个 inserted items 都可查到。
 
 ## 结果总览
 
@@ -122,7 +124,7 @@ LOADCHUNK header over old key: RedisBloom rejects, gemini replaces
 
 ## 关键正向结论
 
-在 Redis 6.2.17 + RedisBloom v2.8.20 范围内，以下迁移方式通过 9 个 corpus 的双向验证：
+在 Redis 6.2.17 + RedisBloom v2.4.20 范围内，以下迁移方式通过 9 个 corpus 的双向验证：
 
 - RDB 文件保存/加载。
 - Redis `DUMP` / `RESTORE`。
@@ -131,7 +133,7 @@ LOADCHUNK header over old key: RedisBloom rejects, gemini replaces
 - Redis 6.2 默认 `aof-use-rdb-preamble yes` 的 AOF rewrite。
 - replication fullsync 产生的 RDB snapshot。
 
-这说明当前 `MBbloom--` RDB encoding 在本轮 corpus 内与 RedisBloom v2.8.20 兼容。该结论不能外推到 RedisBloom 其他版本或 Redis 8 Bloom。
+这说明当前 `MBbloom--` RDB encoding 在本轮 corpus 内与 RedisBloom v2.4.20 兼容。该结论不能外推到 RedisBloom 其他版本或 Redis 8 Bloom。
 
 补充正向结果：
 
@@ -178,7 +180,7 @@ chunks:    [[1, 73], [2, 144], [0, 0]]
 LOADCHUNK: OK, ERR received bad data
 ```
 
-大 filter 证明 RedisBloom v2.8.20 使用 16MiB split，而 gemini 仍输出整层私有 chunk：
+大 filter 证明 RedisBloom v2.4.20 使用 16MiB split，而 gemini 仍输出整层私有 chunk：
 
 ```text
 large_empty_16mb, RedisBloom chunks:
@@ -289,7 +291,7 @@ BF.INSERT nokey NOCREATE CAPACITY 10 ITEMS a
 
 BF.RESERVE reserve_exp0 0.01 10 EXPANSION 0
   gemini:     OK
-  RedisBloom: ERR expansion should be greater or equal to 1
+  RedisBloom: OK
 
 BF.INSERT insert_exp0 EXPANSION 0 ITEMS a
   gemini:     [1]
@@ -305,7 +307,7 @@ BF.DEBUG key
 
 MODULE LIST
   gemini:     name=GeminiBloom, ver=1
-  RedisBloom: name=bf, ver=20820
+  RedisBloom: name=bf, ver=20420
 ```
 
 这些差异不影响已通过的 RDB 类迁移，但影响 RedisBloom client compatibility、监控口径和 live command replay 语义。

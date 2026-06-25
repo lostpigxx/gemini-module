@@ -1,0 +1,10 @@
+{
+  "seed":9697955846,
+  "iterations_per_decoder":100000,
+  "memory_limit_enabled":true,
+  "resource_bombs_enabled":true,
+  "rdb_structured":{"total":35,"expected_accept":3,"expected_reject":32,"false_reject":0,"unsafe_accept":2,"invariant_violation":2,"interesting":[{"name":"bits_per_entry_zero","expected_accept":false,"accepted":true,"invariant_ok":false},{"name":"hash_count_inconsistent","expected_accept":false,"accepted":true,"invariant_ok":false}]},
+  "wire_structured":{"total":33,"expected_accept":2,"expected_reject":31,"false_reject":0,"unsafe_accept":2,"invariant_violation":2,"interesting":[{"name":"bits_per_entry_zero","expected_accept":false,"accepted":true,"invariant_ok":false},{"name":"hash_count_inconsistent","expected_accept":false,"accepted":true,"invariant_ok":false}]},
+  "rdb_random":{"cases":100000,"accepted":2930,"invariant_violation":294},
+  "wire_random":{"cases":100000,"accepted":4543,"invariant_violation":1287}
+}

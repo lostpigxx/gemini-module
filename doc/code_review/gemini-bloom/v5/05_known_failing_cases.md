@@ -1,6 +1,6 @@
 # 05 - 已知失败用例
 
-本文件记录本轮实际执行得到的失败，不包括只从代码推断的问题。Redis 6.2 + RedisBloom v2.8.20 完整兼容性测试项和结果详见 `06_redis62_redisbloom2820_compat_results.md`。
+本文件记录本轮实际执行得到的失败，不包括只从代码推断的问题。Redis 6.2 + RedisBloom v2.4.20 完整兼容性测试项和结果详见 `06_redis62_redisbloom2420_compat_results.md`。
 
 ## 执行环境
 
@@ -8,12 +8,15 @@
 container:      974d83bcff5c (strange_feynman)
 redis-server:   6.2.17
 workspace:      /workspace/projects/VibeCoding/gemini-module
-build dir:      /tmp/gemini-module-v5-docker-build
-gemini module:  /tmp/gemini-module-v5-docker-build/redis_bloom.so
-RedisBloom:     v2.8.20, MODULE LIST ver=20820
-RedisBloom so:  /tmp/redisbloom-v2.8.20/bin/linux-x64-release/redisbloom.so
-result JSON:    doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2820.json
-extended JSON:  doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2820.json
+build dir:      /tmp/gemini-module-v5-2420-build
+gemini module:  /tmp/gemini-module-v5-2420-build/redis_bloom.so
+RedisBloom:     v2.4.20, MODULE LIST ver=20420
+RedisBloom so:  /tmp/redisbloom-v2.4.20/bin/linux-x64-release/redisbloom.so
+result JSON:    doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2420.json
+extended JSON:  doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2420.json
+fuzz JSON:      doc/code_review/gemini-bloom/v5/rdb_wire_fuzz_results_redis62_redisbloom2420.json
+asan fuzz JSON: doc/code_review/gemini-bloom/v5/rdb_wire_fuzz_asan_results_redis62_redisbloom2420.json
+wire JSON:      doc/code_review/gemini-bloom/v5/malicious_wire_audit_results_redis62_redisbloom2420.json
 ```
 
 核心执行方式：
@@ -21,38 +24,54 @@ extended JSON:  doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_r
 ```text
 docker exec 974d83bcff5c \
   cmake -S /workspace/projects/VibeCoding/gemini-module \
-        -B /tmp/gemini-module-v5-docker-build \
+        -B /tmp/gemini-module-v5-2420-build \
         -DCMAKE_BUILD_TYPE=Debug
 
 docker exec 974d83bcff5c \
-  cmake --build /tmp/gemini-module-v5-docker-build --target redis_bloom
+  cmake --build /tmp/gemini-module-v5-2420-build --target redis_bloom
 
 docker exec 974d83bcff5c \
   tclsh /workspace/projects/VibeCoding/gemini-module/modules/gemini-bloom/tests/tcl/bloom_test.tcl \
-        /tmp/gemini-module-v5-docker-build/redis_bloom.so
+        /tmp/gemini-module-v5-2420-build/redis_bloom.so
 
 docker exec 974d83bcff5c \
   python3 /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/redisbloom_compat_matrix.py \
-    --gemini-module /tmp/gemini-module-v5-docker-build/redis_bloom.so \
+    --gemini-module /tmp/gemini-module-v5-2420-build/redis_bloom.so \
     --redis-server /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server \
-    --redisbloom-module /tmp/redisbloom-v2.8.20/bin/linux-x64-release/redisbloom.so \
-    --env-name redis-6.2-redisbloom-v2.8.20 \
+    --redisbloom-module /tmp/redisbloom-v2.4.20/bin/linux-x64-release/redisbloom.so \
+    --env-name redis-6.2-redisbloom-v2.4.20 \
     --redis-tag 6.2.17 \
-    --redisbloom-tag v2.8.20 \
-    --module-ver 20820 \
+    --redisbloom-tag v2.4.20 \
+    --module-ver 20420 \
     --include-large \
-    --output /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2820.json
+    --output /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2420.json
 
 docker exec 974d83bcff5c \
   python3 /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/redisbloom_extended_audit.py \
-    --gemini-module /tmp/gemini-module-v5-docker-build/redis_bloom.so \
+    --gemini-module /tmp/gemini-module-v5-2420-build/redis_bloom.so \
     --redis-server /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server \
-    --redisbloom-module /tmp/redisbloom-v2.8.20/bin/linux-x64-release/redisbloom.so \
-    --env-name redis-6.2-redisbloom-v2.8.20 \
+    --redisbloom-module /tmp/redisbloom-v2.4.20/bin/linux-x64-release/redisbloom.so \
+    --env-name redis-6.2-redisbloom-v2.4.20 \
     --redis-tag 6.2.17 \
-    --redisbloom-tag v2.8.20 \
-    --module-ver 20820 \
-    --output /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2820.json
+    --redisbloom-tag v2.4.20 \
+    --module-ver 20420 \
+    --output /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2420.json
+
+docker exec 974d83bcff5c \
+  /tmp/gemini-module-v5-2420-rdb-wire-fuzz-audit \
+    --iterations 100000 \
+    --memory-limit \
+    --include-resource-bombs \
+    --output /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/rdb_wire_fuzz_results_redis62_redisbloom2420.json
+
+docker exec 974d83bcff5c \
+  python3 /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/redisbloom_malicious_wire_audit.py \
+    --gemini-module /tmp/gemini-module-v5-2420-build/redis_bloom.so \
+    --redis-server /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server \
+    --redisbloom-module /tmp/redisbloom-v2.4.20/bin/linux-x64-release/redisbloom.so \
+    --random-cases 5000 \
+    --data-random-cases 2000 \
+    --output /workspace/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v5/malicious_wire_audit_results_redis62_redisbloom2420.json
 ```
 
 ## 通过的测试
@@ -69,12 +88,22 @@ RedisBloom extended audit:
   BF.DEBUG:                        RedisBloom present, gemini missing
   readonly replica BF.SCANDUMP:    RedisBloom OK, gemini READONLY
   LOADCHUNK existing key:          gemini replaces, RedisBloom rejects header
+RDB/wire decoder fuzz:
+  structured RDB:                  unsafe accept=2/35
+  structured wire:                 unsafe accept=2/33
+  random RDB:                      invariant violation=294/100000
+  random wire:                     invariant violation=1287/100000
+  ASAN/UBSAN:                      completed without sanitizer abort
+malicious BF.LOADCHUNK fuzz:
+  gemini header/data:              connection_error=0
+  gemini existing key:             old_lost=4/12
+  RedisBloom header mutation:      connection_error=3/5032
 ```
 
 `sb_chain_test filtered` 指过滤 `ScalingBloomTest.ExtremeParamsRejected` 后运行：
 
 ```text
-/tmp/gemini-module-v5-sb_chain_test --gtest_filter=-ScalingBloomTest.ExtremeParamsRejected
+/tmp/gemini-module-v5-2420-sb_chain_test --gtest_filter=-ScalingBloomTest.ExtremeParamsRejected
 ```
 
 兼容性矩阵中确认通过的路径：
@@ -126,6 +155,47 @@ BloomWire.RejectsHashCountInconsistentWithBitsPerEntry
 - `modules/gemini-bloom/src/bloom_rdb.cc:239-274`
 
 这些是当前目标内失败，建议作为 P1 修复。
+
+## Fuzz 失败：RDB / wire decoder 接受非法不变量
+
+`bloom_rdb_wire_fuzz_audit.cc` 普通版结果：
+
+```text
+seed:                    9697955846
+iterations_per_decoder:  100000
+resource_bombs_enabled:  true
+
+RDB structured:
+  total=35
+  unsafe_accept=2
+  invariant_violation=2
+
+Wire structured:
+  total=33
+  unsafe_accept=2
+  invariant_violation=2
+
+RDB random:
+  cases=100000
+  accepted=2930
+  invariant_violation=294
+
+Wire random:
+  cases=100000
+  accepted=4543
+  invariant_violation=1287
+```
+
+结构化 unsafe accept：
+
+```text
+bits_per_entry_zero
+hash_count_inconsistent
+```
+
+ASAN/UBSAN 版使用同样 seed 和 100000 次/decoder 随机 fuzz，未触发 sanitizer abort；结论是“当前样本未发现 sanitizer 级崩溃”，不是证明无内存安全问题。
+
+该 fuzz 结果与 `bloom_rdb_test` 的 4 个失败一致，并扩大到随机 payload：decoder 会接受部分变异输入并形成违反内部不变量的 Bloom object。
 
 ## GTest 失败：极端参数巨大分配
 
@@ -185,7 +255,7 @@ EXPECTED COMPAT GAP: SCANDUMP layer cursor should advance by byte length
 含义：
 
 - gemini 当前 cursor 是 layer index。
-- RedisBloom v2.8.20 cursor 是 byte offset。
+- RedisBloom v2.4.20 cursor 是 byte offset。
 - gemini 自身 SCANDUMP/LOADCHUNK round-trip 会通过，但不能证明 RedisBloom 迁入迁出。
 
 ## RedisBloom 互通失败：SCANDUMP / LOADCHUNK
@@ -228,7 +298,7 @@ empty_scaling, gemini -> RedisBloom:
   LOADCHUNK: OK, ERR received bad data
 ```
 
-大 filter corpus 证明 RedisBloom v2.8.20 有 16MiB split，而 gemini 仍输出整层私有 chunk：
+大 filter corpus 证明 RedisBloom v2.4.20 有 16MiB split，而 gemini 仍输出整层私有 chunk：
 
 ```text
 large_empty_16mb, RedisBloom chunks:
@@ -350,12 +420,47 @@ gemini:
   BF.LOADCHUNK dst 1 <src-header> -> OK
   after header: old=0, new=0, BF.CARD=1
 
-RedisBloom v2.8.20:
+RedisBloom v2.4.20:
   BF.LOADCHUNK dst 1 <src-header> -> ERR received bad data
   after header: old=1, new=0, BF.CARD=1
 ```
 
-这是目标内安全/兼容失败：gemini 使用 public `BF.LOADCHUNK` header chunk 执行 replace，RedisBloom v2.8.20 不这样做。
+这是目标内安全/兼容失败：gemini 使用 public `BF.LOADCHUNK` header chunk 执行 replace，RedisBloom v2.4.20 不这样做。
+
+黑盒恶意 wire payload 进一步复现：
+
+```text
+gemini existing-key cases:
+  cases=12
+  ok=4
+  error=8
+  old_lost=4
+  dead_after_reply=0
+
+old_lost samples:
+  gemini_valid_empty_header
+  gemini_bits_per_entry_zero
+  gemini_hash_count_inconsistent
+  gemini_fixed_expansion_zero
+```
+
+同一黑盒 fuzz 对 gemini 未发现连接死亡：
+
+```text
+gemini header cases=5032, connection_error=0
+gemini data cases=2007, connection_error=0
+critical_log_count=0
+```
+
+对照 RedisBloom v2.4.20：native header mutation 中出现 3 个连接死亡 case，脚本记录后重启并继续执行：
+
+```text
+native_mutation_00172
+native_mutation_00974
+native_mutation_01048
+```
+
+该 RedisBloom 现象不计为 gemini 兼容失败，但记录为目标 oracle 在恶意 payload 下的实测稳定性边界。
 
 ## Redis server 迁移正向用例：MIGRATE 与 TTL RESTORE
 
@@ -375,7 +480,7 @@ DUMP/RESTORE with explicit TTL:
 
 ## RedisBloom oracle 差异：RESP2 / command semantics
 
-本轮 Redis 6.2.17 + RedisBloom v2.8.20 oracle 实际观察到：
+本轮 Redis 6.2.17 + RedisBloom v2.4.20 oracle 实际观察到：
 
 ```text
 BF.INFO info CAPACITY
@@ -404,7 +509,7 @@ BF.DEBUG debug_key
 
 BF.RESERVE reserve_exp0 0.01 10 EXPANSION 0
   gemini:     OK
-  RedisBloom: ERR expansion should be greater or equal to 1
+  RedisBloom: OK
 
 BF.INSERT insert_exp0 EXPANSION 0 ITEMS a
   gemini:     [1]
@@ -432,7 +537,7 @@ BF.INFO info_key FILTERS
 ```text
 MODULE LIST
   gemini:     name=GeminiBloom, ver=1
-  RedisBloom: name=bf, ver=20820
+  RedisBloom: name=bf, ver=20420
 
 --loadmodule <module> INITIAL_SIZE 7 ERROR_RATE 0.05
   gemini:     starts; BF.ADD default key -> Capacity=7, Expansion rate=2
@@ -454,7 +559,7 @@ MODULE LIST
 这些不是模块功能失败，但会影响验证可靠性：
 
 ```text
-cmake --build /tmp/gemini-module-v5-docker-build --target bloom_filter_test
+cmake --build /tmp/gemini-module-v5-2420-build --target bloom_filter_test
   failed: no rule to make target
 
 Reason:

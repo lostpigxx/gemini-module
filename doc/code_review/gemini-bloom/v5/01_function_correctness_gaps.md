@@ -15,7 +15,7 @@ BF.INFO key Expansion -> integer/null
 
 位置：`modules/gemini-bloom/src/bloom_commands.cc:463-480`。
 
-本轮 Redis 6.2.17 + RedisBloom v2.8.20 oracle 已确认 RESP2 差异：
+本轮 Redis 6.2.17 + RedisBloom v2.4.20 oracle 已确认 RESP2 差异：
 
 ```text
 gemini:     BF.INFO info CAPACITY -> 100
@@ -42,7 +42,7 @@ RedisBloom: BF.INFO info SIZE -> [240]
 - `BF.CARD after partial MADD matches actual insertions`
 - `BF.INSERT on full filter stops and returns errors`
 
-本轮 Redis 6.2.17 + RedisBloom v2.8.20 oracle 已确认数组长度和停止点不一致：
+本轮 Redis 6.2.17 + RedisBloom v2.4.20 oracle 已确认数组长度和停止点不一致：
 
 ```text
 BF.RESERVE fixed 0.01 2 NONSCALING
@@ -78,8 +78,9 @@ Both end with BF.CARD == 2.
 
 本轮已确认：
 
-- RedisBloom v2.8.20 与 gemini 都接受 `BF.RESERVE key 0.5 100`。
-- RedisBloom v2.8.20 与 gemini 都接受 `NONSCALING`。
+- RedisBloom v2.4.20 与 gemini 都接受 `BF.RESERVE key 0.5 100`。
+- RedisBloom v2.4.20 与 gemini 都接受 `NONSCALING`。
+- RedisBloom v2.4.20 与 gemini 都接受 `BF.RESERVE key 0.01 10 EXPANSION 0`。
 - `BF.INSERT NOCREATE + CAPACITY` 的错误语义不一致：
 
 ```text
@@ -87,7 +88,7 @@ gemini:
   BF.INSERT nokey NOCREATE CAPACITY 10 ITEMS a
   -> ERR NOCREATE cannot be used with CAPACITY or ERROR
 
-RedisBloom v2.8.20:
+RedisBloom v2.4.20:
   BF.INSERT nokey NOCREATE CAPACITY 10 ITEMS a
   -> ERR not found
 ```
@@ -97,7 +98,7 @@ RedisBloom v2.8.20:
 ```text
 BF.RESERVE reserve_exp0 0.01 10 EXPANSION 0
   gemini:     OK
-  RedisBloom: ERR expansion should be greater or equal to 1
+  RedisBloom: OK
 
 BF.INSERT insert_exp0 EXPANSION 0 ITEMS a
   gemini:     [1]
@@ -112,7 +113,7 @@ BF.INSERT insert_missing NOCREATE ITEMS a
   RedisBloom: ERR not found
 ```
 
-因此 `EXPANSION 0` 已不是“待确认”项，而是 RedisBloom v2.8.20 兼容差异：gemini 把它映射到 fixed/non-scaling，RedisBloom v2.8.20 拒绝。RedisBloom 对 `BF.RESERVE` 的未知额外 option 还表现出宽松接受行为，gemini 更严格；这不一定值得复刻，但需要作为 client compatibility 差异记录。
+因此在 RedisBloom v2.4.20 目标下，`BF.RESERVE EXPANSION 0` 不是差异；双方都接受。仍然存在差异的是 `BF.INSERT EXPANSION 0`：gemini 把它映射到 fixed/non-scaling 并创建 filter，RedisBloom v2.4.20 拒绝。RedisBloom 对 `BF.RESERVE` 的未知额外 option 还表现出宽松接受行为，gemini 更严格；这不一定值得复刻，但需要作为 client compatibility 差异记录。
 
 仍需产品化确认：
 
@@ -141,7 +142,7 @@ BF.INSERT insert_missing NOCREATE ITEMS a
 
 **级别：P2**
 
-同一 trace 下，Redis 6.2.17 + RedisBloom v2.8.20 与 gemini 的 `BF.INFO` full response 字段名相同，但 `Size` 数值不同：
+同一 trace 下，Redis 6.2.17 + RedisBloom v2.4.20 与 gemini 的 `BF.INFO` full response 字段名相同，但 `Size` 数值不同：
 
 ```text
 BF.RESERVE info 0.01 100
@@ -164,7 +165,7 @@ gemini 的 `BytesUsed()` 包含 `ScalingBloomFilter` 对象和预留 layer slot 
 
 **级别：P1/P2**
 
-RedisBloom v2.8.20 注册 `BF.DEBUG`，gemini 没有：
+RedisBloom v2.4.20 注册 `BF.DEBUG`，gemini 没有：
 
 ```text
 COMMAND INFO BF.DEBUG
@@ -205,7 +206,7 @@ COMMAND INFO BF.SCANDUMP
 ```text
 MODULE LIST
   gemini:     name=GeminiBloom, ver=1
-  RedisBloom: name=bf, ver=20820
+  RedisBloom: name=bf, ver=20420
 ```
 
 这不影响 `MBbloom--` RDB data type 互通，但会影响：

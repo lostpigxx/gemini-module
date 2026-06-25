@@ -1,6 +1,6 @@
 {
   "envs": {
-    "redis-6.2-redisbloom-v2.8.20": {
+    "redis-6.2-redisbloom-v2.4.20": {
       "command_oracle": {
         "gemini_fixed_insert_reserve": "OK",
         "gemini_fixed_reserve": "OK",
@@ -109,7 +109,7 @@
               "bytes": 3,
               "hex": "766572"
             },
-            20820
+            20420
           ]
         ]
       },
@@ -5667,17 +5667,17 @@
         }
       },
       "env": {
-        "module_ver": "20820",
-        "name": "redis-6.2-redisbloom-v2.8.20",
+        "module_ver": "20420",
+        "name": "redis-6.2-redisbloom-v2.4.20",
         "redis_server": "/workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server",
         "redis_tag": "6.2.17",
-        "redisbloom_module": "/tmp/redisbloom-v2.8.20/bin/linux-x64-release/redisbloom.so",
-        "redisbloom_tag": "v2.8.20"
+        "redisbloom_module": "/tmp/redisbloom-v2.4.20/bin/linux-x64-release/redisbloom.so",
+        "redisbloom_tag": "v2.4.20"
       }
     }
   },
   "summary": {
-    "redis-6.2-redisbloom-v2.8.20": {
+    "redis-6.2-redisbloom-v2.4.20": {
       "error": 0,
       "fail": 38,
       "pass": 88

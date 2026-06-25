@@ -20,7 +20,7 @@ gemini AOF -> RedisBloom replay
 建议目录：
 
 ```text
-modules/gemini-bloom/tests/fixtures/redisbloom-2.8/
+modules/gemini-bloom/tests/fixtures/redisbloom-2.4.20/
 modules/gemini-bloom/tests/fixtures/redis-8-bloom/
 ```
 
@@ -33,11 +33,11 @@ fixture 内容：
 - expected metadata JSON。
 - inserted items 和 must-exist item list。
 
-本轮新增的 `redisbloom_compat_matrix.py` 已把 Redis 6.2.17 + RedisBloom v2.8.20 固定为本轮 oracle，并把完整结果固化为：
+本轮新增的 `redisbloom_compat_matrix.py` 已把 Redis 6.2.17 + RedisBloom v2.4.20 固定为本轮 oracle，并把完整结果固化为：
 
 ```text
-doc/code_review/gemini-bloom/v5/06_redis62_redisbloom2820_compat_results.md
-doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2820.json
+doc/code_review/gemini-bloom/v5/06_redis62_redisbloom2420_compat_results.md
+doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2420.json
 ```
 
 它覆盖 9 个 corpus、7 类路径、双向共 126 个兼容性单元，证明：
@@ -63,11 +63,11 @@ doc/code_review/gemini-bloom/v5/compat_matrix_results_redis62_redisbloom2820.jso
 
 这比纯 gemini round-trip 更有价值，因为当前很多测试只证明“自己写自己读”。
 
-本轮已补 Redis 6.2.17 + RedisBloom v2.8.20 oracle：
+本轮已补 Redis 6.2.17 + RedisBloom v2.4.20 oracle：
 
 ```text
 doc/code_review/gemini-bloom/v5/redisbloom_compat_matrix.py
-RedisBloom module: v2.8.20, MODULE LIST ver=20820
+RedisBloom module: v2.4.20, MODULE LIST ver=20420
 ```
 
 已发现的 oracle 差异：
@@ -111,7 +111,7 @@ expected byte-offset cursor 129, got 2
 - `iter < dataLen` reject。
 - cursor 越界 reject。
 
-本轮新增 RedisBloom v2.8.20 实测边界：
+本轮新增 RedisBloom v2.4.20 实测边界：
 
 ```text
 RedisBloom chunks:
@@ -131,9 +131,18 @@ gemini large_empty_16mb chunks:
   [(1, 73), (2, 20677040), (0, 0)]
 ```
 
-仍缺的是故意构造的跨 layer chunk、layer 中间 chunk、`iter < dataLen` 等恶意 payload fixture。当前矩阵证明真实 RedisBloom v2.8.20 chunk 不互通，但还不是完整 fuzz corpus。
+本轮新增 `redisbloom_malicious_wire_audit.py` 已补黑盒恶意 `BF.LOADCHUNK` payload：
 
-## TEST-04：raw RESP binary harness 已有矩阵覆盖，但仍缺 fuzz
+```text
+per module:
+  header cases=5032
+  data cases=2007
+  existing-key header cases=12
+```
+
+该 harness 覆盖 native truncation、extra byte、native mutation、random header、gemini 结构化 header、data length mutation、random data，以及已有 key 写入保护。剩余缺口是把这些 payload 固化成 CI fixture，并进一步扩展 deterministic 跨 layer chunk、layer 中间 chunk、`iter < dataLen`、跨 16MB split 边界等 RedisBloom byte-offset 语义单测。
+
+## TEST-04：raw RESP binary harness 已有矩阵和黑盒 payload 覆盖，但仍缺 CI 固化
 
 **级别：P2**
 
@@ -145,7 +154,16 @@ gemini large_empty_16mb chunks:
 - 大 bulk string。
 - raw 1..31 bytes。
 
-仍缺随机 bytes fuzz 和更大规模 binary corpus。
+本轮新增随机 payload 覆盖：
+
+```text
+RDB decoder random fuzz:       100000 cases
+wire decoder random fuzz:      100000 cases
+BF.LOADCHUNK header random:    2500 cases per module
+BF.LOADCHUNK data random:      1000 cases per module
+```
+
+剩余缺口是把随机 seed、最小失败样本、binary corpus 和 replay fixture 固化到 CI，而不是只保留审计 runner 与 JSON 结果。
 
 ## TEST-05：replication 基础路径已覆盖，partial-command 仍需扩展
 
@@ -172,11 +190,30 @@ fullsync replication snapshot:
 - 通过 `BF.LOADCHUNK` 创建对象时的 replication 错误传播。
 - AOF rewrite 后 replica restart。
 
-## TEST-06：缺 fuzz / sanitizer release gate
+## TEST-06：已有 fuzz 审计，但仍缺 release gate
 
 **级别：P2**
 
-建议 release gate：
+本轮已补：
+
+```text
+DeserializeHeader structured + random fuzz
+mock RDB stream structured + random fuzz
+BF.LOADCHUNK header/data black-box fuzz
+ASAN + UBSAN decoder fuzz
+3GB declared blob/dataSize resource-bomb harness
+```
+
+结果固化在：
+
+```text
+doc/code_review/gemini-bloom/v5/07_fuzz_and_malicious_payload_results.md
+doc/code_review/gemini-bloom/v5/rdb_wire_fuzz_results_redis62_redisbloom2420.json
+doc/code_review/gemini-bloom/v5/rdb_wire_fuzz_asan_results_redis62_redisbloom2420.json
+doc/code_review/gemini-bloom/v5/malicious_wire_audit_results_redis62_redisbloom2420.json
+```
+
+仍建议作为 release gate 固化：
 
 - `DeserializeHeader` fuzz。
 - mock RDB stream fuzz。
@@ -216,7 +253,7 @@ fullsync replication snapshot:
 
 **级别：P1**
 
-本轮 Redis 6.2.17 + RedisBloom v2.8.20 矩阵证明 AOF 不能只写“通过/失败”，必须区分 Redis 的 AOF rewrite 模式：
+本轮 Redis 6.2.17 + RedisBloom v2.4.20 矩阵证明 AOF 不能只写“通过/失败”，必须区分 Redis 的 AOF rewrite 模式：
 
 ```text
 aof-use-rdb-preamble yes:
@@ -269,7 +306,7 @@ module args:
 结果固化在：
 
 ```text
-doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2820.json
+doc/code_review/gemini-bloom/v5/extended_audit_results_redis62_redisbloom2420.json
 ```
 
 这些仍是审计 runner，不是 CI gate。建议下一步把以下最小集合转成自动测试：
