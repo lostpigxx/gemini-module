@@ -24,7 +24,7 @@ EXPECTED COMPAT GAP: SCANDUMP layer cursor should advance by byte length
 expected byte-offset cursor 129, got 2
 ```
 
-本轮 Redis 6.2.17 + RedisBloom v2.8.20 oracle 进一步确认真实 chunk 序列不同。同一类 `BF.RESERVE key 0.01 10 EXPANSION 2`、插入 40 个 item 的数据：
+本轮 Redis 6.2.17 + RedisBloom v2.4.20 oracle 进一步确认真实 chunk 序列不同。同一类 `BF.RESERVE key 0.01 10 EXPANSION 2`、插入 40 个 item 的数据：
 
 ```text
 RedisBloom SCANDUMP chunks:
@@ -62,7 +62,7 @@ memcpy whole layer
 
 这不支持 RedisBloom 任意 byte-offset chunk。RedisBloom 生成的大 layer 多段 chunk 或 layer 中间 chunk 无法导入 gemini。
 
-本轮 Redis 6.2.17 + RedisBloom v2.8.20 -> gemini 的实际导入结果：
+本轮 Redis 6.2.17 + RedisBloom v2.4.20 -> gemini 的实际导入结果：
 
 ```text
 redisbloom_to_gemini_load_replies:
@@ -133,8 +133,8 @@ RedisBloom command-AOF -> gemini:
 对照组：Redis 6.2.17 默认 `aof-use-rdb-preamble yes` 时，AOF rewrite 文件是 RDB preamble，不包含 `BF.LOADCHUNK`；该路径在完整矩阵 corpus 中双向通过：
 
 ```text
-gemini RDB-preamble AOF -> RedisBloom v2.8.20: 9/9 corpora pass
-RedisBloom v2.8.20 RDB-preamble AOF -> gemini: 9/9 corpora pass
+gemini RDB-preamble AOF -> RedisBloom v2.4.20: 9/9 corpora pass
+RedisBloom v2.4.20 RDB-preamble AOF -> gemini: 9/9 corpora pass
 total: 18/18 cells pass
 ```
 
@@ -163,51 +163,49 @@ RedisModule_CreateDataType(ctx, "MBbloom--", kCurrentEncVer, &tm)
 - gemini RDB 被 RedisBloom 载入失败。
 - migration tool 误把 gemini 数据当 RedisBloom 数据处理。
 
-本轮新增正向信号：Redis 6.2.17 + RedisBloom v2.8.20 的 RDB 类迁移在 9 个 corpus 上双向通过：
+本轮新增正向信号：Redis 6.2.17 + RedisBloom v2.4.20 的 RDB 类迁移在 9 个 corpus 上双向通过：
 
 ```text
-RDB RedisBloom v2.8.20 -> gemini:
+RDB RedisBloom v2.4.20 -> gemini:
   9/9 corpora pass
 
-DUMP/RESTORE RedisBloom v2.8.20 -> gemini:
+DUMP/RESTORE RedisBloom v2.4.20 -> gemini:
   9/9 corpora pass
 
-RDB gemini -> RedisBloom v2.8.20:
+RDB gemini -> RedisBloom v2.4.20:
   9/9 corpora pass
 
-DUMP/RESTORE gemini -> RedisBloom v2.8.20:
+DUMP/RESTORE gemini -> RedisBloom v2.4.20:
   9/9 corpora pass
 
 RDB-preamble AOF and fullsync replication:
   36/36 cells pass
 ```
 
-这说明当前矩阵内的 RDB field order、hash seed、bit layout 与 RedisBloom v2.8.20 对齐，覆盖了 empty/single/multi/fixed/expansion/binary/long-item/large-empty corpus。它也覆盖了 Redis `DUMP/RESTORE`，因此单 key RDB object serialization 在本轮范围内是正向通过的。但这不能掩盖 public SCANDUMP/LOADCHUNK 与 command-AOF 失败。
+这说明当前矩阵内的 RDB field order、hash seed、bit layout 与 RedisBloom v2.4.20 对齐，覆盖了 empty/single/multi/fixed/expansion/binary/long-item/large-empty corpus。它也覆盖了 Redis `DUMP/RESTORE`，因此单 key RDB object serialization 在本轮范围内是正向通过的。但这不能掩盖 public SCANDUMP/LOADCHUNK 与 command-AOF 失败。
 
-仍未覆盖的是目标外版本矩阵，例如 Redis 8 Bloom 或 RedisBloom 其他版本；当前用户指定范围只要求 Redis 6.2 + RedisBloom v2.8.20。
+仍未覆盖的是目标外版本矩阵，例如 Redis 8 Bloom 或 RedisBloom 其他版本；当前用户指定范围只要求 Redis 6.2 + RedisBloom v2.4.20，不能把本结论外推到 v2.8.x 或 Redis 8 Bloom。
 
-建议：在 Redis 6.2 + RedisBloom v2.8.20 范围内，可把 RDB、`DUMP/RESTORE`、RDB-preamble AOF、fullsync replication 标为矩阵通过；但整体 RedisBloom 迁入迁出仍因 SCANDUMP/LOADCHUNK 和 command-AOF 失败而不兼容。
+建议：在 Redis 6.2 + RedisBloom v2.4.20 范围内，可把 RDB、`DUMP/RESTORE`、RDB-preamble AOF、fullsync replication 标为矩阵通过；但整体 RedisBloom 迁入迁出仍因 SCANDUMP/LOADCHUNK 和 command-AOF 失败而不兼容。
 
-## INTEROP-05：缺少 RedisBloom 版本矩阵
+## INTEROP-05：目标版本已固定，但结论不能外推
 
-**级别：P2**
+**级别：P2/P3**
 
-当前代码注释多处写“intended to match RedisBloom”，但没有固定目标版本：
+当前代码注释多处写“intended to match RedisBloom”，容易让读者外推到 RedisBloom 任意版本：
 
 - RedisBloom 2.8.x independent module。
 - Redis 8 内置 Bloom。
 - 历史 encver 2 / 4 行为。
 
-建议：文档和测试都写清楚目标版本。最少应覆盖 RedisBloom 2.8.x 和 Redis 8 Bloom 的一个固定版本。
-
-本轮用户指定范围已覆盖：
+本轮用户指定范围已固定并覆盖：
 
 ```text
 redis-server: 6.2.17
-RedisBloom:   v2.8.20 (MODULE LIST ver=20820)
+RedisBloom:   v2.4.20 (MODULE LIST ver=20420)
 ```
 
-Redis 8 内置 Bloom 和 RedisBloom 其他版本不属于本轮更新后的目标范围。
+Redis 8 内置 Bloom、RedisBloom v2.8.x 和其他版本不属于本轮更新后的目标范围。若未来产品目标改变，应新增对应版本矩阵和结果文件，而不是复用本轮 v2.4.20 结论。
 
 ## INTEROP-06：live replication command stream 的 `BF.CARD` 可观察状态不一致
 
@@ -232,7 +230,7 @@ gemini master -> RedisBloom replica:
   target BF.CARD=19, inserted items found=20/20
 ```
 
-原因是 live replication 复制的是 `BF.RESERVE` / `BF.ADD` command stream，而不是 RDB object。Bloom filter 在高 false-positive 场景下可能出现 `BF.ADD` 返回 0、`BF.CARD` 不等于 attempted item 数的合法行为；RedisBloom v2.8.20 与 gemini 在 `EXPANSION 1` 下的 `BF.CARD` 演进不同。membership 没有 false negative，但 `BF.CARD` 是 RedisBloom API 的可观察状态，因此不能把 live command replay 视作完全兼容。
+原因是 live replication 复制的是 `BF.RESERVE` / `BF.ADD` command stream，而不是 RDB object。Bloom filter 在高 false-positive 场景下可能出现 `BF.ADD` 返回 0、`BF.CARD` 不等于 attempted item 数的合法行为；RedisBloom v2.4.20 与 gemini 在 `EXPANSION 1` 下的 `BF.CARD` 演进不同。membership 没有 false negative，但 `BF.CARD` 是 RedisBloom API 的可观察状态，因此不能把 live command replay 视作完全兼容。
 
 对照组：fullsync replication 走 RDB snapshot，18/18 单元通过。
 
@@ -263,7 +261,7 @@ gemini incremental AOF -> RedisBloom:
 
 **级别：P1**
 
-RedisBloom v2.8.20 把 `BF.SCANDUMP` 注册为 `readonly fast`，gemini 注册为 `write`：
+RedisBloom v2.4.20 把 `BF.SCANDUMP` 注册为 `readonly fast`，gemini 注册为 `write`：
 
 ```text
 COMMAND INFO BF.SCANDUMP
@@ -283,7 +281,7 @@ gemini replica:
 
 这会影响从只读 replica、只读连接、cluster replica 或只读路由执行导出的迁移工具。即使 byte-offset 协议修复，命令 flag 不修正也会让常见“从副本导出减轻主库压力”的迁移流程失败。
 
-建议：`BF.SCANDUMP` 应注册为 `readonly fast`。如果实现内部需要分配临时 header buffer，也不应把命令标记为 write；RedisBloom v2.8.20 同样会在 SCANDUMP 中构造返回 payload，但命令语义仍是只读。
+建议：`BF.SCANDUMP` 应注册为 `readonly fast`。如果实现内部需要分配临时 header buffer，也不应把命令标记为 write；RedisBloom v2.4.20 同样会在 SCANDUMP 中构造返回 payload，但命令语义仍是只读。
 
 ## INTEROP-08：`MIGRATE` 与带 TTL 的 RESTORE 双向通过
 
@@ -312,7 +310,7 @@ DUMP/RESTORE with explicit TTL:
 ```text
 MODULE LIST
   gemini:     name=GeminiBloom, ver=1
-  RedisBloom: name=bf, ver=20820
+  RedisBloom: name=bf, ver=20420
 ```
 
-这意味着 RDB 能互通不等于服务实例对客户端呈现为 RedisBloom。依赖 `MODULE LIST` 检查 `bf` / `ver >= 20820` 的客户端和迁移工具会把 gemini 判定为“未加载 RedisBloom”。如果产品目标包含 drop-in client compatibility，需要决定是否调整 module name/version；如果只承诺 data migration compatibility，应在兼容声明里明确 module identity 差异。
+这意味着 RDB 能互通不等于服务实例对客户端呈现为 RedisBloom。依赖 `MODULE LIST` 检查 `bf` / `ver >= 20420` 的客户端和迁移工具会把 gemini 判定为“未加载 RedisBloom”。如果产品目标包含 drop-in client compatibility，需要决定是否调整 module name/version；如果只承诺 data migration compatibility，应在兼容声明里明确 module identity 差异。

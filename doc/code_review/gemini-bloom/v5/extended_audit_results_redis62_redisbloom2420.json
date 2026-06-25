@@ -1,6 +1,6 @@
 {
   "envs": {
-    "redis-6.2-redisbloom-v2.8.20": {
+    "redis-6.2-redisbloom-v2.4.20": {
       "command_registry": {
         "commands": {
           "BF.ADD": {
@@ -326,7 +326,7 @@
               "bytes": 3,
               "hex": "766572"
             },
-            20820
+            20420
           ]
         ],
         "redisbloom_scandump_first": [
@@ -418,9 +418,7 @@
           "missing_scandump": {
             "error": "ERR not found"
           },
-          "reserve_expansion_zero": {
-            "error": "ERR expansion should be greater or equal to 1"
-          },
+          "reserve_expansion_zero": "OK",
           "reserve_nonscaling_expansion": {
             "error": "Nonscaling filters cannot expand"
           },
@@ -440,13 +438,13 @@
         }
       },
       "env": {
-        "gemini_module": "/tmp/gemini-module-v5-docker-build/redis_bloom.so",
-        "module_ver": "20820",
-        "name": "redis-6.2-redisbloom-v2.8.20",
+        "gemini_module": "/tmp/gemini-module-v5-2420-build/redis_bloom.so",
+        "module_ver": "20420",
+        "name": "redis-6.2-redisbloom-v2.4.20",
         "redis_server": "/workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server",
         "redis_tag": "6.2.17",
-        "redisbloom_module": "/tmp/redisbloom-v2.8.20/bin/linux-x64-release/redisbloom.so",
-        "redisbloom_tag": "v2.8.20"
+        "redisbloom_module": "/tmp/redisbloom-v2.4.20/bin/linux-x64-release/redisbloom.so",
+        "redisbloom_tag": "v2.4.20"
       },
       "incremental_aof": {
         "expansion1": {
@@ -761,7 +759,7 @@
             "missing_count": 0,
             "missing_samples": []
           },
-          "restore_pttl": 600000,
+          "restore_pttl": 599999,
           "source_check": {
             "card": 8,
             "expected_card": 8,
@@ -770,7 +768,7 @@
             "missing_count": 0,
             "missing_samples": []
           },
-          "source_pttl": 599999,
+          "source_pttl": 599998,
           "target_check": {
             "card": 8,
             "expected_card": 8,
@@ -779,7 +777,7 @@
             "missing_count": 0,
             "missing_samples": []
           },
-          "target_pttl": 599996
+          "target_pttl": 599997
         },
         "rb_to_gemini": {
           "dump_len": 189,
@@ -825,7 +823,7 @@
             "missing_count": 0,
             "missing_samples": []
           },
-          "target_pttl": 599996
+          "target_pttl": 599997
         }
       },
       "module_load_args": {
@@ -865,7 +863,7 @@
           },
           "redisbloom": {
             "last_error": "[Errno 111] Connection refused",
-            "log": "8412:C 24 Jun 2026 17:36:11.605 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n8412:C 24 Jun 2026 17:36:11.606 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=8412, just started\n8412:C 24 Jun 2026 17:36:11.606 # Configuration loaded\n8412:M 24 Jun 2026 17:36:11.607 * monotonic clock: POSIX clock_gettime\n8412:M 24 Jun 2026 17:36:11.612 * Running mode=standalone, port=42523.\n8412:M 24 Jun 2026 17:36:11.612 # Server initialized\n8412:M 24 Jun 2026 17:36:11.613 * <bf> RedisBloom version 2.8.20 (Git=unknown)\n8412:M 24 Jun 2026 17:36:11.613 # <bf> Unrecognized option\n8412:M 24 Jun 2026 17:36:11.613 # Module /tmp/redisbloom-v2.8.20/bin/linux-x64-release/redisbloom.so initialization failed. Module not loaded\n8412:M 24 Jun 2026 17:36:11.613 # Can't load module from /tmp/redisbloom-v2.8.20/bin/linux-x64-release/redisbloom.so: server aborting",
+            "log": "10556:C 25 Jun 2026 09:36:13.252 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n10556:C 25 Jun 2026 09:36:13.252 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=10556, just started\n10556:C 25 Jun 2026 09:36:13.252 # Configuration loaded\n10556:M 25 Jun 2026 09:36:13.253 * monotonic clock: POSIX clock_gettime\n10556:M 25 Jun 2026 09:36:13.258 * Running mode=standalone, port=38375.\n10556:M 25 Jun 2026 09:36:13.259 # Server initialized\n10556:M 25 Jun 2026 09:36:13.260 * <bf> RedisBloom version 2.4.20 (Git=unknown)\n10556:M 25 Jun 2026 09:36:13.260 # <bf> Unrecognized option\n10556:M 25 Jun 2026 09:36:13.260 # Module /tmp/redisbloom-v2.4.20/bin/linux-x64-release/redisbloom.so initialization failed. Module not loaded\n10556:M 25 Jun 2026 09:36:13.260 # Can't load module from /tmp/redisbloom-v2.4.20/bin/linux-x64-release/redisbloom.so: server aborting",
             "returncode": 0,
             "started": false,
             "stderr": "",
@@ -875,7 +873,7 @@
         "redisbloom_cf_default_arg": {
           "gemini": {
             "last_error": "[Errno 111] Connection refused",
-            "log": "8414:C 24 Jun 2026 17:36:19.652 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n8414:C 24 Jun 2026 17:36:19.653 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=8414, just started\n8414:C 24 Jun 2026 17:36:19.653 # Configuration loaded\n8414:M 24 Jun 2026 17:36:19.655 * monotonic clock: POSIX clock_gettime\n8414:M 24 Jun 2026 17:36:19.663 * Running mode=standalone, port=57891.\n8414:M 24 Jun 2026 17:36:19.663 # Server initialized\n8414:M 24 Jun 2026 17:36:19.667 # <GeminiBloom> Unrecognized config argument: CF_MAX_EXPANSIONS\n8414:M 24 Jun 2026 17:36:19.667 # Module /tmp/gemini-module-v5-docker-build/redis_bloom.so initialization failed. Module not loaded\n8414:M 24 Jun 2026 17:36:19.667 # Can't load module from /tmp/gemini-module-v5-docker-build/redis_bloom.so: server aborting",
+            "log": "10558:C 25 Jun 2026 09:36:21.311 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n10558:C 25 Jun 2026 09:36:21.312 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=10558, just started\n10558:C 25 Jun 2026 09:36:21.312 # Configuration loaded\n10558:M 25 Jun 2026 09:36:21.314 * monotonic clock: POSIX clock_gettime\n10558:M 25 Jun 2026 09:36:21.322 * Running mode=standalone, port=34253.\n10558:M 25 Jun 2026 09:36:21.322 # Server initialized\n10558:M 25 Jun 2026 09:36:21.326 # <GeminiBloom> Unrecognized config argument: CF_MAX_EXPANSIONS\n10558:M 25 Jun 2026 09:36:21.326 # Module /tmp/gemini-module-v5-2420-build/redis_bloom.so initialization failed. Module not loaded\n10558:M 25 Jun 2026 09:36:21.326 # Can't load module from /tmp/gemini-module-v5-2420-build/redis_bloom.so: server aborting",
             "returncode": 0,
             "started": false,
             "stderr": "",
@@ -909,7 +907,7 @@
                   "bytes": 3,
                   "hex": "766572"
                 },
-                20820
+                20420
               ]
             ],
             "started": true
@@ -977,7 +975,7 @@
                   "bytes": 3,
                   "hex": "766572"
                 },
-                20820
+                20420
               ]
             ],
             "started": true
