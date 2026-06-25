@@ -889,6 +889,95 @@ TEST(BloomRdb, RejectsHashCountInconsistentWithBitsPerEntry) {
 }
 
 // ==================================================================
+// RDB narrowing-cast bypass: high bits in uint64 fields
+// ==================================================================
+
+TEST(BloomRdb, RejectsHashCountHighBitBypass) {
+  // Malicious RDB writes (2^32 + 7) for hashCount. Without range
+  // check, static_cast<uint32_t> truncates to 7 and passes validation.
+  MockRdbStream stream;
+  auto* io = stream.IO();
+
+  Mock_SaveUnsigned(io, 1);  // totalItems
+  Mock_SaveUnsigned(io, 1);  // numLayers
+  Mock_SaveUnsigned(io, ToUnderlying(DefaultFlags()));
+  Mock_SaveUnsigned(io, 2);  // expansion
+
+  Mock_SaveUnsigned(io, 1000);  // capacity
+  Mock_SaveDouble(io, 0.01);    // fpRate
+  Mock_SaveUnsigned(io, (1ULL << 32) + 7);  // hashCount with high bits
+  Mock_SaveDouble(io, 9.97);    // bitsPerEntry
+  Mock_SaveUnsigned(io, 16384); // totalBits
+  Mock_SaveUnsigned(io, 14);    // log2Bits
+
+  std::vector<char> bits(2048, 0);
+  Mock_SaveStringBuffer(io, bits.data(), bits.size());
+  Mock_SaveUnsigned(io, 1);     // itemCount
+
+  stream.Rewind();
+  auto* loaded = static_cast<ScalingBloomFilter*>(
+    RdbLoadBloom(stream.IO(), kCurrentEncVer));
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject hashCount with high bits set (narrowing bypass)";
+  if (loaded) DestroyFilter(loaded);
+}
+
+TEST(BloomRdb, RejectsLog2BitsHighBitBypass) {
+  MockRdbStream stream;
+  auto* io = stream.IO();
+
+  Mock_SaveUnsigned(io, 1);
+  Mock_SaveUnsigned(io, 1);
+  Mock_SaveUnsigned(io, ToUnderlying(DefaultFlags()));
+  Mock_SaveUnsigned(io, 2);
+
+  Mock_SaveUnsigned(io, 1000);
+  Mock_SaveDouble(io, 0.01);
+  Mock_SaveUnsigned(io, 7);
+  Mock_SaveDouble(io, 9.97);
+  Mock_SaveUnsigned(io, 16384);
+  Mock_SaveUnsigned(io, (1ULL << 8) + 14);  // log2Bits with high bits
+
+  std::vector<char> bits(2048, 0);
+  Mock_SaveStringBuffer(io, bits.data(), bits.size());
+  Mock_SaveUnsigned(io, 1);
+
+  stream.Rewind();
+  auto* loaded = static_cast<ScalingBloomFilter*>(
+    RdbLoadBloom(stream.IO(), kCurrentEncVer));
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject log2Bits with high bits set (narrowing bypass)";
+  if (loaded) DestroyFilter(loaded);
+}
+
+TEST(BloomRdb, RejectsFlagsHighBitBypass) {
+  MockRdbStream stream;
+  auto* io = stream.IO();
+
+  Mock_SaveUnsigned(io, 0);
+  Mock_SaveUnsigned(io, 1);
+  Mock_SaveUnsigned(io, (1ULL << 32) + ToUnderlying(DefaultFlags()));
+  Mock_SaveUnsigned(io, 2);
+
+  stream.Rewind();
+  auto* loaded = static_cast<ScalingBloomFilter*>(
+    RdbLoadBloom(stream.IO(), kCurrentEncVer));
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject flags with high bits set (narrowing bypass)";
+  if (loaded) DestroyFilter(loaded);
+}
+
+TEST(BloomRdb, RejectsBitsPerEntryTooLarge) {
+  CustomLayerFields f;
+  f.bitsPerEntry = 5000.0;
+  f.hashCount = 3466;  // ceil(ln2 * 5000)
+  auto* loaded = LoadCustomRdb(f);
+  EXPECT_EQ(loaded, nullptr)
+    << "Should reject bitsPerEntry > 1000";
+  if (loaded) DestroyFilter(loaded);
+}
+
+// ==================================================================
 // Phase 2: Item count integrity
 // ==================================================================
 

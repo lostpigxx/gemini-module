@@ -60,7 +60,8 @@ static bool ValidateLayerFields(const LayerFields& f) {
   uint64_t expectedSize = (f.totalBits + 7) / 8;
   if (f.dataSize != expectedSize) return false;
   if (!std::isfinite(f.fpRate) || f.fpRate <= 0.0 || f.fpRate >= 1.0) return false;
-  if (!std::isfinite(f.bitsPerEntry) || f.bitsPerEntry <= 0.0) return false;
+  if (!std::isfinite(f.bitsPerEntry) || f.bitsPerEntry <= 0.0 ||
+      f.bitsPerEntry > 1000.0) return false;
   uint32_t expectedHash = std::max(1u,
     static_cast<uint32_t>(std::ceil(std::numbers::ln2 * f.bitsPerEntry)));
   if (f.hashCount != expectedHash) return false;
@@ -86,12 +87,15 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   BloomLayer layer;
   layer.capacity_ = r.GetUint();
   layer.fpRate_ = r.GetFloat();
-  layer.hashCount_ = static_cast<uint32_t>(r.GetUint());
+  uint64_t rawHashCount = r.GetUint();
   layer.bitsPerEntry_ = r.GetFloat();
   layer.totalBits_ = r.GetUint();
-  layer.log2Bits_ = static_cast<uint8_t>(r.GetUint());
+  uint64_t rawLog2Bits = r.GetUint();
 
   if (!r.Ok()) return std::nullopt;
+  if (rawHashCount > UINT32_MAX || rawLog2Bits > 255) return std::nullopt;
+  layer.hashCount_ = static_cast<uint32_t>(rawHashCount);
+  layer.log2Bits_ = static_cast<uint8_t>(rawLog2Bits);
 
   layer.dataSize_ = (layer.totalBits_ > 0) ? ((layer.totalBits_ + 7) / 8) : 0;
   layer.use64Bit_ = HasFlag(filterFlags, BloomFlags::Use64Bit);
@@ -166,25 +170,31 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
   shell.totalItems = r.GetUint();
   shell.numLayers = static_cast<size_t>(r.GetUint());
 
-  unsigned rawFlags = (encver >= kEncVerWithFlags)
-    ? static_cast<unsigned>(r.GetUint())
+  uint64_t rawFlags = (encver >= kEncVerWithFlags)
+    ? r.GetUint()
     : ToUnderlying(BloomFlags::Use64Bit | BloomFlags::NoRound);
 
-  if (!ValidateFlags(rawFlags)) return nullptr;
-  shell.flags = FromUnderlying(rawFlags);
+  if (rawFlags > UINT_MAX || !ValidateFlags(static_cast<unsigned>(rawFlags)))
+    return nullptr;
+  shell.flags = FromUnderlying(static_cast<unsigned>(rawFlags));
 
-  shell.expansionFactor = (encver >= kEncVerWithExpansion)
-    ? static_cast<unsigned>(r.GetUint())
+  uint64_t rawExpansion = (encver >= kEncVerWithExpansion)
+    ? r.GetUint()
     : 2;
 
-  if (!r.Ok() || shell.numLayers == 0 || shell.numLayers > kMaxLayers) return nullptr;
+  if (!r.Ok() || rawExpansion > UINT_MAX) return nullptr;
+  shell.expansionFactor = static_cast<unsigned>(rawExpansion);
+
+  if (shell.numLayers == 0 || shell.numLayers > kMaxLayers) return nullptr;
   if (!HasFlag(shell.flags, BloomFlags::FixedSize) && shell.expansionFactor == 0)
     return nullptr;
 
   auto* filter = FromRdbShell(shell);
   if (!filter) return nullptr;
 
+  constexpr uint64_t kMaxTotalDataSize = 4ULL * 1024 * 1024 * 1024;
   uint64_t itemSum = 0;
+  uint64_t totalDataSize = 0;
   for (size_t i = 0; i < shell.numLayers; i++) {
     auto maybeLayer = BloomLayer::ReadFrom(r, shell.flags);
     if (!maybeLayer) {
@@ -192,6 +202,13 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
       RMFree(filter);
       return nullptr;
     }
+    if (maybeLayer->GetDataSize() > kMaxTotalDataSize ||
+        totalDataSize > kMaxTotalDataSize - maybeLayer->GetDataSize()) {
+      filter->~ScalingBloomFilter();
+      RMFree(filter);
+      return nullptr;
+    }
+    totalDataSize += maybeLayer->GetDataSize();
     size_t count = static_cast<size_t>(r.GetUint());
     if (!r.Ok()) {
       filter->~ScalingBloomFilter();
