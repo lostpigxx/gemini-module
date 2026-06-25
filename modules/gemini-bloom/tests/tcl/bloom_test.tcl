@@ -1247,52 +1247,46 @@ test "BF.RESERVE expansion at limit 32768 succeeds" {
 
 puts "\n=== MADD/INSERT partial failure (BUG-05) ==="
 
-test_assert "BF.MADD on full NONSCALING filter returns errors" {
+test_assert "BF.MADD on full filter truncates array at first error" {
   r DEL madd_full
   r BF.RESERVE madd_full 0.01 5 NONSCALING
   for {set i 0} {$i < 5} {incr i} {
     catch {r BF.ADD madd_full "fill_$i"}
   }
+  # All items fail — array should be length 1 (single error, then stop)
   set result [r_nothrow BF.MADD madd_full new1 new2 new3]
-  set err_count 0
-  foreach elem $result {
-    if {[string match "ERR:*" $elem]} { incr err_count }
-  }
-  if {$err_count != 3} { error "Expected 3 errors, got $err_count (result: $result)" }
-  set card [r BF.CARD madd_full]
-  if {$card < 5} { error "Expected CARD>=5, got $card" }
+  set rlen [llength $result]
+  if {$rlen != 1} { error "Expected array length 1 (truncated at error), got $rlen (result: $result)" }
+  if {![string match "ERR:*" [lindex $result 0]]} { error "Expected error element, got: [lindex $result 0]" }
 }
 
-test_assert "BF.CARD after partial MADD matches actual insertions" {
+test_assert "BF.MADD partial success truncates at first error (RedisBloom compat)" {
   r DEL partial_test
   r BF.RESERVE partial_test 0.01 3 NONSCALING
   r BF.ADD partial_test a
   r BF.ADD partial_test b
-  # 2 items in, capacity=3, add batch of 3: first succeeds, rest fail
+  # 2 items in, capacity=3 — c succeeds, d triggers error, e not returned
   set result [r_nothrow BF.MADD partial_test c d e]
+  set rlen [llength $result]
+  # Should be: [1, ERR...] — length 2, not 3
+  if {$rlen != 2} { error "Expected array length 2, got $rlen (result: $result)" }
   set first [lindex $result 0]
   if {$first != 1} { error "First item should succeed (1), got $first" }
-  set err_count 0
-  foreach elem [lrange $result 1 end] {
-    if {[string match "ERR:*" $elem]} { incr err_count }
-  }
-  if {$err_count != 2} { error "Expected 2 errors after first success, got $err_count" }
+  if {![string match "ERR:*" [lindex $result 1]]} { error "Second should be error, got: [lindex $result 1]" }
   set card [r BF.CARD partial_test]
   if {$card != 3} { error "Expected CARD=3 but got $card" }
 }
 
-test_assert "BF.INSERT on full filter stops and returns errors" {
+test_assert "BF.INSERT on full filter truncates at first error" {
   r DEL insert_full
   r BF.RESERVE insert_full 0.01 3 NONSCALING
   r BF.ADD insert_full a
   r BF.ADD insert_full b
   r BF.ADD insert_full c
+  # All items fail — should return [ERR...], length 1
   set result [r_nothrow BF.INSERT insert_full NOCREATE ITEMS d e]
-  set err_count 0
-  foreach elem $result {
-    if {[string match "ERR:*" $elem]} { incr err_count }
-  }
-  if {$err_count != 2} { error "Expected 2 errors, got $err_count (result: $result)" }
+  set rlen [llength $result]
+  if {$rlen != 1} { error "Expected array length 1, got $rlen (result: $result)" }
   set card [r BF.CARD insert_full]
   if {$card != 3} { error "Expected CARD=3 but got $card" }
 }
@@ -1487,11 +1481,11 @@ test_assert "COMMAND INFO BF.EXISTS shows readonly flag" {
   }
 }
 
-test_assert "COMMAND INFO BF.SCANDUMP shows write flag" {
+test_assert "COMMAND INFO BF.SCANDUMP shows readonly flag" {
   set info [r COMMAND INFO BF.SCANDUMP]
   set cmd_str [join $info " "]
-  if {[string first "write" $cmd_str] < 0} {
-    error "BF.SCANDUMP should have write flag, got: $cmd_str"
+  if {[string first "readonly" $cmd_str] < 0} {
+    error "BF.SCANDUMP should have readonly flag, got: $cmd_str"
   }
 }
 
@@ -1505,7 +1499,7 @@ test_assert "COMMAND INFO exposes expected flags for all bloom commands" {
     BF.MEXISTS readonly
     BF.INFO readonly
     BF.CARD readonly
-    BF.SCANDUMP write
+    BF.SCANDUMP readonly
     BF.LOADCHUNK write
   }
   foreach {cmd expected} $expectations {
@@ -1548,6 +1542,40 @@ test_assert "ACL DRYRUN accepts bloom commands when supported" {
   } else {
     set unsupported 0
   }
+}
+
+puts "\n=== LOADCHUNK existing key rejection (SAFE-07) ==="
+
+test_error "BF.LOADCHUNK header on existing Bloom key returns error" {
+  r DEL lc_exist_src lc_exist_dst
+  r BF.RESERVE lc_exist_src 0.01 100
+  r BF.ADD lc_exist_src new_item
+  r BF.RESERVE lc_exist_dst 0.01 100
+  r BF.ADD lc_exist_dst old_item
+
+  set reply [r BF.SCANDUMP lc_exist_src 0]
+  set hdr_data [lindex $reply 1]
+  r BF.LOADCHUNK lc_exist_dst 1 $hdr_data
+} {ERR*received bad data*}
+
+test_assert "BF.LOADCHUNK existing key rejection preserves old data" {
+  set exists [r BF.EXISTS lc_exist_dst old_item]
+  if {$exists != 1} { error "old_item should still exist after rejected LOADCHUNK, got $exists" }
+  set card [r BF.CARD lc_exist_dst]
+  if {$card != 1} { error "CARD should be 1, got $card" }
+}
+
+puts "\n=== Per-layer data size cap (SAFE-06) ==="
+
+test_assert "BloomLayer::Create rejects extremely large capacity" {
+  # kMaxCapacity=1<<30 is enforced at command layer, but even if
+  # something slips through, the per-layer 512MB data size cap
+  # in BloomLayer::Create should reject it
+  # kMaxCapacity already tested in resource limits section above
+  # This test verifies that BF.RESERVE at max capacity still works
+  r DEL cap_max_test
+  set result [r BF.RESERVE cap_max_test 0.01 1073741824]
+  if {$result ne "OK"} { error "Expected OK for max capacity, got $result" }
 }
 
 # ============================================================

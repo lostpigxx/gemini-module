@@ -199,26 +199,24 @@ static int CmdMadd(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (!filter) return REDISMODULE_OK;
 
   int count = argc - 2;
-  RedisModule_ReplyWithArray(ctx, count);
+  RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
 
   bool changed = created;
-  bool full = false;
+  long replied = 0;
   for (int i = 0; i < count; i++) {
-    if (full) {
-      RedisModule_ReplyWithError(ctx, FilterFullError(filter));
-      continue;
-    }
     size_t len;
     const char* item = RedisModule_StringPtrLen(argv[i + 2], &len);
     auto result = filter->Put(AsBytes(item, len));
     if (!result.has_value()) {
       RedisModule_ReplyWithError(ctx, FilterFullError(filter));
-      full = true;
-    } else {
-      RedisModule_ReplyWithLongLong(ctx, *result ? 1 : 0);
-      if (*result) changed = true;
+      replied++;
+      break;
     }
+    RedisModule_ReplyWithLongLong(ctx, *result ? 1 : 0);
+    if (*result) changed = true;
+    replied++;
   }
+  RedisModule_ReplySetArrayLength(ctx, replied);
 
   if (changed) RedisModule_ReplicateVerbatim(ctx);
   return REDISMODULE_OK;
@@ -368,26 +366,24 @@ static int CmdInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
   }
 
-  RedisModule_ReplyWithArray(ctx, count);
+  RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
 
   bool changed = (keyType == REDISMODULE_KEYTYPE_EMPTY);
-  bool full = false;
+  long replied = 0;
   for (int i = 0; i < count; i++) {
-    if (full) {
-      RedisModule_ReplyWithError(ctx, FilterFullError(filter));
-      continue;
-    }
     size_t len;
     const char* item = RedisModule_StringPtrLen(argv[opts.itemsStart + i], &len);
     auto result = filter->Put(AsBytes(item, len));
     if (!result.has_value()) {
       RedisModule_ReplyWithError(ctx, FilterFullError(filter));
-      full = true;
-    } else {
-      RedisModule_ReplyWithLongLong(ctx, *result ? 1 : 0);
-      if (*result) changed = true;
+      replied++;
+      break;
     }
+    RedisModule_ReplyWithLongLong(ctx, *result ? 1 : 0);
+    if (*result) changed = true;
+    replied++;
   }
+  RedisModule_ReplySetArrayLength(ctx, replied);
 
   if (changed) RedisModule_ReplicateVerbatim(ctx);
   return REDISMODULE_OK;
@@ -590,18 +586,14 @@ static int CmdLoadchunk(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
   if (cursor == 1) {
     int keyType = RedisModule_KeyType(key);
     if (keyType != REDISMODULE_KEYTYPE_EMPTY) {
-      if (keyType != REDISMODULE_KEYTYPE_MODULE || !GetFilter(key)) {
-        return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+      if (keyType == REDISMODULE_KEYTYPE_MODULE && GetFilter(key)) {
+        return RedisModule_ReplyWithError(ctx, "ERR received bad data");
       }
+      return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
     }
     auto* filter = DeserializeHeader(data, dataLen);
     if (!filter) {
       return RedisModule_ReplyWithError(ctx, "ERR corrupted header payload");
-    }
-    if (keyType != REDISMODULE_KEYTYPE_EMPTY) {
-      RedisModule_DeleteKey(key);
-      key = static_cast<RedisModuleKey*>(
-        RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
     }
     if (RedisModule_ModuleTypeSetValue(key, BloomType, filter) != REDISMODULE_OK) {
       filter->~ScalingBloomFilter();
@@ -647,7 +639,7 @@ int RegisterBloomCommands(RedisModuleCtx* ctx) {
     {"BF.MEXISTS",   CmdMexists,   "readonly"},
     {"BF.INFO",      CmdInfo,      "readonly"},
     {"BF.CARD",      CmdCard,      "readonly"},
-    {"BF.SCANDUMP",  CmdScandump,  "write"},
+    {"BF.SCANDUMP",  CmdScandump,  "readonly fast"},
     {"BF.LOADCHUNK", CmdLoadchunk, "write deny-oom"},
   };
 

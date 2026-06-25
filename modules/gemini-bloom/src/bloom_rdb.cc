@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <numbers>
 
 constexpr uint32_t kMaxLayers = 1024;
 
@@ -59,7 +60,10 @@ static bool ValidateLayerFields(const LayerFields& f) {
   uint64_t expectedSize = (f.totalBits + 7) / 8;
   if (f.dataSize != expectedSize) return false;
   if (!std::isfinite(f.fpRate) || f.fpRate <= 0.0 || f.fpRate >= 1.0) return false;
-  if (!std::isfinite(f.bitsPerEntry) || f.bitsPerEntry < 0.0) return false;
+  if (!std::isfinite(f.bitsPerEntry) || f.bitsPerEntry <= 0.0) return false;
+  uint32_t expectedHash = std::max(1u,
+    static_cast<uint32_t>(std::ceil(std::numbers::ln2 * f.bitsPerEntry)));
+  if (f.hashCount != expectedHash) return false;
   return true;
 }
 
@@ -199,6 +203,11 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
       RMFree(filter);
       return nullptr;
     }
+    if (itemSum > UINT64_MAX - count) {
+      filter->~ScalingBloomFilter();
+      RMFree(filter);
+      return nullptr;
+    }
     itemSum += count;
     filter->SetLayer(i, {std::move(*maybeLayer), count});
   }
@@ -267,9 +276,11 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   for (size_t i = 0; i < hdr->numLayers; i++) {
     if (!ValidateLayerMeta(meta[i])) return nullptr;
     if (meta[i].itemCount > meta[i].capacity) return nullptr;
+    if (itemSum > UINT64_MAX - meta[i].itemCount) return nullptr;
     itemSum += meta[i].itemCount;
+    if (meta[i].dataSize > kMaxTotalDataSize ||
+        totalDataSize > kMaxTotalDataSize - meta[i].dataSize) return nullptr;
     totalDataSize += meta[i].dataSize;
-    if (totalDataSize > kMaxTotalDataSize) return nullptr;
   }
   if (itemSum != hdr->totalItems) return nullptr;
 
