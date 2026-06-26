@@ -1,0 +1,4 @@
+Flow: official_roundtrip, header_only, data_before_header, malformed_header, zero_layers_header, wrong_size_chunk, cursor_zero, cursor_negative, cursor_text, missing_key_data, string_key_header, existing_bloom_malformed
+TargetState: missing, existing_bloom, existing_string
+SourceShape: single_layer, multi_layer
+PayloadShape: valid, short, zero_layers, wrong_size

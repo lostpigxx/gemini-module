@@ -1,0 +1,7 @@
+Rate: valid_small, valid_tiny, zero, one, negative, text
+Capacity: valid_small, valid_medium, zero, negative, text
+KeyState: missing, existing_bloom, existing_string
+Expansion: absent, valid_1, valid_4, zero, negative, text, missing_value, duplicate
+NonScaling: absent, present, duplicate
+UnknownOption: absent, present
+OptionOrder: expansion_first, nonscaling_first

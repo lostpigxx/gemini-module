@@ -1,0 +1,9 @@
+ErrorRate: default, valid_small, zero, one, negative, text
+Capacity: default, valid_small, zero, negative, text
+KeyState: missing, existing_bloom, existing_string
+NoCreate: absent, present, duplicate
+Expansion: absent, valid_1, valid_4, zero, negative, text, missing_value, duplicate
+NonScaling: absent, present
+UnknownOption: absent, present
+ItemsPosition: normal, missing_keyword, no_items, option_after_items
+ItemShape: one_ascii, two_ascii, duplicate, empty, binary, long

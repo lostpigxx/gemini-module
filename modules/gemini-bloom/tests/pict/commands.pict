@@ -1,0 +1,5 @@
+Command: ADD, EXISTS, MADD, MEXISTS, INFO, CARD
+KeyState: missing, bloom_empty, bloom_with_items, existing_string
+ItemShape: ascii_new, ascii_existing, empty, binary, long
+InfoField: none, Capacity, Items, Expansion, BadField
+Arity: valid, too_few, too_many
