@@ -46,11 +46,13 @@ gemini-bloom 是 Gemini 产品线的 Bloom Filter 组件，不是 RedisBloom 的
 
 ## 2. 算法设计
 
-### 2.1 Scalable Bloom Filter
+gemini-bloom 和 RedisBloom 都实现了 Scalable Bloom Filter，算法源自同一篇论文，但在工程实现上有诸多差异。本章先介绍共同的算法原理，再详述 gemini-bloom 的具体实现选择及其与 RedisBloom 的区别。
+
+### 2.1 Scalable Bloom Filter 原理
 
 基于 Almeida, Baquero, Preguica & Hutchison (2007) 的论文 "Scalable Bloom Filters"。
 
-核心思想：当一个 Bloom Filter 层达到容量上限时，自动创建新层。新层的容量按 expansion factor 倍增，误判率按 tightening ratio 递减，保证整体误判率收敛到用户指定的目标。
+**核心思想**：经典 Bloom Filter 需要预先知道元素数量上限。Scalable Bloom Filter 通过层叠多个子 filter 解决这个问题 — 当一个子 filter 达到容量上限时，在其上方创建新的子 filter。新层的容量按 expansion factor 倍增，误判率按 tightening ratio 递减，保证整体误判率收敛到用户指定的目标。
 
 ```
 用户指定: capacity=100, errorRate=0.01, expansion=2
@@ -59,37 +61,43 @@ Layer 0: capacity=100, fpRate=0.005  (0.01 * 0.5)
 Layer 1: capacity=200, fpRate=0.0025 (0.005 * 0.5)
 Layer 2: capacity=400, fpRate=0.00125
 ...
+
+整体误判率 = sum(各层 fpRate) 收敛于用户指定的 0.01
 ```
 
 **查找**：从最新层向旧层逐层检查。任何一层返回 true 即判定"可能存在"，所有层都返回 false 才判定"确定不存在"。
 
-**插入**：先在所有层上检查是否已存在。如果是新元素，插入到最顶层。如果顶层已满，先创建新层。
+**插入**：先在所有层上检查是否已存在（避免重复计数）。如果是新元素，插入到最顶层。如果顶层已满，先创建新层。
 
 **扩容终止条件**：
 - `FixedSize` 模式下不扩容，满了直接报错
 - 下一层的误判率低于 `1e-15` 时停止扩容
 - 下一层的容量溢出 `uint64_t` 时停止扩容
 
-### 2.2 单层 Bloom Filter 参数
+### 2.2 单层 Bloom Filter 参数计算
 
-每层 Bloom Filter 的参数由学术公式推导：
+每层 Bloom Filter 的参数由经典公式推导（Mitzenmacher & Upfal, 2005）：
 
 ```
-bitsPerEntry = -log(fpRate) / (ln2)^2    // Mitzenmacher & Upfal (2005)
-hashCount    = ceil(ln2 * bitsPerEntry)   // 最优哈希函数数量
-totalBits    = capacity * bitsPerEntry    // 位数组大小
+bitsPerEntry = -log(fpRate) / (ln2)^2     // 每元素所需位数
+hashCount    = ceil(ln2 * bitsPerEntry)    // 最优哈希函数数量
+totalBits    = capacity * bitsPerEntry     // 位数组大小
+
+示例 (fpRate=0.01):
+  bitsPerEntry ≈ 9.585
+  hashCount    = ceil(0.693 * 9.585) = 7
+  capacity=100 → totalBits ≈ 959 → 对齐后 1024 或 960
 ```
 
-**位数组对齐**：
-- 默认模式（无 NoRound flag）：totalBits 向上取整到 2 的幂次，使用 bit masking 代替取模
-- NoRound 模式：totalBits 按 8 字节（64 bit）边界对齐，使用取模运算
-- gemini 命令层创建的 filter 始终使用 `Use64Bit | NoRound` flags
+gemini-bloom 和 RedisBloom 使用相同的公式。参数计算后的差异在于位数组对齐方式（见 2.4 节）。
 
 ### 2.3 哈希函数
 
-使用 **MurmurHash2**（Austin Appleby，public domain），采用 Kirsch-Mitzenmacher 增强双重哈希方案：
+gemini-bloom 和 RedisBloom 都使用 **MurmurHash2**（Austin Appleby，public domain），采用 Kirsch-Mitzenmacher 增强双重哈希方案（"Less Hashing, Same Performance", ESA 2006）：
 
 ```
+双重哈希: 计算两个独立 hash h1, h2，通过 h1 + i*h2 派生 k 个探测位置
+
 32-bit mode:
   h1 = MurmurHash2(data, len, seed=0x9747b28c)
   h2 = MurmurHash2(data, len, seed=h1)
@@ -101,9 +109,143 @@ totalBits    = capacity * bitsPerEntry    // 位数组大小
 probe[i] = h1 + i * h2   (i = 0, 1, ..., hashCount-1)
 ```
 
-gemini 命令层创建的 filter 始终使用 64-bit 模式。seed 值和双重哈希模式是 RDB 持久化格式的一部分 — 任何读写同一 RDB 格式的实现必须使用相同的 seed。
+**seed 值是 RDB 格式的一部分** — 它们决定了哪些 bit 被设置在持久化的位数组中。任何读写同一 RDB 格式的实现必须使用相同的 seed 和双重哈希模式，否则反序列化后的 filter 会出现 false negative。
 
-### 2.4 参考文献
+gemini-bloom 的 seed 值和 `h2 = hash(data, seed=h1)` 模式与 RedisBloom 一致，这是 RDB 双向互通的基础。hash golden vector 测试固化了这些精确值。
+
+### 2.4 gemini-bloom 与 RedisBloom 的设计差异
+
+#### 2.4.1 实现语言与数据结构
+
+| 维度 | gemini-bloom | RedisBloom |
+|---|---|---|
+| 语言 | C++20 | C |
+| 多层容器 | `FilterLayer*` 动态数组 + placement new | `SBChain` 链表 + `SBLink` 节点 |
+| 单层抽象 | `BloomLayer` 类 (RAII) | `struct bloom` (手动 malloc/free) |
+| 内存管理 | RAII + move 语义，析构自动释放 | 手动 `RedisModule_Alloc`/`Free` |
+| 扩容策略 | 动态数组倍增（初始 4 slots），move 迁移 | 链表 append，无搬迁 |
+| 哈希接口 | `HashPair` + 编译期 policy 分发 | 宏 `BLOOM_CALLHASHES` 直接调用 |
+
+**数据结构选择的影响**：RedisBloom 使用链表存储子 filter，每次扩容是 O(1) 的链表 append。gemini-bloom 使用动态数组，扩容时需要 move 所有已有层（O(n)），但查找时内存连续，cache 更友好。由于层数通常 < 20（EXPANSION 2 下），move 成本可忽略。
+
+#### 2.4.2 位数组对齐
+
+| 维度 | gemini-bloom | RedisBloom |
+|---|---|---|
+| 默认创建模式 | `Use64Bit \| NoRound` | 依赖 `BLOOM_OPT_NOROUND` 和 `BLOOM_OPT_FORCE64` flags |
+| NoRound 对齐 | 按 8 字节（64 bit）边界对齐 | 按 8 字节（64 bit）边界对齐 |
+| 默认取整 | NoRound 时不取整到 2 的幂 | 同上 |
+| bit 寻址 | `UseBitMasking()` 判断使用 mask 还是 modulo | 类似逻辑 |
+
+两者在 NoRound 模式下的位数组大小计算一致：先按 `capacity * bitsPerEntry` 计算原始位数，再按 64 bit 对齐。这是 RDB 兼容的关键 — 同一参数产生相同大小的位数组。
+
+#### 2.4.3 Tightening Ratio
+
+| 维度 | gemini-bloom | RedisBloom |
+|---|---|---|
+| 值 | `kTighteningRatio = 0.5` | `SB_TIGHTENING_RATIO = 0.5` |
+| 首层 fpRate | `errorRate * 0.5` (scaling) 或 `errorRate` (fixed) | 同上 |
+| 后续层 | 前一层 fpRate * 0.5 | 同上 |
+
+两者完全一致。
+
+#### 2.4.4 内存统计 (BF.INFO Size)
+
+| 维度 | gemini-bloom | RedisBloom |
+|---|---|---|
+| 统计口径 | `sizeof(ScalingBloomFilter)` + `layerCapacity_ * sizeof(FilterLayer)` + 所有层 bit array | `sizeof(SBChain)` + 所有 `SBLink` + 所有 `struct bloom` + 所有层 bit array |
+| 预分配 | 包含预留但未使用的 layer slots | 链表无预留 |
+| 结果 | 数值通常大于 RedisBloom | 更紧凑 |
+
+示例：capacity=100, fpRate=0.01 的单层空 filter：gemini 报 440 bytes，RedisBloom 报 240 bytes。差异来自 gemini 的 `layerCapacity_=4`（预分配 4 个 FilterLayer slots）和 C++ 对象头的大小。
+
+#### 2.4.5 SCANDUMP / LOADCHUNK 协议
+
+这是两者最大的设计差异，也是 gemini-bloom 明确不兼容的部分：
+
+| 维度 | gemini-bloom | RedisBloom |
+|---|---|---|
+| cursor 语义 | layer index（1=header, 2=layer0, 3=layer1, ...） | byte offset 在拼接后的数据流中的位置 |
+| data chunk 大小 | 整层 bit array（一次一整层） | 最大 16MB chunk，大层会被拆分 |
+| chunk 可以跨层 | 不可以 | 可以（byte-offset 是全局的） |
+| 对外暴露 | 不对客户开放 | RedisBloom 公共迁移接口 |
+
+```
+RedisBloom v2.4.20 chunk 序列示例（EXPANSION 2, 40 items）:
+  [(1, 179), (17, 16), (49, 32), (121, 72), (0, 0)]
+  cursor 按 byte offset 递进: 1 → 1+16=17 → 17+32=49 → 49+72=121 → 0(结束)
+
+gemini 同一 filter 的 chunk 序列:
+  [(1, 179), (2, 128), (3, 128), (4, 128), (0, 0)]
+  cursor 按 layer index 递进: 1 → 2 → 3 → 4 → 0(结束)
+  每个 data chunk 是完整的一层 bit array
+```
+
+gemini 选择私有 layer-index 协议的原因：实现简单、自身 round-trip 自洽、AOF rewrite 可用。由于产品只通过 RDB 路径迁移，SCANDUMP/LOADCHUNK 不对客户开放，因此不需要与 RedisBloom 协议兼容。
+
+#### 2.4.6 命令 parser 严格性
+
+| 维度 | gemini-bloom | RedisBloom v2.4.20 |
+|---|---|---|
+| 未知 option | 拒绝（ERR unrecognized option） | 静默接受 |
+| 重复 option | 拒绝（ERR duplicate） | 最后一次赋值生效 |
+| NOCREATE + CAPACITY | 前置拒绝（ERR NOCREATE cannot be used with CAPACITY or ERROR） | 后置拒绝（ERR not found） |
+| BF.INSERT EXPANSION 0 | 映射为 NONSCALING | 拒绝（ERR Bad argument received） |
+| BF.RESERVE EXPANSION 0 | 映射为 NONSCALING | 映射为 NONSCALING |
+
+gemini 总体上比 RedisBloom 更严格。这是有意为之的设计选择 — 宁可在参数阶段就拒绝，也不让不明确的意图静默通过。
+
+#### 2.4.7 LOADCHUNK 已有 key 行为
+
+| 维度 | gemini-bloom | RedisBloom v2.4.20 |
+|---|---|---|
+| cursor=1 对空 key | 创建 shell | 创建 shell |
+| cursor=1 对已有 Bloom key | ERR received bad data，保留旧 key | ERR received bad data，保留旧 key |
+| cursor=1 对 string key | WRONGTYPE | WRONGTYPE |
+
+gemini 在该行为上已与 RedisBloom v2.4.20 对齐。
+
+#### 2.4.8 批量命令部分失败
+
+| 维度 | gemini-bloom | RedisBloom v2.4.20 |
+|---|---|---|
+| MADD 部分失败数组长度 | 截断到第一个 error（postponed array length） | 截断到第一个 error |
+| INSERT 部分失败数组长度 | 同上 | 同上 |
+| 示例：cap=2, MADD a b c d | [1, 1, ERR]（长度 3） | [1, 1, ERR]（长度 3） |
+
+gemini 在该行为上已与 RedisBloom v2.4.20 对齐。
+
+#### 2.4.9 RDB 序列化格式
+
+| 维度 | gemini-bloom | RedisBloom |
+|---|---|---|
+| data type name | `MBbloom--` | `MBbloom--` |
+| 当前 encver | 4 | 4 |
+| 字段序列 | totalItems, numLayers, flags, expansion, layers[] | 同上 |
+| 每层字段 | capacity, fpRate, hashCount, bitsPerEntry, totalBits, log2Bits, bitArray(blob), itemCount | 同上 |
+| encver 2 兼容 | 支持（无 expansion 字段时默认 2） | 支持 |
+| hash seed | 32-bit: 0x9747b28c, 64-bit: 0xc6a4a7935bd1e995 | 同上 |
+
+RDB 格式是两者兼容的核心。字段序列、编码版本和 hash seed 完全一致。这通过 Redis 6.2.17 + RedisBloom v2.4.20 的双向矩阵验证，覆盖了 RDB 文件、DUMP/RESTORE、MIGRATE、RDB-preamble AOF 和 fullsync replication。
+
+#### 2.4.10 反序列化校验差异
+
+gemini-bloom 在反序列化路径上比 RedisBloom 做了更多校验：
+
+| 校验项 | gemini-bloom | RedisBloom v2.4.20 |
+|---|---|---|
+| hashCount 与 bitsPerEntry 一致性 | 校验 `hashCount == ceil(ln2 * bitsPerEntry)` | 不校验 |
+| bitsPerEntry 上界 | 限制 <= 1000 | 不限制 |
+| 未知 flags | 拒绝 | 不拒绝 |
+| RawBits flag | 拒绝 | 接受 |
+| itemCount > capacity | 拒绝 | 不校验 |
+| sum(itemCount) == totalItems | 校验 | 不校验 |
+| 总 data size | <= 4GB | 无限制 |
+| 窄化 cast 范围检查 | uint64 → uint32/uint8 前检查 | 直接 cast |
+
+这意味着 gemini 可以加载 RedisBloom 产生的合法 RDB，但某些 RedisBloom 接受的边缘 case（如 hashCount 不一致、极大 bitsPerEntry）gemini 会拒绝。在正常使用场景中，RedisBloom 产生的 RDB 数据都能通过 gemini 的校验。
+
+### 2.5 参考文献
 
 - Bloom, B.H. (1970). "Space/Time Trade-offs in Hash Coding with Allowable Errors"
 - Mitzenmacher, M. & Upfal, E. (2005). "Probability and Computing"
