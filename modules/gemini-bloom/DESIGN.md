@@ -377,379 +377,57 @@ RDB 文件、LOADCHUNK payload 均视为非信任输入：
 
 ### 7.2 测试隔离策略
 
-**GTest 与 Redis 解耦**：通过 `REDIS_BLOOM_TESTING` 编译宏，`rm_alloc.h` 将 `RMAlloc`/`RMFree` 映射为标准 `malloc`/`free`，使 core 层代码可以脱离 Redis server 独立编译运行。这同时避免了 GNU ld 要求所有 `extern` 符号可解析的跨平台链接问题。
+**GTest 与 Redis 解耦**：通过 `REDIS_BLOOM_TESTING` 编译宏，`rm_alloc.h` 将 `RMAlloc`/`RMFree` 映射为标准 `malloc`/`free`，使 core 层代码可以脱离 Redis server 独立编译运行。这同时避免了 GNU ld 要求所有 `extern` 符号可解析的跨平台链接问题（详见 `doc/cross_platform_linking.md`）。
 
 **RDB Mock**：`bloom_rdb_test` 使用 `MockRdbStream`（`include/mock_redismodule_io.h`）模拟 Redis Module IO API。mock 将 `RedisModule_SaveUnsigned` / `RedisModule_LoadUnsigned` 等函数指针指向内存 buffer 实现，支持写入后 rewind 读回，完整覆盖序列化 round-trip 而无需启动 Redis。
 
-**TCL 进程隔离**：每次运行 `bloom_test.tcl` 会在随机端口启动独立 redis-server 实例，加载编译好的 `redis_bloom.so`，测试完成后自动 SHUTDOWN。测试之间不共享 Redis 实例状态（AOF 测试会重启 server）。
-
-### 7.3 GTest: BloomLayer 单元测试 (`bloom_filter_test.cc`)
-
-#### 7.3.1 Hash 函数正确性
-
-| 测试场景 | 验证逻辑 |
-|---|---|
-| MurmurHash2 确定性 | 同一输入 + 同一 seed 返回相同值；不同 seed 返回不同值 |
-| MurmurHash64A 确定性 | 同上，64-bit 版本 |
-| 空输入 hash | 空字符串 hash 结果确定且可重复 |
-| Hash32Policy 一致性 | 同一输入的 primary/secondary 可重复；不同输入产生不同 primary |
-| Hash64Policy 一致性 | 同上，64-bit 版本 |
-| **Hash golden vectors** | MurmurHash2 和 MurmurHash64A 对 `""`、`"a"`、`"hello"`、`"hello\0world"` 四组输入验证精确的 h1/h2 值。Hash32Policy 和 Hash64Policy 同样验证精确的 primary/secondary。这些值是 RDB 格式的一部分 — 任何改动都意味着与已持久化数据不兼容 |
-
-#### 7.3.2 BloomLayer 生命周期与功能
-
-| 测试场景 | 验证逻辑 |
-|---|---|
-| Create + RAII | 创建后 hashCount > 0、totalBits > 0、dataSize > 0、bitArray 非空、bitsPerEntry > 0 |
-| Move 构造 | move 后源对象 bitArray 为 null，目标对象 bitArray 非空 |
-| Move 赋值 | 赋值后目标持有源的 capacity/totalBits/bitArray，源 bitArray 为 null，旧存储被释放 |
-| Insert + Test | 插入返回 true（首次）、false（重复）；Test 对已插入元素返回 true |
-| False positive rate | 插入 10000 个元素后，零 false negative；对 100000 个未插入元素测试 FP rate < 3% |
-| Power-of-two bit ceil | 默认模式下 totalBits 是 2 的幂，log2Bits 正确 |
-| NoRound 对齐 | NoRound 模式下 log2Bits == 0，totalBits 按 64 bit 对齐但不是 2 的幂 |
-| 参数拒绝 | capacity=0、fpRate=0/1.0/负数/NaN/Inf 全部返回 nullopt |
-
-#### 7.3.3 BloomFlags
-
-| 测试场景 | 验证逻辑 |
-|---|---|
-| 位运算 | `\|` 和 `&` 运算符、HasFlag、ToUnderlying 正确 |
-| ValidateFlags 接受 | None、NoRound、Use64Bit、FixedSize 及其组合全部接受 |
-| ValidateFlags 拒绝 | 未知 bit（0x80、0x10、0xFF）全部拒绝 |
-| RawBits 拒绝 | RawBits 单独或与 Use64Bit 组合均被 ValidateFlags 拒绝 |
-| RawBits 行为证明 | RawBits 创建的 layer hashCount=0，Test() 对任何输入返回 true（证明不应接受） |
-| 资源限制常量 | kMaxCapacity == 2^30，kMaxExpansion == 32768 |
-
-#### 7.3.4 辅助函数
-
-| 测试场景 | 验证逻辑 |
-|---|---|
-| ResolveBit | 线性 bit index 正确映射到 (byteOffset, mask) little-endian 布局 |
-| ProbePosition | power-of-two 使用 mask，非 power-of-two 使用 modulo |
-
-### 7.4 GTest: ScalingBloomFilter 单元测试 (`sb_chain_test.cc`)
-
-| 测试场景 | 验证逻辑 |
-|---|---|
-| 构造与析构 | 创建后 IsValid==true、NumLayers==1、TotalItems==0、ExpansionFactor 正确 |
-| Put + Contains | 首次插入返回 true，重复返回 false，Contains 确认存在，TotalItems==1 |
-| 32-bit hash | 不设 Use64Bit flag 时使用 Hash32Policy |
-| 零 false negative | 插入 5000 元素后全部可查 |
-| 自动扩容 | 插入超过初始 capacity 后 NumLayers > 1，所有元素仍可查 |
-| Fixed-size 溢出拒绝 | FixedSize 模式下超过 capacity 返回 nullopt，NumLayers 保持 1 |
-| Optional 返回语义 | true=新插入、false=重复、nullopt=满，三种状态逻辑正确 |
-| 重复不消耗 capacity | FixedSize 模式下重复插入不增加 itemCount |
-| TotalCapacity | 返回所有层 capacity 之和 |
-| BytesUsed | 返回值大于 sizeof(ScalingBloomFilter) |
-| Move 赋值 | 所有权正确转移，源对象清空 |
-| Expansion=1 层大小 | EXPANSION 1 下每层 capacity 相同（不倍增） |
-| FromRdbShell + SetLayer | 通过 shell 重建多层 filter 后所有元素可查（RDB 反序列化路径回归） |
-| AppendLayer 安全搬迁 | 插入 500 元素触发多次内部数组扩容，所有元素仍可查（不使用 realloc） |
-| 极端参数拒绝 | capacity=UINT64_MAX + fpRate=1e-300 被拒绝而非触发巨大分配 |
-| Span 接口 | std::span\<const std::byte\> 接口正确传入和使用 |
-
-### 7.5 GTest: RDB/wire 序列化测试 (`bloom_rdb_test.cc`)
-
-#### 7.5.1 RDB round-trip
-
-| 测试场景 | 验证逻辑 |
-|---|---|
-| 空 filter | 序列化 + 反序列化后 TotalItems/NumLayers/ExpansionFactor/Flags 完全一致 |
-| 有数据 filter | 500 元素写入后 round-trip，零 false negative |
-| 多层 filter | 自动扩容后 round-trip，层数和元素数一致，零 false negative |
-| 元数据保留 | capacity、fpRate、hashCount、totalBits、dataSize、log2Bits、bitsPerEntry 逐字段比对 |
-| bit array 精确匹配 | 序列化前后的 bit array 二进制完全一致（memcmp） |
-| FixedSize 保留 | FixedSize flag 在 round-trip 后保留，层数保持 1 |
-| encver 2 兼容 | 手工构造 encver 2 格式（无 expansion 字段）的 RDB 流，反序列化默认 expansion=2，数据可查 |
-| 未知 encver | encver=99 返回 nullptr |
-| 多种 expansion | expansion 1/2/4/8 各自 round-trip 通过 |
-| 多种 FP rate | fpRate 0.1/0.01/0.001/0.0001 各自 round-trip 通过，fpRate 精确保留 |
-| 重复 round-trip | 同一 filter 连续 50 次 round-trip，每次验证 TotalItems/NumLayers 和抽样查询 |
-
-#### 7.5.2 恶意 RDB metadata 拒绝
-
-每个测试构造一个包含特定非法字段的 RDB 流，验证 `RdbLoadBloom()` 返回 nullptr：
-
-| 非法字段 | 测试名 |
-|---|---|
-| totalBits == 0 | `RejectsTotalBitsZero` |
-| fpRate = NaN | `RejectsFpRateNaN` |
-| fpRate = Inf | `RejectsFpRateInf` |
-| fpRate = 0 | `RejectsFpRateZero` |
-| fpRate = 1.0 | `RejectsFpRateOne` |
-| fpRate < 0 | `RejectsFpRateNegative` |
-| bitsPerEntry = NaN | `RejectsBitsPerEntryNaN` |
-| bitsPerEntry = Inf | `RejectsBitsPerEntryInf` |
-| bitsPerEntry = 0 | `RejectsBitsPerEntryZero` |
-| bitsPerEntry < 0 | `RejectsBitsPerEntryNegative` |
-| bitsPerEntry > 1000 | `RejectsBitsPerEntryTooLarge` |
-| capacity == 0 | `RejectsCapacityZero` |
-| hashCount == 0 | `RejectsHashCountZero` |
-| hashCount != ceil(ln2 * bpe) | `RejectsHashCountInconsistentWithBitsPerEntry` |
-| log2Bits >= 64 | `RejectsInvalidLog2Bits` |
-| numLayers > 1024 | `RejectsExcessiveNumLayers` |
-| truncated itemCount | `TruncatedItemCountReturnsNull` |
-| blob 过短 | `RejectsShortLayerBlob` |
-| blob 过长 | `RejectsLongLayerBlob` |
-| scaling + expansion=0 | `RejectsScalingExpansionZero` |
-| fixed + expansion=0 | `AcceptsFixedExpansionZero`（正向验证） |
-| totalItems != sum(itemCount) | `RejectsTotalItemsMismatch` |
-| itemCount > capacity | `RejectsItemCountExceedsCapacity` |
-| 一致的 item counts | `AcceptsConsistentItemCounts`（正向验证） |
-| 未知 flags bits | `RejectsUnknownFlags` |
-| RawBits flag | `RejectsRawBitsFlag` |
-
-#### 7.5.3 窄化 cast 绕过防御
-
-RDB 中所有字段存储为 uint64。攻击者可以设置高位使 cast 后低位"合法"。以下测试验证高位值被拒绝：
-
-| 测试名 | 攻击向量 |
-|---|---|
-| `RejectsHashCountHighBitBypass` | hashCount = 2^32 + expectedHash |
-| `RejectsLog2BitsHighBitBypass` | log2Bits = 2^8 + validLog2 |
-| `RejectsFlagsHighBitBypass` | flags = 2^32 + validFlags |
-
-#### 7.5.4 Wire header (SCANDUMP/LOADCHUNK)
-
-| 测试场景 | 验证逻辑 |
-|---|---|
-| 空 filter header round-trip | SerializeHeader + DeserializeHeader 后 metadata 一致 |
-| 有数据 header round-trip | 多层 filter 的 header round-trip 一致 |
-| 完整 SCANDUMP/LOADCHUNK 模拟 | serialize header + 保存每层 bit array → deserialize header + 恢复 bit array → 零 false negative |
-| LayerMeta round-trip | ToWireMeta + FromWireMeta 逐字段比对 |
-| 截断 header | 过短的 header 返回 nullptr |
-| zero layers | numLayers=0 返回 nullptr |
-| 过多 layers | numLayers=9999 返回 nullptr |
-| 未初始化内存 SetLayer | calloc 的 slot 上 placement new 正确工作 |
-| bad log2Bits header | log2Bits=65 返回 nullptr |
-| totalItems 不一致 | header totalItems 篡改后返回 nullptr |
-| itemCount > capacity | 篡改后返回 nullptr |
-| 未知 flags | flags 高位 set 返回 nullptr |
-| fpRate=0 | 返回 nullptr |
-| bitsPerEntry=Inf/0 | 返回 nullptr |
-| dataSize 不匹配 | 返回 nullptr |
-| hashCount 不一致 | 返回 nullptr |
-| scaling+expansion=0 | 返回 nullptr |
-| fixed+expansion=0 | 接受（正向验证） |
-| totalBits=0 | 返回 nullptr |
-| 超大 totalDataSize | 5GB dataSize 返回 nullptr（4GB cap） |
-| header size 线性增长 | ComputeHeaderSize == sizeof(header) + N * sizeof(meta) |
-
-### 7.6 TCL 集成测试 (`bloom_test.tcl`)
-
-集成测试在真实 redis-server 上运行，覆盖从命令解析到持久化的完整路径。
-
-#### 7.6.1 BF.RESERVE (10 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| 正常创建 | 返回 OK |
-| key 已存在 | 返回 ERR item exists |
-| error rate = 0 / 1.0 / 负数 | 返回参数错误 |
-| capacity = 0 / 负数 | 返回参数错误 |
-| 带 EXPANSION | 创建成功 |
-| 带 NONSCALING | 创建成功 |
-| arity 不足 | 返回 wrong number of arguments |
-
-#### 7.6.2 BF.ADD / BF.EXISTS (8 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| 新元素 | ADD 返回 1 |
-| 重复元素 | ADD 返回 0 |
-| 第二个不同元素 | ADD 返回 1 |
-| key 不存在时 ADD | 自动创建 filter 并返回 1 |
-| ADD arity 错误 | 返回 wrong number of arguments |
-| EXISTS 已存在 | 返回 1 |
-| EXISTS 不存在 | 返回 0 |
-| EXISTS key 不存在 | 返回 0 |
-
-#### 7.6.3 BF.MADD / BF.MEXISTS (4 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| MADD 多个新元素 | 返回全 1 数组 |
-| MADD 部分重复 | 返回混合 0/1 数组 |
-| MEXISTS 混合查询 | 已插入返回 1，未插入返回 0 |
-| MEXISTS key 不存在 | 返回全 0 数组 |
-
-#### 7.6.4 BF.INSERT (7 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| 基本 ITEMS | 返回全 1 数组 |
-| 自定义 ERROR + CAPACITY | 创建并返回成功 |
-| 带 EXPANSION | 创建并返回成功 |
-| 重复 item | 返回 0 |
-| NOCREATE key 不存在 | 返回 ERR |
-| NOCREATE key 存在 | 正常插入 |
-| 缺少 ITEMS 关键字 | 返回 ERR |
-
-#### 7.6.5 BF.INFO (9 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| 完整 info | 返回 10 元素数组（5 对 key-value） |
-| Capacity 字段正确 | 与 RESERVE 指定值一致 |
-| Number of filters >= 1 | 至少 1 层 |
-| Expansion rate 正确 | 与 RESERVE 指定值一致 |
-| 单字段 Capacity | 返回标量（gemini 行为，区别于 RedisBloom 的 singleton array） |
-| 单字段 Items | 返回 0（空 filter） |
-| key 不存在 | 返回 ERR |
-| 未知字段 | 返回 ERR |
-| NONSCALING Expansion | 返回 nil |
-
-#### 7.6.6 BF.CARD (2 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| 正常计数 | 插入 3 个不同 + 1 个重复，返回 3 |
-| key 不存在 | 返回 0 |
-
-#### 7.6.7 NONSCALING 行为 (2 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| 超过 capacity 被拒绝 | 循环插入直到报错 |
-| 保持单层 | Number of filters == 1 |
-
-#### 7.6.8 自动扩容 (2 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| 超过 capacity 自动扩层 | 插入 50 元素到 capacity=10 的 filter，层数 > 1 |
-| 扩容后零 false negative | 所有 50 个元素 EXISTS == 1 |
-
-#### 7.6.9 BF.SCANDUMP / BF.LOADCHUNK round-trip (4 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| 基本 round-trip | dump src → load dst，CARD 一致，所有 200 个 item EXISTS == 1 |
-| 返回 iterator 直接传入 | 使用 SCANDUMP 返回的 cursor 值传给 LOADCHUNK（不自行计算） |
-| 二进制 chunk 保留 | 含 NUL、CRLF、特殊字符的 item 在 dump/load 后仍可查 |
-| cursor 协议语义 | 验证 layer-index cursor 的递增逻辑和终止条件 |
-
-#### 7.6.10 WRONGTYPE 错误 (8 tests)
-
-对 string 类型的 key 执行每个 BF 命令，全部返回 WRONGTYPE。特别验证 MEXISTS 和 MADD 返回 top-level error 而非 per-element error 数组。
-
-#### 7.6.11 EXPANSION 边界 (4 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| EXPANSION 0 → NONSCALING | BF.INFO Expansion 返回 nil |
-| NONSCALING + EXPANSION 互斥 | 返回 ERR |
-| BF.INSERT EXPANSION 0 → NONSCALING | BF.INFO Expansion 返回 nil |
-| BF.INSERT NONSCALING + EXPANSION 互斥 | 返回 ERR |
-
-#### 7.6.12 LOADCHUNK 安全 (7 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| 对 string key LOADCHUNK | 返回 WRONGTYPE，不删除原 key |
-| 保留原 key 数据 | GET 仍返回原值 |
-| 对已有 bloom key 送 malformed header | 返回 ERR，不破坏已有数据 |
-| header 过短 | 返回 ERR corrupted |
-| header zero layers | 返回 ERR corrupted |
-| cursor=0 | 返回 ERR |
-| 负数 cursor | 返回 ERR |
-| key 不存在时 data chunk | 返回 ERR |
-| data chunk 长度不匹配 | 返回 ERR |
-| **对已有 Bloom key LOADCHUNK cursor=1** | 返回 ERR received bad data，不覆盖旧 key，旧数据保留 |
-
-#### 7.6.13 参数校验 (16 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| RESERVE EXPANSION 负数 | 返回 ERR |
-| RESERVE 未知 option | 返回 ERR unrecognized |
-| INSERT NONSCALING 满后拒绝 | 返回 ERR non scaling filter is full |
-| NOCREATE + CAPACITY | 返回 ERR 互斥 |
-| NOCREATE + ERROR | 返回 ERR 互斥 |
-| ITEMS 后无元素 | 返回 wrong arity |
-| EXPANSION 超过 UINT32 | 返回 ERR |
-| RESERVE on string key | 返回 WRONGTYPE |
-| RESERVE on existing bloom | 返回 ERR item exists |
-| INSERT ERROR/CAPACITY/EXPANSION 缺值 | 返回 wrong arity |
-| INSERT ERROR/CAPACITY non-numeric | 返回 ERR |
-| INSERT ERROR 超范围 | 返回 ERR |
-| INSERT 未知 option | 返回 ERR |
-| RESERVE/INSERT duplicate EXPANSION | 返回 ERR duplicate |
-| RESERVE/INSERT duplicate NONSCALING | 返回 ERR duplicate |
-| INSERT duplicate ERROR/CAPACITY | 返回 ERR duplicate |
-
-#### 7.6.14 资源限制 (6 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| RESERVE capacity > 2^30 | 返回 ERR |
-| RESERVE expansion > 32768 | 返回 ERR |
-| INSERT capacity > 2^30 | 返回 ERR |
-| INSERT expansion > 32768 | 返回 ERR |
-| RESERVE capacity = 2^30 | 返回 OK（边界值通过） |
-| RESERVE expansion = 32768 | 返回 OK（边界值通过） |
-
-#### 7.6.15 MADD/INSERT 部分失败 (3 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| MADD 全部失败 | 返回数组长度 1（单个 error，立即停止），匹配 RedisBloom 行为 |
-| MADD 部分成功 | cap=3 已插 2 个，batch 3 个：返回 [1, ERR]（长度 2），CARD=3 |
-| INSERT 全部失败 | 返回数组长度 1（单个 error），CARD 不变 |
-
-#### 7.6.16 多层行为 (3 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| EXPANSION 4 vs 1 | EXPANSION 4 产生的层数少于 EXPANSION 1 |
-| expansion rate 报告 | BF.INFO 返回正确的 expansion rate |
-| 多层零 false negative | 两种 expansion 下所有 100 个元素 EXISTS == 1 |
-
-#### 7.6.17 边界值 item (6 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| 空字符串 | ADD 返回 1，EXISTS 返回 1 |
-| 10000 字节长字符串 | ADD 返回 1，EXISTS 返回 1 |
-| 含 NUL 的二进制 | ADD 返回 1，EXISTS 返回 1 |
-
-#### 7.6.18 持久化 (2 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| RDB BGSAVE + restart | 插入 3 元素 → BGSAVE → SHUTDOWN SAVE → 重启 → 3 元素 EXISTS == 1，CARD == 3 |
-| AOF rewrite + restart | 启用 AOF → 插入 50 元素 → BGREWRITEAOF → SHUTDOWN NOSAVE → 重启 → 50 元素全部可查 |
-
-#### 7.6.19 模块配置 (9 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| 默认配置 | 自动创建 filter 的 Capacity=100、Expansion=2 |
-| 覆盖配置 | `ERROR_RATE 0.02 INITIAL_SIZE 123 EXPANSION 3` 生效 |
-| ERROR_RATE 缺值 | 加载失败 |
-| ERROR_RATE 超范围 | 加载失败 |
-| INITIAL_SIZE 缺值 | 加载失败 |
-| INITIAL_SIZE = 0 | 加载失败 |
-| EXPANSION 缺值 | 加载失败 |
-| EXPANSION = 0 | 加载失败 |
-| 未知参数 | 加载失败 |
-
-#### 7.6.20 Command metadata (8 tests)
-
-| 场景 | 验证逻辑 |
-|---|---|
-| COMMAND INFO flags | 每个命令的 write/readonly flag 与注册一致 |
-| COMMAND GETKEYS | BF.ADD/SCANDUMP/RESERVE/LOADCHUNK/INFO 都正确报告 key 位置 |
-| ACL DRYRUN | 在支持 ACL 的版本上 bloom 命令可正常鉴权 |
-
-#### 7.6.21 已知兼容差异记录 (6 expected-fail tests)
-
-这些测试标记为 `EXPECTED GAP`，验证当前已知的兼容差异仍然存在，不作为 CI 阻断项：
-
-- 5 个 RESP3 差异（BF.ADD/EXISTS boolean、MADD/MEXISTS array boolean、BF.INFO map）
-- 1 个 SCANDUMP byte-offset cursor 差异
-
-### 7.7 构建与运行
+**TCL 进程隔离**：每次运行 `bloom_test.tcl` 会在随机端口启动独立 redis-server 实例，加载编译好的 `redis_bloom.so`，测试完成后自动 SHUTDOWN。测试之间不共享 Redis 实例状态（AOF 测试会重启 server）。TCL 客户端实现了完整的 RESP2 协议解析（含 `redis_read_reply_nothrow` 变体用于读取包含 per-element error 的数组）。
+
+### 7.3 GTest 测试场景
+
+#### bloom_filter_test — 单层 Bloom Filter 核心
+
+- **Hash 函数**：MurmurHash2/64A 确定性、空输入、Hash32Policy/Hash64Policy 一致性。关键：hash golden vector 测试对 `""`、`"a"`、`"hello"`、`"hello\0world"` 验证精确的 h1/h2 值，这些值是 RDB 格式的一部分，任何改动都意味着与已持久化数据不兼容。
+- **BloomLayer 生命周期**：Create + RAII 资源释放、move 构造/赋值的所有权转移、析构后无泄漏。
+- **功能正确性**：Insert 返回 true（首次）/false（重复）、Test 零 false negative、10 万次随机查询的 FP rate < 3%。
+- **参数模式**：默认 power-of-two bit ceil 与 NoRound 64-bit 对齐两种模式的 totalBits/log2Bits 计算。
+- **参数拒绝**：capacity=0、fpRate=0/1/负/NaN/Inf 全部返回 nullopt。
+- **Flags 校验**：ValidateFlags 接受合法组合、拒绝未知 bit 和 RawBits；RawBits 行为证明（hashCount=0 导致 Test 恒真）。
+- **辅助函数**：ResolveBit 的 byte/bit 映射、ProbePosition 的 mask vs modulo 分支。
+
+#### sb_chain_test — ScalingBloomFilter 多层管理
+
+- **基本功能**：构造/析构、Put/Contains、TotalCapacity/BytesUsed、move 赋值所有权转移。
+- **扩容机制**：自动扩容后 NumLayers > 1 且所有元素仍可查；EXPANSION 1 vs 2 的层大小差异。
+- **固定大小**：FixedSize 溢出返回 nullopt、重复不消耗 capacity、层数保持 1。
+- **反序列化路径**：FromRdbShell + SetLayer 重建多层 filter 的正确性（回归历史 placement-new bug）。
+- **安全边界**：AppendLayer 内部数组扩容使用 move 而非 realloc（回归历史 UB）；极端 capacity + fpRate 被拒绝而非触发巨大分配。
+
+#### bloom_rdb_test — 序列化与反序列化
+
+- **RDB round-trip**：空/有数据/多层/FixedSize filter 的 serialize→deserialize 后 metadata 完全一致、bit array 二进制精确匹配、零 false negative。覆盖 encver 2 向后兼容、多种 expansion/fpRate 组合、50 次连续 round-trip 压力测试。
+- **恶意 RDB metadata 拒绝**（~25 个 case）：对 `ValidateLayerFields()` 覆盖的每个字段（totalBits=0、capacity=0、hashCount=0/不一致、fpRate NaN/Inf/0/1/负、bitsPerEntry NaN/Inf/0/负/>1000、log2Bits>=64、blob 长度不匹配、numLayers>1024、truncated stream、item count 不一致/超 capacity、未知 flags、RawBits flag）各构造一个非法 RDB 流，验证 `RdbLoadBloom()` 返回 nullptr。
+- **窄化 cast 绕过防御**：构造 `hashCount = 2^32 + validValue`、`log2Bits = 2^8 + validValue`、`flags = 2^32 + validValue` 等高位攻击向量，验证 range check 在 cast 之前拦截。
+- **Wire header**：SerializeHeader/DeserializeHeader round-trip、LayerMeta round-trip、完整 SCANDUMP/LOADCHUNK 模拟、各类非法 header 拒绝（截断、zero layers、过多 layers、字段篡改）、totalDataSize > 4GB 拒绝。
+
+### 7.4 TCL 集成测试场景
+
+集成测试在真实 redis-server 上运行，覆盖从命令解析到持久化再到 server restart 的完整路径。按场景分类：
+
+- **命令基本功能**（~35 tests）：10 个 BF.* 命令的 happy path 和 arity 校验。BF.ADD 自动创建、BF.EXISTS 对不存在 key 返回 0、BF.MADD/MEXISTS 批量操作、BF.INSERT 各种 option 组合、BF.INFO 完整/单字段、BF.CARD 计数、BF.SCANDUMP/LOADCHUNK round-trip。
+- **参数校验与错误路径**（~30 tests）：error rate / capacity / expansion 的边界值和非法值；NOCREATE + CAPACITY/ERROR 互斥；NONSCALING + EXPANSION 互斥；重复 option 拒绝（EXPANSION/NONSCALING/ERROR/CAPACITY）；未知 option 拒绝；arity 不足；缺值/非数值/超范围。
+- **类型安全**（~10 tests）：所有 BF.* 命令对 string 类型 key 返回 WRONGTYPE；MADD/MEXISTS 返回 top-level error 而非 per-element error；BF.RESERVE 对已存在 bloom key 返回 `ERR item exists`、对 string key 返回 WRONGTYPE。
+- **资源限制**（6 tests）：capacity > 2^30 和 expansion > 32768 被拒绝；边界值 2^30 和 32768 通过。
+- **部分失败语义**（3 tests）：NONSCALING filter 的 MADD/INSERT 在第一个 full error 处截断数组（postponed array length），验证数组长度和 CARD 一致性，匹配 RedisBloom v2.4.20 行为。
+- **LOADCHUNK 安全**（~10 tests）：WRONGTYPE 不删除原 key；malformed header 不破坏已有 bloom key；cursor=0/负数拒绝；data chunk key 不存在拒绝；data 长度不匹配拒绝；**对已有 Bloom key 的 cursor=1 返回 `ERR received bad data` 且旧数据保留**。
+- **扩容与多层**（~5 tests）：自动扩容后零 false negative；EXPANSION 4 vs 1 的层数差异；expansion rate 报告正确。
+- **边界值 item**（6 tests）：空字符串、10KB 长字符串、含 NUL 字节的二进制数据均可正确 ADD/EXISTS。
+- **持久化**（2 tests）：BGSAVE + SHUTDOWN SAVE + restart 后数据完整；启用 AOF + BGREWRITEAOF + SHUTDOWN NOSAVE + restart 后数据完整。
+- **模块配置**（9 tests）：默认值验证；`ERROR_RATE`/`INITIAL_SIZE`/`EXPANSION` 覆盖验证；缺值/超范围/零值/未知参数均导致模块加载失败。配置测试通过启动独立 redis-server 实例来验证模块加载行为。
+- **Command metadata**（8 tests）：COMMAND INFO 验证所有命令的 write/readonly flag；COMMAND GETKEYS 验证 key 位置；ACL DRYRUN 验证鉴权。
+- **已知兼容差异**（6 expected-fail tests）：标记为 `EXPECTED GAP`，记录 RESP3（5 个）和 SCANDUMP byte-offset cursor（1 个）差异，不作为 CI 阻断项。
+
+### 7.5 构建与运行
 
 ```bash
 # 构建
