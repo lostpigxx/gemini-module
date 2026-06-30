@@ -289,11 +289,11 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
         RedisModule_ReplyWithError(ctx, "ERR bad expansion");
         return false;
       }
+      expansionSet = true;
       if (val == 0) {
         opts.fixedSize = true;
       } else {
         opts.expansion = static_cast<unsigned>(val);
-        expansionSet = true;
       }
     } else if (MatchArg(sv, "NOCREATE")) {
       opts.noCreate = true;

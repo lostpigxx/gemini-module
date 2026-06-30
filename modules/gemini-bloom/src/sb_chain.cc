@@ -79,6 +79,10 @@ bool ScalingBloomFilter::AppendLayer(uint64_t cap, double rate) {
   auto maybeLayer = BloomLayer::Create(cap, rate, flags_);
   if (!maybeLayer) return false;
 
+  uint64_t newDataSize = maybeLayer->GetDataSize();
+  if (newDataSize > kMaxTotalDataSize || TotalDataSize() > kMaxTotalDataSize - newDataSize)
+    return false;
+
   auto* slot = &layers_[numLayers_];
   new (slot) FilterLayer{std::move(*maybeLayer), 0};
   numLayers_++;
@@ -136,6 +140,13 @@ uint64_t ScalingBloomFilter::TotalCapacity() const {
   return std::transform_reduce(layerSpan.begin(), layerSpan.end(),
     uint64_t{0}, std::plus<>{},
     [](const FilterLayer& l) { return l.bloom.GetCapacity(); });
+}
+
+uint64_t ScalingBloomFilter::TotalDataSize() const {
+  auto layerSpan = Layers();
+  return std::transform_reduce(layerSpan.begin(), layerSpan.end(),
+    uint64_t{0}, std::plus<>{},
+    [](const FilterLayer& l) { return l.bloom.GetDataSize(); });
 }
 
 size_t ScalingBloomFilter::BytesUsed() const {

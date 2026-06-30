@@ -106,6 +106,7 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
     layer.hashCount_ = 0;
   } else {
     layer.bitsPerEntry_ = OptimalBitsPerEntry(falsePositiveRate);
+    if (layer.bitsPerEntry_ > kMaxBitsPerEntry) return std::nullopt;
     auto rawBits = static_cast<double>(cap) * layer.bitsPerEntry_;
     constexpr double kMaxBits = static_cast<double>(UINT64_MAX - 7);
     if (!std::isfinite(rawBits) || rawBits > kMaxBits) return std::nullopt;

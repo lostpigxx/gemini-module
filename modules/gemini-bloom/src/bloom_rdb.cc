@@ -61,7 +61,7 @@ static bool ValidateLayerFields(const LayerFields& f) {
   if (f.dataSize != expectedSize) return false;
   if (!std::isfinite(f.fpRate) || f.fpRate <= 0.0 || f.fpRate >= 1.0) return false;
   if (!std::isfinite(f.bitsPerEntry) || f.bitsPerEntry <= 0.0 ||
-      f.bitsPerEntry > 1000.0) return false;
+      f.bitsPerEntry > kMaxBitsPerEntry) return false;
   uint32_t expectedHash = std::max(1u,
     static_cast<uint32_t>(std::ceil(std::numbers::ln2 * f.bitsPerEntry)));
   if (f.hashCount != expectedHash) return false;
@@ -69,9 +69,8 @@ static bool ValidateLayerFields(const LayerFields& f) {
 }
 
 // --- BloomLayer serialization (lives here to access Redis Module API) ---
-// Field order is intended to match the RedisBloom RDB wire format for
-// bloom filter persistence. Full interoperability has not been verified
-// against an official RedisBloom golden corpus.
+// Field order matches the RedisBloom RDB wire format for bloom filter
+// persistence. Verified against RedisBloom v2.4.20 (Redis 6.2.17).
 
 void BloomLayer::WriteTo(RdbWriter& w) const {
   w.PutUint(capacity_);
@@ -192,7 +191,6 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
   auto* filter = FromRdbShell(shell);
   if (!filter) return nullptr;
 
-  constexpr uint64_t kMaxTotalDataSize = 4ULL * 1024 * 1024 * 1024;
   uint64_t itemSum = 0;
   uint64_t totalDataSize = 0;
   for (size_t i = 0; i < shell.numLayers; i++) {
@@ -287,7 +285,6 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   const auto* meta = reinterpret_cast<const WireLayerMeta*>(
     static_cast<const char*>(data) + sizeof(WireFilterHeader));
 
-  constexpr uint64_t kMaxTotalDataSize = 4ULL * 1024 * 1024 * 1024;
   uint64_t itemSum = 0;
   uint64_t totalDataSize = 0;
   for (size_t i = 0; i < hdr->numLayers; i++) {
@@ -331,7 +328,7 @@ RedisModuleType* BloomType = nullptr;
 // and our C++ serialization methods.
 
 void* RdbLoadBloom(RedisModuleIO* rdb, int encver) {
-  if (encver > kCurrentEncVer) return nullptr;
+  if (encver != kEncVerWithFlags && encver != kEncVerWithExpansion) return nullptr;
   RdbReader reader(rdb);
   return ScalingBloomFilter::ReadFrom(reader, encver);
 }

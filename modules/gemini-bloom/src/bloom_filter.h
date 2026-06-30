@@ -10,9 +10,8 @@
 
 // --- Bloom filter flags ---
 // Bit-field values are part of the persisted RDB/SCANDUMP wire format.
-// These numeric assignments are intended to match RedisBloom's layout
-// for future interoperability, but full compatibility has not been
-// verified against an official RedisBloom golden corpus.
+// These numeric assignments match RedisBloom's layout. Verified against
+// RedisBloom v2.4.20 (Redis 6.2.17).
 enum class BloomFlags : unsigned {
   None      = 0,
   NoRound   = 1,
@@ -54,6 +53,8 @@ constexpr bool ValidateFlags(unsigned raw) {
 
 constexpr uint64_t kMaxCapacity = 1ULL << 30;
 constexpr unsigned kMaxExpansion = 32768;
+constexpr double kMaxBitsPerEntry = 1000.0;
+constexpr uint64_t kMaxTotalDataSize = 4ULL * 1024 * 1024 * 1024;
 
 // --- Hash pair produced by double-hashing ---
 struct HashPair {

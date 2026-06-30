@@ -302,6 +302,23 @@ TEST(BloomRdb, RejectsUnknownEncver) {
   DestroyFilter(filter);
 }
 
+TEST(BloomRdb, RejectsUndocumentedEncvers) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  filter->Put(AsBytes("x", 1));
+
+  for (int encver : {0, 1, 3}) {
+    MockRdbStream stream;
+    RdbSaveBloom(stream.IO(), filter);
+    stream.Rewind();
+    auto* loaded = static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), encver));
+    EXPECT_EQ(loaded, nullptr)
+      << "Should reject undocumented encver " << encver;
+    if (loaded) DestroyFilter(loaded);
+  }
+
+  DestroyFilter(filter);
+}
+
 // ==================================================================
 // Wire format: SerializeHeader / DeserializeHeader round-trip
 // ==================================================================

@@ -298,6 +298,39 @@ TEST(ScalingBloomTest, ExtremeParamsRejected) {
     << "Should reject large capacity with tiny fpRate";
 }
 
+TEST(ScalingBloomTest, TotalDataSizeAccumulates) {
+  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (mem) ScalingBloomFilter(100, 0.01, DefaultFlags(), 2);
+
+  uint64_t initialDataSize = mem->TotalDataSize();
+  EXPECT_GT(initialDataSize, 0u);
+  EXPECT_EQ(mem->NumLayers(), 1u);
+
+  for (int i = 0; i < 500; i++) {
+    auto item = "grow_" + std::to_string(i);
+    mem->Put(ToSpan(item));
+  }
+  EXPECT_GT(mem->NumLayers(), 1u);
+  EXPECT_GT(mem->TotalDataSize(), initialDataSize);
+
+  uint64_t summed = 0;
+  for (const auto& layer : mem->Layers()) {
+    summed += layer.bloom.GetDataSize();
+  }
+  EXPECT_EQ(mem->TotalDataSize(), summed);
+
+  mem->~ScalingBloomFilter();
+  free(mem);
+}
+
+TEST(ScalingBloomTest, MaxBitsPerEntryConstant) {
+  EXPECT_EQ(kMaxBitsPerEntry, 1000.0);
+}
+
+TEST(ScalingBloomTest, MaxTotalDataSizeConstant) {
+  EXPECT_EQ(kMaxTotalDataSize, 4ULL * 1024 * 1024 * 1024);
+}
+
 // SerializeDeserializeHeader test is covered by TCL integration tests
 // (SCANDUMP/LOADCHUNK round-trip) since the serialization code depends
 // on the Redis Module API.

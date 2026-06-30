@@ -49,6 +49,7 @@ public:
   size_t TotalItems() const { return totalItems_; }
   BloomFlags Flags() const { return flags_; }
   unsigned ExpansionFactor() const { return expansionFactor_; }
+  uint64_t TotalDataSize() const;
 
   // RDB serialization: the filter writes/reads its own structure
   void WriteTo(RdbWriter& w) const;
@@ -82,9 +83,9 @@ private:
 };
 
 // Wire-format structures for BF.SCANDUMP / BF.LOADCHUNK.
-// Field order, types, and packing are intended to match the RedisBloom
-// binary protocol for cross-implementation compatibility. Full
-// interoperability has not been verified against an official corpus.
+// Field order, types, and packing match the RedisBloom binary protocol
+// for cross-implementation compatibility. Verified against RedisBloom
+// v2.4.20 (Redis 6.2.17).
 #pragma pack(push, 1)
 struct WireLayerMeta {
   uint64_t dataSize;

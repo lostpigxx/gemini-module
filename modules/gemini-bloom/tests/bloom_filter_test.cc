@@ -151,6 +151,15 @@ TEST(BloomLayerTest, RejectsInvalidCreateParameters) {
     std::numeric_limits<double>::infinity(), BloomFlags::Use64Bit).has_value());
 }
 
+TEST(BloomLayerTest, RejectsBitsPerEntryExceedingLimit) {
+  // 1e-300 yields bitsPerEntry ≈ 1438 > kMaxBitsPerEntry (1000)
+  EXPECT_FALSE(BloomLayer::Create(1, 1e-300, BloomFlags::Use64Bit).has_value())
+    << "Should reject fpRate that produces bitsPerEntry > 1000";
+  // Boundary: 1e-200 yields bitsPerEntry ≈ 958, should still be accepted
+  EXPECT_TRUE(BloomLayer::Create(1, 1e-200, BloomFlags::Use64Bit).has_value())
+    << "Should accept fpRate that produces bitsPerEntry <= 1000";
+}
+
 TEST(BloomFlagsTest, EnumClassOperators) {
   auto combined = BloomFlags::Use64Bit | BloomFlags::NoRound;
   EXPECT_TRUE(HasFlag(combined, BloomFlags::Use64Bit));
