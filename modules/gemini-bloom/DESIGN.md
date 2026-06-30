@@ -16,7 +16,7 @@ gemini-bloom 是 Gemini 产品线的 Bloom Filter 组件，不是 RedisBloom 的
 **不是什么：**
 - 不是 RedisBloom 的源码移植（clean-room 实现，不引用 RSALv2/SSPL 许可的 RedisBloom 源码）
 - 不是 RedisBloom 的完整协议兼容层（RESP3、BF.DEBUG 等不在范围内）
-- 不承诺与 RedisBloom 的 SCANDUMP/LOADCHUNK 公共协议兼容
+- 不承诺与 RedisBloom 的 SCANDUMP/LOADCHUNK 协议兼容（与 RedisBloom 的兼容通过 RDB 层实现）
 
 ### 1.2 兼容性边界
 
@@ -27,7 +27,7 @@ gemini-bloom 是 Gemini 产品线的 Bloom Filter 组件，不是 RedisBloom 的
 | MIGRATE | 兼容 | Redis 原生迁移命令，双向通过，保留 TTL |
 | psync / fullsync replication | 兼容 | RDB snapshot 传输，双向通过 |
 | RDB-preamble AOF | 兼容 | Redis 6/7 默认模式，AOF 文件包含 RDB 数据，双向通过 |
-| BF.SCANDUMP / BF.LOADCHUNK | 不兼容 | gemini 使用私有 layer-index cursor 协议，不对客户开放 |
+| BF.SCANDUMP / BF.LOADCHUNK | 不兼容 | gemini 使用私有 layer-index cursor 协议，与 RedisBloom 不互通（详见 §5.4） |
 | command-AOF rewrite | 不兼容 | 依赖私有 LOADCHUNK 协议，不对客户暴露 |
 | RESP3 | 不支持 | 所有命令使用 RESP2 返回格式 |
 | BF.DEBUG | 不支持 | RedisBloom 诊断命令，不在实现范围 |
@@ -310,6 +310,8 @@ gemini-bloom 在反序列化路径上比 RedisBloom 做了更多校验：
 | `BF.DEBUG` | 不支持 | 返回每层诊断信息 | 缺少诊断命令 |
 | Module name | GeminiBloom (ver=1) | bf (ver=20420) | MODULE LIST 差异 |
 | BF.INFO / BF.CARD flags | readonly | readonly fast | 性能分类标签差异 |
+| `LOADCHUNK` cursor>1 对已有 key | 拒绝（loading 状态保护） | 允许覆写 bit array | gemini 更安全 |
+| loading 中的 key 读写 | 返回 `ERR filter is being loaded` | 无此概念 | gemini 更严格 |
 
 ---
 
@@ -384,6 +386,7 @@ modules/gemini-bloom/
 - `RawBits(2)`: 原始位模式（不通过 RDB/wire 校验接受）
 - `Use64Bit(4)`: 使用 64-bit hash
 - `FixedSize(8)`: 禁止自动扩容
+- `Loading(16)`: LOADCHUNK 正在加载中（runtime-only，不持久化，序列化时通过 `kPersistentFlagsMask` 剥离）
 
 ### 4.4 内存管理
 
@@ -475,35 +478,77 @@ aof-use-rdb-preamble no
 
 **CI 覆盖**：TCL 集成测试覆盖了 `aof-use-rdb-preamble yes`（默认）模式下的 AOF 持久化 round-trip。非 RDB preamble 模式的 AOF rewrite 尚未纳入 CI 测试矩阵。
 
-### 5.4 SCANDUMP / LOADCHUNK（内部协议）
+### 5.4 SCANDUMP / LOADCHUNK
 
-gemini 使用 layer-index cursor 协议，不对客户开放：
+#### 5.4.1 定位与职责分工
+
+gemini-bloom 与 RedisBloom 的数据兼容通过 **RDB 层**实现，不依赖 SCANDUMP/LOADCHUNK。所有基于 RDB 的 Redis 原生机制（DUMP/RESTORE、MIGRATE、psync/fullsync、RDB 文件加载、RDB-preamble AOF）都走 `RdbSaveBloom`/`RdbLoadBloom`，与 RedisBloom 双向兼容。
+
+SCANDUMP/LOADCHUNK 是 gemini 自有的用户侧导出/导入接口，用于：
+- **AOF command rewrite**：Redis 的 AOF rewrite callback 产出的命令必须是已注册命令
+- **应用层迁移**：在应用层做跨集群的 Bloom Filter 导出/导入、备份/恢复
+
+这两个命令使用 gemini 私有协议，不需要也不打算与 RedisBloom 的 SCANDUMP/LOADCHUNK 互通。
+
+#### 5.4.2 Cursor 协议
 
 ```
-SCANDUMP key 0     → [1, header_blob]
-SCANDUMP key 1     → [2, layer0_full_bits]
-SCANDUMP key 2     → [3, layer1_full_bits]
+SCANDUMP key 0     → [1, header_blob]        # header（WireFilterHeader + WireLayerMeta[]）
+SCANDUMP key 1     → [2, layer0_full_bits]    # 第 0 层完整 bit array
+SCANDUMP key 2     → [3, layer1_full_bits]    # 第 1 层完整 bit array
 ...
-SCANDUMP key N+1   → [0, ""]    (end)
+SCANDUMP key N     → [N+1, layerN-1_bits]     # 最后一层
+SCANDUMP key N+1   → [0, ""]                  # 结束标记
 ```
 
-`LOADCHUNK cursor=1` 反序列化 header 并创建 filter shell（bit arrays 为零）。后续 cursor 逐层填充 bit array。
+cursor 语义是 layer index，每个 data chunk 是一整层的 bit array。客户端使用返回的 iter 作为下一次 SCANDUMP/LOADCHUNK 的 cursor，直到 iter=0。
 
-**"不对客户开放" 的 enforcement 机制**：
+#### 5.4.3 Loading 状态保护
 
-`BF.SCANDUMP` 和 `BF.LOADCHUNK` 在模块层面注册为普通 Redis 命令。这是必要的 — Redis 的 AOF rewrite callback 产出的命令必须是已注册命令。因此，"不对客户开放" 的保证**不由模块层实现**，而是由部署层负责：
+LOADCHUNK 通过 loading 状态保证数据完整性：
 
-- 生产环境通过 proxy 层（如 Envoy / Twemproxy）屏蔽 `BF.SCANDUMP` 和 `BF.LOADCHUNK` 命令
-- 或通过 Redis ACL 限制这两个命令仅对内部服务账号可用
-- 模块层不做访问控制，任何有命令权限的客户端在技术上可以调用
+```
+LOADCHUNK key 1 <header>
+  → 反序列化 header，创建 filter shell（bit arrays 全零）
+  → 标记 filter 为 Loading 状态
+  → OK
 
-**安全风险**：`LOADCHUNK` 是反序列化写入口。`cursor>1` 时可以直接覆写已有 Bloom key 的 layer bit array（只要 data 长度匹配）。这在内部协议前提下可接受，但如果未经 ACL/proxy 屏蔽就暴露给外部客户端，会构成数据完整性攻击面（清零 bit array 可导致 false negative）。
+LOADCHUNK key 2 <layer0_bits>
+  → 填充第 0 层 bit array（仅 Loading 状态的 key 接受）
+  → OK
 
-**安全行为**：
+LOADCHUNK key N+1 <layerN_bits>
+  → 填充最后一层 bit array
+  → 清除 Loading 标记，filter 进入正常状态
+  → OK
+```
+
+**Loading 状态约束：**
+- Loading 状态的 key：所有读写命令（BF.EXISTS/ADD/MADD/INSERT/INFO/CARD/SCANDUMP）返回 `ERR filter is being loaded`
+- 已完成的 key：LOADCHUNK cursor>1 返回 `ERR received bad data`，不可被覆写
+- Loading 标记是 runtime-only flag（`BloomFlags::Loading`），不会持久化到 RDB/wire 格式
+
+这保证了已插入数据的 Bloom Filter 不会被 LOADCHUNK 覆写破坏（避免 false negative）。
+
+#### 5.4.4 与 RedisBloom SCANDUMP/LOADCHUNK 的差异
+
+| 维度 | gemini | RedisBloom v2.4.20 |
+|---|---|---|
+| cursor 语义 | layer index | byte offset 在拼接数据流中的位置 |
+| 每个 chunk 大小 | 一整层 bit array | 最大 16MB，大层会被拆分 |
+| chunk 可以跨层 | 不可以 | 可以 |
+| header 格式 | gemini 私有二进制结构 | RedisBloom 私有二进制结构 |
+| cursor>1 覆写已有 key | 拒绝（loading 状态保护） | 允许（直接 memcpy） |
+| loading 中的 key 读操作 | 拒绝 | 无此概念，部分加载的 key 可查询 |
+| 交叉兼容 | 不兼容 | 不兼容 |
+
+功能上两者等价：都能完成"导出 → 导入"的完整流程。gemini 更严格 — 通过 loading 状态防止对已完成 key 的意外覆写。
+
+#### 5.4.5 其他安全行为
+
 - `cursor=1` 在 key 已存在且是 Bloom 类型时返回 `ERR received bad data`，不覆盖旧 key
 - `cursor=1` 在 key 是非 Bloom 类型时返回 `WRONGTYPE`
 - 数据 chunk 的长度必须精确匹配该层的 `dataSize`
-- `cursor>1` 对已完成的 Bloom key 执行 bit array 覆写（仅限部署层已屏蔽的内部使用场景）
 
 ---
 
@@ -645,7 +690,7 @@ tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
 
 ## 9. 已知限制
 
-1. **SCANDUMP/LOADCHUNK 不对外兼容**：使用私有 layer-index cursor 协议，不兼容 RedisBloom 的 byte-offset chunk 协议。这两个命令在模块层面注册为普通命令（AOF rewrite 需要），但不对客户开放 — 生产环境必须通过 ACL 或 proxy 层屏蔽（详见 §5.4）。
+1. **SCANDUMP/LOADCHUNK 不与 RedisBloom 互通**：使用 gemini 私有 layer-index cursor 协议和 header 格式，不兼容 RedisBloom 的 byte-offset chunk 协议。与 RedisBloom 的数据兼容通过 RDB 层实现（DUMP/RESTORE/MIGRATE/psync/RDB 文件），不依赖 SCANDUMP/LOADCHUNK（详见 §5.4）。
 
 2. **command-AOF 不跨实现兼容**：关闭 `aof-use-rdb-preamble` 后的 AOF 文件无法在 RedisBloom 和 gemini 之间互相回放。生产环境**必须**保持 Redis 默认的 `aof-use-rdb-preamble yes`（详见 §5.3）。
 

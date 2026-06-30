@@ -331,6 +331,26 @@ TEST(ScalingBloomTest, MaxTotalDataSizeConstant) {
   EXPECT_EQ(kMaxTotalDataSize, 4ULL * 1024 * 1024 * 1024);
 }
 
+TEST(ScalingBloomTest, LoadingStateLifecycle) {
+  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (mem) ScalingBloomFilter(100, 0.01, DefaultFlags(), 2);
+
+  EXPECT_FALSE(mem->IsLoading());
+  mem->SetLoading();
+  EXPECT_TRUE(mem->IsLoading());
+  EXPECT_TRUE(HasFlag(mem->Flags(), BloomFlags::Loading));
+  mem->ClearLoading();
+  EXPECT_FALSE(mem->IsLoading());
+  EXPECT_FALSE(HasFlag(mem->Flags(), BloomFlags::Loading));
+
+  mem->~ScalingBloomFilter();
+  free(mem);
+}
+
+TEST(ScalingBloomTest, LoadingFlagNotInSupportedFlags) {
+  EXPECT_FALSE(ValidateFlags(ToUnderlying(BloomFlags::Loading)));
+}
+
 // SerializeDeserializeHeader test is covered by TCL integration tests
 // (SCANDUMP/LOADCHUNK round-trip) since the serialization code depends
 // on the Redis Module API.

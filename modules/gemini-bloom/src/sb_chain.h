@@ -49,6 +49,9 @@ public:
   size_t TotalItems() const { return totalItems_; }
   BloomFlags Flags() const { return flags_; }
   unsigned ExpansionFactor() const { return expansionFactor_; }
+  bool IsLoading() const { return HasFlag(flags_, BloomFlags::Loading); }
+  void SetLoading() { flags_ = flags_ | BloomFlags::Loading; }
+  void ClearLoading() { flags_ = FromUnderlying(ToUnderlying(flags_) & ~ToUnderlying(BloomFlags::Loading)); }
   uint64_t TotalDataSize() const;
 
   // RDB serialization: the filter writes/reads its own structure

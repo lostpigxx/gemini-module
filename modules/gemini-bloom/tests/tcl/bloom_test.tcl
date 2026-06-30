@@ -1403,7 +1403,7 @@ test_assert "Module load rejects unknown config argument" {
 
 puts "\n=== LOADCHUNK half-restore safety (DESIGN-02) ==="
 
-test_assert "Half-restored filter returns 0 for EXISTS" {
+test_error "Half-restored filter rejects EXISTS (loading state)" {
   # Create a filter with data
   r DEL half_src half_dst
   r BF.RESERVE half_src 0.01 100
@@ -1415,14 +1415,29 @@ test_assert "Half-restored filter returns 0 for EXISTS" {
   set hdr_data [lindex $reply 1]
   r BF.LOADCHUNK half_dst $hdr_cursor $hdr_data
 
-  # The filter exists but bit arrays are zeros
-  set exists [r BF.EXISTS half_dst testitem]
-  if {$exists != 0} { error "Half-restored filter should return 0 for EXISTS, got $exists" }
+  # The filter is in loading state — reads are rejected
+  r BF.EXISTS half_dst testitem
+} {ERR filter is being loaded}
 
-  # BF.CARD still shows header-declared count
-  set card [r BF.CARD half_dst]
-  if {$card != 1} { error "Half-restored CARD should be 1, got $card" }
-}
+test_error "Half-restored filter rejects CARD (loading state)" {
+  r BF.CARD half_dst
+} {ERR filter is being loaded}
+
+test_error "Half-restored filter rejects ADD (loading state)" {
+  r BF.ADD half_dst newitem
+} {ERR filter is being loaded}
+
+test_error "Half-restored filter rejects SCANDUMP (loading state)" {
+  r BF.SCANDUMP half_dst 0
+} {ERR filter is being loaded}
+
+test_error "LOADCHUNK cursor>1 rejects completed filter" {
+  r DEL lc_completed
+  r BF.RESERVE lc_completed 0.01 100
+  r BF.ADD lc_completed x
+  # Try to overwrite a completed filter's layer
+  r BF.LOADCHUNK lc_completed 2 [string repeat \x00 128]
+} {ERR received bad data}
 
 puts "\n=== SCANDUMP cursor protocol documentation (COMPAT-01) ==="
 

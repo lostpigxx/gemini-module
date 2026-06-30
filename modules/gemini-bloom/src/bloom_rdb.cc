@@ -155,7 +155,7 @@ std::optional<BloomLayer> BloomLayer::FromWireMeta(const WireLayerMeta& meta, Bl
 void ScalingBloomFilter::WriteTo(RdbWriter& w) const {
   w.PutUint(totalItems_);
   w.PutUint(numLayers_);
-  w.PutUint(ToUnderlying(flags_));
+  w.PutUint(ToUnderlying(flags_) & kPersistentFlagsMask);
   w.PutUint(expansionFactor_);
 
   for (const auto& layer : Layers()) {
@@ -246,7 +246,7 @@ size_t SerializeHeader(const ScalingBloomFilter& filter, void* output) {
   auto* hdr = static_cast<WireFilterHeader*>(output);
   hdr->totalItems = filter.TotalItems();
   hdr->numLayers = static_cast<uint32_t>(filter.NumLayers());
-  hdr->flags = ToUnderlying(filter.Flags());
+  hdr->flags = ToUnderlying(filter.Flags()) & kPersistentFlagsMask;
   hdr->expansionFactor = filter.ExpansionFactor();
 
   auto* meta = reinterpret_cast<WireLayerMeta*>(

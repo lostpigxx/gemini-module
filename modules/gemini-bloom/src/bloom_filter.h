@@ -18,6 +18,7 @@ enum class BloomFlags : unsigned {
   RawBits   = 2,
   Use64Bit  = 4,
   FixedSize = 8,
+  Loading   = 16,
 };
 
 constexpr BloomFlags operator|(BloomFlags a, BloomFlags b) {
@@ -46,6 +47,8 @@ constexpr unsigned kSupportedFlags =
   ToUnderlying(BloomFlags::NoRound) |
   ToUnderlying(BloomFlags::Use64Bit) |
   ToUnderlying(BloomFlags::FixedSize);
+
+constexpr unsigned kPersistentFlagsMask = kSupportedFlags;
 
 constexpr bool ValidateFlags(unsigned raw) {
   return (raw & ~kSupportedFlags) == 0;

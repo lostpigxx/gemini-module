@@ -70,6 +70,10 @@ static ScalingBloomFilter* OpenOrCreate(RedisModuleCtx* ctx, RedisModuleString* 
     RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
     return nullptr;
   }
+  if (filter->IsLoading()) {
+    RedisModule_ReplyWithError(ctx, "ERR filter is being loaded");
+    return nullptr;
+  }
   return filter;
 }
 
@@ -82,6 +86,14 @@ static const char* FilterFullError(const ScalingBloomFilter* filter) {
   return HasFlag(filter->Flags(), BloomFlags::FixedSize)
     ? "ERR non scaling filter is full"
     : "ERR filter expansion failed";
+}
+
+static bool RejectIfLoading(RedisModuleCtx* ctx, const ScalingBloomFilter* filter) {
+  if (filter->IsLoading()) {
+    RedisModule_ReplyWithError(ctx, "ERR filter is being loaded");
+    return true;
+  }
+  return false;
 }
 
 // --- BF.RESERVE ---
@@ -239,7 +251,8 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
   opts.errorRate = g_bloomConfig.defaultErrorRate;
   opts.capacity = g_bloomConfig.defaultCapacity;
   opts.expansion = g_bloomConfig.defaultExpansion;
-  bool expansionSet = false;
+  bool expansionSeen = false;
+  bool expansionPositive = false;
   bool capacitySet = false;
   bool errorSet = false;
   bool nonscalingSet = false;
@@ -278,10 +291,11 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
       opts.capacity = static_cast<uint64_t>(val);
       capacitySet = true;
     } else if (MatchArg(sv, "EXPANSION")) {
-      if (expansionSet) {
+      if (expansionSeen) {
         RedisModule_ReplyWithError(ctx, "ERR duplicate EXPANSION option");
         return false;
       }
+      expansionSeen = true;
       if (++i >= argc) { RedisModule_WrongArity(ctx); return false; }
       long long val;
       if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
@@ -289,11 +303,11 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
         RedisModule_ReplyWithError(ctx, "ERR bad expansion");
         return false;
       }
-      expansionSet = true;
       if (val == 0) {
         opts.fixedSize = true;
       } else {
         opts.expansion = static_cast<unsigned>(val);
+        expansionPositive = true;
       }
     } else if (MatchArg(sv, "NOCREATE")) {
       opts.noCreate = true;
@@ -313,7 +327,7 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
   }
 
-  if (opts.fixedSize && expansionSet) {
+  if (opts.fixedSize && expansionPositive) {
     RedisModule_ReplyWithError(ctx, "ERR NONSCALING and EXPANSION are mutually exclusive");
     return false;
   }
@@ -362,6 +376,7 @@ static int CmdInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   } else if (keyType == REDISMODULE_KEYTYPE_MODULE) {
     filter = GetFilter(key);
     if (!filter) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
   } else {
     return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
   }
@@ -403,6 +418,7 @@ static int CmdExists(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   auto* filter = GetFilter(key);
   if (!filter) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+  if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
 
   size_t len;
   const char* item = RedisModule_StringPtrLen(argv[2], &len);
@@ -429,6 +445,7 @@ static int CmdMexists(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (!filter) {
     return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
   }
+  if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
 
   RedisModule_ReplyWithArray(ctx, count);
   for (int i = 0; i < count; i++) {
@@ -455,6 +472,7 @@ static int CmdInfo(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   auto* filter = GetFilter(key);
   if (!filter) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+  if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
 
   if (argc == 3) {
     size_t len;
@@ -508,6 +526,7 @@ static int CmdCard(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   auto* filter = GetFilter(key);
   if (!filter) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+  if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
 
   return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalItems()));
 }
@@ -534,6 +553,7 @@ static int CmdScandump(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
 
   auto* filter = GetFilter(key);
   if (!filter) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+  if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
 
   long long cursor;
   if (RedisModule_StringToLongLong(argv[2], &cursor) != REDISMODULE_OK || cursor < 0) {
@@ -595,6 +615,7 @@ static int CmdLoadchunk(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     if (!filter) {
       return RedisModule_ReplyWithError(ctx, "ERR corrupted header payload");
     }
+    filter->SetLoading();
     if (RedisModule_ModuleTypeSetValue(key, BloomType, filter) != REDISMODULE_OK) {
       filter->~ScalingBloomFilter();
       RMFree(filter);
@@ -606,6 +627,9 @@ static int CmdLoadchunk(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     }
     auto* filter = GetFilter(key);
     if (!filter) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    if (!filter->IsLoading()) {
+      return RedisModule_ReplyWithError(ctx, "ERR received bad data");
+    }
 
     size_t idx = static_cast<size_t>(cursor - 2);
     if (idx >= filter->NumLayers()) {
@@ -616,6 +640,9 @@ static int CmdLoadchunk(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
       return RedisModule_ReplyWithError(ctx, "ERR data length mismatch for layer");
     }
     std::memcpy(layer.bloom.GetBitArray(), data, dataLen);
+    if (idx == filter->NumLayers() - 1) {
+      filter->ClearLoading();
+    }
   }
 
   RedisModule_ReplicateVerbatim(ctx);

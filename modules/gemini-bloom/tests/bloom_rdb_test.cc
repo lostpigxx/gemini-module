@@ -1343,3 +1343,44 @@ TEST(BloomWire, HeaderSizeScalesWithLayers) {
   DestroyFilter(f1);
   DestroyFilter(f3);
 }
+
+// ==================================================================
+// Loading flag must not leak to RDB or wire format
+// ==================================================================
+
+TEST(BloomRdb, LoadingFlagStrippedOnRdbRoundTrip) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  filter->Put(AsBytes("x", 1));
+  filter->SetLoading();
+  EXPECT_TRUE(filter->IsLoading());
+
+  auto* loaded = RdbRoundTrip(filter, kCurrentEncVer);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_FALSE(loaded->IsLoading())
+    << "Loading flag must be stripped during RDB serialization";
+  EXPECT_TRUE(loaded->Contains(AsBytes("x", 1)));
+
+  DestroyFilter(filter);
+  DestroyFilter(loaded);
+}
+
+TEST(BloomWire, LoadingFlagStrippedOnHeaderRoundTrip) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  filter->Put(AsBytes("x", 1));
+  filter->SetLoading();
+
+  size_t hdr_size = ComputeHeaderSize(*filter);
+  std::vector<uint8_t> buf(hdr_size);
+  SerializeHeader(*filter, buf.data());
+
+  auto* hdr = reinterpret_cast<const WireFilterHeader*>(buf.data());
+  EXPECT_EQ(hdr->flags & ToUnderlying(BloomFlags::Loading), 0u)
+    << "Loading flag must not appear in wire header";
+
+  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_FALSE(loaded->IsLoading());
+
+  DestroyFilter(filter);
+  DestroyFilter(loaded);
+}
