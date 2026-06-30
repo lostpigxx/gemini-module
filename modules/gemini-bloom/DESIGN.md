@@ -42,6 +42,8 @@ gemini-bloom 是 Gemini 产品线的 Bloom Filter 组件，不是 RedisBloom 的
 
 兼容性已通过 Redis 6.2.17 + RedisBloom v2.4.20 的对照矩阵验证，覆盖 9 个 corpus（empty、single-layer、multi-layer、fixed、expansion 1/2/4、binary items、long item、large 16MB）在 RDB/DUMP/RESTORE/MIGRATE/RDB-preamble AOF/fullsync replication 路径上的双向数据完整性。该结论不能外推到其他 RedisBloom 版本或 Redis 8 内置 Bloom。
 
+**验证 corpus 与复现**：验证使用的 RDB fixture 文件和期望结果存储在 `tests/compat/redisbloom-2.4.20/` 目录下。目前为本地验证通过状态，尚未作为 CI 阻断项。后续计划将 corpus round-trip 纳入 CI gate，确保任何序列化变更都被自动检测。
+
 ---
 
 ## 2. 算法设计
@@ -279,7 +281,7 @@ gemini-bloom 在反序列化路径上比 RedisBloom 做了更多校验：
 | error_rate | (0.0, 1.0) | 必须是有限正数 |
 | expansion | 0 .. 32768 | `kMaxExpansion`，0 表示 NONSCALING |
 | per-layer data size | <= 2 GB | `BloomLayer::Create` 内部检查 |
-| total data size (RDB/wire) | <= 4 GB | 反序列化路径检查 |
+| total data size | <= 4 GB | runtime `AppendLayer()` + RDB/wire 反序列化 |
 | max layers | <= 1024 | RDB/wire 反序列化检查 |
 
 **Parser 行为：**
@@ -454,6 +456,25 @@ Filter-level 校验：
 
 由于 Redis 6/7 默认启用 `aof-use-rdb-preamble yes`，实际 AOF 文件中的 bloom 数据以 RDB 格式存储，不包含 `BF.LOADCHUNK`。只有关闭 RDB preamble 时才会触发 command-AOF rewrite。
 
+**`aof-use-rdb-preamble` 配置依赖**：
+
+```
+aof-use-rdb-preamble yes (Redis 6/7 默认)
+  → AOF 中 bloom 数据以 RDB 格式存储，与 RedisBloom 双向兼容
+
+aof-use-rdb-preamble no
+  → AOF 中 bloom 数据以 BF.LOADCHUNK 命令序列存储
+  → 使用 gemini 私有协议，与 RedisBloom 不兼容
+```
+
+模块当前不检测 `aof-use-rdb-preamble` 配置值。在非 RDB preamble 模式下，AOF 文件只能由 gemini 自身回放。生产环境**必须**保持 Redis 默认的 `aof-use-rdb-preamble yes`。后续可考虑在模块加载时检测该配置并在关闭时输出 warning。
+
+**AOF rewrite 失败语义**：
+
+当 `AofRewriteBloom()` 中 header buffer 分配失败时，模块调用 `RedisModule_LogIOError()` 记录 warning 并跳过该 key。这意味着在极端 OOM 场景下，生成的 AOF 文件可能缺少被跳过的 key。该行为依赖 Redis 对 `RedisModule_LogIOError()` 的处理策略 — Redis 可能 abort 整个 rewrite（保留旧 AOF），但模块层不做该假设。
+
+**CI 覆盖**：TCL 集成测试覆盖了 `aof-use-rdb-preamble yes`（默认）模式下的 AOF 持久化 round-trip。非 RDB preamble 模式的 AOF rewrite 尚未纳入 CI 测试矩阵。
+
 ### 5.4 SCANDUMP / LOADCHUNK（内部协议）
 
 gemini 使用 layer-index cursor 协议，不对客户开放：
@@ -468,10 +489,21 @@ SCANDUMP key N+1   → [0, ""]    (end)
 
 `LOADCHUNK cursor=1` 反序列化 header 并创建 filter shell（bit arrays 为零）。后续 cursor 逐层填充 bit array。
 
+**"不对客户开放" 的 enforcement 机制**：
+
+`BF.SCANDUMP` 和 `BF.LOADCHUNK` 在模块层面注册为普通 Redis 命令。这是必要的 — Redis 的 AOF rewrite callback 产出的命令必须是已注册命令。因此，"不对客户开放" 的保证**不由模块层实现**，而是由部署层负责：
+
+- 生产环境通过 proxy 层（如 Envoy / Twemproxy）屏蔽 `BF.SCANDUMP` 和 `BF.LOADCHUNK` 命令
+- 或通过 Redis ACL 限制这两个命令仅对内部服务账号可用
+- 模块层不做访问控制，任何有命令权限的客户端在技术上可以调用
+
+**安全风险**：`LOADCHUNK` 是反序列化写入口。`cursor>1` 时可以直接覆写已有 Bloom key 的 layer bit array（只要 data 长度匹配）。这在内部协议前提下可接受，但如果未经 ACL/proxy 屏蔽就暴露给外部客户端，会构成数据完整性攻击面（清零 bit array 可导致 false negative）。
+
 **安全行为**：
 - `cursor=1` 在 key 已存在且是 Bloom 类型时返回 `ERR received bad data`，不覆盖旧 key
 - `cursor=1` 在 key 是非 Bloom 类型时返回 `WRONGTYPE`
 - 数据 chunk 的长度必须精确匹配该层的 `dataSize`
+- `cursor>1` 对已完成的 Bloom key 执行 bit array 覆写（仅限部署层已屏蔽的内部使用场景）
 
 ---
 
@@ -485,8 +517,8 @@ SCANDUMP key N+1   → [0, ""]    (end)
 | 最大 expansion | 32768 | 命令层、config 层 |
 | 最大 layers | 1024 | RDB/wire 反序列化 |
 | 单层最大 data size | 2 GB | `BloomLayer::Create()` |
-| 总 data size | 4 GB | RDB/wire 反序列化 |
-| bitsPerEntry 上界 | 1000 | `ValidateLayerFields()` |
+| 总 data size | 4 GB | `AppendLayer()` runtime 检查 + RDB/wire 反序列化 |
+| bitsPerEntry 上界 | 1000 | `BloomLayer::Create()` + `ValidateLayerFields()` |
 
 ### 6.2 非信任输入防御
 
@@ -613,9 +645,9 @@ tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
 
 ## 9. 已知限制
 
-1. **SCANDUMP/LOADCHUNK 不对外兼容**：使用私有 layer-index cursor 协议，不兼容 RedisBloom 的 byte-offset chunk 协议。客户不应直接使用这两个命令。
+1. **SCANDUMP/LOADCHUNK 不对外兼容**：使用私有 layer-index cursor 协议，不兼容 RedisBloom 的 byte-offset chunk 协议。这两个命令在模块层面注册为普通命令（AOF rewrite 需要），但不对客户开放 — 生产环境必须通过 ACL 或 proxy 层屏蔽（详见 §5.4）。
 
-2. **command-AOF 不跨实现兼容**：关闭 `aof-use-rdb-preamble` 后的 AOF 文件无法在 RedisBloom 和 gemini 之间互相回放。生产环境应保持 Redis 默认的 RDB preamble 模式。
+2. **command-AOF 不跨实现兼容**：关闭 `aof-use-rdb-preamble` 后的 AOF 文件无法在 RedisBloom 和 gemini 之间互相回放。生产环境**必须**保持 Redis 默认的 `aof-use-rdb-preamble yes`（详见 §5.3）。
 
 3. **live replication command stream 的 BF.CARD 差异**：在 `EXPANSION 1` 等高 false-positive 场景下，command replay 路径上 RedisBloom 和 gemini 的 `BF.CARD` 可能不同（但 membership 不受影响）。fullsync replication（RDB snapshot）无此问题。
 
@@ -625,4 +657,4 @@ tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
 
 6. **子 filter 数量影响查询性能**：`EXPANSION 1` 会产生较多 layer，查询需要逐层检查。建议使用 `EXPANSION 2` 或更大值。
 
-7. **Redis 8 Bloom 共存未验证**：Redis 8 内置 Bloom 使用相同的 `BF.*` 命令名和 `MBbloom--` 类型名，在 Redis 8 环境中加载 gemini-bloom 可能产生命令或类型冲突。当前目标环境为 Redis 6.x / 7.x。
+7. **RedisBloom / Redis 8 同实例共存冲突**：gemini-bloom 复用了 `BF.*` 命令名和 `MBbloom--` data type name。在同一 Redis 实例中，如果已加载 RedisBloom module，加载 gemini-bloom 将产生命令名和 data type name 的注册冲突（`RedisModule_CreateCommand` / `RedisModule_CreateDataType` 返回错误），模块加载会失败。同样，Redis 8 内置 Bloom 使用相同的命令名和类型名，在 Redis 8 环境中加载 gemini-bloom 也会产生冲突。gemini-bloom 与 RedisBloom / Redis 8 Bloom 是**互斥部署**关系，不能同时加载在同一 Redis 实例上。当前目标环境为 Redis 6.x / 7.x 且不加载 RedisBloom module。
