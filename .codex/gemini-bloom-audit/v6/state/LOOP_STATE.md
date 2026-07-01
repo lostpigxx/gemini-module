@@ -16,8 +16,8 @@
 | 01 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage01/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage01/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage01/reviewer_output.md` | `b35f0f624c6805e7610010f795420e2d592abbaa` | PUSHED | yes |
 | 02 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage02/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage02/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage02/reviewer_output.md` | `77566087a4a58a0ac3bd790b73e64276fb045a90` | PUSHED | yes |
 | 03 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage03/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/reviewer_output.md` | `dc0a3a8ad8e97e6631028d4152804f68a923ecbf` | PUSHED | yes |
-| 04 | BLOCKED | `.codex/gemini-bloom-audit/v6/agents/stage04/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage04/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage04/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 04 runtime command semantics` | PUSHED_BY_STAGE_GATE | yes |
-| 05 | PENDING |  |  |  |  |  |  |
+| 04 | BLOCKED | `.codex/gemini-bloom-audit/v6/agents/stage04/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage04/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage04/reviewer_output.md` | `d884abb3e73c7ea4fa680c222bf1aa3a256b57c4` | PUSHED | yes |
+| 05 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage05/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage05/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage05/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 05 redisbloom compat` | PUSHED_BY_STAGE_GATE | yes |
 | 06 | PENDING |  |  |  |  |  |  |
 | 07 | PENDING |  |  |  |  |  |  |
 | 08 | PENDING |  |  |  |  |  |  |
@@ -39,6 +39,7 @@ Findings should be indexed here as they are discovered.
 | GBV6-03-001 | 03 | P2 | OPEN | RDB/wire deserialization does not enforce DESIGN's per-layer 2GB data-size cap | `.codex/gemini-bloom-audit/v6/agents/stage03/potential_findings.md` |
 | GBV6-03-002 | 03 | P2 | OPEN | RDB/wire deserialization accepts expansionFactor values above `kMaxExpansion` | `.codex/gemini-bloom-audit/v6/agents/stage03/potential_findings.md` |
 | GBV6-03-003 | 03 | P3 | OPEN | TCL per-layer data-size cap test name/comment do not match the assertion | `.codex/gemini-bloom-audit/v6/agents/stage03/potential_findings.md` |
+| GBV6-05-001 | 05 | P2 | OPEN | Linux/GCC default build fails because `bloom_rdb.cc` uses `UINT_MAX` without including `<climits>` | `.codex/gemini-bloom-audit/v6/evidence/stage05/oracle_diff/gemini_default_build_stderr.log` |
 
 ## Global blockers
 
@@ -49,4 +50,4 @@ Findings should be indexed here as they are discovered.
 ## Final confidence
 
 - Current confidence: `UNKNOWN`
-- Reason: Stage 04 runtime command semantics audit verified all ten BF commands, with ACL DRYRUN blocked by Redis 6.2.16. RedisBloom oracle, persistence transport, fuzz, sanitizer, ops, perf, and final report audit remain VERIFY_LATER.
+- Reason: Stage 05 verified Redis 6.2.17 + RedisBloom v2.4.20 RDB-family compatibility over the audit corpus, with DESIGN_INTENDED gaps preserved. Persistence transport standalone stage, fuzz, sanitizer, ops, perf, and final report audit remain VERIFY_LATER.

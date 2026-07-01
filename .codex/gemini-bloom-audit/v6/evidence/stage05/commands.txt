@@ -1,0 +1,28 @@
+# Stage 05 commands
+
+# Rehydrate and planner
+read DESIGN.md, LOOP_CONTROL_BATCH.md, policies, LOOP_STATE.md, STAGE_05_REDISBLOOM_COMPAT.md, Stage 04 outputs
+spawn Stage 05 planner subagent and save planner_output.md
+
+# Local/oracle discovery
+rg -n "RedisBloom|redisbloom|redis-stack|MBbloom|2\.4\.20|20420|redis-server" .codex modules tests tools CMakeLists.txt README.md doc
+rg --files -g '*redisbloom*' -g '*RedisBloom*' -g '*redis_bloom*' -g '*.so' -g '*.dylib' -g '*.rdb' -g '*.aof'
+find . -maxdepth 5 -type d -path '*compat*' -o -type f -name '*redisbloom*' -o -type f -name '*RedisBloom*'
+redis-server --version
+docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}'
+docker ps --format '{{.ID}} {{.Names}} {{.Image}} {{.Status}}'
+docker exec strange_feynman bash -lc 'git ls-remote --tags https://github.com/RedisBloom/RedisBloom.git refs/tags/v2.4.20'
+
+# Oracle build and verification
+docker exec strange_feynman bash -lc 'git clone --branch v2.4.20 --depth 1 --recursive https://github.com/RedisBloom/RedisBloom.git /tmp/redisbloom-v2.4.20-stage05-v6'
+docker exec strange_feynman bash -lc 'cd /tmp/redisbloom-v2.4.20-stage05-v6; make build -j$(nproc)'
+docker exec strange_feynman bash -lc 'start Redis 6.2.17 with /tmp/redisbloom-v2.4.20-stage05-v6/bin/linux-x64-release/redisbloom.so and verify MODULE LIST ver=20420'
+
+# Gemini build
+docker exec strange_feynman bash -lc 'cmake -S /workspace/projects/VibeCoding/gemini-module -B /tmp/gemini-module-v6-stage05-build && cmake --build /tmp/gemini-module-v6-stage05-build --target redis_bloom -j$(nproc)'
+docker exec strange_feynman bash -lc 'cmake -S /workspace/projects/VibeCoding/gemini-module -B /tmp/gemini-module-v6-stage05-build-workaround -DCMAKE_CXX_FLAGS="-include climits" && cmake --build /tmp/gemini-module-v6-stage05-build-workaround --target redis_bloom -j$(nproc)'
+
+# Compatibility execution
+docker exec strange_feynman bash -lc 'python3 oracle_diff/redisbloom_compat_matrix.py --gemini-module /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so --redis-server /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server --redisbloom-module /tmp/redisbloom-v2.4.20-stage05-v6/bin/linux-x64-release/redisbloom.so --env-name redis-6.2.17-redisbloom-v2.4.20 --redis-tag 6.2.17 --redisbloom-tag v2.4.20 --module-ver 20420 --include-large --output compat_matrix_results_redis62_redisbloom2420.json'
+docker exec strange_feynman bash -lc 'PYTHONPATH=oracle_diff python3 oracle_diff/redisbloom_extended_audit.py --gemini-module /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so --redis-server /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server --redisbloom-module /tmp/redisbloom-v2.4.20-stage05-v6/bin/linux-x64-release/redisbloom.so --env-name redis-6.2.17-redisbloom-v2.4.20 --redis-tag 6.2.17 --redisbloom-tag v2.4.20 --module-ver 20420 --output extended_audit_results_redis62_redisbloom2420.json'
+docker exec strange_feynman bash -lc 'python3 oracle_diff/stage05_raw_resp_diff.py --redis-server /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server --gemini-module /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so --redisbloom-module /tmp/redisbloom-v2.4.20-stage05-v6/bin/linux-x64-release/redisbloom.so --output diff_raw_resp.log'

@@ -1,0 +1,20 @@
+# Stage 05 Oracle Environment
+
+- Host cwd: /Users/liuyu/centos_ex/projects/VibeCoding/gemini-module
+- Host platform: macOS-26.5.1-arm64-arm-64bit-Mach-O
+- Docker container: strange_feynman / 974d83bcff5c
+- Container workspace: /workspace/projects/VibeCoding/gemini-module
+- Audited git commit: d884abb3e73c7ea4fa680c222bf1aa3a256b57c4
+- Redis server: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server
+- Redis server version: Redis 6.2.17
+- RedisBloom source: https://github.com/RedisBloom/RedisBloom.git tag v2.4.20
+- RedisBloom tag object: refs/tags/v2.4.20 -> adfc5326d76544a14a8e3904f3d7328a71e77df6; checkout commit c44f89506d6e4af6362190f7b2eb7df526489107
+- RedisBloom module: /tmp/redisbloom-v2.4.20-stage05-v6/bin/linux-x64-release/redisbloom.so
+- RedisBloom MODULE LIST: name=bf ver=20420
+- Gemini default Linux/GCC build: FAILED; see `oracle_diff/gemini_default_build_stderr.log` and `oracle_diff/gemini_default_build_exit_code.txt`
+- Gemini audit module: /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so
+- Gemini audit module build workaround: `-DCMAKE_CXX_FLAGS=-include climits` because default GCC build lacks `<climits>` for `UINT_MAX`
+- Gemini MODULE LIST: name=GeminiBloom ver=1
+- Matrix harness: `oracle_diff/redisbloom_compat_matrix.py`
+- Extended harness: `oracle_diff/redisbloom_extended_audit.py`
+- Raw RESP harness: `oracle_diff/stage05_raw_resp_diff.py`
