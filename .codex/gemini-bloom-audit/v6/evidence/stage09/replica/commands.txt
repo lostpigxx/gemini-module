@@ -1,0 +1,106 @@
+start-live-master: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/live-master/redis.conf
+live-master:45376> PING
+start-live-replica: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/live-replica/redis.conf
+live-replica:45377> PING
+wait-live-replica:45377> INFO replication
+live-master:45376> BF.RESERVE bf:live 0.01 4 EXPANSION 2
+live-master:45376> BF.MADD bf:live a b c d e f g h
+live-master:45376> BF.RESERVE bf:fixed 0.01 2 NONSCALING
+live-master:45376> BF.MADD bf:fixed x y z
+live-master:45376> BF.ADD bf:auto auto-1
+live-master:45376> BF.ADD bf:bin ''
+live-master:45376> BF.ADD bf:bin <bytes:3:610062>
+live-master:45376> WAIT 1 5000
+live-replica:45377> BF.MEXISTS bf:live a b c d e f g h
+live-replica:45377> BF.MEXISTS bf:fixed x y
+live-replica:45377> BF.EXISTS bf:fixed z
+live-replica:45377> BF.EXISTS bf:auto auto-1
+live-replica:45377> BF.EXISTS bf:bin ''
+live-replica:45377> BF.EXISTS bf:bin <bytes:3:610062>
+live-master:45376> BF.INFO bf:live
+live-master:45376> BF.INFO bf:fixed
+live-master:45376> BF.INFO bf:auto
+live-replica:45377> BF.INFO bf:live
+live-replica:45377> BF.INFO bf:fixed
+live-replica:45377> BF.INFO bf:auto
+live-replica:45377> BF.ADD bf:live replica-write
+live-replica:45377> BF.RESERVE bf:new 0.01 10
+live-replica:45377> BF.MADD bf:live rw1 rw2
+live-replica:45377> BF.INSERT bf:live ITEMS rw1
+live-replica:45377> BF.LOADCHUNK bf:chunk 1 payload
+live-replica:45377> BF.EXISTS bf:live a
+live-replica:45377> BF.MEXISTS bf:live a b
+live-replica:45377> BF.INFO bf:live
+live-replica:45377> BF.CARD bf:live
+live-replica:45377> BF.SCANDUMP bf:live 0
+live-replica:45377> BF.ADD bf:live replica-write-2
+live-replica:45377> INFO replication
+stop-live-replica: redis-cli -p 45377 SHUTDOWN NOSAVE
+stop-live-master: redis-cli -p 45376 SHUTDOWN NOSAVE
+start-fullsync-master: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/fullsync-master/redis.conf
+fullsync-master:45378> PING
+fullsync-master:45378> BF.RESERVE bf:fs:single 0.01 10
+fullsync-master:45378> BF.MADD bf:fs:single s1 s2 s3
+fullsync-master:45378> BF.RESERVE bf:fs:multi 0.01 3 EXPANSION 2
+fullsync-master:45378> BF.MADD bf:fs:multi m1 m2 m3 m4 m5 m6 m7
+fullsync-master:45378> BF.RESERVE bf:fs:fixed 0.01 2 NONSCALING
+fullsync-master:45378> BF.MADD bf:fs:fixed f1 f2
+fullsync-master:45378> BF.ADD bf:fs:ttl ttl-item
+fullsync-master:45378> PEXPIRE bf:fs:ttl 60000
+start-fullsync-replica: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/fullsync-replica/redis.conf
+fullsync-replica:45379> PING
+wait-fullsync-replica:45379> INFO replication
+fullsync-replica:45379> BF.MEXISTS bf:fs:single s1 s2 s3
+fullsync-replica:45379> BF.MEXISTS bf:fs:multi m1 m2 m3 m4 m5 m6 m7
+fullsync-replica:45379> BF.MEXISTS bf:fs:fixed f1 f2
+fullsync-replica:45379> BF.EXISTS bf:fs:ttl ttl-item
+fullsync-master-verify:45378> PTTL bf:fs:ttl
+fullsync-replica:45379> PTTL bf:fs:ttl
+fullsync-master-verify:45378> INFO replication
+fullsync-replica:45379> INFO replication
+fullsync-master-verify:45378> DBSIZE
+fullsync-replica:45379> DBSIZE
+stop-fullsync-replica: redis-cli -p 45379 SHUTDOWN NOSAVE
+stop-fullsync-master: redis-cli -p 45378 SHUTDOWN NOSAVE
+start-reconnect-master: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/reconnect-master/redis.conf
+reconnect-master:45380> PING
+start-reconnect-replica: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/reconnect-replica/redis.conf
+reconnect-replica:45381> PING
+wait-reconnect-replica:45381> INFO replication
+reconnect-master:45380> BF.RESERVE bf:reconn 0.01 4 EXPANSION 2
+reconnect-master:45380> BF.MADD bf:reconn before-1 before-2
+reconnect-master:45380> WAIT 1 5000
+reconnect-master:45380> CLIENT KILL TYPE replica
+reconnect-master:45380> BF.MADD bf:reconn during-1 during-2 during-3
+wait-reconnect-replica:45381> INFO replication
+reconnect-master:45380> WAIT 1 5000
+reconnect-replica:45381> BF.MEXISTS bf:reconn before-1 before-2 during-1 during-2 during-3
+reconnect-replica:45381> REPLICAOF NO ONE
+reconnect-master:45380> BF.MADD bf:reconn forced-1 forced-2
+reconnect-replica:45381> REPLICAOF 127.0.0.1 45380
+wait-reconnect-replica:45381> INFO replication
+wait-reconnect-replica:45381> INFO replication
+reconnect-master:45380> WAIT 1 5000
+reconnect-replica:45381> BF.MEXISTS bf:reconn before-1 before-2 during-1 during-2 during-3 forced-1 forced-2
+reconnect-replica:45381> BF.EXISTS bf:reconn forced-1
+reconnect-replica:45381> BF.ADD bf:reconn replica-write
+stop-reconnect-replica: redis-cli -p 45381 SHUTDOWN NOSAVE
+stop-reconnect-master: redis-cli -p 45380 SHUTDOWN NOSAVE
+start-loading-master: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/loading-master/redis.conf
+loading-master:45382> PING
+loading-master:45382> BF.RESERVE bf:loading:src 0.01 10
+loading-master:45382> BF.MADD bf:loading:src la lb
+loading-master:45382> BF.SCANDUMP bf:loading:src 0
+loading-master:45382> BF.LOADCHUNK bf:loading:partial 1 <bytes:73:02000000000000000100000005000000>
+loading-master:45382> BF.EXISTS bf:loading:partial la
+loading-master:45382> BF.INFO bf:loading:partial
+loading-master:45382> BF.CARD bf:loading:partial
+loading-master:45382> BF.SCANDUMP bf:loading:partial 0
+loading-master:45382> BF.ADD bf:loading:partial lc
+start-loading-replica: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/loading-replica/redis.conf
+loading-replica:45383> PING
+wait-loading-replica:45383> INFO replication
+loading-replica:45383> BF.EXISTS bf:loading:partial la
+loading-replica:45383> BF.INFO bf:loading:partial
+stop-loading-replica: redis-cli -p 45383 SHUTDOWN NOSAVE
+stop-loading-master: redis-cli -p 45382 SHUTDOWN NOSAVE

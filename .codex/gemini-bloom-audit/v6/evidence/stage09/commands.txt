@@ -1,0 +1,217 @@
+git-head: git rev-parse HEAD
+git-status: git status --short
+redis-server-version: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server --version
+redis-cli-version: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-cli --version
+start-feature-probe: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/feature-probe/redis.conf
+feature-probe:45375> PING
+feature-probe:45375> ACL DRYRUN default PING
+feature-probe:45375> COMMAND GETKEYSANDFLAGS GET x
+stop-feature-probe: redis-cli -p 45375 SHUTDOWN NOSAVE
+start-live-master: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/live-master/redis.conf
+live-master:45376> PING
+start-live-replica: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/live-replica/redis.conf
+live-replica:45377> PING
+wait-live-replica:45377> INFO replication
+live-master:45376> BF.RESERVE bf:live 0.01 4 EXPANSION 2
+live-master:45376> BF.MADD bf:live a b c d e f g h
+live-master:45376> BF.RESERVE bf:fixed 0.01 2 NONSCALING
+live-master:45376> BF.MADD bf:fixed x y z
+live-master:45376> BF.ADD bf:auto auto-1
+live-master:45376> BF.ADD bf:bin ''
+live-master:45376> BF.ADD bf:bin <bytes:3:610062>
+live-master:45376> WAIT 1 5000
+live-replica:45377> BF.MEXISTS bf:live a b c d e f g h
+live-replica:45377> BF.MEXISTS bf:fixed x y
+live-replica:45377> BF.EXISTS bf:fixed z
+live-replica:45377> BF.EXISTS bf:auto auto-1
+live-replica:45377> BF.EXISTS bf:bin ''
+live-replica:45377> BF.EXISTS bf:bin <bytes:3:610062>
+live-master:45376> BF.INFO bf:live
+live-master:45376> BF.INFO bf:fixed
+live-master:45376> BF.INFO bf:auto
+live-replica:45377> BF.INFO bf:live
+live-replica:45377> BF.INFO bf:fixed
+live-replica:45377> BF.INFO bf:auto
+live-replica:45377> BF.ADD bf:live replica-write
+live-replica:45377> BF.RESERVE bf:new 0.01 10
+live-replica:45377> BF.MADD bf:live rw1 rw2
+live-replica:45377> BF.INSERT bf:live ITEMS rw1
+live-replica:45377> BF.LOADCHUNK bf:chunk 1 payload
+live-replica:45377> BF.EXISTS bf:live a
+live-replica:45377> BF.MEXISTS bf:live a b
+live-replica:45377> BF.INFO bf:live
+live-replica:45377> BF.CARD bf:live
+live-replica:45377> BF.SCANDUMP bf:live 0
+live-replica:45377> BF.ADD bf:live replica-write-2
+live-replica:45377> INFO replication
+stop-live-replica: redis-cli -p 45377 SHUTDOWN NOSAVE
+stop-live-master: redis-cli -p 45376 SHUTDOWN NOSAVE
+start-fullsync-master: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/fullsync-master/redis.conf
+fullsync-master:45378> PING
+fullsync-master:45378> BF.RESERVE bf:fs:single 0.01 10
+fullsync-master:45378> BF.MADD bf:fs:single s1 s2 s3
+fullsync-master:45378> BF.RESERVE bf:fs:multi 0.01 3 EXPANSION 2
+fullsync-master:45378> BF.MADD bf:fs:multi m1 m2 m3 m4 m5 m6 m7
+fullsync-master:45378> BF.RESERVE bf:fs:fixed 0.01 2 NONSCALING
+fullsync-master:45378> BF.MADD bf:fs:fixed f1 f2
+fullsync-master:45378> BF.ADD bf:fs:ttl ttl-item
+fullsync-master:45378> PEXPIRE bf:fs:ttl 60000
+start-fullsync-replica: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/fullsync-replica/redis.conf
+fullsync-replica:45379> PING
+wait-fullsync-replica:45379> INFO replication
+fullsync-replica:45379> BF.MEXISTS bf:fs:single s1 s2 s3
+fullsync-replica:45379> BF.MEXISTS bf:fs:multi m1 m2 m3 m4 m5 m6 m7
+fullsync-replica:45379> BF.MEXISTS bf:fs:fixed f1 f2
+fullsync-replica:45379> BF.EXISTS bf:fs:ttl ttl-item
+fullsync-master-verify:45378> PTTL bf:fs:ttl
+fullsync-replica:45379> PTTL bf:fs:ttl
+fullsync-master-verify:45378> INFO replication
+fullsync-replica:45379> INFO replication
+fullsync-master-verify:45378> DBSIZE
+fullsync-replica:45379> DBSIZE
+stop-fullsync-replica: redis-cli -p 45379 SHUTDOWN NOSAVE
+stop-fullsync-master: redis-cli -p 45378 SHUTDOWN NOSAVE
+start-reconnect-master: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/reconnect-master/redis.conf
+reconnect-master:45380> PING
+start-reconnect-replica: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/reconnect-replica/redis.conf
+reconnect-replica:45381> PING
+wait-reconnect-replica:45381> INFO replication
+reconnect-master:45380> BF.RESERVE bf:reconn 0.01 4 EXPANSION 2
+reconnect-master:45380> BF.MADD bf:reconn before-1 before-2
+reconnect-master:45380> WAIT 1 5000
+reconnect-master:45380> CLIENT KILL TYPE replica
+reconnect-master:45380> BF.MADD bf:reconn during-1 during-2 during-3
+wait-reconnect-replica:45381> INFO replication
+reconnect-master:45380> WAIT 1 5000
+reconnect-replica:45381> BF.MEXISTS bf:reconn before-1 before-2 during-1 during-2 during-3
+reconnect-replica:45381> REPLICAOF NO ONE
+reconnect-master:45380> BF.MADD bf:reconn forced-1 forced-2
+reconnect-replica:45381> REPLICAOF 127.0.0.1 45380
+wait-reconnect-replica:45381> INFO replication
+wait-reconnect-replica:45381> INFO replication
+reconnect-master:45380> WAIT 1 5000
+reconnect-replica:45381> BF.MEXISTS bf:reconn before-1 before-2 during-1 during-2 during-3 forced-1 forced-2
+reconnect-replica:45381> BF.EXISTS bf:reconn forced-1
+reconnect-replica:45381> BF.ADD bf:reconn replica-write
+stop-reconnect-replica: redis-cli -p 45381 SHUTDOWN NOSAVE
+stop-reconnect-master: redis-cli -p 45380 SHUTDOWN NOSAVE
+start-loading-master: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/loading-master/redis.conf
+loading-master:45382> PING
+loading-master:45382> BF.RESERVE bf:loading:src 0.01 10
+loading-master:45382> BF.MADD bf:loading:src la lb
+loading-master:45382> BF.SCANDUMP bf:loading:src 0
+loading-master:45382> BF.LOADCHUNK bf:loading:partial 1 <bytes:73:02000000000000000100000005000000>
+loading-master:45382> BF.EXISTS bf:loading:partial la
+loading-master:45382> BF.INFO bf:loading:partial
+loading-master:45382> BF.CARD bf:loading:partial
+loading-master:45382> BF.SCANDUMP bf:loading:partial 0
+loading-master:45382> BF.ADD bf:loading:partial lc
+start-loading-replica: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/replica/loading-replica/redis.conf
+loading-replica:45383> PING
+wait-loading-replica:45383> INFO replication
+loading-replica:45383> BF.EXISTS bf:loading:partial la
+loading-replica:45383> BF.INFO bf:loading:partial
+stop-loading-replica: redis-cli -p 45383 SHUTDOWN NOSAVE
+stop-loading-master: redis-cli -p 45382 SHUTDOWN NOSAVE
+start-metadata: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/metadata/redis.conf
+metadata:45384> PING
+metadata:45384> COMMAND INFO BF.RESERVE BF.ADD BF.MADD BF.INSERT BF.EXISTS BF.MEXISTS BF.INFO BF.CARD BF.SCANDUMP BF.LOADCHUNK
+metadata:45384> COMMAND GETKEYS BF.RESERVE cmd:key 0.01 100
+metadata:45384> COMMAND GETKEYS BF.ADD cmd:key item
+metadata:45384> COMMAND GETKEYS BF.MADD cmd:key item1 item2
+metadata:45384> COMMAND GETKEYS BF.INSERT cmd:key CAPACITY 10 ERROR 0.01 ITEMS item1 item2
+metadata:45384> COMMAND GETKEYS BF.INSERT cmd:key NOCREATE ITEMS item1
+metadata:45384> COMMAND GETKEYS BF.EXISTS cmd:key item
+metadata:45384> COMMAND GETKEYS BF.MEXISTS cmd:key item1 item2
+metadata:45384> COMMAND GETKEYS BF.INFO cmd:key
+metadata:45384> COMMAND GETKEYS BF.INFO cmd:key ITEMS
+metadata:45384> COMMAND GETKEYS BF.CARD cmd:key
+metadata:45384> COMMAND GETKEYS BF.SCANDUMP cmd:key 0
+metadata:45384> COMMAND GETKEYS BF.LOADCHUNK cmd:key 1 payload
+metadata:45384> COMMAND GETKEYSANDFLAGS BF.ADD cmd:key item
+stop-metadata: redis-cli -p 45384 SHUTDOWN NOSAVE
+start-acl: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/acl/redis.conf
+acl:45385> PING
+acl:45385> BF.ADD bf:acl item
+acl:45385> ACL DRYRUN default BF.EXISTS bf:acl item
+acl:45385> ACL SETUSER stage09_ro on '>stage09pass' '~bf:*' -@all +BF.EXISTS +BF.MEXISTS +BF.INFO +BF.CARD +BF.SCANDUMP
+acl-ro:45385> AUTH stage09_ro stage09pass
+acl-ro:45385> BF.EXISTS bf:acl item
+acl-ro:45385> BF.MEXISTS bf:acl item
+acl-ro:45385> BF.INFO bf:acl
+acl-ro:45385> BF.CARD bf:acl
+acl-ro:45385> BF.SCANDUMP bf:acl 0
+acl-ro:45385> BF.ADD bf:acl write
+acl-ro:45385> BF.RESERVE bf:new 0.01 10
+acl-ro:45385> BF.EXISTS other:acl item
+stop-acl: redis-cli -p 45385 SHUTDOWN NOSAVE
+start-cluster-0: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/cluster/node-45386/redis.conf
+cluster-0:45386> PING
+start-cluster-1: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/cluster/node-45387/redis.conf
+cluster-1:45387> PING
+start-cluster-2: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/cluster/node-45388/redis.conf
+cluster-2:45388> PING
+start-cluster-3: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/cluster/node-45389/redis.conf
+cluster-3:45389> PING
+start-cluster-4: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/cluster/node-45390/redis.conf
+cluster-4:45390> PING
+start-cluster-5: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server /tmp/gemini-module-v6-stage09-runtime-1782907685362-18652/cluster/node-45391/redis.conf
+cluster-5:45391> PING
+cluster-create: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-cli --cluster create 127.0.0.1:45386 127.0.0.1:45387 127.0.0.1:45388 127.0.0.1:45389 127.0.0.1:45390 127.0.0.1:45391 --cluster-replicas 1 --cluster-yes
+cluster-first:45386> CLUSTER INFO
+module-list-45386:45386> MODULE LIST
+module-list-45387:45387> MODULE LIST
+module-list-45388:45388> MODULE LIST
+module-list-45389:45389> MODULE LIST
+module-list-45390:45390> MODULE LIST
+module-list-45391:45391> MODULE LIST
+cluster-first:45386> CLUSTER KEYSLOT '{gb09}:live'
+cluster-first:45386> CLUSTER SLOTS
+cluster-first:45386> CLUSTER NODES
+cluster-first:45386> CLUSTER SLOTS
+cluster-first:45386> CLUSTER NODES
+cluster-first:45386> CLUSTER SLOTS
+cluster-first:45386> CLUSTER NODES
+cluster-first:45386> CLUSTER SLOTS
+cluster-first:45386> CLUSTER NODES
+cluster-owner:45387> BF.RESERVE '{gb09}:live' 0.01 4 EXPANSION 2
+cluster-owner:45387> BF.MADD '{gb09}:live' c1 c2 c3 c4 c5
+cluster-owner:45387> WAIT 1 5000
+cluster-owner:45387> BF.MEXISTS '{gb09}:live' c1 c2 c3 c4 c5
+cluster-owner:45387> BF.INFO '{gb09}:live'
+cluster-owner:45387> BF.CARD '{gb09}:live'
+cluster-nonowner:45386> BF.RESERVE '{gb09}:new' 0.01 10
+cluster-nonowner:45386> BF.ADD '{gb09}:live' x
+cluster-nonowner:45386> BF.MADD '{gb09}:live' x y
+cluster-nonowner:45386> BF.INSERT '{gb09}:live' ITEMS x
+cluster-nonowner:45386> BF.EXISTS '{gb09}:live' c1
+cluster-nonowner:45386> BF.MEXISTS '{gb09}:live' c1 c2
+cluster-nonowner:45386> BF.INFO '{gb09}:live'
+cluster-nonowner:45386> BF.CARD '{gb09}:live'
+cluster-nonowner:45386> BF.SCANDUMP '{gb09}:live' 0
+cluster-nonowner:45386> BF.LOADCHUNK '{gb09}:live' 1 payload
+cluster-cli-redirect: /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-cli -c -p 45386 BF.EXISTS '{gb09}:live' c1
+cluster-owner:45387> BF.SCANDUMP '{gb09}:live' 0
+cluster-owner:45387> BF.SCANDUMP '{gb09}:live' 1
+cluster-owner:45387> BF.SCANDUMP '{gb09}:live' 2
+cluster-owner:45387> BF.SCANDUMP '{gb09}:live' 3
+cluster-owner:45387> BF.LOADCHUNK '{gb09}:copy' 1 <bytes:126:05000000000000000200000005000000>
+cluster-owner:45387> BF.LOADCHUNK '{gb09}:copy' 2 <bytes:128:00080000804002000001802001000000>
+cluster-owner:45387> BF.LOADCHUNK '{gb09}:copy' 3 <bytes:128:00000000000000000000000000000000>
+cluster-owner:45387> BF.EXISTS '{gb09}:copy' c1
+cluster-replica:45390> BF.EXISTS '{gb09}:live' c1
+cluster-replica:45390> READONLY
+cluster-replica:45390> BF.EXISTS '{gb09}:live' c1
+cluster-replica:45390> BF.INFO '{gb09}:live'
+cluster-replica:45390> BF.CARD '{gb09}:live'
+cluster-replica:45390> BF.SCANDUMP '{gb09}:live' 0
+cluster-replica:45390> BF.ADD '{gb09}:live' replica-write
+stop-cluster-0: redis-cli -p 45386 SHUTDOWN NOSAVE
+stop-cluster-1: redis-cli -p 45387 SHUTDOWN NOSAVE
+stop-cluster-2: redis-cli -p 45388 SHUTDOWN NOSAVE
+stop-cluster-3: redis-cli -p 45389 SHUTDOWN NOSAVE
+stop-cluster-4: redis-cli -p 45390 SHUTDOWN NOSAVE
+stop-cluster-5: redis-cli -p 45391 SHUTDOWN NOSAVE
+BUILD configure: cmake -S . -B /tmp/gemini-module-v6-stage09-build-workaround -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-include climits"
+BUILD redis_bloom: cmake --build /tmp/gemini-module-v6-stage09-build-workaround -j2 --target redis_bloom
+RUNTIME: python3 .codex/gemini-bloom-audit/v6/evidence/stage09/stage09_runtime_ops.py --repo /workspace/projects/VibeCoding/gemini-module --root .codex/gemini-bloom-audit/v6/evidence/stage09 --redis-server /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server --redis-cli /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-cli --module /tmp/gemini-module-v6-stage09-build-workaround/redis_bloom.so

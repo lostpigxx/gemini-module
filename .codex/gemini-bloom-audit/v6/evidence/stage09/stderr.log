@@ -1,0 +1,120 @@
+## git-head
+
+
+## git-status
+
+
+## redis-server-version
+
+
+## redis-cli-version
+
+
+## start-feature-probe
+
+
+## stop-feature-probe
+
+
+## start-live-master
+
+
+## start-live-replica
+
+
+## stop-live-replica
+
+
+## stop-live-master
+
+
+## start-fullsync-master
+
+
+## start-fullsync-replica
+
+
+## stop-fullsync-replica
+
+
+## stop-fullsync-master
+
+
+## start-reconnect-master
+
+
+## start-reconnect-replica
+
+
+## stop-reconnect-replica
+
+
+## stop-reconnect-master
+
+
+## start-loading-master
+
+
+## start-loading-replica
+
+
+## stop-loading-replica
+
+
+## stop-loading-master
+
+
+## start-metadata
+
+
+## stop-metadata
+
+
+## start-acl
+
+
+## stop-acl
+
+
+## start-cluster-0
+
+
+## start-cluster-1
+
+
+## start-cluster-2
+
+
+## start-cluster-3
+
+
+## start-cluster-4
+
+
+## start-cluster-5
+
+
+## cluster-create
+
+
+## cluster-cli-redirect
+
+
+## stop-cluster-0
+
+
+## stop-cluster-1
+
+
+## stop-cluster-2
+
+
+## stop-cluster-3
+
+
+## stop-cluster-4
+
+
+## stop-cluster-5
+
+

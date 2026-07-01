@@ -1,0 +1,38 @@
+{
+  "reserve": [
+    "cmd:key"
+  ],
+  "add": [
+    "cmd:key"
+  ],
+  "madd": [
+    "cmd:key"
+  ],
+  "insert_capacity": [
+    "cmd:key"
+  ],
+  "insert_nocreate": [
+    "cmd:key"
+  ],
+  "exists": [
+    "cmd:key"
+  ],
+  "mexists": [
+    "cmd:key"
+  ],
+  "info": [
+    "cmd:key"
+  ],
+  "info_field": [
+    "cmd:key"
+  ],
+  "card": [
+    "cmd:key"
+  ],
+  "scandump": [
+    "cmd:key"
+  ],
+  "loadchunk": [
+    "cmd:key"
+  ]
+}

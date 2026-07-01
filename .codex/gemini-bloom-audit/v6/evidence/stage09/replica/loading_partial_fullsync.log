@@ -1,0 +1,36 @@
+{
+  "status": "FAIL_CARRY_FORWARD_GBV6-07-002",
+  "load_header_reply": "OK",
+  "primary_loading_protection": {
+    "exists": {
+      "error": "ERR filter is being loaded"
+    },
+    "info": {
+      "error": "ERR filter is being loaded"
+    },
+    "card": {
+      "error": "ERR filter is being loaded"
+    },
+    "scandump": {
+      "error": "ERR filter is being loaded"
+    },
+    "add": {
+      "error": "ERR filter is being loaded"
+    }
+  },
+  "replica_exists_la": 0,
+  "replica_info": [
+    "Capacity",
+    10,
+    "Size",
+    232,
+    "Number of filters",
+    1,
+    "Number of items inserted",
+    2,
+    "Expansion rate",
+    2
+  ],
+  "readable_completed_with_false_negative": true,
+  "classification": "Operational fullsync manifestation of GBV6-07-002"
+}

@@ -1,0 +1,30 @@
+18725:C 01 Jul 2026 20:08:06.670 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+18725:C 01 Jul 2026 20:08:06.671 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=18725, just started
+18725:C 01 Jul 2026 20:08:06.671 # Configuration loaded
+18725:M 01 Jul 2026 20:08:06.672 * monotonic clock: POSIX clock_gettime
+18725:M 01 Jul 2026 20:08:06.676 * Running mode=standalone, port=45380.
+18725:M 01 Jul 2026 20:08:06.676 # Server initialized
+18725:M 01 Jul 2026 20:08:06.678 * <GeminiBloom> GeminiBloom module loaded
+18725:M 01 Jul 2026 20:08:06.678 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage09-build-workaround/redis_bloom.so
+18725:M 01 Jul 2026 20:08:06.680 * Ready to accept connections
+18725:M 01 Jul 2026 20:08:06.812 * Replica 127.0.0.1:45381 asks for synchronization
+18725:M 01 Jul 2026 20:08:06.812 * Full resync requested by replica 127.0.0.1:45381
+18725:M 01 Jul 2026 20:08:06.812 * Replication backlog created, my new replication IDs are '4fa48e95c94cf9b92ccd531cd50644c95a277508' and '0000000000000000000000000000000000000000'
+18725:M 01 Jul 2026 20:08:06.812 * Starting BGSAVE for SYNC with target: disk
+18725:M 01 Jul 2026 20:08:06.812 * Background saving started by pid 18734
+18734:C 01 Jul 2026 20:08:06.814 * DB saved on disk
+18734:C 01 Jul 2026 20:08:06.814 * RDB: 0 MB of memory used by copy-on-write
+18725:M 01 Jul 2026 20:08:06.893 * Background saving terminated with success
+18725:M 01 Jul 2026 20:08:06.893 * Synchronization with replica 127.0.0.1:45381 succeeded
+18725:M 01 Jul 2026 20:08:06.906 # Connection with replica 127.0.0.1:45381 lost.
+18725:M 01 Jul 2026 20:08:06.906 * Replica 127.0.0.1:45381 asks for synchronization
+18725:M 01 Jul 2026 20:08:06.906 * Partial resynchronization request from 127.0.0.1:45381 accepted. Sending 74 bytes of backlog starting from offset 196.
+18725:M 01 Jul 2026 20:08:07.917 # Connection with replica 127.0.0.1:45381 lost.
+18725:M 01 Jul 2026 20:08:08.427 * Replica 127.0.0.1:45381 asks for synchronization
+18725:M 01 Jul 2026 20:08:08.427 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'dfbb1ea8ce9b9411da1cdb4c34434074e6a53edb', my replication IDs are '4fa48e95c94cf9b92ccd531cd50644c95a277508' and '0000000000000000000000000000000000000000')
+18725:M 01 Jul 2026 20:08:08.427 * Starting BGSAVE for SYNC with target: disk
+18725:M 01 Jul 2026 20:08:08.428 * Background saving started by pid 18735
+18735:C 01 Jul 2026 20:08:08.436 * DB saved on disk
+18735:C 01 Jul 2026 20:08:08.436 * RDB: 1 MB of memory used by copy-on-write
+18725:M 01 Jul 2026 20:08:08.462 * Background saving terminated with success
+18725:M 01 Jul 2026 20:08:08.463 * Synchronization with replica 127.0.0.1:45381 succeeded

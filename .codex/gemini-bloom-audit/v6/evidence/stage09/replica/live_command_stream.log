@@ -1,0 +1,242 @@
+{
+  "status": "PASS",
+  "checks": {
+    "live_members": true,
+    "fixed_members": true,
+    "fixed_rejected_z": true,
+    "auto_member": true,
+    "empty_item": true,
+    "nul_item": true,
+    "writes_rejected": true,
+    "readonly_success": true,
+    "info_fields_match": true
+  },
+  "live_log": [
+    {
+      "cmd": [
+        "BF.RESERVE",
+        "bf:live",
+        "0.01",
+        "4",
+        "EXPANSION",
+        "2"
+      ],
+      "reply": "OK"
+    },
+    {
+      "cmd": [
+        "BF.MADD",
+        "bf:live",
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h"
+      ],
+      "reply": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "cmd": [
+        "BF.RESERVE",
+        "bf:fixed",
+        "0.01",
+        "2",
+        "NONSCALING"
+      ],
+      "reply": "OK"
+    },
+    {
+      "cmd": [
+        "BF.MADD",
+        "bf:fixed",
+        "x",
+        "y",
+        "z"
+      ],
+      "reply": [
+        1,
+        1,
+        {
+          "error": "ERR non scaling filter is full"
+        }
+      ]
+    },
+    {
+      "cmd": [
+        "BF.ADD",
+        "bf:auto",
+        "auto-1"
+      ],
+      "reply": 1
+    },
+    {
+      "cmd": [
+        "BF.ADD",
+        "bf:bin",
+        ""
+      ],
+      "reply": 1
+    },
+    {
+      "cmd": [
+        "BF.ADD",
+        "bf:bin",
+        "a\\x00b"
+      ],
+      "reply": 1
+    },
+    {
+      "cmd": [
+        "WAIT",
+        1,
+        5000
+      ],
+      "reply": 1
+    }
+  ],
+  "primary_info": {
+    "bf:live": {
+      "Capacity": 12,
+      "Size": 552,
+      "Number of filters": 2,
+      "Number of items inserted": 8,
+      "Expansion rate": 2
+    },
+    "bf:fixed": {
+      "Capacity": 2,
+      "Size": 424,
+      "Number of filters": 1,
+      "Number of items inserted": 2,
+      "Expansion rate": null
+    },
+    "bf:auto": {
+      "Capacity": 100,
+      "Size": 440,
+      "Number of filters": 1,
+      "Number of items inserted": 1,
+      "Expansion rate": 2
+    }
+  },
+  "replica_info": {
+    "bf:live": {
+      "Capacity": 12,
+      "Size": 552,
+      "Number of filters": 2,
+      "Number of items inserted": 8,
+      "Expansion rate": 2
+    },
+    "bf:fixed": {
+      "Capacity": 2,
+      "Size": 424,
+      "Number of filters": 1,
+      "Number of items inserted": 2,
+      "Expansion rate": null
+    },
+    "bf:auto": {
+      "Capacity": 100,
+      "Size": 440,
+      "Number of filters": 1,
+      "Number of items inserted": 1,
+      "Expansion rate": 2
+    }
+  },
+  "info_checks": {
+    "bf:live": {
+      "Capacity": true,
+      "Number of filters": true,
+      "Number of items inserted": true,
+      "Expansion rate": true
+    },
+    "bf:fixed": {
+      "Capacity": true,
+      "Number of filters": true,
+      "Number of items inserted": true,
+      "Expansion rate": true
+    },
+    "bf:auto": {
+      "Capacity": true,
+      "Number of filters": true,
+      "Number of items inserted": true,
+      "Expansion rate": true
+    }
+  },
+  "write_rejections": {
+    "add": {
+      "error": "READONLY You can't write against a read only replica."
+    },
+    "reserve": {
+      "error": "READONLY You can't write against a read only replica."
+    },
+    "madd": {
+      "error": "READONLY You can't write against a read only replica."
+    },
+    "insert": {
+      "error": "READONLY You can't write against a read only replica."
+    },
+    "loadchunk": {
+      "error": "READONLY You can't write against a read only replica."
+    }
+  },
+  "readonly": {
+    "exists": 1,
+    "mexists": [
+      1,
+      1
+    ],
+    "info": [
+      "Capacity",
+      12,
+      "Size",
+      552,
+      "Number of filters",
+      2,
+      "Number of items inserted",
+      8,
+      "Expansion rate",
+      2
+    ],
+    "card": 8,
+    "scandump": [
+      1,
+      {
+        "bytes_hex": "08000000000000000200000005000000020000008000000000000000000400000000000004000000000000007b14ae47e17a743fe4862fb2350e2640080000000400000000000000008000000000000000000400000000000004000000000000007b14ae47e17a643f44f7d49edef0284009000000080000000000000000",
+        "len": 126
+      }
+    ]
+  },
+  "replica_info_raw": {
+    "role": "slave",
+    "master_host": "127.0.0.1",
+    "master_port": "45376",
+    "master_link_status": "up",
+    "master_last_io_seconds_ago": "1",
+    "master_sync_in_progress": "0",
+    "slave_read_repl_offset": "453",
+    "slave_repl_offset": "453",
+    "slave_priority": "100",
+    "slave_read_only": "1",
+    "replica_announced": "1",
+    "connected_slaves": "0",
+    "master_failover_state": "no-failover",
+    "master_replid": "f6d9a8e93089bdda27c83e882334beb62ca1bb88",
+    "master_replid2": "0000000000000000000000000000000000000000",
+    "master_repl_offset": "453",
+    "second_repl_offset": "-1",
+    "repl_backlog_active": "1",
+    "repl_backlog_size": "1048576",
+    "repl_backlog_first_byte_offset": "1",
+    "repl_backlog_histlen": "453"
+  }
+}
