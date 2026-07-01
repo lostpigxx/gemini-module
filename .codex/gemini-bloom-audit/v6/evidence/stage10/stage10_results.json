@@ -1,0 +1,3330 @@
+{
+  "memory_scenarios": {
+    "MEM-01": {
+      "bf_info": {
+        "Capacity": 100,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 0,
+        "Size": 440
+      },
+      "info_memory": {
+        "mem_fragmentation_ratio": "2.07",
+        "used_memory": "5551128",
+        "used_memory_rss": "9465856"
+      },
+      "key": "mem_empty100",
+      "memory_usage": 488,
+      "notes": "empty reserved capacity 100 filter",
+      "os_rss_kb": 9384
+    },
+    "MEM-02": {
+      "bf_info": {
+        "Capacity": 100,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 50,
+        "Size": 440
+      },
+      "info_memory": {
+        "mem_fragmentation_ratio": "2.07",
+        "used_memory": "5551128",
+        "used_memory_rss": "9465856"
+      },
+      "key": "mem_empty100",
+      "memory_usage": 488,
+      "notes": "same filter after inserts below capacity",
+      "os_rss_kb": 9384
+    },
+    "MEM-03": {
+      "bf_info": {
+        "Capacity": 70,
+        "Expansion rate": 2,
+        "Number of filters": 3,
+        "Number of items inserted": 40,
+        "Size": 680
+      },
+      "info_memory": {
+        "mem_fragmentation_ratio": "2.07",
+        "used_memory": "5551936",
+        "used_memory_rss": "9465856"
+      },
+      "key": "mem_exp2_growth",
+      "memory_usage": 728,
+      "notes": "multi-layer growth capacity 10 expansion 2",
+      "os_rss_kb": 9384
+    },
+    "MEM-04": {
+      "bf_info": {
+        "Capacity": 80,
+        "Expansion rate": 1,
+        "Number of filters": 8,
+        "Number of items inserted": 80,
+        "Size": 1576
+      },
+      "info_memory": {
+        "mem_fragmentation_ratio": "2.07",
+        "used_memory": "5553680",
+        "used_memory_rss": "9465856"
+      },
+      "key": "mem_exp1_many",
+      "memory_usage": 1624,
+      "notes": "expansion 1 many-layer case",
+      "os_rss_kb": 9384
+    },
+    "MEM-05-10000": {
+      "bf_info": {
+        "Capacity": 10000,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 100,
+        "Size": 14088
+      },
+      "info_memory": {
+        "mem_fragmentation_ratio": "1.73",
+        "used_memory": "5567880",
+        "used_memory_rss": "9609216"
+      },
+      "key": "mem_cap_10000",
+      "memory_usage": 14136,
+      "notes": "capacity 10000 memory accounting",
+      "os_rss_kb": 9384
+    },
+    "MEM-05-100000": {
+      "bf_info": {
+        "Capacity": 100000,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 100,
+        "Size": 138144
+      },
+      "info_memory": {
+        "mem_fragmentation_ratio": "1.73",
+        "used_memory": "5706128",
+        "used_memory_rss": "9609216"
+      },
+      "key": "mem_cap_100000",
+      "memory_usage": 138192,
+      "notes": "capacity 100000 memory accounting",
+      "os_rss_kb": 9512
+    },
+    "MEM-06": {
+      "bf_info": {
+        "Capacity": 1073741824,
+        "Expansion rate": null,
+        "Number of filters": 1,
+        "Number of items inserted": 0,
+        "Size": 2807928
+      },
+      "info_memory": {
+        "mem_fragmentation_ratio": "1.73",
+        "used_memory": "5706128",
+        "used_memory_rss": "9609216"
+      },
+      "key": "rl_cap_max_safe",
+      "memory_usage": 2807976,
+      "notes": "capacity 2^30 high-error NONSCALING boundary",
+      "os_rss_kb": 9512
+    }
+  },
+  "module": "/tmp/gemini-module-v6-stage10-build-workaround/redis_bloom.so",
+  "persistence": {
+    "aof_related_sizes": {
+      "appendonly.aof": 72473
+    },
+    "bgrewriteaof_reply": "Background append only file rewriting started",
+    "config_set_aof_preamble": "OK",
+    "config_set_appendonly": "OK",
+    "file_sizes": {
+      "appendonly.aof": 72473,
+      "dump.rdb": 72473
+    },
+    "rdb_size": 72473,
+    "restart_checks": {
+      "pa_cap_100_card": 100,
+      "pa_large_10kb_exists": 1,
+      "pa_large_1mb_exists": 1
+    },
+    "save_reply": "OK",
+    "wait_persistence_info": {
+      "aof_base_size": "72473",
+      "aof_buffer_length": "0",
+      "aof_current_rewrite_time_sec": "-1",
+      "aof_current_size": "72473",
+      "aof_delayed_fsync": "0",
+      "aof_enabled": "1",
+      "aof_last_bgrewrite_status": "ok",
+      "aof_last_cow_size": "1204224",
+      "aof_last_rewrite_time_sec": "0",
+      "aof_last_write_status": "ok",
+      "aof_pending_bio_fsync": "0",
+      "aof_pending_rewrite": "0",
+      "aof_rewrite_buffer_length": "0",
+      "aof_rewrite_in_progress": "0",
+      "aof_rewrite_scheduled": "0",
+      "current_cow_size": "0",
+      "current_cow_size_age": "0",
+      "current_fork_perc": "0.00",
+      "current_save_keys_processed": "0",
+      "current_save_keys_total": "0",
+      "loading": "0",
+      "module_fork_in_progress": "0",
+      "module_fork_last_cow_size": "0",
+      "rdb_bgsave_in_progress": "0",
+      "rdb_changes_since_last_save": "0",
+      "rdb_current_bgsave_time_sec": "-1",
+      "rdb_last_bgsave_status": "ok",
+      "rdb_last_bgsave_time_sec": "-1",
+      "rdb_last_cow_size": "0",
+      "rdb_last_save_time": "1782908993"
+    }
+  },
+  "redis_data_dir": "/tmp/redis-e1pcaana",
+  "resource_details": {
+    "rl_cap_10": {
+      "bf_info": {
+        "Capacity": 10,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 0,
+        "Size": 424
+      },
+      "memory_usage": 472
+    },
+    "rl_cap_100": {
+      "bf_info": {
+        "Capacity": 100,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 0,
+        "Size": 440
+      },
+      "memory_usage": 488
+    },
+    "rl_cap_10000": {
+      "bf_info": {
+        "Capacity": 10000,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 0,
+        "Size": 14088
+      },
+      "memory_usage": 14136
+    },
+    "rl_cap_100000": {
+      "bf_info": {
+        "Capacity": 100000,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 0,
+        "Size": 138144
+      },
+      "memory_usage": 138192
+    },
+    "rl_cap_max_safe": {
+      "bf_info": {
+        "Capacity": 1073741824,
+        "Expansion rate": null,
+        "Number of filters": 1,
+        "Number of items inserted": 0,
+        "Size": 2807928
+      },
+      "memory_usage": 2807976
+    },
+    "rl_exp_1": {
+      "Capacity": 10,
+      "Expansion rate": 1,
+      "Number of filters": 1,
+      "Number of items inserted": 0,
+      "Size": 424
+    },
+    "rl_exp_2": {
+      "Capacity": 10,
+      "Expansion rate": 2,
+      "Number of filters": 1,
+      "Number of items inserted": 0,
+      "Size": 424
+    },
+    "rl_exp_32768": {
+      "Capacity": 10,
+      "Expansion rate": 32768,
+      "Number of filters": 1,
+      "Number of items inserted": 0,
+      "Size": 424
+    },
+    "rl_exp_4": {
+      "Capacity": 10,
+      "Expansion rate": 4,
+      "Number of filters": 1,
+      "Number of items inserted": 0,
+      "Size": 424
+    },
+    "rl_exp_zero_insert": {
+      "Capacity": 100,
+      "Expansion rate": null,
+      "Number of filters": 1,
+      "Number of items inserted": 1,
+      "Size": 424
+    },
+    "rl_exp_zero_reserve": {
+      "Capacity": 10,
+      "Expansion rate": null,
+      "Number of filters": 1,
+      "Number of items inserted": 0,
+      "Size": 424
+    },
+    "rl_nonscaling_full": {
+      "bf_info": {
+        "Capacity": 10,
+        "Expansion rate": null,
+        "Number of filters": 1,
+        "Number of items inserted": 10,
+        "Size": 424
+      },
+      "card": 10,
+      "insert_reply": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        {
+          "redis_error": "ERR non scaling filter is full"
+        }
+      ],
+      "item11_exists": 0,
+      "madd_reply": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        {
+          "redis_error": "ERR non scaling filter is full"
+        }
+      ]
+    }
+  },
+  "scandump": {
+    "SLC-01": {
+      "capacity": 100,
+      "chunks": [
+        {
+          "cursor_arg": 0,
+          "data_len": 73,
+          "elapsed_ms": 0.132,
+          "next_cursor": 1
+        },
+        {
+          "cursor_arg": 1,
+          "data_len": 144,
+          "elapsed_ms": 0.052,
+          "next_cursor": 2
+        },
+        {
+          "cursor_arg": 2,
+          "data_len": 0,
+          "elapsed_ms": 0.059,
+          "next_cursor": 0
+        }
+      ],
+      "copy_info": {
+        "Capacity": 100,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 10,
+        "Size": 248
+      },
+      "copy_key": "slc_single_copy",
+      "copy_sample_exists": {
+        "slc_single-item-0": 1,
+        "slc_single-item-1": 1,
+        "slc_single-item-2": 1,
+        "slc_single-item-3": 1,
+        "slc_single-item-4": 1
+      },
+      "expansion": 2,
+      "inserted_attempts": 10,
+      "inserted_recorded": 10,
+      "key": "slc_single",
+      "source_info": {
+        "Capacity": 100,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 10,
+        "Size": 440
+      }
+    },
+    "SLC-02": {
+      "capacity": 10,
+      "chunks": [
+        {
+          "cursor_arg": 0,
+          "data_len": 179,
+          "elapsed_ms": 0.049,
+          "next_cursor": 1
+        },
+        {
+          "cursor_arg": 1,
+          "data_len": 128,
+          "elapsed_ms": 0.048,
+          "next_cursor": 2
+        },
+        {
+          "cursor_arg": 2,
+          "data_len": 128,
+          "elapsed_ms": 0.048,
+          "next_cursor": 3
+        },
+        {
+          "cursor_arg": 3,
+          "data_len": 128,
+          "elapsed_ms": 0.051,
+          "next_cursor": 4
+        },
+        {
+          "cursor_arg": 4,
+          "data_len": 0,
+          "elapsed_ms": 0.044,
+          "next_cursor": 0
+        }
+      ],
+      "copy_info": {
+        "Capacity": 70,
+        "Expansion rate": 2,
+        "Number of filters": 3,
+        "Number of items inserted": 40,
+        "Size": 616
+      },
+      "copy_key": "slc_multi_exp2_copy",
+      "copy_sample_exists": {
+        "slc_multi_exp2-item-0": 1,
+        "slc_multi_exp2-item-1": 1,
+        "slc_multi_exp2-item-2": 1,
+        "slc_multi_exp2-item-3": 1,
+        "slc_multi_exp2-item-4": 1
+      },
+      "expansion": 2,
+      "inserted_attempts": 40,
+      "inserted_recorded": 40,
+      "key": "slc_multi_exp2",
+      "source_info": {
+        "Capacity": 70,
+        "Expansion rate": 2,
+        "Number of filters": 3,
+        "Number of items inserted": 40,
+        "Size": 680
+      }
+    },
+    "SLC-03": {
+      "capacity": 10,
+      "chunks": [
+        {
+          "cursor_arg": 0,
+          "data_len": 444,
+          "elapsed_ms": 0.051,
+          "next_cursor": 1
+        },
+        {
+          "cursor_arg": 1,
+          "data_len": 128,
+          "elapsed_ms": 0.051,
+          "next_cursor": 2
+        },
+        {
+          "cursor_arg": 2,
+          "data_len": 128,
+          "elapsed_ms": 0.049,
+          "next_cursor": 3
+        },
+        {
+          "cursor_arg": 3,
+          "data_len": 128,
+          "elapsed_ms": 0.047,
+          "next_cursor": 4
+        },
+        {
+          "cursor_arg": 4,
+          "data_len": 128,
+          "elapsed_ms": 0.048,
+          "next_cursor": 5
+        },
+        {
+          "cursor_arg": 5,
+          "data_len": 128,
+          "elapsed_ms": 0.046,
+          "next_cursor": 6
+        },
+        {
+          "cursor_arg": 6,
+          "data_len": 128,
+          "elapsed_ms": 0.048,
+          "next_cursor": 7
+        },
+        {
+          "cursor_arg": 7,
+          "data_len": 128,
+          "elapsed_ms": 0.048,
+          "next_cursor": 8
+        },
+        {
+          "cursor_arg": 8,
+          "data_len": 128,
+          "elapsed_ms": 0.064,
+          "next_cursor": 9
+        },
+        {
+          "cursor_arg": 9,
+          "data_len": 0,
+          "elapsed_ms": 0.045,
+          "next_cursor": 0
+        }
+      ],
+      "copy_info": {
+        "Capacity": 80,
+        "Expansion rate": 1,
+        "Number of filters": 8,
+        "Number of items inserted": 80,
+        "Size": 1576
+      },
+      "copy_key": "slc_many_exp1_copy",
+      "copy_sample_exists": {
+        "slc_many_exp1-item-0": 1,
+        "slc_many_exp1-item-1": 1,
+        "slc_many_exp1-item-2": 1,
+        "slc_many_exp1-item-3": 1,
+        "slc_many_exp1-item-4": 1
+      },
+      "expansion": 1,
+      "inserted_attempts": 80,
+      "inserted_recorded": 80,
+      "key": "slc_many_exp1",
+      "source_info": {
+        "Capacity": 80,
+        "Expansion rate": 1,
+        "Number of filters": 8,
+        "Number of items inserted": 80,
+        "Size": 1576
+      }
+    },
+    "SLC-04": {
+      "capacity": 100000,
+      "chunks": [
+        {
+          "cursor_arg": 0,
+          "data_len": 73,
+          "elapsed_ms": 0.05,
+          "next_cursor": 1
+        },
+        {
+          "cursor_arg": 1,
+          "data_len": 137848,
+          "elapsed_ms": 0.285,
+          "next_cursor": 2
+        },
+        {
+          "cursor_arg": 2,
+          "data_len": 0,
+          "elapsed_ms": 0.044,
+          "next_cursor": 0
+        }
+      ],
+      "copy_info": {
+        "Capacity": 100000,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 100,
+        "Size": 137952
+      },
+      "copy_key": "slc_large_layer_copy",
+      "copy_sample_exists": {
+        "slc_large_layer-item-0": 1,
+        "slc_large_layer-item-1": 1,
+        "slc_large_layer-item-2": 1,
+        "slc_large_layer-item-3": 1,
+        "slc_large_layer-item-4": 1
+      },
+      "expansion": 2,
+      "inserted_attempts": 100,
+      "inserted_recorded": 100,
+      "key": "slc_large_layer",
+      "source_info": {
+        "Capacity": 100000,
+        "Expansion rate": 2,
+        "Number of filters": 1,
+        "Number of items inserted": 100,
+        "Size": 138144
+      }
+    }
+  },
+  "statuses": [
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-01",
+      "notes": "capacity 0 must reject before allocation",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-02a",
+      "notes": "minimum capacity accepted",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-02b",
+      "notes": "minimum capacity add",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-02c",
+      "notes": "minimum capacity exists",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-03-10",
+      "notes": "capacity 10 accepted",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-03-100",
+      "notes": "capacity 100 accepted",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-03-10000",
+      "notes": "capacity 10000 accepted",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-03-100000",
+      "notes": "capacity 100000 accepted",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-04",
+      "notes": "capacity 2^30 high-error NONSCALING safety probe",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-05",
+      "notes": "capacity above DESIGN max must reject before allocation",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-06-1",
+      "notes": "expansion 1 accepted",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-06-2",
+      "notes": "expansion 2 accepted",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-06-4",
+      "notes": "expansion 4 accepted",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-06-32768",
+      "notes": "expansion 32768 accepted",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-07",
+      "notes": "expansion above DESIGN max must reject",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-08a",
+      "notes": "EXPANSION 0 maps to non-scaling in BF.RESERVE",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-08b",
+      "notes": "EXPANSION 0 maps to non-scaling in BF.INSERT",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-09",
+      "notes": "tiny error with max capacity should hit per-layer cap without allocation",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-10",
+      "notes": "bitsPerEntry > 1000 should reject gracefully",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-11a",
+      "notes": "prepare fixed-size filter",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-11b",
+      "notes": "MADD should truncate at first full error",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-11c",
+      "notes": "cardinality must stay at capacity",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-11d",
+      "notes": "later item after full error should not be processed",
+      "status": "PASS"
+    },
+    {
+      "area": "resource_limits",
+      "evidence": "resource_limits.log",
+      "id": "RL-11e",
+      "notes": "BF.INSERT fixed filter should truncate at first full error",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-01",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-02",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-03",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-04",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "latency_samples",
+      "evidence": "latency_samples.csv",
+      "id": "LAT-05",
+      "notes": "bounded latency audit sample recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "memory_usage",
+      "evidence": "memory_usage.md",
+      "id": "MEM-01",
+      "notes": "empty reserved capacity 100 filter",
+      "status": "PASS"
+    },
+    {
+      "area": "memory_usage",
+      "evidence": "memory_usage.md",
+      "id": "MEM-02",
+      "notes": "same filter after inserts below capacity",
+      "status": "PASS"
+    },
+    {
+      "area": "memory_usage",
+      "evidence": "memory_usage.md",
+      "id": "MEM-03",
+      "notes": "multi-layer growth capacity 10 expansion 2",
+      "status": "PASS"
+    },
+    {
+      "area": "memory_usage",
+      "evidence": "memory_usage.md",
+      "id": "MEM-04",
+      "notes": "expansion 1 many-layer case",
+      "status": "PASS"
+    },
+    {
+      "area": "memory_usage",
+      "evidence": "memory_usage.md",
+      "id": "MEM-05-10000",
+      "notes": "capacity 10000 memory accounting",
+      "status": "PASS"
+    },
+    {
+      "area": "memory_usage",
+      "evidence": "memory_usage.md",
+      "id": "MEM-05-100000",
+      "notes": "capacity 100000 memory accounting",
+      "status": "PASS"
+    },
+    {
+      "area": "memory_usage",
+      "evidence": "memory_usage.md",
+      "id": "MEM-06",
+      "notes": "capacity 2^30 high-error NONSCALING boundary",
+      "status": "PASS"
+    },
+    {
+      "area": "scandump_loadchunk",
+      "evidence": "scandump_loadchunk.md",
+      "id": "SLC-01",
+      "notes": "private cursor sequence and ordered same-module replay",
+      "status": "PASS"
+    },
+    {
+      "area": "scandump_loadchunk",
+      "evidence": "scandump_loadchunk.md",
+      "id": "SLC-02",
+      "notes": "private cursor sequence and ordered same-module replay",
+      "status": "PASS"
+    },
+    {
+      "area": "scandump_loadchunk",
+      "evidence": "scandump_loadchunk.md",
+      "id": "SLC-03",
+      "notes": "private cursor sequence and ordered same-module replay",
+      "status": "PASS"
+    },
+    {
+      "area": "scandump_loadchunk",
+      "evidence": "scandump_loadchunk.md",
+      "id": "SLC-04",
+      "notes": "private cursor sequence and ordered same-module replay",
+      "status": "PASS"
+    },
+    {
+      "area": "persistence_size",
+      "evidence": "persistence_size.md",
+      "id": "PA-01",
+      "notes": "RDB size after moderate filters and large item hashing",
+      "status": "PASS"
+    },
+    {
+      "area": "persistence_size",
+      "evidence": "persistence_size.md",
+      "id": "PA-02",
+      "notes": "AOF RDB-preamble size recorded",
+      "status": "PASS"
+    },
+    {
+      "area": "persistence_size",
+      "evidence": "persistence_size.md",
+      "id": "PA-02-RESTART",
+      "notes": "same-module AOF RDB-preamble restart sanity check",
+      "status": "PASS"
+    },
+    {
+      "area": "persistence_size",
+      "evidence": "blocked_or_not_verified.md",
+      "id": "PA-03",
+      "notes": "command-AOF aof-use-rdb-preamble no not rerun in Stage 10",
+      "status": "NOT_VERIFIED"
+    },
+    {
+      "area": "persistence_size",
+      "evidence": "persistence_size.md",
+      "id": "PA-04",
+      "notes": "RDB/AOF preamble stores bit arrays, not raw 1MB item payloads",
+      "status": "PASS"
+    }
+  ]
+}

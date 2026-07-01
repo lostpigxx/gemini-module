@@ -1,0 +1,2813 @@
+SUBPROCESS cmake -S /workspace/projects/VibeCoding/gemini-module -B /tmp/gemini-module-v6-stage10-build-workaround -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS=-include climits
+SUBPROCESS cmake --build /tmp/gemini-module-v6-stage10-build-workaround -j2 --target redis_bloom
+SUBPROCESS /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server --bind 127.0.0.1 --port 56755 --protected-mode no --daemonize no --loglevel notice --dir /tmp/redis-e1pcaana --dbfilename dump.rdb --loadmodule /tmp/gemini-module-v6-stage10-build-workaround/redis_bloom.so
+REDIS PING
+REDIS FLUSHALL
+REDIS INFO memory
+REDIS BF.RESERVE rl_cap_zero 0.01 0
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.RESERVE rl_cap_min 0.01 1
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.ADD rl_cap_min one
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.EXISTS rl_cap_min one
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.RESERVE rl_cap_10 0.01 10
+REDIS INFO memory
+REDIS BF.INFO rl_cap_10
+REDIS MEMORY USAGE rl_cap_10
+REDIS INFO memory
+REDIS BF.RESERVE rl_cap_100 0.01 100
+REDIS INFO memory
+REDIS BF.INFO rl_cap_100
+REDIS MEMORY USAGE rl_cap_100
+REDIS INFO memory
+REDIS BF.RESERVE rl_cap_10000 0.01 10000
+REDIS INFO memory
+REDIS BF.INFO rl_cap_10000
+REDIS MEMORY USAGE rl_cap_10000
+REDIS INFO memory
+REDIS BF.RESERVE rl_cap_100000 0.01 100000
+REDIS INFO memory
+REDIS BF.INFO rl_cap_100000
+REDIS MEMORY USAGE rl_cap_100000
+REDIS INFO memory
+REDIS BF.RESERVE rl_cap_max_safe 0.99 1073741824 NONSCALING
+REDIS INFO memory
+REDIS BF.INFO rl_cap_max_safe
+REDIS MEMORY USAGE rl_cap_max_safe
+REDIS INFO memory
+REDIS BF.RESERVE rl_cap_too_big 0.01 1073741825
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.RESERVE rl_exp_1 0.01 10 EXPANSION 1
+REDIS INFO memory
+REDIS BF.INFO rl_exp_1
+REDIS INFO memory
+REDIS BF.RESERVE rl_exp_2 0.01 10 EXPANSION 2
+REDIS INFO memory
+REDIS BF.INFO rl_exp_2
+REDIS INFO memory
+REDIS BF.RESERVE rl_exp_4 0.01 10 EXPANSION 4
+REDIS INFO memory
+REDIS BF.INFO rl_exp_4
+REDIS INFO memory
+REDIS BF.RESERVE rl_exp_32768 0.01 10 EXPANSION 32768
+REDIS INFO memory
+REDIS BF.INFO rl_exp_32768
+REDIS INFO memory
+REDIS BF.RESERVE rl_exp_too_big 0.01 10 EXPANSION 32769
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.RESERVE rl_exp_zero_reserve 0.01 10 EXPANSION 0
+REDIS INFO memory
+REDIS BF.INFO rl_exp_zero_reserve
+REDIS INFO memory
+REDIS BF.INSERT rl_exp_zero_insert EXPANSION 0 ITEMS a
+REDIS INFO memory
+REDIS BF.INFO rl_exp_zero_insert
+REDIS INFO memory
+REDIS BF.RESERVE rl_too_large_layer 1e-7 1073741824 NONSCALING
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.RESERVE rl_bits_per_entry 1e-300 10
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.RESERVE rl_nonscaling_full 0.001 10 NONSCALING
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.MADD rl_nonscaling_full item0 item1 item2 item3 item4 item5 item6 item7 item8 item9 item10 item11
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.CARD rl_nonscaling_full
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.EXISTS rl_nonscaling_full item11
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.INSERT rl_insert_full CAPACITY 10 ERROR 0.001 NONSCALING ITEMS item0 item1 item2 item3 item4 item5 item6 item7 item8 item9 item10 item11
+REDIS INFO memory
+REDIS BF.INFO rl_nonscaling_full
+REDIS BF.RESERVE lat_base 0.01 100 EXPANSION 2
+REDIS BF.ADD lat_base lat-base-0
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-0
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-1
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-1
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-2
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-2
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-3
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-3
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-4
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-4
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-5
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-5
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-6
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-6
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-7
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-7
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-8
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-8
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-10
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-10
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-11
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-11
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-12
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-12
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-13
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-13
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-14
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-14
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-15
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-15
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-16
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-16
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-17
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-17
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-18
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-18
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-19
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-19
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-20
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-20
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-21
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-21
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-22
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-22
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-23
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-23
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-24
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-24
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-25
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-25
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-26
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-26
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-27
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-27
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-28
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-28
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.ADD lat_base lat-base-29
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.EXISTS lat_base lat-base-29
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.MADD lat_base batch-0-0 batch-0-1 batch-0-2 batch-0-3 batch-0-4 batch-0-5 batch-0-6 batch-0-7 batch-0-8 batch-0-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.MEXISTS lat_base batch-0-0 batch-0-1 batch-0-2 batch-0-3 batch-0-4 batch-0-5 batch-0-6 batch-0-7 batch-0-8 batch-0-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.INFO lat_base
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.CARD lat_base
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.MADD lat_base batch-1-0 batch-1-1 batch-1-2 batch-1-3 batch-1-4 batch-1-5 batch-1-6 batch-1-7 batch-1-8 batch-1-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.MEXISTS lat_base batch-1-0 batch-1-1 batch-1-2 batch-1-3 batch-1-4 batch-1-5 batch-1-6 batch-1-7 batch-1-8 batch-1-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.INFO lat_base
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.CARD lat_base
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.MADD lat_base batch-2-0 batch-2-1 batch-2-2 batch-2-3 batch-2-4 batch-2-5 batch-2-6 batch-2-7 batch-2-8 batch-2-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.MEXISTS lat_base batch-2-0 batch-2-1 batch-2-2 batch-2-3 batch-2-4 batch-2-5 batch-2-6 batch-2-7 batch-2-8 batch-2-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.INFO lat_base
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.CARD lat_base
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.MADD lat_base batch-3-0 batch-3-1 batch-3-2 batch-3-3 batch-3-4 batch-3-5 batch-3-6 batch-3-7 batch-3-8 batch-3-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.MEXISTS lat_base batch-3-0 batch-3-1 batch-3-2 batch-3-3 batch-3-4 batch-3-5 batch-3-6 batch-3-7 batch-3-8 batch-3-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.INFO lat_base
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.CARD lat_base
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.MADD lat_base batch-4-0 batch-4-1 batch-4-2 batch-4-3 batch-4-4 batch-4-5 batch-4-6 batch-4-7 batch-4-8 batch-4-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.MEXISTS lat_base batch-4-0 batch-4-1 batch-4-2 batch-4-3 batch-4-4 batch-4-5 batch-4-6 batch-4-7 batch-4-8 batch-4-9
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.INFO lat_base
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.CARD lat_base
+REDIS BF.INFO lat_base
+REDIS INFO memory
+REDIS MEMORY USAGE lat_base
+REDIS BF.RESERVE lat_cap_10 0.01 10 EXPANSION 2
+REDIS BF.ADD lat_cap_10 cap-10-0
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.EXISTS lat_cap_10 cap-10-0
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.ADD lat_cap_10 cap-10-1
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.EXISTS lat_cap_10 cap-10-1
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.ADD lat_cap_10 cap-10-2
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.EXISTS lat_cap_10 cap-10-2
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.ADD lat_cap_10 cap-10-3
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.EXISTS lat_cap_10 cap-10-3
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.ADD lat_cap_10 cap-10-4
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.EXISTS lat_cap_10 cap-10-4
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.ADD lat_cap_10 cap-10-5
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.EXISTS lat_cap_10 cap-10-5
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.ADD lat_cap_10 cap-10-6
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.EXISTS lat_cap_10 cap-10-6
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.ADD lat_cap_10 cap-10-7
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.EXISTS lat_cap_10 cap-10-7
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.ADD lat_cap_10 cap-10-8
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.EXISTS lat_cap_10 cap-10-8
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.ADD lat_cap_10 cap-10-9
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.EXISTS lat_cap_10 cap-10-9
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.INFO lat_cap_10
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.CARD lat_cap_10
+REDIS BF.INFO lat_cap_10
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10
+REDIS BF.RESERVE lat_cap_100 0.01 100 EXPANSION 2
+REDIS BF.ADD lat_cap_100 cap-100-0
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.EXISTS lat_cap_100 cap-100-0
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.ADD lat_cap_100 cap-100-1
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.EXISTS lat_cap_100 cap-100-1
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.ADD lat_cap_100 cap-100-2
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.EXISTS lat_cap_100 cap-100-2
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.ADD lat_cap_100 cap-100-3
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.EXISTS lat_cap_100 cap-100-3
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.ADD lat_cap_100 cap-100-4
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.EXISTS lat_cap_100 cap-100-4
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.ADD lat_cap_100 cap-100-5
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.EXISTS lat_cap_100 cap-100-5
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.ADD lat_cap_100 cap-100-6
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.EXISTS lat_cap_100 cap-100-6
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.ADD lat_cap_100 cap-100-7
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.EXISTS lat_cap_100 cap-100-7
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.ADD lat_cap_100 cap-100-8
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.EXISTS lat_cap_100 cap-100-8
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.ADD lat_cap_100 cap-100-9
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.EXISTS lat_cap_100 cap-100-9
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.INFO lat_cap_100
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.CARD lat_cap_100
+REDIS BF.INFO lat_cap_100
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100
+REDIS BF.RESERVE lat_cap_10000 0.01 10000 EXPANSION 2
+REDIS BF.ADD lat_cap_10000 cap-10000-0
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.EXISTS lat_cap_10000 cap-10000-0
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.ADD lat_cap_10000 cap-10000-1
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.EXISTS lat_cap_10000 cap-10000-1
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.ADD lat_cap_10000 cap-10000-2
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.EXISTS lat_cap_10000 cap-10000-2
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.ADD lat_cap_10000 cap-10000-3
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.EXISTS lat_cap_10000 cap-10000-3
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.ADD lat_cap_10000 cap-10000-4
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.EXISTS lat_cap_10000 cap-10000-4
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.ADD lat_cap_10000 cap-10000-5
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.EXISTS lat_cap_10000 cap-10000-5
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.ADD lat_cap_10000 cap-10000-6
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.EXISTS lat_cap_10000 cap-10000-6
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.ADD lat_cap_10000 cap-10000-7
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.EXISTS lat_cap_10000 cap-10000-7
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.ADD lat_cap_10000 cap-10000-8
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.EXISTS lat_cap_10000 cap-10000-8
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.ADD lat_cap_10000 cap-10000-9
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.EXISTS lat_cap_10000 cap-10000-9
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.INFO lat_cap_10000
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.CARD lat_cap_10000
+REDIS BF.INFO lat_cap_10000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_10000
+REDIS BF.RESERVE lat_cap_100000 0.01 100000 EXPANSION 2
+REDIS BF.ADD lat_cap_100000 cap-100000-0
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.EXISTS lat_cap_100000 cap-100000-0
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.ADD lat_cap_100000 cap-100000-1
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.EXISTS lat_cap_100000 cap-100000-1
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.ADD lat_cap_100000 cap-100000-2
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.EXISTS lat_cap_100000 cap-100000-2
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.ADD lat_cap_100000 cap-100000-3
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.EXISTS lat_cap_100000 cap-100000-3
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.ADD lat_cap_100000 cap-100000-4
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.EXISTS lat_cap_100000 cap-100000-4
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.ADD lat_cap_100000 cap-100000-5
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.EXISTS lat_cap_100000 cap-100000-5
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.ADD lat_cap_100000 cap-100000-6
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.EXISTS lat_cap_100000 cap-100000-6
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.ADD lat_cap_100000 cap-100000-7
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.EXISTS lat_cap_100000 cap-100000-7
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.ADD lat_cap_100000 cap-100000-8
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.EXISTS lat_cap_100000 cap-100000-8
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.ADD lat_cap_100000 cap-100000-9
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.EXISTS lat_cap_100000 cap-100000-9
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.INFO lat_cap_100000
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.CARD lat_cap_100000
+REDIS BF.INFO lat_cap_100000
+REDIS INFO memory
+REDIS MEMORY USAGE lat_cap_100000
+REDIS BF.RESERVE lat_exp1_many 0.01 10 EXPANSION 1
+REDIS BF.ADD lat_exp1_many many-0
+REDIS BF.ADD lat_exp1_many many-1
+REDIS BF.ADD lat_exp1_many many-2
+REDIS BF.ADD lat_exp1_many many-3
+REDIS BF.ADD lat_exp1_many many-4
+REDIS BF.ADD lat_exp1_many many-5
+REDIS BF.ADD lat_exp1_many many-6
+REDIS BF.ADD lat_exp1_many many-7
+REDIS BF.ADD lat_exp1_many many-8
+REDIS BF.ADD lat_exp1_many many-9
+REDIS BF.ADD lat_exp1_many many-10
+REDIS BF.ADD lat_exp1_many many-11
+REDIS BF.ADD lat_exp1_many many-12
+REDIS BF.ADD lat_exp1_many many-13
+REDIS BF.ADD lat_exp1_many many-14
+REDIS BF.ADD lat_exp1_many many-15
+REDIS BF.ADD lat_exp1_many many-16
+REDIS BF.ADD lat_exp1_many many-17
+REDIS BF.ADD lat_exp1_many many-18
+REDIS BF.ADD lat_exp1_many many-19
+REDIS BF.ADD lat_exp1_many many-20
+REDIS BF.ADD lat_exp1_many many-21
+REDIS BF.ADD lat_exp1_many many-22
+REDIS BF.ADD lat_exp1_many many-23
+REDIS BF.ADD lat_exp1_many many-24
+REDIS BF.ADD lat_exp1_many many-25
+REDIS BF.ADD lat_exp1_many many-26
+REDIS BF.ADD lat_exp1_many many-27
+REDIS BF.ADD lat_exp1_many many-28
+REDIS BF.ADD lat_exp1_many many-29
+REDIS BF.ADD lat_exp1_many many-30
+REDIS BF.ADD lat_exp1_many many-31
+REDIS BF.ADD lat_exp1_many many-32
+REDIS BF.ADD lat_exp1_many many-33
+REDIS BF.ADD lat_exp1_many many-34
+REDIS BF.ADD lat_exp1_many many-35
+REDIS BF.ADD lat_exp1_many many-36
+REDIS BF.ADD lat_exp1_many many-37
+REDIS BF.ADD lat_exp1_many many-38
+REDIS BF.ADD lat_exp1_many many-39
+REDIS BF.ADD lat_exp1_many many-40
+REDIS BF.ADD lat_exp1_many many-41
+REDIS BF.ADD lat_exp1_many many-42
+REDIS BF.ADD lat_exp1_many many-43
+REDIS BF.ADD lat_exp1_many many-44
+REDIS BF.ADD lat_exp1_many many-45
+REDIS BF.ADD lat_exp1_many many-46
+REDIS BF.ADD lat_exp1_many many-47
+REDIS BF.ADD lat_exp1_many many-48
+REDIS BF.ADD lat_exp1_many many-49
+REDIS BF.ADD lat_exp1_many many-50
+REDIS BF.ADD lat_exp1_many many-51
+REDIS BF.ADD lat_exp1_many many-52
+REDIS BF.ADD lat_exp1_many many-53
+REDIS BF.ADD lat_exp1_many many-54
+REDIS BF.ADD lat_exp1_many many-55
+REDIS BF.ADD lat_exp1_many many-56
+REDIS BF.ADD lat_exp1_many many-57
+REDIS BF.ADD lat_exp1_many many-58
+REDIS BF.ADD lat_exp1_many many-59
+REDIS BF.ADD lat_exp1_many many-60
+REDIS BF.ADD lat_exp1_many many-61
+REDIS BF.ADD lat_exp1_many many-62
+REDIS BF.ADD lat_exp1_many many-63
+REDIS BF.ADD lat_exp1_many many-64
+REDIS BF.ADD lat_exp1_many many-65
+REDIS BF.ADD lat_exp1_many many-66
+REDIS BF.ADD lat_exp1_many many-67
+REDIS BF.ADD lat_exp1_many many-68
+REDIS BF.ADD lat_exp1_many many-69
+REDIS BF.ADD lat_exp1_many many-70
+REDIS BF.ADD lat_exp1_many many-71
+REDIS BF.ADD lat_exp1_many many-72
+REDIS BF.ADD lat_exp1_many many-73
+REDIS BF.ADD lat_exp1_many many-74
+REDIS BF.ADD lat_exp1_many many-75
+REDIS BF.ADD lat_exp1_many many-76
+REDIS BF.ADD lat_exp1_many many-77
+REDIS BF.ADD lat_exp1_many many-78
+REDIS BF.ADD lat_exp1_many many-79
+REDIS BF.ADD lat_exp1_many many-80
+REDIS BF.ADD lat_exp1_many many-81
+REDIS BF.ADD lat_exp1_many many-82
+REDIS BF.ADD lat_exp1_many many-83
+REDIS BF.ADD lat_exp1_many many-84
+REDIS BF.ADD lat_exp1_many many-85
+REDIS BF.ADD lat_exp1_many many-86
+REDIS BF.ADD lat_exp1_many many-87
+REDIS BF.ADD lat_exp1_many many-88
+REDIS BF.ADD lat_exp1_many many-89
+REDIS BF.EXISTS lat_exp1_many many-0
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-0
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-0
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-0
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-0
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-0
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-0
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-0
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-0
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-0
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-89
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-89
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-89
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-89
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-89
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-89
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-89
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-89
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-89
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-89
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-absent
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-absent
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-absent
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-absent
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-absent
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-absent
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-absent
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-absent
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-absent
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.EXISTS lat_exp1_many many-absent
+REDIS BF.INFO lat_exp1_many
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp1_many
+REDIS BF.RESERVE lat_exp_cmp_1 0.01 10 EXPANSION 1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-0
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-1
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-2
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-3
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-4
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-5
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-6
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-7
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-8
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-9
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-10
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-11
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-12
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-13
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-14
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-15
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-16
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-17
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-18
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.ADD lat_exp_cmp_1 exp-1-19
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.INFO lat_exp_cmp_1
+REDIS BF.INFO lat_exp_cmp_1
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_1
+REDIS BF.RESERVE lat_exp_cmp_2 0.01 10 EXPANSION 2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-0
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-1
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-2
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-3
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-4
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-5
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-6
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-7
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-8
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-9
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-10
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-11
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-12
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-13
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-14
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-15
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-16
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-17
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-18
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.ADD lat_exp_cmp_2 exp-2-19
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.INFO lat_exp_cmp_2
+REDIS BF.INFO lat_exp_cmp_2
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_2
+REDIS BF.RESERVE lat_exp_cmp_4 0.01 10 EXPANSION 4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-0
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-1
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-2
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-3
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-4
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-5
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-6
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-7
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-8
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-9
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-10
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-11
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-12
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-13
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-14
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-15
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-16
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-17
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-18
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.ADD lat_exp_cmp_4 exp-4-19
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.INFO lat_exp_cmp_4
+REDIS BF.INFO lat_exp_cmp_4
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_4
+REDIS BF.RESERVE lat_exp_cmp_32768 0.01 10 EXPANSION 32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-0
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-1
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-2
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-3
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-4
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-5
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-6
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-7
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-8
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-9
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-10
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-11
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-12
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-13
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-14
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-15
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-16
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-17
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-18
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.ADD lat_exp_cmp_32768 exp-32768-19
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS BF.INFO lat_exp_cmp_32768
+REDIS INFO memory
+REDIS MEMORY USAGE lat_exp_cmp_32768
+REDIS BF.RESERVE lat_large_items 0.01 100
+REDIS BF.ADD lat_large_items 0
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items 0
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items 1
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items 1
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items 2
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items 2
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items 3
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items 3
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items 4
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items 4
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items 5
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items 5
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items 6
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items 6
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items 7
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items 7
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items 8
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items 8
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items 9
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items 9
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items small0
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items small0
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items small1
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items small1
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items small2
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items small2
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items small3
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items small3
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items small4
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items small4
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items small5
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items small5
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items small6
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items small6
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items small7
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items small7
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items small8
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items small8
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items small9
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items small9
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items b'bin\x00ary0'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items b'bin\x00ary0'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items b'bin\x00ary1'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items b'bin\x00ary1'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items b'bin\x00ary2'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items b'bin\x00ary2'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items b'bin\x00ary3'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items b'bin\x00ary3'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items b'bin\x00ary4'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items b'bin\x00ary4'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items b'bin\x00ary5'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items b'bin\x00ary5'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items b'bin\x00ary6'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items b'bin\x00ary6'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items b'bin\x00ary7'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items b'bin\x00ary7'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items b'bin\x00ary8'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items b'bin\x00ary8'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items b'bin\x00ary9'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items b'bin\x00ary9'
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items <bytes len=10001 sha256=c7f8df786ee81af2>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items <bytes len=10001 sha256=c7f8df786ee81af2>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items <bytes len=10001 sha256=a59c240618bf23fe>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items <bytes len=10001 sha256=a59c240618bf23fe>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items <bytes len=10001 sha256=94112abd9f18a028>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items <bytes len=10001 sha256=94112abd9f18a028>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items <bytes len=10001 sha256=c25af58345b410f2>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items <bytes len=10001 sha256=c25af58345b410f2>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items <bytes len=10001 sha256=b9f39725d0e31c2c>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items <bytes len=10001 sha256=b9f39725d0e31c2c>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.ADD lat_large_items <bytes len=1000001 sha256=46bde5962b192718>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS BF.EXISTS lat_large_items <bytes len=1000001 sha256=46bde5962b192718>
+REDIS BF.INFO lat_large_items
+REDIS INFO memory
+REDIS MEMORY USAGE lat_large_items
+REDIS INFO server
+REDIS BF.RESERVE mem_empty100 0.01 100
+REDIS BF.INFO mem_empty100
+REDIS MEMORY USAGE mem_empty100
+REDIS INFO memory
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.ADD mem_empty100 mem-0
+REDIS BF.ADD mem_empty100 mem-1
+REDIS BF.ADD mem_empty100 mem-2
+REDIS BF.ADD mem_empty100 mem-3
+REDIS BF.ADD mem_empty100 mem-4
+REDIS BF.ADD mem_empty100 mem-5
+REDIS BF.ADD mem_empty100 mem-6
+REDIS BF.ADD mem_empty100 mem-7
+REDIS BF.ADD mem_empty100 mem-8
+REDIS BF.ADD mem_empty100 mem-9
+REDIS BF.ADD mem_empty100 mem-10
+REDIS BF.ADD mem_empty100 mem-11
+REDIS BF.ADD mem_empty100 mem-12
+REDIS BF.ADD mem_empty100 mem-13
+REDIS BF.ADD mem_empty100 mem-14
+REDIS BF.ADD mem_empty100 mem-15
+REDIS BF.ADD mem_empty100 mem-16
+REDIS BF.ADD mem_empty100 mem-17
+REDIS BF.ADD mem_empty100 mem-18
+REDIS BF.ADD mem_empty100 mem-19
+REDIS BF.ADD mem_empty100 mem-20
+REDIS BF.ADD mem_empty100 mem-21
+REDIS BF.ADD mem_empty100 mem-22
+REDIS BF.ADD mem_empty100 mem-23
+REDIS BF.ADD mem_empty100 mem-24
+REDIS BF.ADD mem_empty100 mem-25
+REDIS BF.ADD mem_empty100 mem-26
+REDIS BF.ADD mem_empty100 mem-27
+REDIS BF.ADD mem_empty100 mem-28
+REDIS BF.ADD mem_empty100 mem-29
+REDIS BF.ADD mem_empty100 mem-30
+REDIS BF.ADD mem_empty100 mem-31
+REDIS BF.ADD mem_empty100 mem-32
+REDIS BF.ADD mem_empty100 mem-33
+REDIS BF.ADD mem_empty100 mem-34
+REDIS BF.ADD mem_empty100 mem-35
+REDIS BF.ADD mem_empty100 mem-36
+REDIS BF.ADD mem_empty100 mem-37
+REDIS BF.ADD mem_empty100 mem-38
+REDIS BF.ADD mem_empty100 mem-39
+REDIS BF.ADD mem_empty100 mem-40
+REDIS BF.ADD mem_empty100 mem-41
+REDIS BF.ADD mem_empty100 mem-42
+REDIS BF.ADD mem_empty100 mem-43
+REDIS BF.ADD mem_empty100 mem-44
+REDIS BF.ADD mem_empty100 mem-45
+REDIS BF.ADD mem_empty100 mem-46
+REDIS BF.ADD mem_empty100 mem-47
+REDIS BF.ADD mem_empty100 mem-48
+REDIS BF.ADD mem_empty100 mem-49
+REDIS BF.INFO mem_empty100
+REDIS MEMORY USAGE mem_empty100
+REDIS INFO memory
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.RESERVE mem_exp2_growth 0.01 10 EXPANSION 2
+REDIS BF.ADD mem_exp2_growth grow2-0
+REDIS BF.ADD mem_exp2_growth grow2-1
+REDIS BF.ADD mem_exp2_growth grow2-2
+REDIS BF.ADD mem_exp2_growth grow2-3
+REDIS BF.ADD mem_exp2_growth grow2-4
+REDIS BF.ADD mem_exp2_growth grow2-5
+REDIS BF.ADD mem_exp2_growth grow2-6
+REDIS BF.ADD mem_exp2_growth grow2-7
+REDIS BF.ADD mem_exp2_growth grow2-8
+REDIS BF.ADD mem_exp2_growth grow2-9
+REDIS BF.ADD mem_exp2_growth grow2-10
+REDIS BF.ADD mem_exp2_growth grow2-11
+REDIS BF.ADD mem_exp2_growth grow2-12
+REDIS BF.ADD mem_exp2_growth grow2-13
+REDIS BF.ADD mem_exp2_growth grow2-14
+REDIS BF.ADD mem_exp2_growth grow2-15
+REDIS BF.ADD mem_exp2_growth grow2-16
+REDIS BF.ADD mem_exp2_growth grow2-17
+REDIS BF.ADD mem_exp2_growth grow2-18
+REDIS BF.ADD mem_exp2_growth grow2-19
+REDIS BF.ADD mem_exp2_growth grow2-20
+REDIS BF.ADD mem_exp2_growth grow2-21
+REDIS BF.ADD mem_exp2_growth grow2-22
+REDIS BF.ADD mem_exp2_growth grow2-23
+REDIS BF.ADD mem_exp2_growth grow2-24
+REDIS BF.ADD mem_exp2_growth grow2-25
+REDIS BF.ADD mem_exp2_growth grow2-26
+REDIS BF.ADD mem_exp2_growth grow2-27
+REDIS BF.ADD mem_exp2_growth grow2-28
+REDIS BF.ADD mem_exp2_growth grow2-29
+REDIS BF.ADD mem_exp2_growth grow2-30
+REDIS BF.ADD mem_exp2_growth grow2-31
+REDIS BF.ADD mem_exp2_growth grow2-32
+REDIS BF.ADD mem_exp2_growth grow2-33
+REDIS BF.ADD mem_exp2_growth grow2-34
+REDIS BF.ADD mem_exp2_growth grow2-35
+REDIS BF.ADD mem_exp2_growth grow2-36
+REDIS BF.ADD mem_exp2_growth grow2-37
+REDIS BF.ADD mem_exp2_growth grow2-38
+REDIS BF.ADD mem_exp2_growth grow2-39
+REDIS BF.INFO mem_exp2_growth
+REDIS MEMORY USAGE mem_exp2_growth
+REDIS INFO memory
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.RESERVE mem_exp1_many 0.01 10 EXPANSION 1
+REDIS BF.ADD mem_exp1_many grow1-0
+REDIS BF.ADD mem_exp1_many grow1-1
+REDIS BF.ADD mem_exp1_many grow1-2
+REDIS BF.ADD mem_exp1_many grow1-3
+REDIS BF.ADD mem_exp1_many grow1-4
+REDIS BF.ADD mem_exp1_many grow1-5
+REDIS BF.ADD mem_exp1_many grow1-6
+REDIS BF.ADD mem_exp1_many grow1-7
+REDIS BF.ADD mem_exp1_many grow1-8
+REDIS BF.ADD mem_exp1_many grow1-9
+REDIS BF.ADD mem_exp1_many grow1-10
+REDIS BF.ADD mem_exp1_many grow1-11
+REDIS BF.ADD mem_exp1_many grow1-12
+REDIS BF.ADD mem_exp1_many grow1-13
+REDIS BF.ADD mem_exp1_many grow1-14
+REDIS BF.ADD mem_exp1_many grow1-15
+REDIS BF.ADD mem_exp1_many grow1-16
+REDIS BF.ADD mem_exp1_many grow1-17
+REDIS BF.ADD mem_exp1_many grow1-18
+REDIS BF.ADD mem_exp1_many grow1-19
+REDIS BF.ADD mem_exp1_many grow1-20
+REDIS BF.ADD mem_exp1_many grow1-21
+REDIS BF.ADD mem_exp1_many grow1-22
+REDIS BF.ADD mem_exp1_many grow1-23
+REDIS BF.ADD mem_exp1_many grow1-24
+REDIS BF.ADD mem_exp1_many grow1-25
+REDIS BF.ADD mem_exp1_many grow1-26
+REDIS BF.ADD mem_exp1_many grow1-27
+REDIS BF.ADD mem_exp1_many grow1-28
+REDIS BF.ADD mem_exp1_many grow1-29
+REDIS BF.ADD mem_exp1_many grow1-30
+REDIS BF.ADD mem_exp1_many grow1-31
+REDIS BF.ADD mem_exp1_many grow1-32
+REDIS BF.ADD mem_exp1_many grow1-33
+REDIS BF.ADD mem_exp1_many grow1-34
+REDIS BF.ADD mem_exp1_many grow1-35
+REDIS BF.ADD mem_exp1_many grow1-36
+REDIS BF.ADD mem_exp1_many grow1-37
+REDIS BF.ADD mem_exp1_many grow1-38
+REDIS BF.ADD mem_exp1_many grow1-39
+REDIS BF.ADD mem_exp1_many grow1-40
+REDIS BF.ADD mem_exp1_many grow1-41
+REDIS BF.ADD mem_exp1_many grow1-42
+REDIS BF.ADD mem_exp1_many grow1-43
+REDIS BF.ADD mem_exp1_many grow1-44
+REDIS BF.ADD mem_exp1_many grow1-45
+REDIS BF.ADD mem_exp1_many grow1-46
+REDIS BF.ADD mem_exp1_many grow1-47
+REDIS BF.ADD mem_exp1_many grow1-48
+REDIS BF.ADD mem_exp1_many grow1-49
+REDIS BF.ADD mem_exp1_many grow1-50
+REDIS BF.ADD mem_exp1_many grow1-51
+REDIS BF.ADD mem_exp1_many grow1-52
+REDIS BF.ADD mem_exp1_many grow1-53
+REDIS BF.ADD mem_exp1_many grow1-54
+REDIS BF.ADD mem_exp1_many grow1-55
+REDIS BF.ADD mem_exp1_many grow1-56
+REDIS BF.ADD mem_exp1_many grow1-57
+REDIS BF.ADD mem_exp1_many grow1-58
+REDIS BF.ADD mem_exp1_many grow1-59
+REDIS BF.ADD mem_exp1_many grow1-60
+REDIS BF.ADD mem_exp1_many grow1-61
+REDIS BF.ADD mem_exp1_many grow1-62
+REDIS BF.ADD mem_exp1_many grow1-63
+REDIS BF.ADD mem_exp1_many grow1-64
+REDIS BF.ADD mem_exp1_many grow1-65
+REDIS BF.ADD mem_exp1_many grow1-66
+REDIS BF.ADD mem_exp1_many grow1-67
+REDIS BF.ADD mem_exp1_many grow1-68
+REDIS BF.ADD mem_exp1_many grow1-69
+REDIS BF.ADD mem_exp1_many grow1-70
+REDIS BF.ADD mem_exp1_many grow1-71
+REDIS BF.ADD mem_exp1_many grow1-72
+REDIS BF.ADD mem_exp1_many grow1-73
+REDIS BF.ADD mem_exp1_many grow1-74
+REDIS BF.ADD mem_exp1_many grow1-75
+REDIS BF.ADD mem_exp1_many grow1-76
+REDIS BF.ADD mem_exp1_many grow1-77
+REDIS BF.ADD mem_exp1_many grow1-78
+REDIS BF.ADD mem_exp1_many grow1-79
+REDIS BF.INFO mem_exp1_many
+REDIS MEMORY USAGE mem_exp1_many
+REDIS INFO memory
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.RESERVE mem_cap_10000 0.01 10000
+REDIS BF.ADD mem_cap_10000 memcap-10000-0
+REDIS BF.ADD mem_cap_10000 memcap-10000-1
+REDIS BF.ADD mem_cap_10000 memcap-10000-2
+REDIS BF.ADD mem_cap_10000 memcap-10000-3
+REDIS BF.ADD mem_cap_10000 memcap-10000-4
+REDIS BF.ADD mem_cap_10000 memcap-10000-5
+REDIS BF.ADD mem_cap_10000 memcap-10000-6
+REDIS BF.ADD mem_cap_10000 memcap-10000-7
+REDIS BF.ADD mem_cap_10000 memcap-10000-8
+REDIS BF.ADD mem_cap_10000 memcap-10000-9
+REDIS BF.ADD mem_cap_10000 memcap-10000-10
+REDIS BF.ADD mem_cap_10000 memcap-10000-11
+REDIS BF.ADD mem_cap_10000 memcap-10000-12
+REDIS BF.ADD mem_cap_10000 memcap-10000-13
+REDIS BF.ADD mem_cap_10000 memcap-10000-14
+REDIS BF.ADD mem_cap_10000 memcap-10000-15
+REDIS BF.ADD mem_cap_10000 memcap-10000-16
+REDIS BF.ADD mem_cap_10000 memcap-10000-17
+REDIS BF.ADD mem_cap_10000 memcap-10000-18
+REDIS BF.ADD mem_cap_10000 memcap-10000-19
+REDIS BF.ADD mem_cap_10000 memcap-10000-20
+REDIS BF.ADD mem_cap_10000 memcap-10000-21
+REDIS BF.ADD mem_cap_10000 memcap-10000-22
+REDIS BF.ADD mem_cap_10000 memcap-10000-23
+REDIS BF.ADD mem_cap_10000 memcap-10000-24
+REDIS BF.ADD mem_cap_10000 memcap-10000-25
+REDIS BF.ADD mem_cap_10000 memcap-10000-26
+REDIS BF.ADD mem_cap_10000 memcap-10000-27
+REDIS BF.ADD mem_cap_10000 memcap-10000-28
+REDIS BF.ADD mem_cap_10000 memcap-10000-29
+REDIS BF.ADD mem_cap_10000 memcap-10000-30
+REDIS BF.ADD mem_cap_10000 memcap-10000-31
+REDIS BF.ADD mem_cap_10000 memcap-10000-32
+REDIS BF.ADD mem_cap_10000 memcap-10000-33
+REDIS BF.ADD mem_cap_10000 memcap-10000-34
+REDIS BF.ADD mem_cap_10000 memcap-10000-35
+REDIS BF.ADD mem_cap_10000 memcap-10000-36
+REDIS BF.ADD mem_cap_10000 memcap-10000-37
+REDIS BF.ADD mem_cap_10000 memcap-10000-38
+REDIS BF.ADD mem_cap_10000 memcap-10000-39
+REDIS BF.ADD mem_cap_10000 memcap-10000-40
+REDIS BF.ADD mem_cap_10000 memcap-10000-41
+REDIS BF.ADD mem_cap_10000 memcap-10000-42
+REDIS BF.ADD mem_cap_10000 memcap-10000-43
+REDIS BF.ADD mem_cap_10000 memcap-10000-44
+REDIS BF.ADD mem_cap_10000 memcap-10000-45
+REDIS BF.ADD mem_cap_10000 memcap-10000-46
+REDIS BF.ADD mem_cap_10000 memcap-10000-47
+REDIS BF.ADD mem_cap_10000 memcap-10000-48
+REDIS BF.ADD mem_cap_10000 memcap-10000-49
+REDIS BF.ADD mem_cap_10000 memcap-10000-50
+REDIS BF.ADD mem_cap_10000 memcap-10000-51
+REDIS BF.ADD mem_cap_10000 memcap-10000-52
+REDIS BF.ADD mem_cap_10000 memcap-10000-53
+REDIS BF.ADD mem_cap_10000 memcap-10000-54
+REDIS BF.ADD mem_cap_10000 memcap-10000-55
+REDIS BF.ADD mem_cap_10000 memcap-10000-56
+REDIS BF.ADD mem_cap_10000 memcap-10000-57
+REDIS BF.ADD mem_cap_10000 memcap-10000-58
+REDIS BF.ADD mem_cap_10000 memcap-10000-59
+REDIS BF.ADD mem_cap_10000 memcap-10000-60
+REDIS BF.ADD mem_cap_10000 memcap-10000-61
+REDIS BF.ADD mem_cap_10000 memcap-10000-62
+REDIS BF.ADD mem_cap_10000 memcap-10000-63
+REDIS BF.ADD mem_cap_10000 memcap-10000-64
+REDIS BF.ADD mem_cap_10000 memcap-10000-65
+REDIS BF.ADD mem_cap_10000 memcap-10000-66
+REDIS BF.ADD mem_cap_10000 memcap-10000-67
+REDIS BF.ADD mem_cap_10000 memcap-10000-68
+REDIS BF.ADD mem_cap_10000 memcap-10000-69
+REDIS BF.ADD mem_cap_10000 memcap-10000-70
+REDIS BF.ADD mem_cap_10000 memcap-10000-71
+REDIS BF.ADD mem_cap_10000 memcap-10000-72
+REDIS BF.ADD mem_cap_10000 memcap-10000-73
+REDIS BF.ADD mem_cap_10000 memcap-10000-74
+REDIS BF.ADD mem_cap_10000 memcap-10000-75
+REDIS BF.ADD mem_cap_10000 memcap-10000-76
+REDIS BF.ADD mem_cap_10000 memcap-10000-77
+REDIS BF.ADD mem_cap_10000 memcap-10000-78
+REDIS BF.ADD mem_cap_10000 memcap-10000-79
+REDIS BF.ADD mem_cap_10000 memcap-10000-80
+REDIS BF.ADD mem_cap_10000 memcap-10000-81
+REDIS BF.ADD mem_cap_10000 memcap-10000-82
+REDIS BF.ADD mem_cap_10000 memcap-10000-83
+REDIS BF.ADD mem_cap_10000 memcap-10000-84
+REDIS BF.ADD mem_cap_10000 memcap-10000-85
+REDIS BF.ADD mem_cap_10000 memcap-10000-86
+REDIS BF.ADD mem_cap_10000 memcap-10000-87
+REDIS BF.ADD mem_cap_10000 memcap-10000-88
+REDIS BF.ADD mem_cap_10000 memcap-10000-89
+REDIS BF.ADD mem_cap_10000 memcap-10000-90
+REDIS BF.ADD mem_cap_10000 memcap-10000-91
+REDIS BF.ADD mem_cap_10000 memcap-10000-92
+REDIS BF.ADD mem_cap_10000 memcap-10000-93
+REDIS BF.ADD mem_cap_10000 memcap-10000-94
+REDIS BF.ADD mem_cap_10000 memcap-10000-95
+REDIS BF.ADD mem_cap_10000 memcap-10000-96
+REDIS BF.ADD mem_cap_10000 memcap-10000-97
+REDIS BF.ADD mem_cap_10000 memcap-10000-98
+REDIS BF.ADD mem_cap_10000 memcap-10000-99
+REDIS BF.INFO mem_cap_10000
+REDIS MEMORY USAGE mem_cap_10000
+REDIS INFO memory
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.RESERVE mem_cap_100000 0.01 100000
+REDIS BF.ADD mem_cap_100000 memcap-100000-0
+REDIS BF.ADD mem_cap_100000 memcap-100000-1
+REDIS BF.ADD mem_cap_100000 memcap-100000-2
+REDIS BF.ADD mem_cap_100000 memcap-100000-3
+REDIS BF.ADD mem_cap_100000 memcap-100000-4
+REDIS BF.ADD mem_cap_100000 memcap-100000-5
+REDIS BF.ADD mem_cap_100000 memcap-100000-6
+REDIS BF.ADD mem_cap_100000 memcap-100000-7
+REDIS BF.ADD mem_cap_100000 memcap-100000-8
+REDIS BF.ADD mem_cap_100000 memcap-100000-9
+REDIS BF.ADD mem_cap_100000 memcap-100000-10
+REDIS BF.ADD mem_cap_100000 memcap-100000-11
+REDIS BF.ADD mem_cap_100000 memcap-100000-12
+REDIS BF.ADD mem_cap_100000 memcap-100000-13
+REDIS BF.ADD mem_cap_100000 memcap-100000-14
+REDIS BF.ADD mem_cap_100000 memcap-100000-15
+REDIS BF.ADD mem_cap_100000 memcap-100000-16
+REDIS BF.ADD mem_cap_100000 memcap-100000-17
+REDIS BF.ADD mem_cap_100000 memcap-100000-18
+REDIS BF.ADD mem_cap_100000 memcap-100000-19
+REDIS BF.ADD mem_cap_100000 memcap-100000-20
+REDIS BF.ADD mem_cap_100000 memcap-100000-21
+REDIS BF.ADD mem_cap_100000 memcap-100000-22
+REDIS BF.ADD mem_cap_100000 memcap-100000-23
+REDIS BF.ADD mem_cap_100000 memcap-100000-24
+REDIS BF.ADD mem_cap_100000 memcap-100000-25
+REDIS BF.ADD mem_cap_100000 memcap-100000-26
+REDIS BF.ADD mem_cap_100000 memcap-100000-27
+REDIS BF.ADD mem_cap_100000 memcap-100000-28
+REDIS BF.ADD mem_cap_100000 memcap-100000-29
+REDIS BF.ADD mem_cap_100000 memcap-100000-30
+REDIS BF.ADD mem_cap_100000 memcap-100000-31
+REDIS BF.ADD mem_cap_100000 memcap-100000-32
+REDIS BF.ADD mem_cap_100000 memcap-100000-33
+REDIS BF.ADD mem_cap_100000 memcap-100000-34
+REDIS BF.ADD mem_cap_100000 memcap-100000-35
+REDIS BF.ADD mem_cap_100000 memcap-100000-36
+REDIS BF.ADD mem_cap_100000 memcap-100000-37
+REDIS BF.ADD mem_cap_100000 memcap-100000-38
+REDIS BF.ADD mem_cap_100000 memcap-100000-39
+REDIS BF.ADD mem_cap_100000 memcap-100000-40
+REDIS BF.ADD mem_cap_100000 memcap-100000-41
+REDIS BF.ADD mem_cap_100000 memcap-100000-42
+REDIS BF.ADD mem_cap_100000 memcap-100000-43
+REDIS BF.ADD mem_cap_100000 memcap-100000-44
+REDIS BF.ADD mem_cap_100000 memcap-100000-45
+REDIS BF.ADD mem_cap_100000 memcap-100000-46
+REDIS BF.ADD mem_cap_100000 memcap-100000-47
+REDIS BF.ADD mem_cap_100000 memcap-100000-48
+REDIS BF.ADD mem_cap_100000 memcap-100000-49
+REDIS BF.ADD mem_cap_100000 memcap-100000-50
+REDIS BF.ADD mem_cap_100000 memcap-100000-51
+REDIS BF.ADD mem_cap_100000 memcap-100000-52
+REDIS BF.ADD mem_cap_100000 memcap-100000-53
+REDIS BF.ADD mem_cap_100000 memcap-100000-54
+REDIS BF.ADD mem_cap_100000 memcap-100000-55
+REDIS BF.ADD mem_cap_100000 memcap-100000-56
+REDIS BF.ADD mem_cap_100000 memcap-100000-57
+REDIS BF.ADD mem_cap_100000 memcap-100000-58
+REDIS BF.ADD mem_cap_100000 memcap-100000-59
+REDIS BF.ADD mem_cap_100000 memcap-100000-60
+REDIS BF.ADD mem_cap_100000 memcap-100000-61
+REDIS BF.ADD mem_cap_100000 memcap-100000-62
+REDIS BF.ADD mem_cap_100000 memcap-100000-63
+REDIS BF.ADD mem_cap_100000 memcap-100000-64
+REDIS BF.ADD mem_cap_100000 memcap-100000-65
+REDIS BF.ADD mem_cap_100000 memcap-100000-66
+REDIS BF.ADD mem_cap_100000 memcap-100000-67
+REDIS BF.ADD mem_cap_100000 memcap-100000-68
+REDIS BF.ADD mem_cap_100000 memcap-100000-69
+REDIS BF.ADD mem_cap_100000 memcap-100000-70
+REDIS BF.ADD mem_cap_100000 memcap-100000-71
+REDIS BF.ADD mem_cap_100000 memcap-100000-72
+REDIS BF.ADD mem_cap_100000 memcap-100000-73
+REDIS BF.ADD mem_cap_100000 memcap-100000-74
+REDIS BF.ADD mem_cap_100000 memcap-100000-75
+REDIS BF.ADD mem_cap_100000 memcap-100000-76
+REDIS BF.ADD mem_cap_100000 memcap-100000-77
+REDIS BF.ADD mem_cap_100000 memcap-100000-78
+REDIS BF.ADD mem_cap_100000 memcap-100000-79
+REDIS BF.ADD mem_cap_100000 memcap-100000-80
+REDIS BF.ADD mem_cap_100000 memcap-100000-81
+REDIS BF.ADD mem_cap_100000 memcap-100000-82
+REDIS BF.ADD mem_cap_100000 memcap-100000-83
+REDIS BF.ADD mem_cap_100000 memcap-100000-84
+REDIS BF.ADD mem_cap_100000 memcap-100000-85
+REDIS BF.ADD mem_cap_100000 memcap-100000-86
+REDIS BF.ADD mem_cap_100000 memcap-100000-87
+REDIS BF.ADD mem_cap_100000 memcap-100000-88
+REDIS BF.ADD mem_cap_100000 memcap-100000-89
+REDIS BF.ADD mem_cap_100000 memcap-100000-90
+REDIS BF.ADD mem_cap_100000 memcap-100000-91
+REDIS BF.ADD mem_cap_100000 memcap-100000-92
+REDIS BF.ADD mem_cap_100000 memcap-100000-93
+REDIS BF.ADD mem_cap_100000 memcap-100000-94
+REDIS BF.ADD mem_cap_100000 memcap-100000-95
+REDIS BF.ADD mem_cap_100000 memcap-100000-96
+REDIS BF.ADD mem_cap_100000 memcap-100000-97
+REDIS BF.ADD mem_cap_100000 memcap-100000-98
+REDIS BF.ADD mem_cap_100000 memcap-100000-99
+REDIS BF.INFO mem_cap_100000
+REDIS MEMORY USAGE mem_cap_100000
+REDIS INFO memory
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.INFO rl_cap_max_safe
+REDIS MEMORY USAGE rl_cap_max_safe
+REDIS INFO memory
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.RESERVE slc_single 0.01 100 EXPANSION 2
+REDIS BF.ADD slc_single slc_single-item-0
+REDIS BF.ADD slc_single slc_single-item-1
+REDIS BF.ADD slc_single slc_single-item-2
+REDIS BF.ADD slc_single slc_single-item-3
+REDIS BF.ADD slc_single slc_single-item-4
+REDIS BF.ADD slc_single slc_single-item-5
+REDIS BF.ADD slc_single slc_single-item-6
+REDIS BF.ADD slc_single slc_single-item-7
+REDIS BF.ADD slc_single slc_single-item-8
+REDIS BF.ADD slc_single slc_single-item-9
+REDIS BF.SCANDUMP slc_single 0
+REDIS BF.INFO slc_single
+REDIS BF.INFO slc_single
+REDIS MEMORY USAGE slc_single
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_single_copy 1 b'\n\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x05\x00\x00\x00\x02\x00\x00\x00\x90\x00\x00\x00\x00\x00\x00\x00\x80\x04\x00\x00\x00\x00\x00\x00\n\x00\x00\x00\x00\x00\x00\x00{\x14\xaeG\xe1zt?\xe4\x86/\xb25\x0e&@\x08\x00\x00\x00d\x00\x00\x00\x00\x00\x00\x00\x00'
+REDIS BF.INFO slc_single_copy
+REDIS BF.INFO slc_single_copy
+REDIS MEMORY USAGE slc_single_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_single 1
+REDIS BF.INFO slc_single
+REDIS BF.INFO slc_single
+REDIS MEMORY USAGE slc_single
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_single_copy 2 <bytes len=144 sha256=b3d8f18b1ac6e2e2>
+REDIS BF.INFO slc_single_copy
+REDIS BF.INFO slc_single_copy
+REDIS MEMORY USAGE slc_single_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_single 2
+REDIS BF.INFO slc_single
+REDIS BF.INFO slc_single
+REDIS MEMORY USAGE slc_single
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.EXISTS slc_single_copy slc_single-item-0
+REDIS BF.EXISTS slc_single_copy slc_single-item-1
+REDIS BF.EXISTS slc_single_copy slc_single-item-2
+REDIS BF.EXISTS slc_single_copy slc_single-item-3
+REDIS BF.EXISTS slc_single_copy slc_single-item-4
+REDIS BF.INFO slc_single
+REDIS BF.INFO slc_single_copy
+REDIS BF.RESERVE slc_multi_exp2 0.01 10 EXPANSION 2
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-0
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-1
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-2
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-3
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-4
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-5
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-6
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-7
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-8
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-9
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-10
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-11
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-12
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-13
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-14
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-15
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-16
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-17
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-18
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-19
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-20
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-21
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-22
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-23
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-24
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-25
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-26
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-27
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-28
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-29
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-30
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-31
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-32
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-33
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-34
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-35
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-36
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-37
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-38
+REDIS BF.ADD slc_multi_exp2 slc_multi_exp2-item-39
+REDIS BF.SCANDUMP slc_multi_exp2 0
+REDIS BF.INFO slc_multi_exp2
+REDIS BF.INFO slc_multi_exp2
+REDIS MEMORY USAGE slc_multi_exp2
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_multi_exp2_copy 1 <bytes len=179 sha256=c19cba3355fe704a>
+REDIS BF.INFO slc_multi_exp2_copy
+REDIS BF.INFO slc_multi_exp2_copy
+REDIS MEMORY USAGE slc_multi_exp2_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_multi_exp2 1
+REDIS BF.INFO slc_multi_exp2
+REDIS BF.INFO slc_multi_exp2
+REDIS MEMORY USAGE slc_multi_exp2
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_multi_exp2_copy 2 <bytes len=128 sha256=ba44637a017a91e0>
+REDIS BF.INFO slc_multi_exp2_copy
+REDIS BF.INFO slc_multi_exp2_copy
+REDIS MEMORY USAGE slc_multi_exp2_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_multi_exp2 2
+REDIS BF.INFO slc_multi_exp2
+REDIS BF.INFO slc_multi_exp2
+REDIS MEMORY USAGE slc_multi_exp2
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_multi_exp2_copy 3 <bytes len=128 sha256=b7a2396be469ede9>
+REDIS BF.INFO slc_multi_exp2_copy
+REDIS BF.INFO slc_multi_exp2_copy
+REDIS MEMORY USAGE slc_multi_exp2_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_multi_exp2 3
+REDIS BF.INFO slc_multi_exp2
+REDIS BF.INFO slc_multi_exp2
+REDIS MEMORY USAGE slc_multi_exp2
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_multi_exp2_copy 4 <bytes len=128 sha256=dfbe2ccf3cc04421>
+REDIS BF.INFO slc_multi_exp2_copy
+REDIS BF.INFO slc_multi_exp2_copy
+REDIS MEMORY USAGE slc_multi_exp2_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_multi_exp2 4
+REDIS BF.INFO slc_multi_exp2
+REDIS BF.INFO slc_multi_exp2
+REDIS MEMORY USAGE slc_multi_exp2
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.EXISTS slc_multi_exp2_copy slc_multi_exp2-item-0
+REDIS BF.EXISTS slc_multi_exp2_copy slc_multi_exp2-item-1
+REDIS BF.EXISTS slc_multi_exp2_copy slc_multi_exp2-item-2
+REDIS BF.EXISTS slc_multi_exp2_copy slc_multi_exp2-item-3
+REDIS BF.EXISTS slc_multi_exp2_copy slc_multi_exp2-item-4
+REDIS BF.INFO slc_multi_exp2
+REDIS BF.INFO slc_multi_exp2_copy
+REDIS BF.RESERVE slc_many_exp1 0.01 10 EXPANSION 1
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-0
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-1
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-2
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-3
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-4
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-5
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-6
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-7
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-8
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-9
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-10
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-11
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-12
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-13
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-14
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-15
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-16
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-17
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-18
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-19
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-20
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-21
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-22
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-23
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-24
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-25
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-26
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-27
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-28
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-29
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-30
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-31
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-32
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-33
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-34
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-35
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-36
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-37
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-38
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-39
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-40
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-41
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-42
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-43
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-44
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-45
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-46
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-47
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-48
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-49
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-50
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-51
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-52
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-53
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-54
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-55
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-56
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-57
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-58
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-59
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-60
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-61
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-62
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-63
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-64
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-65
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-66
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-67
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-68
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-69
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-70
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-71
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-72
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-73
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-74
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-75
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-76
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-77
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-78
+REDIS BF.ADD slc_many_exp1 slc_many_exp1-item-79
+REDIS BF.SCANDUMP slc_many_exp1 0
+REDIS BF.INFO slc_many_exp1
+REDIS BF.INFO slc_many_exp1
+REDIS MEMORY USAGE slc_many_exp1
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_many_exp1_copy 1 <bytes len=444 sha256=3c726215984cac8b>
+REDIS BF.INFO slc_many_exp1_copy
+REDIS BF.INFO slc_many_exp1_copy
+REDIS MEMORY USAGE slc_many_exp1_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_many_exp1 1
+REDIS BF.INFO slc_many_exp1
+REDIS BF.INFO slc_many_exp1
+REDIS MEMORY USAGE slc_many_exp1
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_many_exp1_copy 2 <bytes len=128 sha256=ce6db753cf12dc13>
+REDIS BF.INFO slc_many_exp1_copy
+REDIS BF.INFO slc_many_exp1_copy
+REDIS MEMORY USAGE slc_many_exp1_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_many_exp1 2
+REDIS BF.INFO slc_many_exp1
+REDIS BF.INFO slc_many_exp1
+REDIS MEMORY USAGE slc_many_exp1
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_many_exp1_copy 3 <bytes len=128 sha256=67869e18d96a13d3>
+REDIS BF.INFO slc_many_exp1_copy
+REDIS BF.INFO slc_many_exp1_copy
+REDIS MEMORY USAGE slc_many_exp1_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_many_exp1 3
+REDIS BF.INFO slc_many_exp1
+REDIS BF.INFO slc_many_exp1
+REDIS MEMORY USAGE slc_many_exp1
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_many_exp1_copy 4 <bytes len=128 sha256=5b5d3e3b37fb7a38>
+REDIS BF.INFO slc_many_exp1_copy
+REDIS BF.INFO slc_many_exp1_copy
+REDIS MEMORY USAGE slc_many_exp1_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_many_exp1 4
+REDIS BF.INFO slc_many_exp1
+REDIS BF.INFO slc_many_exp1
+REDIS MEMORY USAGE slc_many_exp1
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_many_exp1_copy 5 <bytes len=128 sha256=bdb02d146ba1e1b4>
+REDIS BF.INFO slc_many_exp1_copy
+REDIS BF.INFO slc_many_exp1_copy
+REDIS MEMORY USAGE slc_many_exp1_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_many_exp1 5
+REDIS BF.INFO slc_many_exp1
+REDIS BF.INFO slc_many_exp1
+REDIS MEMORY USAGE slc_many_exp1
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_many_exp1_copy 6 <bytes len=128 sha256=00a4c3c4c2fef940>
+REDIS BF.INFO slc_many_exp1_copy
+REDIS BF.INFO slc_many_exp1_copy
+REDIS MEMORY USAGE slc_many_exp1_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_many_exp1 6
+REDIS BF.INFO slc_many_exp1
+REDIS BF.INFO slc_many_exp1
+REDIS MEMORY USAGE slc_many_exp1
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_many_exp1_copy 7 <bytes len=128 sha256=419d4b944de2b4c8>
+REDIS BF.INFO slc_many_exp1_copy
+REDIS BF.INFO slc_many_exp1_copy
+REDIS MEMORY USAGE slc_many_exp1_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_many_exp1 7
+REDIS BF.INFO slc_many_exp1
+REDIS BF.INFO slc_many_exp1
+REDIS MEMORY USAGE slc_many_exp1
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_many_exp1_copy 8 <bytes len=128 sha256=4f5263e427bc1054>
+REDIS BF.INFO slc_many_exp1_copy
+REDIS BF.INFO slc_many_exp1_copy
+REDIS MEMORY USAGE slc_many_exp1_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_many_exp1 8
+REDIS BF.INFO slc_many_exp1
+REDIS BF.INFO slc_many_exp1
+REDIS MEMORY USAGE slc_many_exp1
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_many_exp1_copy 9 <bytes len=128 sha256=3d10ae5c353e8e2c>
+REDIS BF.INFO slc_many_exp1_copy
+REDIS BF.INFO slc_many_exp1_copy
+REDIS MEMORY USAGE slc_many_exp1_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_many_exp1 9
+REDIS BF.INFO slc_many_exp1
+REDIS BF.INFO slc_many_exp1
+REDIS MEMORY USAGE slc_many_exp1
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.EXISTS slc_many_exp1_copy slc_many_exp1-item-0
+REDIS BF.EXISTS slc_many_exp1_copy slc_many_exp1-item-1
+REDIS BF.EXISTS slc_many_exp1_copy slc_many_exp1-item-2
+REDIS BF.EXISTS slc_many_exp1_copy slc_many_exp1-item-3
+REDIS BF.EXISTS slc_many_exp1_copy slc_many_exp1-item-4
+REDIS BF.INFO slc_many_exp1
+REDIS BF.INFO slc_many_exp1_copy
+REDIS BF.RESERVE slc_large_layer 0.01 100000 EXPANSION 2
+REDIS BF.ADD slc_large_layer slc_large_layer-item-0
+REDIS BF.ADD slc_large_layer slc_large_layer-item-1
+REDIS BF.ADD slc_large_layer slc_large_layer-item-2
+REDIS BF.ADD slc_large_layer slc_large_layer-item-3
+REDIS BF.ADD slc_large_layer slc_large_layer-item-4
+REDIS BF.ADD slc_large_layer slc_large_layer-item-5
+REDIS BF.ADD slc_large_layer slc_large_layer-item-6
+REDIS BF.ADD slc_large_layer slc_large_layer-item-7
+REDIS BF.ADD slc_large_layer slc_large_layer-item-8
+REDIS BF.ADD slc_large_layer slc_large_layer-item-9
+REDIS BF.ADD slc_large_layer slc_large_layer-item-10
+REDIS BF.ADD slc_large_layer slc_large_layer-item-11
+REDIS BF.ADD slc_large_layer slc_large_layer-item-12
+REDIS BF.ADD slc_large_layer slc_large_layer-item-13
+REDIS BF.ADD slc_large_layer slc_large_layer-item-14
+REDIS BF.ADD slc_large_layer slc_large_layer-item-15
+REDIS BF.ADD slc_large_layer slc_large_layer-item-16
+REDIS BF.ADD slc_large_layer slc_large_layer-item-17
+REDIS BF.ADD slc_large_layer slc_large_layer-item-18
+REDIS BF.ADD slc_large_layer slc_large_layer-item-19
+REDIS BF.ADD slc_large_layer slc_large_layer-item-20
+REDIS BF.ADD slc_large_layer slc_large_layer-item-21
+REDIS BF.ADD slc_large_layer slc_large_layer-item-22
+REDIS BF.ADD slc_large_layer slc_large_layer-item-23
+REDIS BF.ADD slc_large_layer slc_large_layer-item-24
+REDIS BF.ADD slc_large_layer slc_large_layer-item-25
+REDIS BF.ADD slc_large_layer slc_large_layer-item-26
+REDIS BF.ADD slc_large_layer slc_large_layer-item-27
+REDIS BF.ADD slc_large_layer slc_large_layer-item-28
+REDIS BF.ADD slc_large_layer slc_large_layer-item-29
+REDIS BF.ADD slc_large_layer slc_large_layer-item-30
+REDIS BF.ADD slc_large_layer slc_large_layer-item-31
+REDIS BF.ADD slc_large_layer slc_large_layer-item-32
+REDIS BF.ADD slc_large_layer slc_large_layer-item-33
+REDIS BF.ADD slc_large_layer slc_large_layer-item-34
+REDIS BF.ADD slc_large_layer slc_large_layer-item-35
+REDIS BF.ADD slc_large_layer slc_large_layer-item-36
+REDIS BF.ADD slc_large_layer slc_large_layer-item-37
+REDIS BF.ADD slc_large_layer slc_large_layer-item-38
+REDIS BF.ADD slc_large_layer slc_large_layer-item-39
+REDIS BF.ADD slc_large_layer slc_large_layer-item-40
+REDIS BF.ADD slc_large_layer slc_large_layer-item-41
+REDIS BF.ADD slc_large_layer slc_large_layer-item-42
+REDIS BF.ADD slc_large_layer slc_large_layer-item-43
+REDIS BF.ADD slc_large_layer slc_large_layer-item-44
+REDIS BF.ADD slc_large_layer slc_large_layer-item-45
+REDIS BF.ADD slc_large_layer slc_large_layer-item-46
+REDIS BF.ADD slc_large_layer slc_large_layer-item-47
+REDIS BF.ADD slc_large_layer slc_large_layer-item-48
+REDIS BF.ADD slc_large_layer slc_large_layer-item-49
+REDIS BF.ADD slc_large_layer slc_large_layer-item-50
+REDIS BF.ADD slc_large_layer slc_large_layer-item-51
+REDIS BF.ADD slc_large_layer slc_large_layer-item-52
+REDIS BF.ADD slc_large_layer slc_large_layer-item-53
+REDIS BF.ADD slc_large_layer slc_large_layer-item-54
+REDIS BF.ADD slc_large_layer slc_large_layer-item-55
+REDIS BF.ADD slc_large_layer slc_large_layer-item-56
+REDIS BF.ADD slc_large_layer slc_large_layer-item-57
+REDIS BF.ADD slc_large_layer slc_large_layer-item-58
+REDIS BF.ADD slc_large_layer slc_large_layer-item-59
+REDIS BF.ADD slc_large_layer slc_large_layer-item-60
+REDIS BF.ADD slc_large_layer slc_large_layer-item-61
+REDIS BF.ADD slc_large_layer slc_large_layer-item-62
+REDIS BF.ADD slc_large_layer slc_large_layer-item-63
+REDIS BF.ADD slc_large_layer slc_large_layer-item-64
+REDIS BF.ADD slc_large_layer slc_large_layer-item-65
+REDIS BF.ADD slc_large_layer slc_large_layer-item-66
+REDIS BF.ADD slc_large_layer slc_large_layer-item-67
+REDIS BF.ADD slc_large_layer slc_large_layer-item-68
+REDIS BF.ADD slc_large_layer slc_large_layer-item-69
+REDIS BF.ADD slc_large_layer slc_large_layer-item-70
+REDIS BF.ADD slc_large_layer slc_large_layer-item-71
+REDIS BF.ADD slc_large_layer slc_large_layer-item-72
+REDIS BF.ADD slc_large_layer slc_large_layer-item-73
+REDIS BF.ADD slc_large_layer slc_large_layer-item-74
+REDIS BF.ADD slc_large_layer slc_large_layer-item-75
+REDIS BF.ADD slc_large_layer slc_large_layer-item-76
+REDIS BF.ADD slc_large_layer slc_large_layer-item-77
+REDIS BF.ADD slc_large_layer slc_large_layer-item-78
+REDIS BF.ADD slc_large_layer slc_large_layer-item-79
+REDIS BF.ADD slc_large_layer slc_large_layer-item-80
+REDIS BF.ADD slc_large_layer slc_large_layer-item-81
+REDIS BF.ADD slc_large_layer slc_large_layer-item-82
+REDIS BF.ADD slc_large_layer slc_large_layer-item-83
+REDIS BF.ADD slc_large_layer slc_large_layer-item-84
+REDIS BF.ADD slc_large_layer slc_large_layer-item-85
+REDIS BF.ADD slc_large_layer slc_large_layer-item-86
+REDIS BF.ADD slc_large_layer slc_large_layer-item-87
+REDIS BF.ADD slc_large_layer slc_large_layer-item-88
+REDIS BF.ADD slc_large_layer slc_large_layer-item-89
+REDIS BF.ADD slc_large_layer slc_large_layer-item-90
+REDIS BF.ADD slc_large_layer slc_large_layer-item-91
+REDIS BF.ADD slc_large_layer slc_large_layer-item-92
+REDIS BF.ADD slc_large_layer slc_large_layer-item-93
+REDIS BF.ADD slc_large_layer slc_large_layer-item-94
+REDIS BF.ADD slc_large_layer slc_large_layer-item-95
+REDIS BF.ADD slc_large_layer slc_large_layer-item-96
+REDIS BF.ADD slc_large_layer slc_large_layer-item-97
+REDIS BF.ADD slc_large_layer slc_large_layer-item-98
+REDIS BF.ADD slc_large_layer slc_large_layer-item-99
+REDIS BF.SCANDUMP slc_large_layer 0
+REDIS BF.INFO slc_large_layer
+REDIS BF.INFO slc_large_layer
+REDIS MEMORY USAGE slc_large_layer
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_large_layer_copy 1 b'd\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x05\x00\x00\x00\x02\x00\x00\x00x\x1a\x02\x00\x00\x00\x00\x00\xc0\xd3\x10\x00\x00\x00\x00\x00d\x00\x00\x00\x00\x00\x00\x00{\x14\xaeG\xe1zt?\xe4\x86/\xb25\x0e&@\x08\x00\x00\x00\xa0\x86\x01\x00\x00\x00\x00\x00\x00'
+REDIS BF.INFO slc_large_layer_copy
+REDIS BF.INFO slc_large_layer_copy
+REDIS MEMORY USAGE slc_large_layer_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_large_layer 1
+REDIS BF.INFO slc_large_layer
+REDIS BF.INFO slc_large_layer
+REDIS MEMORY USAGE slc_large_layer
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.LOADCHUNK slc_large_layer_copy 2 <bytes len=137848 sha256=8e3b0ad2e29c1dae>
+REDIS BF.INFO slc_large_layer_copy
+REDIS BF.INFO slc_large_layer_copy
+REDIS MEMORY USAGE slc_large_layer_copy
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.SCANDUMP slc_large_layer 2
+REDIS BF.INFO slc_large_layer
+REDIS BF.INFO slc_large_layer
+REDIS MEMORY USAGE slc_large_layer
+REDIS INFO memory
+REDIS INFO memory
+REDIS BF.EXISTS slc_large_layer_copy slc_large_layer-item-0
+REDIS BF.EXISTS slc_large_layer_copy slc_large_layer-item-1
+REDIS BF.EXISTS slc_large_layer_copy slc_large_layer-item-2
+REDIS BF.EXISTS slc_large_layer_copy slc_large_layer-item-3
+REDIS BF.EXISTS slc_large_layer_copy slc_large_layer-item-4
+REDIS BF.INFO slc_large_layer
+REDIS BF.INFO slc_large_layer_copy
+REDIS BF.RESERVE pa_cap_100 0.01 100
+REDIS BF.ADD pa_cap_100 pa-100-0
+REDIS BF.ADD pa_cap_100 pa-100-1
+REDIS BF.ADD pa_cap_100 pa-100-2
+REDIS BF.ADD pa_cap_100 pa-100-3
+REDIS BF.ADD pa_cap_100 pa-100-4
+REDIS BF.ADD pa_cap_100 pa-100-5
+REDIS BF.ADD pa_cap_100 pa-100-6
+REDIS BF.ADD pa_cap_100 pa-100-7
+REDIS BF.ADD pa_cap_100 pa-100-8
+REDIS BF.ADD pa_cap_100 pa-100-9
+REDIS BF.ADD pa_cap_100 pa-100-10
+REDIS BF.ADD pa_cap_100 pa-100-11
+REDIS BF.ADD pa_cap_100 pa-100-12
+REDIS BF.ADD pa_cap_100 pa-100-13
+REDIS BF.ADD pa_cap_100 pa-100-14
+REDIS BF.ADD pa_cap_100 pa-100-15
+REDIS BF.ADD pa_cap_100 pa-100-16
+REDIS BF.ADD pa_cap_100 pa-100-17
+REDIS BF.ADD pa_cap_100 pa-100-18
+REDIS BF.ADD pa_cap_100 pa-100-19
+REDIS BF.ADD pa_cap_100 pa-100-20
+REDIS BF.ADD pa_cap_100 pa-100-21
+REDIS BF.ADD pa_cap_100 pa-100-22
+REDIS BF.ADD pa_cap_100 pa-100-23
+REDIS BF.ADD pa_cap_100 pa-100-24
+REDIS BF.ADD pa_cap_100 pa-100-25
+REDIS BF.ADD pa_cap_100 pa-100-26
+REDIS BF.ADD pa_cap_100 pa-100-27
+REDIS BF.ADD pa_cap_100 pa-100-28
+REDIS BF.ADD pa_cap_100 pa-100-29
+REDIS BF.ADD pa_cap_100 pa-100-30
+REDIS BF.ADD pa_cap_100 pa-100-31
+REDIS BF.ADD pa_cap_100 pa-100-32
+REDIS BF.ADD pa_cap_100 pa-100-33
+REDIS BF.ADD pa_cap_100 pa-100-34
+REDIS BF.ADD pa_cap_100 pa-100-35
+REDIS BF.ADD pa_cap_100 pa-100-36
+REDIS BF.ADD pa_cap_100 pa-100-37
+REDIS BF.ADD pa_cap_100 pa-100-38
+REDIS BF.ADD pa_cap_100 pa-100-39
+REDIS BF.ADD pa_cap_100 pa-100-40
+REDIS BF.ADD pa_cap_100 pa-100-41
+REDIS BF.ADD pa_cap_100 pa-100-42
+REDIS BF.ADD pa_cap_100 pa-100-43
+REDIS BF.ADD pa_cap_100 pa-100-44
+REDIS BF.ADD pa_cap_100 pa-100-45
+REDIS BF.ADD pa_cap_100 pa-100-46
+REDIS BF.ADD pa_cap_100 pa-100-47
+REDIS BF.ADD pa_cap_100 pa-100-48
+REDIS BF.ADD pa_cap_100 pa-100-49
+REDIS BF.ADD pa_cap_100 pa-100-50
+REDIS BF.ADD pa_cap_100 pa-100-51
+REDIS BF.ADD pa_cap_100 pa-100-52
+REDIS BF.ADD pa_cap_100 pa-100-53
+REDIS BF.ADD pa_cap_100 pa-100-54
+REDIS BF.ADD pa_cap_100 pa-100-55
+REDIS BF.ADD pa_cap_100 pa-100-56
+REDIS BF.ADD pa_cap_100 pa-100-57
+REDIS BF.ADD pa_cap_100 pa-100-58
+REDIS BF.ADD pa_cap_100 pa-100-59
+REDIS BF.ADD pa_cap_100 pa-100-60
+REDIS BF.ADD pa_cap_100 pa-100-61
+REDIS BF.ADD pa_cap_100 pa-100-62
+REDIS BF.ADD pa_cap_100 pa-100-63
+REDIS BF.ADD pa_cap_100 pa-100-64
+REDIS BF.ADD pa_cap_100 pa-100-65
+REDIS BF.ADD pa_cap_100 pa-100-66
+REDIS BF.ADD pa_cap_100 pa-100-67
+REDIS BF.ADD pa_cap_100 pa-100-68
+REDIS BF.ADD pa_cap_100 pa-100-69
+REDIS BF.ADD pa_cap_100 pa-100-70
+REDIS BF.ADD pa_cap_100 pa-100-71
+REDIS BF.ADD pa_cap_100 pa-100-72
+REDIS BF.ADD pa_cap_100 pa-100-73
+REDIS BF.ADD pa_cap_100 pa-100-74
+REDIS BF.ADD pa_cap_100 pa-100-75
+REDIS BF.ADD pa_cap_100 pa-100-76
+REDIS BF.ADD pa_cap_100 pa-100-77
+REDIS BF.ADD pa_cap_100 pa-100-78
+REDIS BF.ADD pa_cap_100 pa-100-79
+REDIS BF.ADD pa_cap_100 pa-100-80
+REDIS BF.ADD pa_cap_100 pa-100-81
+REDIS BF.ADD pa_cap_100 pa-100-82
+REDIS BF.ADD pa_cap_100 pa-100-83
+REDIS BF.ADD pa_cap_100 pa-100-84
+REDIS BF.ADD pa_cap_100 pa-100-85
+REDIS BF.ADD pa_cap_100 pa-100-86
+REDIS BF.ADD pa_cap_100 pa-100-87
+REDIS BF.ADD pa_cap_100 pa-100-88
+REDIS BF.ADD pa_cap_100 pa-100-89
+REDIS BF.ADD pa_cap_100 pa-100-90
+REDIS BF.ADD pa_cap_100 pa-100-91
+REDIS BF.ADD pa_cap_100 pa-100-92
+REDIS BF.ADD pa_cap_100 pa-100-93
+REDIS BF.ADD pa_cap_100 pa-100-94
+REDIS BF.ADD pa_cap_100 pa-100-95
+REDIS BF.ADD pa_cap_100 pa-100-96
+REDIS BF.ADD pa_cap_100 pa-100-97
+REDIS BF.ADD pa_cap_100 pa-100-98
+REDIS BF.ADD pa_cap_100 pa-100-99
+REDIS BF.RESERVE pa_cap_10000 0.01 10000
+REDIS BF.ADD pa_cap_10000 pa-10000-0
+REDIS BF.ADD pa_cap_10000 pa-10000-1
+REDIS BF.ADD pa_cap_10000 pa-10000-2
+REDIS BF.ADD pa_cap_10000 pa-10000-3
+REDIS BF.ADD pa_cap_10000 pa-10000-4
+REDIS BF.ADD pa_cap_10000 pa-10000-5
+REDIS BF.ADD pa_cap_10000 pa-10000-6
+REDIS BF.ADD pa_cap_10000 pa-10000-7
+REDIS BF.ADD pa_cap_10000 pa-10000-8
+REDIS BF.ADD pa_cap_10000 pa-10000-9
+REDIS BF.ADD pa_cap_10000 pa-10000-10
+REDIS BF.ADD pa_cap_10000 pa-10000-11
+REDIS BF.ADD pa_cap_10000 pa-10000-12
+REDIS BF.ADD pa_cap_10000 pa-10000-13
+REDIS BF.ADD pa_cap_10000 pa-10000-14
+REDIS BF.ADD pa_cap_10000 pa-10000-15
+REDIS BF.ADD pa_cap_10000 pa-10000-16
+REDIS BF.ADD pa_cap_10000 pa-10000-17
+REDIS BF.ADD pa_cap_10000 pa-10000-18
+REDIS BF.ADD pa_cap_10000 pa-10000-19
+REDIS BF.ADD pa_cap_10000 pa-10000-20
+REDIS BF.ADD pa_cap_10000 pa-10000-21
+REDIS BF.ADD pa_cap_10000 pa-10000-22
+REDIS BF.ADD pa_cap_10000 pa-10000-23
+REDIS BF.ADD pa_cap_10000 pa-10000-24
+REDIS BF.ADD pa_cap_10000 pa-10000-25
+REDIS BF.ADD pa_cap_10000 pa-10000-26
+REDIS BF.ADD pa_cap_10000 pa-10000-27
+REDIS BF.ADD pa_cap_10000 pa-10000-28
+REDIS BF.ADD pa_cap_10000 pa-10000-29
+REDIS BF.ADD pa_cap_10000 pa-10000-30
+REDIS BF.ADD pa_cap_10000 pa-10000-31
+REDIS BF.ADD pa_cap_10000 pa-10000-32
+REDIS BF.ADD pa_cap_10000 pa-10000-33
+REDIS BF.ADD pa_cap_10000 pa-10000-34
+REDIS BF.ADD pa_cap_10000 pa-10000-35
+REDIS BF.ADD pa_cap_10000 pa-10000-36
+REDIS BF.ADD pa_cap_10000 pa-10000-37
+REDIS BF.ADD pa_cap_10000 pa-10000-38
+REDIS BF.ADD pa_cap_10000 pa-10000-39
+REDIS BF.ADD pa_cap_10000 pa-10000-40
+REDIS BF.ADD pa_cap_10000 pa-10000-41
+REDIS BF.ADD pa_cap_10000 pa-10000-42
+REDIS BF.ADD pa_cap_10000 pa-10000-43
+REDIS BF.ADD pa_cap_10000 pa-10000-44
+REDIS BF.ADD pa_cap_10000 pa-10000-45
+REDIS BF.ADD pa_cap_10000 pa-10000-46
+REDIS BF.ADD pa_cap_10000 pa-10000-47
+REDIS BF.ADD pa_cap_10000 pa-10000-48
+REDIS BF.ADD pa_cap_10000 pa-10000-49
+REDIS BF.ADD pa_cap_10000 pa-10000-50
+REDIS BF.ADD pa_cap_10000 pa-10000-51
+REDIS BF.ADD pa_cap_10000 pa-10000-52
+REDIS BF.ADD pa_cap_10000 pa-10000-53
+REDIS BF.ADD pa_cap_10000 pa-10000-54
+REDIS BF.ADD pa_cap_10000 pa-10000-55
+REDIS BF.ADD pa_cap_10000 pa-10000-56
+REDIS BF.ADD pa_cap_10000 pa-10000-57
+REDIS BF.ADD pa_cap_10000 pa-10000-58
+REDIS BF.ADD pa_cap_10000 pa-10000-59
+REDIS BF.ADD pa_cap_10000 pa-10000-60
+REDIS BF.ADD pa_cap_10000 pa-10000-61
+REDIS BF.ADD pa_cap_10000 pa-10000-62
+REDIS BF.ADD pa_cap_10000 pa-10000-63
+REDIS BF.ADD pa_cap_10000 pa-10000-64
+REDIS BF.ADD pa_cap_10000 pa-10000-65
+REDIS BF.ADD pa_cap_10000 pa-10000-66
+REDIS BF.ADD pa_cap_10000 pa-10000-67
+REDIS BF.ADD pa_cap_10000 pa-10000-68
+REDIS BF.ADD pa_cap_10000 pa-10000-69
+REDIS BF.ADD pa_cap_10000 pa-10000-70
+REDIS BF.ADD pa_cap_10000 pa-10000-71
+REDIS BF.ADD pa_cap_10000 pa-10000-72
+REDIS BF.ADD pa_cap_10000 pa-10000-73
+REDIS BF.ADD pa_cap_10000 pa-10000-74
+REDIS BF.ADD pa_cap_10000 pa-10000-75
+REDIS BF.ADD pa_cap_10000 pa-10000-76
+REDIS BF.ADD pa_cap_10000 pa-10000-77
+REDIS BF.ADD pa_cap_10000 pa-10000-78
+REDIS BF.ADD pa_cap_10000 pa-10000-79
+REDIS BF.ADD pa_cap_10000 pa-10000-80
+REDIS BF.ADD pa_cap_10000 pa-10000-81
+REDIS BF.ADD pa_cap_10000 pa-10000-82
+REDIS BF.ADD pa_cap_10000 pa-10000-83
+REDIS BF.ADD pa_cap_10000 pa-10000-84
+REDIS BF.ADD pa_cap_10000 pa-10000-85
+REDIS BF.ADD pa_cap_10000 pa-10000-86
+REDIS BF.ADD pa_cap_10000 pa-10000-87
+REDIS BF.ADD pa_cap_10000 pa-10000-88
+REDIS BF.ADD pa_cap_10000 pa-10000-89
+REDIS BF.ADD pa_cap_10000 pa-10000-90
+REDIS BF.ADD pa_cap_10000 pa-10000-91
+REDIS BF.ADD pa_cap_10000 pa-10000-92
+REDIS BF.ADD pa_cap_10000 pa-10000-93
+REDIS BF.ADD pa_cap_10000 pa-10000-94
+REDIS BF.ADD pa_cap_10000 pa-10000-95
+REDIS BF.ADD pa_cap_10000 pa-10000-96
+REDIS BF.ADD pa_cap_10000 pa-10000-97
+REDIS BF.ADD pa_cap_10000 pa-10000-98
+REDIS BF.ADD pa_cap_10000 pa-10000-99
+REDIS BF.RESERVE pa_ml_exp1 0.01 10 EXPANSION 1
+REDIS BF.ADD pa_ml_exp1 pa-exp1-0
+REDIS BF.ADD pa_ml_exp1 pa-exp1-1
+REDIS BF.ADD pa_ml_exp1 pa-exp1-2
+REDIS BF.ADD pa_ml_exp1 pa-exp1-3
+REDIS BF.ADD pa_ml_exp1 pa-exp1-4
+REDIS BF.ADD pa_ml_exp1 pa-exp1-5
+REDIS BF.ADD pa_ml_exp1 pa-exp1-6
+REDIS BF.ADD pa_ml_exp1 pa-exp1-7
+REDIS BF.ADD pa_ml_exp1 pa-exp1-8
+REDIS BF.ADD pa_ml_exp1 pa-exp1-9
+REDIS BF.ADD pa_ml_exp1 pa-exp1-10
+REDIS BF.ADD pa_ml_exp1 pa-exp1-11
+REDIS BF.ADD pa_ml_exp1 pa-exp1-12
+REDIS BF.ADD pa_ml_exp1 pa-exp1-13
+REDIS BF.ADD pa_ml_exp1 pa-exp1-14
+REDIS BF.ADD pa_ml_exp1 pa-exp1-15
+REDIS BF.ADD pa_ml_exp1 pa-exp1-16
+REDIS BF.ADD pa_ml_exp1 pa-exp1-17
+REDIS BF.ADD pa_ml_exp1 pa-exp1-18
+REDIS BF.ADD pa_ml_exp1 pa-exp1-19
+REDIS BF.ADD pa_ml_exp1 pa-exp1-20
+REDIS BF.ADD pa_ml_exp1 pa-exp1-21
+REDIS BF.ADD pa_ml_exp1 pa-exp1-22
+REDIS BF.ADD pa_ml_exp1 pa-exp1-23
+REDIS BF.ADD pa_ml_exp1 pa-exp1-24
+REDIS BF.ADD pa_ml_exp1 pa-exp1-25
+REDIS BF.ADD pa_ml_exp1 pa-exp1-26
+REDIS BF.ADD pa_ml_exp1 pa-exp1-27
+REDIS BF.ADD pa_ml_exp1 pa-exp1-28
+REDIS BF.ADD pa_ml_exp1 pa-exp1-29
+REDIS BF.ADD pa_ml_exp1 pa-exp1-30
+REDIS BF.ADD pa_ml_exp1 pa-exp1-31
+REDIS BF.ADD pa_ml_exp1 pa-exp1-32
+REDIS BF.ADD pa_ml_exp1 pa-exp1-33
+REDIS BF.ADD pa_ml_exp1 pa-exp1-34
+REDIS BF.ADD pa_ml_exp1 pa-exp1-35
+REDIS BF.ADD pa_ml_exp1 pa-exp1-36
+REDIS BF.ADD pa_ml_exp1 pa-exp1-37
+REDIS BF.ADD pa_ml_exp1 pa-exp1-38
+REDIS BF.ADD pa_ml_exp1 pa-exp1-39
+REDIS BF.ADD pa_ml_exp1 pa-exp1-40
+REDIS BF.ADD pa_ml_exp1 pa-exp1-41
+REDIS BF.ADD pa_ml_exp1 pa-exp1-42
+REDIS BF.ADD pa_ml_exp1 pa-exp1-43
+REDIS BF.ADD pa_ml_exp1 pa-exp1-44
+REDIS BF.ADD pa_ml_exp1 pa-exp1-45
+REDIS BF.ADD pa_ml_exp1 pa-exp1-46
+REDIS BF.ADD pa_ml_exp1 pa-exp1-47
+REDIS BF.ADD pa_ml_exp1 pa-exp1-48
+REDIS BF.ADD pa_ml_exp1 pa-exp1-49
+REDIS BF.ADD pa_ml_exp1 pa-exp1-50
+REDIS BF.ADD pa_ml_exp1 pa-exp1-51
+REDIS BF.ADD pa_ml_exp1 pa-exp1-52
+REDIS BF.ADD pa_ml_exp1 pa-exp1-53
+REDIS BF.ADD pa_ml_exp1 pa-exp1-54
+REDIS BF.ADD pa_ml_exp1 pa-exp1-55
+REDIS BF.ADD pa_ml_exp1 pa-exp1-56
+REDIS BF.ADD pa_ml_exp1 pa-exp1-57
+REDIS BF.ADD pa_ml_exp1 pa-exp1-58
+REDIS BF.ADD pa_ml_exp1 pa-exp1-59
+REDIS BF.ADD pa_ml_exp1 pa-exp1-60
+REDIS BF.ADD pa_ml_exp1 pa-exp1-61
+REDIS BF.ADD pa_ml_exp1 pa-exp1-62
+REDIS BF.ADD pa_ml_exp1 pa-exp1-63
+REDIS BF.ADD pa_ml_exp1 pa-exp1-64
+REDIS BF.ADD pa_ml_exp1 pa-exp1-65
+REDIS BF.ADD pa_ml_exp1 pa-exp1-66
+REDIS BF.ADD pa_ml_exp1 pa-exp1-67
+REDIS BF.ADD pa_ml_exp1 pa-exp1-68
+REDIS BF.ADD pa_ml_exp1 pa-exp1-69
+REDIS BF.ADD pa_ml_exp1 pa-exp1-70
+REDIS BF.ADD pa_ml_exp1 pa-exp1-71
+REDIS BF.ADD pa_ml_exp1 pa-exp1-72
+REDIS BF.ADD pa_ml_exp1 pa-exp1-73
+REDIS BF.ADD pa_ml_exp1 pa-exp1-74
+REDIS BF.ADD pa_ml_exp1 pa-exp1-75
+REDIS BF.ADD pa_ml_exp1 pa-exp1-76
+REDIS BF.ADD pa_ml_exp1 pa-exp1-77
+REDIS BF.ADD pa_ml_exp1 pa-exp1-78
+REDIS BF.ADD pa_ml_exp1 pa-exp1-79
+REDIS BF.RESERVE pa_large_items 0.01 100
+REDIS BF.ADD pa_large_items <bytes len=10000 sha256=e4ee97ec252749d2>
+REDIS BF.ADD pa_large_items <bytes len=1000000 sha256=29db38f631ce8382>
+REDIS SAVE
+REDIS CONFIG SET aof-use-rdb-preamble yes
+REDIS CONFIG SET appendonly yes
+REDIS INFO persistence
+REDIS INFO persistence
+REDIS BGREWRITEAOF
+REDIS INFO persistence
+REDIS INFO persistence
+REDIS SHUTDOWN NOSAVE
+SUBPROCESS /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server --bind 127.0.0.1 --port 56755 --protected-mode no --daemonize no --loglevel notice --dir /tmp/redis-e1pcaana --dbfilename dump.rdb --loadmodule /tmp/gemini-module-v6-stage10-build-workaround/redis_bloom.so --appendonly yes --aof-use-rdb-preamble yes
+REDIS PING
+REDIS BF.CARD pa_cap_100
+REDIS BF.EXISTS pa_large_items <bytes len=10000 sha256=e4ee97ec252749d2>
+REDIS BF.EXISTS pa_large_items <bytes len=1000000 sha256=29db38f631ce8382>
+REDIS SHUTDOWN NOSAVE

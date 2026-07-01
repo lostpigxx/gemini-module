@@ -1,0 +1,393 @@
+scenario_id,command,capacity,expansion,item_class,item_size_bytes,iteration,elapsed_ms,reply_class,num_layers,bf_info_size,memory_usage,used_memory,used_memory_rss,notes
+LAT-01,BF.ADD lat_base lat-base-0,100,2,small,10,0,0.056,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-0,100,2,small,10,0,0.041,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-1,100,2,small,10,1,0.040,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-1,100,2,small,10,1,0.039,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-2,100,2,small,10,2,0.037,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-2,100,2,small,10,2,0.042,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-3,100,2,small,10,3,0.039,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-3,100,2,small,10,3,0.039,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-4,100,2,small,10,4,0.039,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-4,100,2,small,10,4,0.038,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-5,100,2,small,10,5,0.039,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-5,100,2,small,10,5,0.039,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-6,100,2,small,10,6,0.038,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-6,100,2,small,10,6,0.035,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-7,100,2,small,10,7,0.038,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-7,100,2,small,10,7,0.039,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-8,100,2,small,10,8,0.038,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-8,100,2,small,10,8,0.036,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-9,100,2,small,10,9,0.039,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-9,100,2,small,10,9,0.038,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-10,100,2,small,11,10,0.036,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-10,100,2,small,11,10,0.039,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-11,100,2,small,11,11,0.038,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-11,100,2,small,11,11,0.039,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-12,100,2,small,11,12,0.038,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-12,100,2,small,11,12,0.038,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-13,100,2,small,11,13,0.040,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-13,100,2,small,11,13,0.043,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-14,100,2,small,11,14,0.031,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-14,100,2,small,11,14,0.031,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-15,100,2,small,11,15,0.042,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-15,100,2,small,11,15,0.032,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-16,100,2,small,11,16,0.031,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-16,100,2,small,11,16,0.031,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-17,100,2,small,11,17,0.031,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-17,100,2,small,11,17,0.032,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-18,100,2,small,11,18,0.034,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-18,100,2,small,11,18,0.031,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-19,100,2,small,11,19,0.034,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-19,100,2,small,11,19,0.034,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-20,100,2,small,11,20,0.031,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-20,100,2,small,11,20,0.031,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-21,100,2,small,11,21,0.030,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-21,100,2,small,11,21,0.035,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-22,100,2,small,11,22,0.034,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-22,100,2,small,11,22,0.034,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-23,100,2,small,11,23,0.031,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-23,100,2,small,11,23,0.037,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-24,100,2,small,11,24,0.035,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-24,100,2,small,11,24,0.036,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-25,100,2,small,11,25,0.035,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-25,100,2,small,11,25,0.035,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-26,100,2,small,11,26,0.036,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-26,100,2,small,11,26,0.032,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-27,100,2,small,11,27,0.036,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-27,100,2,small,11,27,0.036,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-28,100,2,small,11,28,0.035,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-28,100,2,small,11,28,0.035,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.ADD lat_base lat-base-29,100,2,small,11,29,0.039,int,1,440,488,3910736,9072640,baseline ADD
+LAT-01,BF.EXISTS lat_base lat-base-29,100,2,small,11,29,0.036,int,1,440,488,3910736,9072640,baseline EXISTS
+LAT-01,BF.MADD lat_base batch-0-0 batch-0-1,100,2,small_batch,90,0,0.109,list,1,440,488,3910736,9072640,baseline MADD batch of 10
+LAT-01,BF.MEXISTS lat_base batch-0-0 batch-0-1,100,2,small_batch,90,0,0.144,list,1,440,488,3910736,9072640,baseline MEXISTS batch of 10
+LAT-01,BF.INFO lat_base,100,2,none,0,0,0.177,list,1,440,488,3910736,9072640,baseline INFO
+LAT-01,BF.CARD lat_base,100,2,none,0,0,0.034,int,1,440,488,3910736,9072640,baseline CARD
+LAT-01,BF.MADD lat_base batch-1-0 batch-1-1,100,2,small_batch,90,1,0.106,list,1,440,488,3910736,9072640,baseline MADD batch of 10
+LAT-01,BF.MEXISTS lat_base batch-1-0 batch-1-1,100,2,small_batch,90,1,0.107,list,1,440,488,3910736,9072640,baseline MEXISTS batch of 10
+LAT-01,BF.INFO lat_base,100,2,none,0,1,0.181,list,1,440,488,3910736,9072640,baseline INFO
+LAT-01,BF.CARD lat_base,100,2,none,0,1,0.032,int,1,440,488,3910736,9072640,baseline CARD
+LAT-01,BF.MADD lat_base batch-2-0 batch-2-1,100,2,small_batch,90,2,0.114,list,1,440,488,3910736,9072640,baseline MADD batch of 10
+LAT-01,BF.MEXISTS lat_base batch-2-0 batch-2-1,100,2,small_batch,90,2,0.108,list,1,440,488,3910736,9072640,baseline MEXISTS batch of 10
+LAT-01,BF.INFO lat_base,100,2,none,0,2,0.179,list,1,440,488,3910736,9072640,baseline INFO
+LAT-01,BF.CARD lat_base,100,2,none,0,2,0.035,int,1,440,488,3910736,9072640,baseline CARD
+LAT-01,BF.MADD lat_base batch-3-0 batch-3-1,100,2,small_batch,90,3,0.118,list,1,440,488,3910736,9072640,baseline MADD batch of 10
+LAT-01,BF.MEXISTS lat_base batch-3-0 batch-3-1,100,2,small_batch,90,3,0.111,list,1,440,488,3910736,9072640,baseline MEXISTS batch of 10
+LAT-01,BF.INFO lat_base,100,2,none,0,3,0.176,list,1,440,488,3910736,9072640,baseline INFO
+LAT-01,BF.CARD lat_base,100,2,none,0,3,0.035,int,1,440,488,3910736,9072640,baseline CARD
+LAT-01,BF.MADD lat_base batch-4-0 batch-4-1,100,2,small_batch,90,4,0.115,list,1,440,488,3910736,9072640,baseline MADD batch of 10
+LAT-01,BF.MEXISTS lat_base batch-4-0 batch-4-1,100,2,small_batch,90,4,0.109,list,1,440,488,3910736,9072640,baseline MEXISTS batch of 10
+LAT-01,BF.INFO lat_base,100,2,none,0,4,0.175,list,1,440,488,3910736,9072640,baseline INFO
+LAT-01,BF.CARD lat_base,100,2,none,0,4,0.035,int,1,440,488,3910736,9072640,baseline CARD
+LAT-02,BF.ADD lat_cap_10 cap-10-0,10,2,small,8,0,0.034,int,1,424,472,3911272,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10 cap-10-0,10,2,small,8,0,0.033,int,1,424,472,3911272,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10 cap-10-1,10,2,small,8,1,0.035,int,1,424,472,3911272,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10 cap-10-1,10,2,small,8,1,0.035,int,1,424,472,3911272,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10 cap-10-2,10,2,small,8,2,0.034,int,1,424,472,3911272,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10 cap-10-2,10,2,small,8,2,0.032,int,1,424,472,3911272,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10 cap-10-3,10,2,small,8,3,0.036,int,1,424,472,3911272,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10 cap-10-3,10,2,small,8,3,0.036,int,1,424,472,3911272,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10 cap-10-4,10,2,small,8,4,0.041,int,1,424,472,3911272,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10 cap-10-4,10,2,small,8,4,0.031,int,1,424,472,3911272,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10 cap-10-5,10,2,small,8,5,0.036,int,1,424,472,3911272,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10 cap-10-5,10,2,small,8,5,0.036,int,1,424,472,3911272,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10 cap-10-6,10,2,small,8,6,0.035,int,1,424,472,3911272,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10 cap-10-6,10,2,small,8,6,0.033,int,1,424,472,3911272,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10 cap-10-7,10,2,small,8,7,0.031,int,1,424,472,3911272,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10 cap-10-7,10,2,small,8,7,0.035,int,1,424,472,3911272,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10 cap-10-8,10,2,small,8,8,0.034,int,1,424,472,3911272,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10 cap-10-8,10,2,small,8,8,0.039,int,1,424,472,3911272,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10 cap-10-9,10,2,small,8,9,0.029,int,1,424,472,3911272,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10 cap-10-9,10,2,small,8,9,0.028,int,1,424,472,3911272,9072640,capacity scale EXISTS
+LAT-02,BF.INFO lat_cap_10,10,2,none,0,0,0.171,list,1,424,472,3911272,9072640,capacity scale INFO
+LAT-02,BF.CARD lat_cap_10,10,2,none,0,0,0.034,int,1,424,472,3911272,9072640,capacity scale CARD
+LAT-02,BF.ADD lat_cap_100 cap-100-0,100,2,small,9,0,0.030,int,1,440,488,3912088,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100 cap-100-0,100,2,small,9,0,0.030,int,1,440,488,3912088,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100 cap-100-1,100,2,small,9,1,0.033,int,1,440,488,3912088,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100 cap-100-1,100,2,small,9,1,0.033,int,1,440,488,3911952,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100 cap-100-2,100,2,small,9,2,0.030,int,1,440,488,3911952,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100 cap-100-2,100,2,small,9,2,0.033,int,1,440,488,3911952,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100 cap-100-3,100,2,small,9,3,0.032,int,1,440,488,3911952,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100 cap-100-3,100,2,small,9,3,0.033,int,1,440,488,3911952,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100 cap-100-4,100,2,small,9,4,0.030,int,1,440,488,3911952,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100 cap-100-4,100,2,small,9,4,0.033,int,1,440,488,3911952,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100 cap-100-5,100,2,small,9,5,0.030,int,1,440,488,3911952,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100 cap-100-5,100,2,small,9,5,0.033,int,1,440,488,3911952,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100 cap-100-6,100,2,small,9,6,0.040,int,1,440,488,3911952,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100 cap-100-6,100,2,small,9,6,0.033,int,1,440,488,3911952,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100 cap-100-7,100,2,small,9,7,0.032,int,1,440,488,3911952,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100 cap-100-7,100,2,small,9,7,0.034,int,1,440,488,3911952,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100 cap-100-8,100,2,small,9,8,0.033,int,1,440,488,3911952,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100 cap-100-8,100,2,small,9,8,0.034,int,1,440,488,3911952,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100 cap-100-9,100,2,small,9,9,0.030,int,1,440,488,3911952,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100 cap-100-9,100,2,small,9,9,0.034,int,1,440,488,3911952,9072640,capacity scale EXISTS
+LAT-02,BF.INFO lat_cap_100,100,2,none,0,0,0.166,list,1,440,488,3911952,9072640,capacity scale INFO
+LAT-02,BF.CARD lat_cap_100,100,2,none,0,0,0.029,int,1,440,488,3911952,9072640,capacity scale CARD
+LAT-02,BF.ADD lat_cap_10000 cap-10000-0,10000,2,small,11,0,0.032,int,1,14088,14152,3926184,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10000 cap-10000-0,10000,2,small,11,0,0.033,int,1,14088,14152,3926184,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10000 cap-10000-1,10000,2,small,11,1,0.029,int,1,14088,14152,3926184,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10000 cap-10000-1,10000,2,small,11,1,0.039,int,1,14088,14152,3926184,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10000 cap-10000-2,10000,2,small,11,2,0.040,int,1,14088,14152,3926184,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10000 cap-10000-2,10000,2,small,11,2,0.030,int,1,14088,14152,3926184,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10000 cap-10000-3,10000,2,small,11,3,0.042,int,1,14088,14152,3926184,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10000 cap-10000-3,10000,2,small,11,3,0.030,int,1,14088,14152,3926184,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10000 cap-10000-4,10000,2,small,11,4,0.038,int,1,14088,14152,3926184,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10000 cap-10000-4,10000,2,small,11,4,0.040,int,1,14088,14152,3926184,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10000 cap-10000-5,10000,2,small,11,5,0.041,int,1,14088,14152,3926184,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10000 cap-10000-5,10000,2,small,11,5,0.032,int,1,14088,14152,3926184,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10000 cap-10000-6,10000,2,small,11,6,0.040,int,1,14088,14152,3926184,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10000 cap-10000-6,10000,2,small,11,6,0.036,int,1,14088,14152,3926184,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10000 cap-10000-7,10000,2,small,11,7,0.032,int,1,14088,14152,3926184,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10000 cap-10000-7,10000,2,small,11,7,0.037,int,1,14088,14152,3926184,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10000 cap-10000-8,10000,2,small,11,8,0.037,int,1,14088,14152,3926184,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10000 cap-10000-8,10000,2,small,11,8,0.032,int,1,14088,14152,3926184,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_10000 cap-10000-9,10000,2,small,11,9,0.035,int,1,14088,14152,3926184,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_10000 cap-10000-9,10000,2,small,11,9,0.038,int,1,14088,14152,3926184,9072640,capacity scale EXISTS
+LAT-02,BF.INFO lat_cap_10000,10000,2,none,0,0,0.168,list,1,14088,14152,3926184,9072640,capacity scale INFO
+LAT-02,BF.CARD lat_cap_10000,10000,2,none,0,0,0.036,int,1,14088,14152,3926184,9072640,capacity scale CARD
+LAT-02,BF.ADD lat_cap_100000 cap-100000-0,100000,2,small,12,0,0.053,int,1,138144,138208,4065848,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100000 cap-100000-0,100000,2,small,12,0,0.035,int,1,138144,138208,4065848,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100000 cap-100000-1,100000,2,small,12,1,0.041,int,1,138144,138208,4065848,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100000 cap-100000-1,100000,2,small,12,1,0.034,int,1,138144,138208,4065848,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100000 cap-100000-2,100000,2,small,12,2,0.040,int,1,138144,138208,4065848,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100000 cap-100000-2,100000,2,small,12,2,0.036,int,1,138144,138208,4065848,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100000 cap-100000-3,100000,2,small,12,3,0.039,int,1,138144,138208,4065848,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100000 cap-100000-3,100000,2,small,12,3,0.040,int,1,138144,138208,4065848,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100000 cap-100000-4,100000,2,small,12,4,0.035,int,1,138144,138208,4065848,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100000 cap-100000-4,100000,2,small,12,4,0.037,int,1,138144,138208,4065848,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100000 cap-100000-5,100000,2,small,12,5,0.041,int,1,138144,138208,4065848,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100000 cap-100000-5,100000,2,small,12,5,0.034,int,1,138144,138208,4065848,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100000 cap-100000-6,100000,2,small,12,6,0.048,int,1,138144,138208,4065848,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100000 cap-100000-6,100000,2,small,12,6,0.040,int,1,138144,138208,4065848,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100000 cap-100000-7,100000,2,small,12,7,0.038,int,1,138144,138208,4065848,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100000 cap-100000-7,100000,2,small,12,7,0.034,int,1,138144,138208,4065848,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100000 cap-100000-8,100000,2,small,12,8,0.037,int,1,138144,138208,4065848,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100000 cap-100000-8,100000,2,small,12,8,0.042,int,1,138144,138208,4065848,9072640,capacity scale EXISTS
+LAT-02,BF.ADD lat_cap_100000 cap-100000-9,100000,2,small,12,9,0.039,int,1,138144,138208,4065848,9072640,capacity scale ADD
+LAT-02,BF.EXISTS lat_cap_100000 cap-100000-9,100000,2,small,12,9,0.037,int,1,138144,138208,4065848,9072640,capacity scale EXISTS
+LAT-02,BF.INFO lat_cap_100000,100000,2,none,0,0,0.176,list,1,138144,138208,4065848,9072640,capacity scale INFO
+LAT-02,BF.CARD lat_cap_100000,100000,2,none,0,0,0.038,int,1,138144,138208,4065848,9072640,capacity scale CARD
+LAT-03,BF.EXISTS lat_exp1_many many-0,10,1,oldest,6,0,0.035,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-0,10,1,oldest,6,1,0.032,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-0,10,1,oldest,6,2,0.031,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-0,10,1,oldest,6,3,0.031,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-0,10,1,oldest,6,4,0.031,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-0,10,1,oldest,6,5,0.037,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-0,10,1,oldest,6,6,0.038,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-0,10,1,oldest,6,7,0.036,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-0,10,1,oldest,6,8,0.038,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-0,10,1,oldest,6,9,0.038,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-89,10,1,newest,7,0,0.031,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-89,10,1,newest,7,1,0.037,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-89,10,1,newest,7,2,0.046,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-89,10,1,newest,7,3,0.031,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-89,10,1,newest,7,4,0.038,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-89,10,1,newest,7,5,0.032,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-89,10,1,newest,7,6,0.039,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-89,10,1,newest,7,7,0.038,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-89,10,1,newest,7,8,0.032,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-89,10,1,newest,7,9,0.037,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-absent,10,1,missing,11,0,0.037,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-absent,10,1,missing,11,1,0.037,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-absent,10,1,missing,11,2,0.046,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-absent,10,1,missing,11,3,0.036,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-absent,10,1,missing,11,4,0.037,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-absent,10,1,missing,11,5,0.032,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-absent,10,1,missing,11,6,0.037,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-absent,10,1,missing,11,7,0.036,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-absent,10,1,missing,11,8,0.048,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-03,BF.EXISTS lat_exp1_many many-absent,10,1,missing,11,9,0.032,int,9,2216,2264,4068240,9072640,multi-layer query after 90 attempted inserts
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-0,10,1,small,7,0,0.034,int,1,424,472,4068776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-1,10,1,small,7,1,0.035,int,1,424,472,4068776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-2,10,1,small,7,2,0.034,int,1,424,472,4068776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-3,10,1,small,7,3,0.030,int,1,424,472,4068776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-4,10,1,small,7,4,0.037,int,1,424,472,4068776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-5,10,1,small,7,5,0.046,int,1,424,472,4068776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-6,10,1,small,7,6,0.036,int,1,424,472,4068776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-7,10,1,small,7,7,0.035,int,1,424,472,4068776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-8,10,1,small,7,8,0.036,int,1,424,472,4068776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-9,10,1,small,7,9,0.036,int,1,424,472,4068776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-10,10,1,small,8,10,0.038,int,2,552,600,4068912,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-11,10,1,small,8,11,0.037,int,2,552,600,4068912,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-12,10,1,small,8,12,0.037,int,2,552,600,4068912,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-13,10,1,small,8,13,0.034,int,2,552,600,4068912,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-14,10,1,small,8,14,0.034,int,2,552,600,4068912,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-15,10,1,small,8,15,0.047,int,2,552,600,4068912,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-16,10,1,small,8,16,0.034,int,2,552,600,4068912,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-17,10,1,small,8,17,0.035,int,2,552,600,4068912,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-18,10,1,small,8,18,0.037,int,2,552,600,4068912,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_1 exp-1-19,10,1,small,8,19,0.036,int,2,552,600,4068912,9072640,expansion comparison
+LAT-04,BF.INFO lat_exp_cmp_1,10,1,none,0,0,0.165,list,2,552,600,4068912,9072640,expansion comparison info
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-0,10,2,small,7,0,0.029,int,1,424,472,4069448,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-1,10,2,small,7,1,0.030,int,1,424,472,4069448,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-2,10,2,small,7,2,0.037,int,1,424,472,4069448,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-3,10,2,small,7,3,0.038,int,1,424,472,4069448,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-4,10,2,small,7,4,0.031,int,1,424,472,4069448,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-5,10,2,small,7,5,0.036,int,1,424,472,4069448,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-6,10,2,small,7,6,0.031,int,1,424,472,4069448,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-7,10,2,small,7,7,0.039,int,1,424,472,4069448,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-8,10,2,small,7,8,0.037,int,1,424,472,4069448,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-9,10,2,small,7,9,0.031,int,1,424,472,4069448,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-10,10,2,small,8,10,0.045,int,2,552,600,4069584,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-11,10,2,small,8,11,0.031,int,2,552,600,4069584,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-12,10,2,small,8,12,0.041,int,2,552,600,4069584,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-13,10,2,small,8,13,0.037,int,2,552,600,4069584,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-14,10,2,small,8,14,0.036,int,2,552,600,4069584,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-15,10,2,small,8,15,0.039,int,2,552,600,4069584,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-16,10,2,small,8,16,0.032,int,2,552,600,4069584,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-17,10,2,small,8,17,0.041,int,2,552,600,4069584,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-18,10,2,small,8,18,0.039,int,2,552,600,4069584,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_2 exp-2-19,10,2,small,8,19,0.031,int,2,552,600,4069584,9072640,expansion comparison
+LAT-04,BF.INFO lat_exp_cmp_2,10,2,none,0,0,0.180,list,2,552,600,4069584,9072640,expansion comparison info
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-0,10,4,small,7,0,0.034,int,1,424,472,4070120,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-1,10,4,small,7,1,0.035,int,1,424,472,4070120,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-2,10,4,small,7,2,0.037,int,1,424,472,4070120,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-3,10,4,small,7,3,0.034,int,1,424,472,4070120,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-4,10,4,small,7,4,0.036,int,1,424,472,4070120,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-5,10,4,small,7,5,0.034,int,1,424,472,4070120,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-6,10,4,small,7,6,0.036,int,1,424,472,4070120,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-7,10,4,small,7,7,0.036,int,1,424,472,4070120,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-8,10,4,small,7,8,0.032,int,1,424,472,4070120,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-9,10,4,small,7,9,0.035,int,1,424,472,4070120,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-10,10,4,small,8,10,0.051,int,2,552,600,4070256,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-11,10,4,small,8,11,0.036,int,2,552,600,4070256,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-12,10,4,small,8,12,0.034,int,2,552,600,4070256,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-13,10,4,small,8,13,0.032,int,2,552,600,4070256,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-14,10,4,small,8,14,0.036,int,2,552,600,4070256,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-15,10,4,small,8,15,0.033,int,2,552,600,4070256,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-16,10,4,small,8,16,0.035,int,2,552,600,4070256,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-17,10,4,small,8,17,0.037,int,2,552,600,4070256,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-18,10,4,small,8,18,0.036,int,2,552,600,4070256,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_4 exp-4-19,10,4,small,8,19,0.035,int,2,552,600,4070256,9072640,expansion comparison
+LAT-04,BF.INFO lat_exp_cmp_4,10,4,none,0,0,0.164,list,2,552,600,4070256,9072640,expansion comparison info
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-0,10,32768,small,11,0,0.031,int,1,424,472,4070792,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-1,10,32768,small,11,1,0.031,int,1,424,472,4070792,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-2,10,32768,small,11,2,0.038,int,1,424,472,4070792,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-3,10,32768,small,11,3,0.037,int,1,424,472,4070792,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-4,10,32768,small,11,4,0.037,int,1,424,472,4070792,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-5,10,32768,small,11,5,0.037,int,1,424,472,4070792,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-6,10,32768,small,11,6,0.032,int,1,424,472,4070792,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-7,10,32768,small,11,7,0.036,int,1,424,472,4070792,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-8,10,32768,small,11,8,0.037,int,1,424,472,4070792,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-9,10,32768,small,11,9,0.032,int,1,424,472,4070792,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-10,10,32768,small,12,10,0.060,int,2,511216,511264,4582776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-11,10,32768,small,12,11,0.045,int,2,511216,511264,4582776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-12,10,32768,small,12,12,0.039,int,2,511216,511264,4582776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-13,10,32768,small,12,13,0.045,int,2,511216,511264,4582776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-14,10,32768,small,12,14,0.047,int,2,511216,511264,4582776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-15,10,32768,small,12,15,0.039,int,2,511216,511264,4582776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-16,10,32768,small,12,16,0.047,int,2,511216,511264,4582776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-17,10,32768,small,12,17,0.037,int,2,511216,511264,4582776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-18,10,32768,small,12,18,0.035,int,2,511216,511264,4582776,9072640,expansion comparison
+LAT-04,BF.ADD lat_exp_cmp_32768 exp-32768-19,10,32768,small,12,19,0.068,int,2,511216,511264,4582776,9465856,expansion comparison
+LAT-04,BF.INFO lat_exp_cmp_32768,10,32768,none,0,0,0.175,list,2,511216,511264,4582776,9465856,expansion comparison info
+LAT-05,BF.ADD lat_large_items 0,100,2,empty,1,0,0.036,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items 0,100,2,empty,1,0,0.034,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items 1,100,2,empty,1,1,0.038,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items 1,100,2,empty,1,1,0.034,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items 2,100,2,empty,1,2,0.034,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items 2,100,2,empty,1,2,0.035,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items 3,100,2,empty,1,3,0.033,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items 3,100,2,empty,1,3,0.044,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items 4,100,2,empty,1,4,0.035,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items 4,100,2,empty,1,4,0.037,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items 5,100,2,empty,1,5,0.034,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items 5,100,2,empty,1,5,0.036,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items 6,100,2,empty,1,6,0.035,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items 6,100,2,empty,1,6,0.040,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items 7,100,2,empty,1,7,0.035,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items 7,100,2,empty,1,7,0.035,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items 8,100,2,empty,1,8,0.035,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items 8,100,2,empty,1,8,0.042,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items 9,100,2,empty,1,9,0.035,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items 9,100,2,empty,1,9,0.042,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items small0,100,2,small,6,0,0.037,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items small0,100,2,small,6,0,0.037,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items small1,100,2,small,6,1,0.037,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items small1,100,2,small,6,1,0.034,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items small2,100,2,small,6,2,0.039,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items small2,100,2,small,6,2,0.033,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items small3,100,2,small,6,3,0.030,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items small3,100,2,small,6,3,0.039,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items small4,100,2,small,6,4,0.036,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items small4,100,2,small,6,4,0.036,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items small5,100,2,small,6,5,0.032,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items small5,100,2,small,6,5,0.033,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items small6,100,2,small,6,6,0.031,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items small6,100,2,small,6,6,0.030,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items small7,100,2,small,6,7,0.038,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items small7,100,2,small,6,7,0.034,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items small8,100,2,small,6,8,0.039,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items small8,100,2,small,6,8,0.045,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items small9,100,2,small,6,9,0.036,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items small9,100,2,small,6,9,0.030,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items b'bin\x00ary0',100,2,binary_nul,8,0,0.115,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items b'bin\x00ary0',100,2,binary_nul,8,0,0.031,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items b'bin\x00ary1',100,2,binary_nul,8,1,0.031,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items b'bin\x00ary1',100,2,binary_nul,8,1,0.031,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items b'bin\x00ary2',100,2,binary_nul,8,2,0.031,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items b'bin\x00ary2',100,2,binary_nul,8,2,0.031,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items b'bin\x00ary3',100,2,binary_nul,8,3,0.034,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items b'bin\x00ary3',100,2,binary_nul,8,3,0.036,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items b'bin\x00ary4',100,2,binary_nul,8,4,0.040,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items b'bin\x00ary4',100,2,binary_nul,8,4,0.038,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items b'bin\x00ary5',100,2,binary_nul,8,5,0.040,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items b'bin\x00ary5',100,2,binary_nul,8,5,0.035,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items b'bin\x00ary6',100,2,binary_nul,8,6,0.033,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items b'bin\x00ary6',100,2,binary_nul,8,6,0.033,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items b'bin\x00ary7',100,2,binary_nul,8,7,0.035,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items b'bin\x00ary7',100,2,binary_nul,8,7,0.035,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items b'bin\x00ary8',100,2,binary_nul,8,8,0.034,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items b'bin\x00ary8',100,2,binary_nul,8,8,0.037,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items b'bin\x00ary9',100,2,binary_nul,8,9,0.037,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items b'bin\x00ary9',100,2,binary_nul,8,9,0.034,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items <bytes len=10001 sha256=c7f8df786ee81af2>,100,2,10kb,10001,0,0.817,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items <bytes len=10001 sha256=c7f8df786ee81af2>,100,2,10kb,10001,0,0.057,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items <bytes len=10001 sha256=a59c240618bf23fe>,100,2,10kb,10001,1,0.060,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items <bytes len=10001 sha256=a59c240618bf23fe>,100,2,10kb,10001,1,0.059,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items <bytes len=10001 sha256=94112abd9f18a028>,100,2,10kb,10001,2,0.057,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items <bytes len=10001 sha256=94112abd9f18a028>,100,2,10kb,10001,2,0.059,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items <bytes len=10001 sha256=c25af58345b410f2>,100,2,10kb,10001,3,0.057,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items <bytes len=10001 sha256=c25af58345b410f2>,100,2,10kb,10001,3,0.057,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items <bytes len=10001 sha256=b9f39725d0e31c2c>,100,2,10kb,10001,4,0.055,int,1,440,488,4583328,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items <bytes len=10001 sha256=b9f39725d0e31c2c>,100,2,10kb,10001,4,0.059,int,1,440,488,4583328,9465856,large item hashing EXISTS
+LAT-05,BF.ADD lat_large_items <bytes len=1000001 sha256=46bde5962b192718>,100,2,1mb,1000001,0,2.987,int,1,440,488,5554056,9465856,large item hashing ADD
+LAT-05,BF.EXISTS lat_large_items <bytes len=1000001 sha256=46bde5962b192718>,100,2,1mb,1000001,0,2.604,int,1,440,488,5550576,9465856,large item hashing EXISTS
+LAT-06,BF.SCANDUMP slc_single 0,100,2,dump_chunk,73,0,0.132,list,1,440,488,5706680,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_single_copy 1 <chunk>,100,2,load_chunk,73,0,0.292,str,,,296,5707040,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_single 1,100,2,dump_chunk,144,1,0.052,list,1,440,488,5707040,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_single_copy 2 <chunk>,100,2,load_chunk,144,1,0.057,str,1,248,296,5707040,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_single 2,100,2,dump_chunk,0,2,0.059,list,1,440,488,5707040,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.SCANDUMP slc_multi_exp2 0,10,2,dump_chunk,179,0,0.049,list,3,680,728,5708104,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_multi_exp2_copy 1 <chunk>,10,2,load_chunk,179,0,0.047,str,,,664,5708848,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_multi_exp2 1,10,2,dump_chunk,128,1,0.048,list,3,680,728,5708848,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_multi_exp2_copy 2 <chunk>,10,2,load_chunk,128,1,0.037,str,,,664,5708848,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_multi_exp2 2,10,2,dump_chunk,128,2,0.048,list,3,680,728,5708848,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_multi_exp2_copy 3 <chunk>,10,2,load_chunk,128,2,0.037,str,,,664,5708848,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_multi_exp2 3,10,2,dump_chunk,128,3,0.051,list,3,680,728,5708848,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_multi_exp2_copy 4 <chunk>,10,2,load_chunk,128,3,0.033,str,3,616,664,5708848,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_multi_exp2 4,10,2,dump_chunk,0,4,0.044,list,3,680,728,5708848,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.SCANDUMP slc_many_exp1 0,10,1,dump_chunk,444,0,0.051,list,8,1576,1624,5710608,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_many_exp1_copy 1 <chunk>,10,1,load_chunk,444,0,0.052,str,,,1624,5712352,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_many_exp1 1,10,1,dump_chunk,128,1,0.051,list,8,1576,1624,5712352,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_many_exp1_copy 2 <chunk>,10,1,load_chunk,128,1,0.036,str,,,1624,5712352,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_many_exp1 2,10,1,dump_chunk,128,2,0.049,list,8,1576,1624,5712352,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_many_exp1_copy 3 <chunk>,10,1,load_chunk,128,2,0.038,str,,,1624,5712352,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_many_exp1 3,10,1,dump_chunk,128,3,0.047,list,8,1576,1624,5712352,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_many_exp1_copy 4 <chunk>,10,1,load_chunk,128,3,0.036,str,,,1624,5712352,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_many_exp1 4,10,1,dump_chunk,128,4,0.048,list,8,1576,1624,5712352,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_many_exp1_copy 5 <chunk>,10,1,load_chunk,128,4,0.035,str,,,1624,5712352,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_many_exp1 5,10,1,dump_chunk,128,5,0.046,list,8,1576,1624,5712352,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_many_exp1_copy 6 <chunk>,10,1,load_chunk,128,5,0.034,str,,,1624,5712352,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_many_exp1 6,10,1,dump_chunk,128,6,0.048,list,8,1576,1624,5712352,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_many_exp1_copy 7 <chunk>,10,1,load_chunk,128,6,0.035,str,,,1624,5712352,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_many_exp1 7,10,1,dump_chunk,128,7,0.048,list,8,1576,1624,5712352,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_many_exp1_copy 8 <chunk>,10,1,load_chunk,128,7,0.034,str,,,1624,5712352,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_many_exp1 8,10,1,dump_chunk,128,8,0.064,list,8,1576,1624,5712352,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_many_exp1_copy 9 <chunk>,10,1,load_chunk,128,8,0.042,str,8,1576,1624,5712352,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_many_exp1 9,10,1,dump_chunk,0,9,0.045,list,8,1576,1624,5712352,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.SCANDUMP slc_large_layer 0,100000,2,dump_chunk,73,0,0.050,list,1,138144,138192,5850616,9609216,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_large_layer_copy 1 <chunk>,100000,2,load_chunk,73,0,0.065,str,,,138000,5988672,9609216,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_large_layer 1,100000,2,dump_chunk,137848,1,0.285,list,1,138144,138192,5021424,10133504,SCANDUMP private full-layer cursor sample
+LAT-06,BF.LOADCHUNK slc_large_layer_copy 2 <chunk>,100000,2,load_chunk,137848,1,0.340,str,1,137952,138000,5126512,10133504,ordered same-module LOADCHUNK replay sample
+LAT-06,BF.SCANDUMP slc_large_layer 2,100000,2,dump_chunk,0,2,0.044,list,1,138144,138192,5126512,10133504,SCANDUMP private full-layer cursor sample

@@ -1,0 +1,24 @@
+# Stage 10 Evidence Index
+
+- `env_snapshot.txt`: present
+- `commands.txt`: present
+- `stdout.log`: present
+- `stderr.log`: present
+- `exit_codes.txt`: present
+- `perf_matrix.md`: present
+- `resource_limits.log`: present
+- `memory_usage.md`: present
+- `latency_samples.csv`: present
+- `scandump_loadchunk.md`: present
+- `persistence_size.md`: present
+- `static_resource_audit.md`: present
+- `blocked_or_not_verified.md`: present
+- `stage10_results.json`: present
+- `module_build/cmake_configure_stdout.log`: present
+- `module_build/cmake_configure_stderr.log`: present
+- `module_build/cmake_build_stdout.log`: present
+- `module_build/cmake_build_stderr.log`: present
+- `server_logs/redis_initial_stdout.log`: present
+- `server_logs/redis_initial_stderr.log`: present
+- `server_logs/redis_restart_aof_stdout.log`: present
+- `server_logs/redis_restart_aof_stderr.log`: present
