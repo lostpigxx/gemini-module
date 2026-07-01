@@ -14,8 +14,8 @@
 |---|---|---|---|---|---|---|---|
 | 00 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage00/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage00/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage00/reviewer_output.md` | `fa165b27fc498da23b0861f99e5f2919d89dd897` | PUSHED | yes |
 | 01 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage01/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage01/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage01/reviewer_output.md` | `b35f0f624c6805e7610010f795420e2d592abbaa` | PUSHED | yes |
-| 02 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage02/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage02/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage02/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 02 build existing tests` | PUSHED_BY_STAGE_GATE | yes |
-| 03 | PENDING |  |  |  |  |  |  |
+| 02 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage02/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage02/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage02/reviewer_output.md` | `77566087a4a58a0ac3bd790b73e64276fb045a90` | PUSHED | yes |
+| 03 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage03/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 03 static deep audit` | PUSHED_BY_STAGE_GATE | yes |
 | 04 | PENDING |  |  |  |  |  |  |
 | 05 | PENDING |  |  |  |  |  |  |
 | 06 | PENDING |  |  |  |  |  |  |
@@ -36,6 +36,9 @@ Findings should be indexed here as they are discovered.
 | GBV6-00-002 | 00 | P3 | OPEN | `sb_chain.h` SCANDUMP/LOADCHUNK comment contradicts DESIGN.md private protocol boundary | `.codex/gemini-bloom-audit/v6/evidence/stage00/stdout.log` |
 | GBV6-02-001 | 02 | P2 | OPEN | CMake `bloom_test` target fails to execute on macOS because GTest dylib RPATH is missing | `.codex/gemini-bloom-audit/v6/evidence/stage02/gtest/bloom_test_target_stderr.log` |
 | GBV6-02-002 | 02 | P2 | OPEN | TCL expected gaps are counted as failures and make the documented integration test command exit nonzero | `.codex/gemini-bloom-audit/v6/evidence/stage02/tcl/bloom_test_tcl_stdout.log` |
+| GBV6-03-001 | 03 | P2 | OPEN | RDB/wire deserialization does not enforce DESIGN's per-layer 2GB data-size cap | `.codex/gemini-bloom-audit/v6/agents/stage03/potential_findings.md` |
+| GBV6-03-002 | 03 | P2 | OPEN | RDB/wire deserialization accepts expansionFactor values above `kMaxExpansion` | `.codex/gemini-bloom-audit/v6/agents/stage03/potential_findings.md` |
+| GBV6-03-003 | 03 | P3 | OPEN | TCL per-layer data-size cap test name/comment do not match the assertion | `.codex/gemini-bloom-audit/v6/agents/stage03/potential_findings.md` |
 
 ## Global blockers
 
@@ -45,4 +48,4 @@ Findings should be indexed here as they are discovered.
 ## Final confidence
 
 - Current confidence: `UNKNOWN`
-- Reason: Stage 02 established a build/test baseline with classified test-infrastructure findings. RedisBloom oracle, persistence transport, fuzz, sanitizer, ops, perf, and final report audit remain VERIFY_LATER.
+- Reason: Stage 03 static deep audit found RDB/wire resource-boundary and test-coverage findings. Runtime command semantics, RedisBloom oracle, persistence transport, fuzz, sanitizer, ops, perf, and final report audit remain VERIFY_LATER.

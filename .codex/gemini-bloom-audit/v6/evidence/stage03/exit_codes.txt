@@ -1,0 +1,10 @@
+# Stage 03 Exit Codes
+
+| Command group | Exit code | Notes |
+|---|---:|---|
+| Initial `mkdir -p .codex/.../stage03 ...` | 1 | Sandbox write denial; resolved by approved escalation. |
+| Escalated `mkdir -p .codex/.../stage03 ...` | 0 | Created Stage 03 artifact directories. |
+| Rehydration `sed` reads | 0 | All required control/policy/state/stage files readable. |
+| Static `rg`/`wc`/`nl` inspection commands | 0 | Source and test files inspected. |
+| Metadata commands (`git rev-parse`, `git status`, `uname`, `cmake --version`, `clang --version`) | 0 | Metadata captured. |
+| Runtime/build/fuzz/sanitizer commands | N/A | Not executed in Stage 03 by design. |
