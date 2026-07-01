@@ -1,0 +1,1015 @@
+{
+  "corpora": [
+    "binary_items",
+    "empty_scaling",
+    "expansion1",
+    "expansion4",
+    "fixed_full",
+    "large_empty_16mb",
+    "long_item",
+    "multi_exp2",
+    "single_layer"
+  ],
+  "env": {
+    "gemini_build_note": "Stage06 reused Stage05 audit-only Linux build with -include climits because GBV6-05-001 remains open for default GCC build.",
+    "gemini_module": "/tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so",
+    "name": "redis-6.2.17-redisbloom-v2.4.20",
+    "redis_server": "/workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server",
+    "redis_tag": "6.2.17",
+    "redisbloom_module": "/tmp/redisbloom-v2.4.20-stage05-v6/bin/linux-x64-release/redisbloom.so",
+    "redisbloom_module_ver": "20420",
+    "redisbloom_tag": "v2.4.20"
+  },
+  "generated_at_utc": "2026-07-01T11:02:12.133302+00:00",
+  "paths": {
+    "aof_no_preamble_cross": {
+      "gemini_to_redisbloom": {
+        "errors": 0,
+        "fail": 7,
+        "failures": [
+          {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 0,
+              "missing_count": 6,
+              "missing_samples": [
+                "0:",
+                "1:6e756c3a003a696e73696465",
+                "2:63726c663a0d0a3a696e73696465",
+                "3:737061636520616e6420746162096974",
+                "4:74636c3a7b6c6973747d5c6368617273"
+              ]
+            },
+            "corpus": "binary_items"
+          },
+          {
+            "check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 0,
+              "missing_count": 20,
+              "missing_samples": [
+                "0:657870313a30",
+                "1:657870313a31",
+                "2:657870313a32",
+                "3:657870313a33",
+                "4:657870313a34"
+              ]
+            },
+            "corpus": "expansion1"
+          },
+          {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:657870343a30",
+                "1:657870343a31",
+                "2:657870343a32",
+                "3:657870343a33",
+                "4:657870343a34"
+              ]
+            },
+            "corpus": "expansion4"
+          },
+          {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:66697865643a30",
+                "1:66697865643a31",
+                "2:66697865643a32",
+                "3:66697865643a33",
+                "4:66697865643a34"
+              ]
+            },
+            "corpus": "fixed_full"
+          },
+          {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 0,
+              "missing_count": 1,
+              "missing_samples": [
+                "0:6c6f6e673a7878787878787878787878"
+              ]
+            },
+            "corpus": "long_item"
+          },
+          {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:6974656d3a30",
+                "1:6974656d3a31",
+                "2:6974656d3a32",
+                "3:6974656d3a33",
+                "4:6974656d3a34"
+              ]
+            },
+            "corpus": "multi_exp2"
+          },
+          {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:73696e676c653a30",
+                "1:73696e676c653a31",
+                "2:73696e676c653a32",
+                "3:73696e676c653a33",
+                "4:73696e676c653a34"
+              ]
+            },
+            "corpus": "single_layer"
+          }
+        ],
+        "no_false_negative": 2,
+        "pass": 2,
+        "total": 9
+      },
+      "note": "Private LOADCHUNK command-AOF is not a cross-implementation compatibility contract; empty filters can appear to pass because there are no membership bits to verify.",
+      "redisbloom_to_gemini": {
+        "errors": 0,
+        "fail": 9,
+        "failures": [
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 0,
+              "missing_count": 6,
+              "missing_samples": [
+                "0:",
+                "1:6e756c3a003a696e73696465",
+                "2:63726c663a0d0a3a696e73696465",
+                "3:737061636520616e6420746162096974",
+                "4:74636c3a7b6c6973747d5c6368617273"
+              ]
+            },
+            "corpus": "binary_items"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "corpus": "empty_scaling"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 0,
+              "missing_count": 20,
+              "missing_samples": [
+                "0:657870313a30",
+                "1:657870313a31",
+                "2:657870313a32",
+                "3:657870313a33",
+                "4:657870313a34"
+              ]
+            },
+            "corpus": "expansion1"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:657870343a30",
+                "1:657870343a31",
+                "2:657870343a32",
+                "3:657870343a33",
+                "4:657870343a34"
+              ]
+            },
+            "corpus": "expansion4"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:66697865643a30",
+                "1:66697865643a31",
+                "2:66697865643a32",
+                "3:66697865643a33",
+                "4:66697865643a34"
+              ]
+            },
+            "corpus": "fixed_full"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "corpus": "large_empty_16mb"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 0,
+              "missing_count": 1,
+              "missing_samples": [
+                "0:6c6f6e673a7878787878787878787878"
+              ]
+            },
+            "corpus": "long_item"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:6974656d3a30",
+                "1:6974656d3a31",
+                "2:6974656d3a32",
+                "3:6974656d3a33",
+                "4:6974656d3a34"
+              ]
+            },
+            "corpus": "multi_exp2"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:73696e676c653a30",
+                "1:73696e676c653a31",
+                "2:73696e676c653a32",
+                "3:73696e676c653a33",
+                "4:73696e676c653a34"
+              ]
+            },
+            "corpus": "single_layer"
+          }
+        ],
+        "no_false_negative": 2,
+        "pass": 0,
+        "total": 9
+      },
+      "verdict": "DESIGN_INTENDED_INCOMPATIBLE"
+    },
+    "aof_no_preamble_gemini_self": {
+      "errors": 0,
+      "fail": 0,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "aof_rdb_preamble_gemini_self": {
+      "errors": 0,
+      "fail": 0,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "aof_rdb_preamble_gemini_to_redisbloom": {
+      "errors": 0,
+      "fail": 0,
+      "failures": [],
+      "no_false_negative": 9,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "aof_rdb_preamble_redisbloom_to_gemini": {
+      "errors": 0,
+      "fail": 0,
+      "failures": [],
+      "no_false_negative": 9,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "dump_restore_gemini_self": {
+      "errors": 0,
+      "fail": 0,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "dump_restore_gemini_to_redisbloom": {
+      "errors": 0,
+      "fail": 0,
+      "failures": [],
+      "no_false_negative": 9,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "dump_restore_redisbloom_to_gemini": {
+      "errors": 0,
+      "fail": 0,
+      "failures": [],
+      "no_false_negative": 9,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "fullsync_gemini_self": {
+      "errors": 0,
+      "fail": 0,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "fullsync_gemini_to_redisbloom": {
+      "errors": 0,
+      "fail": 0,
+      "failures": [],
+      "no_false_negative": 9,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "fullsync_redisbloom_to_gemini": {
+      "errors": 0,
+      "fail": 0,
+      "failures": [],
+      "no_false_negative": 9,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "migrate_bidirectional_ttl": {
+      "directions": {
+        "gemini_to_rb": {
+          "migrate": "OK",
+          "no_false_negative": true,
+          "pass": true,
+          "pttl": 599998,
+          "source_pttl": 599999
+        },
+        "rb_to_gemini": {
+          "migrate": "OK",
+          "no_false_negative": true,
+          "pass": true,
+          "pttl": 599997,
+          "source_pttl": 599999
+        }
+      },
+      "verdict": "PASS"
+    },
+    "rdb_gemini_self": {
+      "errors": 0,
+      "fail": 0,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "rdb_gemini_to_redisbloom": {
+      "errors": 0,
+      "fail": 0,
+      "failures": [],
+      "no_false_negative": 9,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "rdb_redisbloom_to_gemini": {
+      "errors": 0,
+      "fail": 0,
+      "failures": [],
+      "no_false_negative": 9,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "scandump_loadchunk_cross": {
+      "gemini_to_redisbloom": {
+        "errors": 0,
+        "fail": 7,
+        "failures": [
+          {
+            "check": {
+              "card": 6,
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 0,
+              "missing_count": 6,
+              "missing_samples": [
+                "0:",
+                "1:6e756c3a003a696e73696465",
+                "2:63726c663a0d0a3a696e73696465",
+                "3:737061636520616e6420746162096974",
+                "4:74636c3a7b6c6973747d5c6368617273"
+              ]
+            },
+            "corpus": "binary_items"
+          },
+          {
+            "check": {
+              "card": 20,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 0,
+              "missing_count": 20,
+              "missing_samples": [
+                "0:657870313a30",
+                "1:657870313a31",
+                "2:657870313a32",
+                "3:657870313a33",
+                "4:657870313a34"
+              ]
+            },
+            "corpus": "expansion1"
+          },
+          {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:657870343a30",
+                "1:657870343a31",
+                "2:657870343a32",
+                "3:657870343a33",
+                "4:657870343a34"
+              ]
+            },
+            "corpus": "expansion4"
+          },
+          {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:66697865643a30",
+                "1:66697865643a31",
+                "2:66697865643a32",
+                "3:66697865643a33",
+                "4:66697865643a34"
+              ]
+            },
+            "corpus": "fixed_full"
+          },
+          {
+            "check": {
+              "card": 1,
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 0,
+              "missing_count": 1,
+              "missing_samples": [
+                "0:6c6f6e673a7878787878787878787878"
+              ]
+            },
+            "corpus": "long_item"
+          },
+          {
+            "check": {
+              "card": 40,
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:6974656d3a30",
+                "1:6974656d3a31",
+                "2:6974656d3a32",
+                "3:6974656d3a33",
+                "4:6974656d3a34"
+              ]
+            },
+            "corpus": "multi_exp2"
+          },
+          {
+            "check": {
+              "card": 8,
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:73696e676c653a30",
+                "1:73696e676c653a31",
+                "2:73696e676c653a32",
+                "3:73696e676c653a33",
+                "4:73696e676c653a34"
+              ]
+            },
+            "corpus": "single_layer"
+          }
+        ],
+        "no_false_negative": 2,
+        "pass": 2,
+        "total": 9
+      },
+      "note": "SCANDUMP/LOADCHUNK cursor/chunk payloads are private by DESIGN and must not be treated as RedisBloom-compatible transport.",
+      "redisbloom_to_gemini": {
+        "errors": 0,
+        "fail": 9,
+        "failures": [
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 6,
+              "expected_items": 6,
+              "found": 0,
+              "missing_count": 6,
+              "missing_samples": [
+                "0:",
+                "1:6e756c3a003a696e73696465",
+                "2:63726c663a0d0a3a696e73696465",
+                "3:737061636520616e6420746162096974",
+                "4:74636c3a7b6c6973747d5c6368617273"
+              ]
+            },
+            "corpus": "binary_items"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "corpus": "empty_scaling"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 0,
+              "missing_count": 20,
+              "missing_samples": [
+                "0:657870313a30",
+                "1:657870313a31",
+                "2:657870313a32",
+                "3:657870313a33",
+                "4:657870313a34"
+              ]
+            },
+            "corpus": "expansion1"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:657870343a30",
+                "1:657870343a31",
+                "2:657870343a32",
+                "3:657870343a33",
+                "4:657870343a34"
+              ]
+            },
+            "corpus": "expansion4"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:66697865643a30",
+                "1:66697865643a31",
+                "2:66697865643a32",
+                "3:66697865643a33",
+                "4:66697865643a34"
+              ]
+            },
+            "corpus": "fixed_full"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 0,
+              "expected_items": 0,
+              "found": 0,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "corpus": "large_empty_16mb"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 1,
+              "expected_items": 1,
+              "found": 0,
+              "missing_count": 1,
+              "missing_samples": [
+                "0:6c6f6e673a7878787878787878787878"
+              ]
+            },
+            "corpus": "long_item"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 40,
+              "expected_items": 40,
+              "found": 0,
+              "missing_count": 40,
+              "missing_samples": [
+                "0:6974656d3a30",
+                "1:6974656d3a31",
+                "2:6974656d3a32",
+                "3:6974656d3a33",
+                "4:6974656d3a34"
+              ]
+            },
+            "corpus": "multi_exp2"
+          },
+          {
+            "check": {
+              "card": {
+                "error": "ERR filter is being loaded"
+              },
+              "expected_card": 8,
+              "expected_items": 8,
+              "found": 0,
+              "missing_count": 8,
+              "missing_samples": [
+                "0:73696e676c653a30",
+                "1:73696e676c653a31",
+                "2:73696e676c653a32",
+                "3:73696e676c653a33",
+                "4:73696e676c653a34"
+              ]
+            },
+            "corpus": "single_layer"
+          }
+        ],
+        "no_false_negative": 2,
+        "pass": 0,
+        "total": 9
+      },
+      "verdict": "DESIGN_INTENDED_INCOMPATIBLE"
+    },
+    "scandump_loadchunk_gemini_self": {
+      "errors": 0,
+      "fail": 0,
+      "pass": 9,
+      "total": 9,
+      "verdict": "PASS"
+    },
+    "scandump_loadchunk_safety": {
+      "summary": "pass",
+      "verdict": "PASS"
+    },
+    "supplemental_live_command_replay": {
+      "incremental_aof": {
+        "detail": {
+          "expansion1": {
+            "gemini_to_rb": {
+              "check": {
+                "card": 19,
+                "expected_card": 20,
+                "expected_items": 20,
+                "found": 20,
+                "missing_count": 0,
+                "missing_samples": []
+              },
+              "critical_log_count": 0,
+              "populate": {
+                "adds": [
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1
+                ],
+                "reserve": "OK"
+              },
+              "source_check": {
+                "card": 20,
+                "expected_card": 20,
+                "expected_items": 20,
+                "found": 20,
+                "missing_count": 0,
+                "missing_samples": []
+              }
+            },
+            "rb_to_gemini": {
+              "check": {
+                "card": 20,
+                "expected_card": 19,
+                "expected_items": 20,
+                "found": 20,
+                "missing_count": 0,
+                "missing_samples": []
+              },
+              "critical_log_count": 0,
+              "populate": {
+                "adds": [
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  0,
+                  1,
+                  1,
+                  1
+                ],
+                "reserve": "OK"
+              },
+              "source_check": {
+                "card": 19,
+                "expected_card": 19,
+                "expected_items": 20,
+                "found": 20,
+                "missing_count": 0,
+                "missing_samples": []
+              }
+            }
+          },
+          "fixed_full": {
+            "gemini_to_rb": {
+              "check": {
+                "card": 2,
+                "expected_card": 2,
+                "expected_items": 2,
+                "found": 2,
+                "missing_count": 0,
+                "missing_samples": []
+              },
+              "critical_log_count": 0,
+              "populate": {
+                "adds": [
+                  1,
+                  1
+                ],
+                "reserve": "OK"
+              },
+              "source_check": {
+                "card": 2,
+                "expected_card": 2,
+                "expected_items": 2,
+                "found": 2,
+                "missing_count": 0,
+                "missing_samples": []
+              }
+            },
+            "rb_to_gemini": {
+              "check": {
+                "card": 2,
+                "expected_card": 2,
+                "expected_items": 2,
+                "found": 2,
+                "missing_count": 0,
+                "missing_samples": []
+              },
+              "critical_log_count": 0,
+              "populate": {
+                "adds": [
+                  1,
+                  1
+                ],
+                "reserve": "OK"
+              },
+              "source_check": {
+                "card": 2,
+                "expected_card": 2,
+                "expected_items": 2,
+                "found": 2,
+                "missing_count": 0,
+                "missing_samples": []
+              }
+            }
+          },
+          "single_layer": {
+            "gemini_to_rb": {
+              "check": {
+                "card": 8,
+                "expected_card": 8,
+                "expected_items": 8,
+                "found": 8,
+                "missing_count": 0,
+                "missing_samples": []
+              },
+              "critical_log_count": 0,
+              "populate": {
+                "adds": [
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1
+                ],
+                "reserve": "OK"
+              },
+              "source_check": {
+                "card": 8,
+                "expected_card": 8,
+                "expected_items": 8,
+                "found": 8,
+                "missing_count": 0,
+                "missing_samples": []
+              }
+            },
+            "rb_to_gemini": {
+              "check": {
+                "card": 8,
+                "expected_card": 8,
+                "expected_items": 8,
+                "found": 8,
+                "missing_count": 0,
+                "missing_samples": []
+              },
+              "critical_log_count": 0,
+              "populate": {
+                "adds": [
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1,
+                  1
+                ],
+                "reserve": "OK"
+              },
+              "source_check": {
+                "card": 8,
+                "expected_card": 8,
+                "expected_items": 8,
+                "found": 8,
+                "missing_count": 0,
+                "missing_samples": []
+              }
+            }
+          }
+        },
+        "summary": {
+          "error": 0,
+          "fail": 2,
+          "pass": 4
+        }
+      },
+      "note": "Expansion1 BF.CARD can drift while all inserted items remain present; Stage06 pass/fail is based on fullsync/RDB paths for replication compatibility.",
+      "repl_live_gemini_to_redisbloom": {
+        "errors": 0,
+        "fail": 1,
+        "failures": [
+          {
+            "check": {
+              "card": 19,
+              "expected_card": 20,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "corpus": "expansion1"
+          }
+        ],
+        "no_false_negative": 9,
+        "pass": 8,
+        "total": 9
+      },
+      "repl_live_redisbloom_to_gemini": {
+        "errors": 0,
+        "fail": 1,
+        "failures": [
+          {
+            "check": {
+              "card": 20,
+              "expected_card": 19,
+              "expected_items": 20,
+              "found": 20,
+              "missing_count": 0,
+              "missing_samples": []
+            },
+            "corpus": "expansion1"
+          }
+        ],
+        "no_false_negative": 9,
+        "pass": 8,
+        "total": 9
+      },
+      "verdict": "DESIGN_INTENDED_LIMITATION"
+    }
+  },
+  "raw_evidence": [
+    ".codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix/cross_impl_transport_results.json",
+    ".codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix/extended_transport_results.json",
+    ".codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix/gemini_self_transport_results.json"
+  ]
+}

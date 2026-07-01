@@ -1,0 +1,29 @@
+{
+  "bf_debug": {
+    "gemini": false,
+    "redisbloom": true
+  },
+  "incremental_aof": {
+    "error": 0,
+    "fail": 2,
+    "pass": 4
+  },
+  "loadchunk_header_over_existing_key": {
+    "gemini": {
+      "error": "ERR received bad data"
+    },
+    "redisbloom": {
+      "error": "ERR received bad data"
+    }
+  },
+  "migrate_and_dump_restore_ttl": {
+    "error": 0,
+    "fail": 0,
+    "pass": 2
+  },
+  "readonly_scandump_ok": {
+    "gemini": true,
+    "redisbloom": true
+  }
+}
+wrote .codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix/extended_transport_results.json

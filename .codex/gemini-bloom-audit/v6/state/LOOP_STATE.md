@@ -17,8 +17,8 @@
 | 02 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage02/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage02/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage02/reviewer_output.md` | `77566087a4a58a0ac3bd790b73e64276fb045a90` | PUSHED | yes |
 | 03 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage03/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/reviewer_output.md` | `dc0a3a8ad8e97e6631028d4152804f68a923ecbf` | PUSHED | yes |
 | 04 | BLOCKED | `.codex/gemini-bloom-audit/v6/agents/stage04/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage04/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage04/reviewer_output.md` | `d884abb3e73c7ea4fa680c222bf1aa3a256b57c4` | PUSHED | yes |
-| 05 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage05/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage05/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage05/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 05 redisbloom compat` | PUSHED_BY_STAGE_GATE | yes |
-| 06 | PENDING |  |  |  |  |  |  |
+| 05 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage05/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage05/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage05/reviewer_output.md` | `6bb72cd73af7823b7872bb58edfa7e5317c8f53b` | PUSHED | yes |
+| 06 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage06/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage06/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage06/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 06 persistence transport` | PUSHED_BY_STAGE_GATE | yes |
 | 07 | PENDING |  |  |  |  |  |  |
 | 08 | PENDING |  |  |  |  |  |  |
 | 09 | PENDING |  |  |  |  |  |  |
@@ -50,4 +50,4 @@ Findings should be indexed here as they are discovered.
 ## Final confidence
 
 - Current confidence: `UNKNOWN`
-- Reason: Stage 05 verified Redis 6.2.17 + RedisBloom v2.4.20 RDB-family compatibility over the audit corpus, with DESIGN_INTENDED gaps preserved. Persistence transport standalone stage, fuzz, sanitizer, ops, perf, and final report audit remain VERIFY_LATER.
+- Reason: Stage 06 persistence transport audit passed on Redis 6.2.17 + RedisBloom v2.4.20 with DESIGN_INTENDED private-protocol gaps preserved. Fuzz, sanitizer, ops, perf, and final report audit remain VERIFY_LATER.
