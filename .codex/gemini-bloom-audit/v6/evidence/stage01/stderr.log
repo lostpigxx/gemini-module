@@ -1,0 +1,21 @@
+# Stage 01 stderr
+
+`cat /etc/os-release`:
+
+```text
+cat: /etc/os-release: No such file or directory
+```
+
+`ls -ld modules/gemini-bloom/tests/compat/redisbloom-2.4.20`:
+
+```text
+ls: modules/gemini-bloom/tests/compat/redisbloom-2.4.20: No such file or directory
+```
+
+`ls -ld .github`:
+
+```text
+ls: .github: No such file or directory
+```
+
+No dependency command in Stage 01 failed due to sandbox or network. No push failure has occurred in Stage 01 yet; push gate is executed after reviewer PASS and commit.

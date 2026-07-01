@@ -12,8 +12,8 @@
 
 | Stage | Status | Planner | Result | Reviewer | Commit | Push | Agent Closed |
 |---|---|---|---|---|---|---|---|
-| 00 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage00/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage00/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage00/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 00 design contract` | PUSHED_BY_STAGE_GATE | yes |
-| 01 | PENDING |  |  |  |  |  |  |
+| 00 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage00/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage00/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage00/reviewer_output.md` | `fa165b27fc498da23b0861f99e5f2919d89dd897` | PUSHED | yes |
+| 01 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage01/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage01/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage01/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 01 env repo baseline` | PUSHED_BY_STAGE_GATE | yes |
 | 02 | PENDING |  |  |  |  |  |  |
 | 03 | PENDING |  |  |  |  |  |  |
 | 04 | PENDING |  |  |  |  |  |  |

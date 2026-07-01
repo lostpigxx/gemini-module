@@ -1,0 +1,27 @@
+# Stage 01 exit codes
+
+| Command | Exit code | Notes |
+|---|---:|---|
+| `git rev-parse HEAD` | 0 | Captured HEAD. |
+| `git branch --show-current` | 0 | Captured branch. |
+| `git status --short` | 0 | Dirty tree only contained Stage 01 audit files at collection time. |
+| `git remote -v` | 0 | Captured remotes. |
+| `git branch -vv` | 0 | Captured target branch tracking. |
+| `git log --oneline --decorate -3` | 0 | Captured recent history. |
+| `uname -a` | 0 | Captured Darwin kernel info. |
+| `cat /etc/os-release` | 1 | Missing on macOS; recorded as non-blocking environment fact. |
+| `sw_vers` | 0 | Captured macOS version. |
+| `cmake --version` | 0 | Available. |
+| `c++ --version` | 0 | Available. |
+| `g++ --version` | 0 | Available, Apple clang frontend. |
+| `clang++ --version` | 0 | Available. |
+| `redis-server --version` | 0 | Available, Redis 6.2.16. |
+| `redis-cli --version` | 0 | Available, Redis 6.2.16. |
+| `tclsh <<< 'puts [info patchlevel]'` | 0 | Available, Tcl 8.5.9. |
+| `python3 --version` | 0 | Available, Python 3.13.7. |
+| `docker --version` | 0 | Available, Docker 27.4.0. |
+| `find modules/gemini-bloom -maxdepth 4 -type f \| sort` | 0 | Repo tree captured. |
+| `git ls-files modules/gemini-bloom` | 0 | Tracked file cross-check captured. |
+| `git status --ignored --short modules/gemini-bloom/tests/pict/__pycache__/run_pict_cases.cpython-313.pyc` | 0 | Ignored local pycache recorded. |
+| `ls -ld modules/gemini-bloom/tests/compat/redisbloom-2.4.20` | 1 | Fixture path absent. |
+| `ls -ld .github` | 1 | `.github` absent. |
