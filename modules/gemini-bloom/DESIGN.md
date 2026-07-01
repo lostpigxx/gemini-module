@@ -702,4 +702,6 @@ tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
 
 6. **子 filter 数量影响查询性能**：`EXPANSION 1` 会产生较多 layer，查询需要逐层检查。建议使用 `EXPANSION 2` 或更大值。
 
-7. **RedisBloom / Redis 8 同实例共存冲突**：gemini-bloom 复用了 `BF.*` 命令名和 `MBbloom--` data type name。在同一 Redis 实例中，如果已加载 RedisBloom module，加载 gemini-bloom 将产生命令名和 data type name 的注册冲突（`RedisModule_CreateCommand` / `RedisModule_CreateDataType` 返回错误），模块加载会失败。同样，Redis 8 内置 Bloom 使用相同的命令名和类型名，在 Redis 8 环境中加载 gemini-bloom 也会产生冲突。gemini-bloom 与 RedisBloom / Redis 8 Bloom 是**互斥部署**关系，不能同时加载在同一 Redis 实例上。当前目标环境为 Redis 6.x / 7.x 且不加载 RedisBloom module。
+7. **command-AOF rewrite 分配失败时 key 会被跳过**：`AofRewriteBloom()` 中 header buffer 分配失败时，模块记录 warning 日志并跳过该 key（`return`）。Redis Module API 没有提供显式 abort AOF rewrite 的接口，`RedisModule_LogIOError` 是模块层能发出的最强信号。实际风险极低：默认 `aof-use-rdb-preamble yes` 时此代码路径不执行；即使执行，header 只有几百字节，能触发 OOM 意味着 Redis 整体已在极端内存压力下。
+
+8. **RedisBloom / Redis 8 同实例共存冲突**：gemini-bloom 复用了 `BF.*` 命令名和 `MBbloom--` data type name。在同一 Redis 实例中，如果已加载 RedisBloom module，加载 gemini-bloom 将产生命令名和 data type name 的注册冲突（`RedisModule_CreateCommand` / `RedisModule_CreateDataType` 返回错误），模块加载会失败。同样，Redis 8 内置 Bloom 使用相同的命令名和类型名，在 Redis 8 环境中加载 gemini-bloom 也会产生冲突。gemini-bloom 与 RedisBloom / Redis 8 Bloom 是**互斥部署**关系，不能同时加载在同一 Redis 实例上。当前目标环境为 Redis 6.x / 7.x 且不加载 RedisBloom module。
