@@ -18,8 +18,8 @@
 | 03 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage03/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/reviewer_output.md` | `dc0a3a8ad8e97e6631028d4152804f68a923ecbf` | PUSHED | yes |
 | 04 | BLOCKED | `.codex/gemini-bloom-audit/v6/agents/stage04/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage04/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage04/reviewer_output.md` | `d884abb3e73c7ea4fa680c222bf1aa3a256b57c4` | PUSHED | yes |
 | 05 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage05/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage05/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage05/reviewer_output.md` | `6bb72cd73af7823b7872bb58edfa7e5317c8f53b` | PUSHED | yes |
-| 06 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage06/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage06/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage06/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 06 persistence transport` | PUSHED_BY_STAGE_GATE | yes |
-| 07 | PENDING |  |  |  |  |  |  |
+| 06 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage06/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage06/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage06/reviewer_output.md` | `5dc3706c745325bd15d598c8216c8a92e703a1a2` | PUSHED | yes |
+| 07 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage07/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage07/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage07/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 07 fuzz fault safety` | PUSHED_BY_STAGE_GATE | yes |
 | 08 | PENDING |  |  |  |  |  |  |
 | 09 | PENDING |  |  |  |  |  |  |
 | 10 | PENDING |  |  |  |  |  |  |
@@ -40,6 +40,8 @@ Findings should be indexed here as they are discovered.
 | GBV6-03-002 | 03 | P2 | OPEN | RDB/wire deserialization accepts expansionFactor values above `kMaxExpansion` | `.codex/gemini-bloom-audit/v6/agents/stage03/potential_findings.md` |
 | GBV6-03-003 | 03 | P3 | OPEN | TCL per-layer data-size cap test name/comment do not match the assertion | `.codex/gemini-bloom-audit/v6/agents/stage03/potential_findings.md` |
 | GBV6-05-001 | 05 | P2 | OPEN | Linux/GCC default build fails because `bloom_rdb.cc` uses `UINT_MAX` without including `<climits>` | `.codex/gemini-bloom-audit/v6/evidence/stage05/oracle_diff/gemini_default_build_stderr.log` |
+| GBV6-07-001 | 07 | P1 | OPEN | `BF.LOADCHUNK` accepts out-of-order or repeated data chunks and can complete a filter with false negatives | `.codex/gemini-bloom-audit/v6/evidence/stage07/stage07_fuzz_results.json` |
+| GBV6-07-002 | 07 | P1 | OPEN | Half-loaded `LOADCHUNK` keys persist/replay as completed filters with false negatives | `.codex/gemini-bloom-audit/v6/evidence/stage07/stage07_fuzz_results.json` |
 
 ## Global blockers
 
@@ -50,4 +52,4 @@ Findings should be indexed here as they are discovered.
 ## Final confidence
 
 - Current confidence: `UNKNOWN`
-- Reason: Stage 06 persistence transport audit passed on Redis 6.2.17 + RedisBloom v2.4.20 with DESIGN_INTENDED private-protocol gaps preserved. Fuzz, sanitizer, ops, perf, and final report audit remain VERIFY_LATER.
+- Reason: Stage 07 fuzz/fault-safety audit found P1 LOADCHUNK data-integrity failures. Sanitizer, ops, perf, and final report audit remain VERIFY_LATER.

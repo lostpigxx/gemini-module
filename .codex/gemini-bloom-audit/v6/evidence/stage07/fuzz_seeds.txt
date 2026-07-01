@@ -1,0 +1,6 @@
+# Stage 07 Fuzz Seeds
+
+- primary_seed_decimal: 2970124295
+- primary_seed_hex: 0xB100F007
+- random_header_cases: 64 generated payloads with sizes from [0, 1, 2, 7, 19, 20, 21, 72, 73, 74, 128, 512]
+- generator: `.codex/gemini-bloom-audit/v6/evidence/stage07/stage07_fuzz_fault_safety.py`

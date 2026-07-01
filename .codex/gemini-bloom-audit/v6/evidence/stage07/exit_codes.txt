@@ -1,0 +1,3 @@
+fuzz_harness=0
+gtest_build_probe=2
+static_inspection=0

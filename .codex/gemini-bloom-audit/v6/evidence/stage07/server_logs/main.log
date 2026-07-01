@@ -1,0 +1,12 @@
+16628:C 01 Jul 2026 19:17:00.915 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+16628:C 01 Jul 2026 19:17:00.916 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=16628, just started
+16628:C 01 Jul 2026 19:17:00.916 # Configuration loaded
+16628:M 01 Jul 2026 19:17:00.916 * monotonic clock: POSIX clock_gettime
+16628:M 01 Jul 2026 19:17:00.921 * Running mode=standalone, port=56921.
+16628:M 01 Jul 2026 19:17:00.921 # Server initialized
+16628:M 01 Jul 2026 19:17:00.923 * <GeminiBloom> GeminiBloom module loaded
+16628:M 01 Jul 2026 19:17:00.923 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so
+16628:M 01 Jul 2026 19:17:00.925 * Ready to accept connections
+16628:M 01 Jul 2026 19:17:01.017 # User requested shutdown...
+16628:M 01 Jul 2026 19:17:01.018 * Removing the pid file.
+16628:M 01 Jul 2026 19:17:01.018 # Redis is now ready to exit, bye bye...
