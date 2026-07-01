@@ -1,0 +1,17 @@
+# Stage 08 Exit Codes
+
+| Probe | Exit / Result | Classification |
+|---|---:|---|
+| environment snapshot | 0 | PASS |
+| GCC default ASAN configure | 1 | BLOCKED / TOOLCHAIN |
+| GCC default ASAN build | 99 | NOT_RUN_AFTER_CONFIGURE_FAIL |
+| GCC workaround ASAN configure | 1 | BLOCKED / TOOLCHAIN |
+| GCC workaround ASAN build | 99 | NOT_RUN_AFTER_CONFIGURE_FAIL |
+| Clang ASAN configure | 0 | PASS_BUILD_ONLY |
+| Clang ASAN build | 0 | PASS_BUILD_ONLY |
+| `bloom_test` target build | 2 | BLOCKED / GTEST_TARGET_ABSENT |
+| ASAN module load, no preload wrapper | 0 | MODULE_LOAD_FAILED_IN_REDIS_LOG |
+| ASAN module load, GCC 11 preload wrapper | 0 | MODULE_LOAD_FAILED_IN_REDIS_LOG |
+| static fallback scan | 0 | PASS_STATIC_SCAN |
+| `command -v valgrind` | 1 | BLOCKED / VALGRIND_UNAVAILABLE |
+

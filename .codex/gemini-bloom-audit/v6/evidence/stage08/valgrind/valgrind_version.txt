@@ -1,0 +1,1 @@
+NOT_FOUND: `command -v valgrind` produced no executable path.

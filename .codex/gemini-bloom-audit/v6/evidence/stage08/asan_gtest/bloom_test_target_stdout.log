@@ -1,0 +1,1 @@
+NO_STDOUT: `cmake --build ... --target bloom_test` produced no stdout.
