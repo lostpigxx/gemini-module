@@ -28,7 +28,7 @@ gemini-bloom 是 Gemini 产品线的 Bloom Filter 组件，不是 RedisBloom 的
 | psync / fullsync replication | 兼容 | RDB snapshot 传输，双向通过 |
 | RDB-preamble AOF | 兼容 | Redis 6/7 默认模式，AOF 文件包含 RDB 数据，双向通过 |
 | BF.SCANDUMP / BF.LOADCHUNK | 不兼容 | gemini 使用私有 layer-index cursor 协议，与 RedisBloom 不互通（详见 §5.4） |
-| command-AOF rewrite | 不兼容 | 依赖私有 LOADCHUNK 协议，不对客户暴露 |
+| command-AOF rewrite | 不兼容 | 依赖私有 LOADCHUNK 协议（详见 §5.3） |
 | RESP3 | 不支持 | 所有命令使用 RESP2 返回格式 |
 | BF.DEBUG | 不支持 | RedisBloom 诊断命令，不在实现范围 |
 
@@ -163,14 +163,7 @@ gemini-bloom 的 seed 值和 `h2 = hash(data, seed=h1)` 模式与 RedisBloom 一
 
 #### 2.4.5 SCANDUMP / LOADCHUNK 协议
 
-这是两者最大的设计差异，也是 gemini-bloom 明确不兼容的部分：
-
-| 维度 | gemini-bloom | RedisBloom |
-|---|---|---|
-| cursor 语义 | layer index（1=header, 2=layer0, 3=layer1, ...） | byte offset 在拼接后的数据流中的位置 |
-| data chunk 大小 | 整层 bit array（一次一整层） | 最大 16MB chunk，大层会被拆分 |
-| chunk 可以跨层 | 不可以 | 可以（byte-offset 是全局的） |
-| 对外暴露 | 不对客户开放 | RedisBloom 公共迁移接口 |
+gemini 使用私有 layer-index cursor 协议，与 RedisBloom 的 byte-offset chunk 协议不互通。与 RedisBloom 的数据兼容通过 RDB 层实现，不依赖此协议。完整设计详见 §5.4。
 
 ```
 RedisBloom v2.4.20 chunk 序列示例（EXPANSION 2, 40 items）:
@@ -182,8 +175,6 @@ gemini 同一 filter 的 chunk 序列:
   cursor 按 layer index 递进: 1 → 2 → 3 → 4 → 0(结束)
   每个 data chunk 是完整的一层 bit array
 ```
-
-gemini 选择私有 layer-index 协议的原因：实现简单、自身 round-trip 自洽、AOF rewrite 可用。由于产品只通过 RDB 路径迁移，SCANDUMP/LOADCHUNK 不对客户开放，因此不需要与 RedisBloom 协议兼容。
 
 #### 2.4.6 命令 parser 严格性
 
@@ -201,11 +192,13 @@ gemini 总体上比 RedisBloom 更严格。这是有意为之的设计选择 —
 
 | 维度 | gemini-bloom | RedisBloom v2.4.20 |
 |---|---|---|
-| cursor=1 对空 key | 创建 shell | 创建 shell |
+| cursor=1 对空 key | 创建 shell，标记 Loading 状态 | 创建 shell |
 | cursor=1 对已有 Bloom key | ERR received bad data，保留旧 key | ERR received bad data，保留旧 key |
 | cursor=1 对 string key | WRONGTYPE | WRONGTYPE |
+| cursor>1 对已完成的 Bloom key | ERR received bad data | 允许覆写 bit array |
+| loading 中的 key 读写 | 返回 ERR filter is being loaded | 无此概念，可正常查询 |
 
-gemini 在该行为上已与 RedisBloom v2.4.20 对齐。
+gemini 在 cursor=1 行为上与 RedisBloom 对齐，但通过 loading 状态对 cursor>1 增加了完整性保护（详见 §5.4.3）。
 
 #### 2.4.8 批量命令部分失败
 
@@ -270,8 +263,8 @@ gemini-bloom 在反序列化路径上比 RedisBloom 做了更多校验：
 | `BF.MEXISTS key item [item ...]` | readonly | 批量检查 |
 | `BF.INFO key [field]` | readonly | 返回 filter 元数据 |
 | `BF.CARD key` | readonly | 返回已插入元素数 |
-| `BF.SCANDUMP key cursor` | readonly fast | 增量序列化（内部使用） |
-| `BF.LOADCHUNK key cursor data` | write deny-oom | 增量反序列化（内部使用） |
+| `BF.SCANDUMP key cursor` | readonly fast | 增量导出（详见 §5.4） |
+| `BF.LOADCHUNK key cursor data` | write deny-oom | 增量导入（详见 §5.4） |
 
 ### 3.2 参数校验与资源限制
 
@@ -579,7 +572,7 @@ RDB 文件、LOADCHUNK payload 均视为非信任输入：
 - 所有 write 命令标记 `deny-oom`，Redis OOM 状态下自动拒绝
 - 参数校验在任何 key 操作之前完成
 - 类型检查使用 `WRONGTYPE` 标准错误
-- LOADCHUNK 不覆盖已有 Bloom key
+- LOADCHUNK 通过 loading 状态保护已完成的 Bloom key 不被覆写（详见 §5.4.3）
 
 ---
 
@@ -589,10 +582,10 @@ RDB 文件、LOADCHUNK payload 均视为非信任输入：
 
 | 测试层 | 框架 | 用例数 | 定位 |
 |---|---|---|---|
-| BloomLayer 单元测试 | GTest (`bloom_filter_test`) | 27 | 单层 Bloom Filter 核心逻辑、hash 函数、flags |
-| ScalingBloomFilter 单元测试 | GTest (`sb_chain_test`) | 16 | 多层管理、扩容、固定大小、极端参数 |
-| RDB/wire 序列化测试 | GTest (`bloom_rdb_test`) | 62 | 序列化 round-trip、恶意输入拒绝、encver 兼容 |
-| 集成测试 | TCL (`bloom_test.tcl`) | 146 | 完整命令语义、Redis 持久化、模块配置 |
+| BloomLayer 单元测试 | GTest (`bloom_filter_test`) | 28 | 单层 Bloom Filter 核心逻辑、hash 函数、flags |
+| ScalingBloomFilter 单元测试 | GTest (`sb_chain_test`) | 21 | 多层管理、扩容、固定大小、loading 状态、极端参数 |
+| RDB/wire 序列化测试 | GTest (`bloom_rdb_test`) | 65 | 序列化 round-trip、恶意输入拒绝、encver 兼容、loading flag 剥离 |
+| 集成测试 | TCL (`bloom_test.tcl`) | 150 | 完整命令语义、Redis 持久化、loading 状态保护、模块配置 |
 
 ### 7.2 测试隔离策略
 
