@@ -1,0 +1,51 @@
+Running main() from /private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_6094xsvp9s/croot/yaml-cpp-split_1714510906468/work/test/gtest-1.11.0/googletest/src/gtest_main.cc
+[==========] Running 21 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 21 tests from ScalingBloomTest
+[ RUN      ] ScalingBloomTest.ConstructAndDestruct
+[       OK ] ScalingBloomTest.ConstructAndDestruct (0 ms)
+[ RUN      ] ScalingBloomTest.PutAndContains
+[       OK ] ScalingBloomTest.PutAndContains (0 ms)
+[ RUN      ] ScalingBloomTest.Uses32BitHashWhenFlagIsAbsent
+[       OK ] ScalingBloomTest.Uses32BitHashWhenFlagIsAbsent (0 ms)
+[ RUN      ] ScalingBloomTest.NoFalseNegatives
+[       OK ] ScalingBloomTest.NoFalseNegatives (1 ms)
+[ RUN      ] ScalingBloomTest.AutoExpansion
+[       OK ] ScalingBloomTest.AutoExpansion (0 ms)
+[ RUN      ] ScalingBloomTest.FixedSizeRejectsOverflow
+[       OK ] ScalingBloomTest.FixedSizeRejectsOverflow (0 ms)
+[ RUN      ] ScalingBloomTest.OptionalReturnSemantics
+[       OK ] ScalingBloomTest.OptionalReturnSemantics (0 ms)
+[ RUN      ] ScalingBloomTest.FixedSizeDuplicateDoesNotConsumeCapacity
+[       OK ] ScalingBloomTest.FixedSizeDuplicateDoesNotConsumeCapacity (0 ms)
+[ RUN      ] ScalingBloomTest.TotalCapacity
+[       OK ] ScalingBloomTest.TotalCapacity (0 ms)
+[ RUN      ] ScalingBloomTest.BytesUsed
+[       OK ] ScalingBloomTest.BytesUsed (0 ms)
+[ RUN      ] ScalingBloomTest.MoveAssignmentTransfersOwnership
+[       OK ] ScalingBloomTest.MoveAssignmentTransfersOwnership (0 ms)
+[ RUN      ] ScalingBloomTest.ExpansionOneAddsSameSizedLayers
+[       OK ] ScalingBloomTest.ExpansionOneAddsSameSizedLayers (0 ms)
+[ RUN      ] ScalingBloomTest.FromRdbShellSetLayer
+[       OK ] ScalingBloomTest.FromRdbShellSetLayer (0 ms)
+[ RUN      ] ScalingBloomTest.AppendLayerSafeRelocation
+[       OK ] ScalingBloomTest.AppendLayerSafeRelocation (0 ms)
+[ RUN      ] ScalingBloomTest.ExtremeParamsRejected
+[       OK ] ScalingBloomTest.ExtremeParamsRejected (0 ms)
+[ RUN      ] ScalingBloomTest.TotalDataSizeAccumulates
+[       OK ] ScalingBloomTest.TotalDataSizeAccumulates (0 ms)
+[ RUN      ] ScalingBloomTest.MaxBitsPerEntryConstant
+[       OK ] ScalingBloomTest.MaxBitsPerEntryConstant (0 ms)
+[ RUN      ] ScalingBloomTest.MaxTotalDataSizeConstant
+[       OK ] ScalingBloomTest.MaxTotalDataSizeConstant (0 ms)
+[ RUN      ] ScalingBloomTest.LoadingStateLifecycle
+[       OK ] ScalingBloomTest.LoadingStateLifecycle (0 ms)
+[ RUN      ] ScalingBloomTest.LoadingFlagNotInSupportedFlags
+[       OK ] ScalingBloomTest.LoadingFlagNotInSupportedFlags (0 ms)
+[ RUN      ] ScalingBloomTest.SpanInterface
+[       OK ] ScalingBloomTest.SpanInterface (0 ms)
+[----------] 21 tests from ScalingBloomTest (2 ms total)
+
+[----------] Global test environment tear-down
+[==========] 21 tests from 1 test suite ran. (3 ms total)
+[  PASSED  ] 21 tests.

@@ -1,0 +1,250 @@
+Module: /private/tmp/gemini-bloom-stage02-build.G7fAub/redis_bloom.so
+Starting redis-server on port 53386...
+Connected.
+
+=== BF.RESERVE ===
+  PASS: BF.RESERVE creates a new filter
+  PASS: BF.RESERVE on existing key returns error
+  PASS: BF.RESERVE with invalid error rate (0)
+  PASS: BF.RESERVE with invalid error rate (1)
+  PASS: BF.RESERVE with invalid error rate (negative)
+  PASS: BF.RESERVE with invalid capacity (0)
+  PASS: BF.RESERVE with invalid capacity (negative)
+  PASS: BF.RESERVE with EXPANSION
+  PASS: BF.RESERVE with NONSCALING
+  PASS: BF.RESERVE wrong arity
+
+=== BF.ADD ===
+  PASS: BF.ADD new item returns 1
+  PASS: BF.ADD duplicate item returns 0
+  PASS: BF.ADD second unique item returns 1
+  PASS: BF.ADD auto-creates filter on missing key
+  PASS: BF.ADD wrong arity
+
+=== BF.EXISTS ===
+  PASS: BF.EXISTS finds existing item
+  PASS: BF.EXISTS returns 0 for missing item
+  PASS: BF.EXISTS returns 0 for missing key
+
+=== BF.MADD ===
+  PASS: BF.MADD adds multiple items
+  PASS: BF.MADD with duplicates returns mixed results
+
+=== BF.MEXISTS ===
+  PASS: BF.MEXISTS checks multiple items
+  PASS: BF.MEXISTS on missing key returns all zeros
+
+=== BF.INSERT ===
+  PASS: BF.INSERT basic with ITEMS
+  PASS: BF.INSERT with custom ERROR and CAPACITY
+  PASS: BF.INSERT with EXPANSION
+  PASS: BF.INSERT duplicate returns 0
+  PASS: BF.INSERT with NOCREATE on missing key
+  PASS: BF.INSERT with NOCREATE on existing key works
+  PASS: BF.INSERT without ITEMS keyword
+
+=== BF.INFO ===
+  PASS: BF.INFO returns full info
+  PASS: BF.INFO Capacity field is correct
+  PASS: BF.INFO Number of filters >= 1
+  PASS: BF.INFO Expansion rate is 2
+  PASS: BF.INFO single field: Capacity
+  PASS: BF.INFO single field: Items
+  PASS: BF.INFO on missing key
+  PASS: BF.INFO unrecognized field
+  PASS: BF.INFO NONSCALING filter shows null expansion
+
+=== RESP3 reply shapes ===
+  FAIL: EXPECTED RESP3 GAP: BF.ADD returns boolean type
+    expected RESP3 boolean '#', got ':' reply=: 1
+  FAIL: EXPECTED RESP3 GAP: BF.EXISTS returns boolean type
+    expected RESP3 boolean '#', got ':' reply=: 1
+  FAIL: EXPECTED RESP3 GAP: BF.MADD returns array of booleans
+    expected RESP3 boolean element, got ':' reply=* {{: 1} {: 1}}
+  FAIL: EXPECTED RESP3 GAP: BF.MEXISTS returns array of booleans
+    expected RESP3 boolean element, got ':' reply=* {{: 1} {: 0}}
+  FAIL: EXPECTED RESP3 GAP: BF.INFO full response returns map type
+    expected RESP3 map '%', got '*' reply=* {{+ Capacity} {: 100} {+ Size} {: 440} {+ {Number of filters}} {: 1} {+ {Number of items inserted}} {: 0} {+ {Expansion rate}} {: 2}}
+  PASS: RESP3 BF.INFO single Capacity remains integer scalar
+
+=== BF.CARD ===
+  PASS: BF.CARD returns inserted count
+  PASS: BF.CARD on missing key returns 0
+
+=== NONSCALING behavior ===
+  PASS: NONSCALING filter rejects overflow
+  PASS: NONSCALING filter stays at 1 layer
+
+=== Auto-scaling behavior ===
+  PASS: Filter auto-scales when full
+  PASS: All items survive scaling (no false negatives)
+
+=== BF.SCANDUMP / BF.LOADCHUNK round-trip ===
+  PASS: SCANDUMP/LOADCHUNK preserves data
+  PASS: SCANDUMP/LOADCHUNK using returned iterator directly (official protocol)
+  PASS: SCANDUMP/LOADCHUNK preserves binary chunk payloads
+  FAIL: EXPECTED COMPAT GAP: SCANDUMP layer cursor should advance by byte length
+    expected byte-offset cursor 129, got 2
+
+=== Wrong type errors ===
+  PASS: BF.ADD on string key
+  PASS: BF.EXISTS on string key
+  PASS: BF.INFO on string key
+  PASS: BF.MEXISTS on string key returns top-level WRONGTYPE (not array of errors)
+  PASS: BF.MADD on string key returns top-level WRONGTYPE
+  PASS: BF.INSERT on string key returns WRONGTYPE
+  PASS: BF.CARD on string key returns WRONGTYPE
+  PASS: BF.SCANDUMP on string key returns WRONGTYPE
+
+=== EXPANSION validation ===
+  PASS: BF.RESERVE EXPANSION 0 maps to NONSCALING
+  PASS: BF.RESERVE NONSCALING and EXPANSION together should be rejected
+  PASS: BF.INSERT EXPANSION 0 maps to NONSCALING
+  PASS: BF.INSERT NONSCALING and EXPANSION together should be rejected
+
+=== LOADCHUNK safety ===
+  PASS: BF.LOADCHUNK on string key should return WRONGTYPE, not delete
+  PASS: BF.LOADCHUNK WRONGTYPE preserves original key
+  PASS: BF.LOADCHUNK with malformed header does not delete existing bloom key
+  PASS: BF.LOADCHUNK rejects header too short
+  PASS: BF.LOADCHUNK rejects header with zero layers
+
+=== BytesUsed accuracy ===
+  PASS: BF.INFO Size accounts for layer storage capacity
+
+=== Additional LOADCHUNK safety ===
+  PASS: BF.LOADCHUNK cursor 0 should be rejected
+  PASS: BF.LOADCHUNK negative cursor should be rejected
+  PASS: BF.LOADCHUNK data chunk on non-existent key
+  PASS: BF.LOADCHUNK data chunk with wrong size
+
+=== Additional parameter validation ===
+  PASS: BF.RESERVE EXPANSION negative should be rejected
+  PASS: BF.RESERVE unrecognized option
+  PASS: BF.INSERT NONSCALING filter rejects when full
+
+=== NOCREATE mutual exclusion ===
+  PASS: BF.INSERT NOCREATE + CAPACITY should be rejected
+  PASS: BF.INSERT NOCREATE + ERROR should be rejected
+
+=== BF.INSERT ITEMS edge cases ===
+  PASS: BF.INSERT ITEMS with no items returns wrong arity
+
+=== Parser missing value and numeric validation ===
+  PASS: BF.RESERVE EXPANSION missing value rejected
+  PASS: BF.RESERVE EXPANSION non-numeric rejected
+  PASS: BF.INSERT ERROR missing value rejected
+  PASS: BF.INSERT ERROR non-numeric rejected
+  PASS: BF.INSERT ERROR out of range high rejected
+  PASS: BF.INSERT CAPACITY missing value rejected
+  PASS: BF.INSERT CAPACITY non-numeric rejected
+  PASS: BF.INSERT EXPANSION missing value rejected
+  PASS: BF.INSERT EXPANSION non-numeric rejected
+  PASS: BF.INSERT unknown option before ITEMS rejected
+
+=== EXPANSION overflow / truncation ===
+  PASS: BF.RESERVE EXPANSION 4294967296 should be rejected
+  PASS: BF.INSERT EXPANSION 4294967296 should be rejected
+
+=== BF.RESERVE wrong type distinction ===
+  PASS: BF.RESERVE on string key returns WRONGTYPE
+  PASS: BF.RESERVE on existing bloom key returns item exists
+
+=== Multi-layer behavior ===
+  PASS: EXPANSION 4 creates fewer layers than EXPANSION 1
+  PASS: BF.INFO reports correct expansion rate
+  PASS: All items survive multi-layer scaling (no false negatives)
+
+=== Edge cases ===
+  PASS: BF.ADD empty string as item
+  PASS: BF.EXISTS empty string as item
+  PASS: BF.ADD very long item
+  PASS: BF.EXISTS very long item
+  PASS: BF.ADD binary item with null bytes
+  PASS: BF.EXISTS binary item with null bytes
+
+=== RDB persistence ===
+  PASS: Data survives BGSAVE + restart
+
+=== AOF persistence ===
+  PASS: Data survives AOF rewrite + restart
+
+=== Resource limits (BUG-04) ===
+  PASS: BF.RESERVE capacity exceeding 1<<30 rejected
+  PASS: BF.RESERVE expansion exceeding 32768 rejected
+  PASS: BF.INSERT capacity exceeding 1<<30 rejected
+  PASS: BF.INSERT expansion exceeding 32768 rejected
+  PASS: BF.RESERVE capacity at limit 1<<30 succeeds
+  PASS: BF.RESERVE expansion at limit 32768 succeeds
+
+=== MADD/INSERT partial failure (BUG-05) ===
+  PASS: BF.MADD on full filter truncates array at first error
+  PASS: BF.MADD partial success truncates at first error (RedisBloom compat)
+  PASS: BF.INSERT on full filter truncates at first error
+
+=== Parser duplicate options (IMPL-08) ===
+  PASS: BF.RESERVE duplicate EXPANSION rejected
+  PASS: BF.RESERVE duplicate NONSCALING rejected
+  PASS: BF.INSERT duplicate ERROR rejected
+  PASS: BF.INSERT duplicate CAPACITY rejected
+  PASS: BF.INSERT duplicate EXPANSION rejected
+  PASS: BF.INSERT duplicate NONSCALING rejected
+
+=== Module config tests (TEST-07) ===
+  PASS: Default config creates filter with expected defaults
+  PASS: Module load args override default ERROR_RATE INITIAL_SIZE and EXPANSION
+  PASS: Module load rejects ERROR_RATE missing value
+  PASS: Module load rejects ERROR_RATE out of range
+  PASS: Module load rejects INITIAL_SIZE missing value
+  PASS: Module load rejects INITIAL_SIZE zero
+  PASS: Module load rejects EXPANSION missing value
+  PASS: Module load rejects EXPANSION zero
+  PASS: Module load rejects unknown config argument
+
+=== LOADCHUNK half-restore safety (DESIGN-02) ===
+  PASS: Half-restored filter rejects EXISTS (loading state)
+  PASS: Half-restored filter rejects CARD (loading state)
+  PASS: Half-restored filter rejects ADD (loading state)
+  PASS: Half-restored filter rejects SCANDUMP (loading state)
+  PASS: LOADCHUNK cursor>1 rejects completed filter
+
+=== SCANDUMP cursor protocol documentation (COMPAT-01) ===
+  PASS: SCANDUMP uses layer-index cursor protocol
+
+=== Command flags (IMPL-09, TEST-08) ===
+  PASS: COMMAND INFO BF.ADD shows write flag
+  PASS: COMMAND INFO BF.EXISTS shows readonly flag
+  PASS: COMMAND INFO BF.SCANDUMP shows readonly flag
+  PASS: COMMAND INFO exposes expected flags for all bloom commands
+  PASS: COMMAND GETKEYS BF.ADD returns the filter key
+  PASS: COMMAND GETKEYS BF.SCANDUMP returns the filter key
+  PASS: COMMAND GETKEYS BF.RESERVE returns the filter key
+  PASS: COMMAND GETKEYS BF.LOADCHUNK returns the filter key
+  PASS: COMMAND GETKEYS BF.INFO returns the filter key
+  PASS: ACL DRYRUN accepts bloom commands when supported
+
+=== LOADCHUNK existing key rejection (SAFE-07) ===
+  PASS: BF.LOADCHUNK header on existing Bloom key returns error
+  PASS: BF.LOADCHUNK existing key rejection preserves old data
+
+=== Per-layer data size cap (SAFE-06) ===
+  PASS: BloomLayer::Create rejects extremely large capacity
+
+==========================================
+Results: 144 passed, 6 failed
+==========================================
+
+Failed tests:
+  - EXPECTED RESP3 GAP: BF.ADD returns boolean type
+    expected RESP3 boolean '#', got ':' reply=: 1
+  - EXPECTED RESP3 GAP: BF.EXISTS returns boolean type
+    expected RESP3 boolean '#', got ':' reply=: 1
+  - EXPECTED RESP3 GAP: BF.MADD returns array of booleans
+    expected RESP3 boolean element, got ':' reply=* {{: 1} {: 1}}
+  - EXPECTED RESP3 GAP: BF.MEXISTS returns array of booleans
+    expected RESP3 boolean element, got ':' reply=* {{: 1} {: 0}}
+  - EXPECTED RESP3 GAP: BF.INFO full response returns map type
+    expected RESP3 map '%', got '*' reply=* {{+ Capacity} {: 100} {+ Size} {: 440} {+ {Number of filters}} {: 1} {+ {Number of items inserted}} {: 0} {+ {Expansion rate}} {: 2}}
+  - EXPECTED COMPAT GAP: SCANDUMP layer cursor should advance by byte length
+    expected byte-offset cursor 129, got 2
+

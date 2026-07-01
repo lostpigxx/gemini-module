@@ -1,0 +1,20 @@
+# Stage 02 stdout summary
+
+Detailed stdout is split across:
+
+- `build/configure_stdout.log`
+- `build/configure_fallback_stdout.log`
+- `build/build_fallback_stdout.log`
+- `gtest/bloom_test_target_stdout.log`
+- `gtest/bloom_filter_test_stdout.log`
+- `gtest/sb_chain_test_stdout.log`
+- `gtest/bloom_rdb_test_stdout.log`
+- `tcl/bloom_test_tcl_stdout.log`
+
+Important stdout facts:
+
+- Clean fallback configure succeeded.
+- Clean fallback full build succeeded.
+- `redis_bloom.so` and the three GTest binaries were built in `/private/tmp/gemini-bloom-stage02-build.G7fAub`.
+- Direct GTest rerun passed 28 + 21 + 65 tests.
+- TCL integration reported `144 passed, 6 failed`; the failures were all labeled `EXPECTED ... GAP`.

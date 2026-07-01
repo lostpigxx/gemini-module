@@ -1,0 +1,17 @@
+# Stage 02 exit codes
+
+| Command | Exit code | Classification |
+|---|---:|---|
+| `cmake -B build` | 1 | ENVIRONMENT: stale local CMake cache in ignored `build/`. |
+| `cmake --build build -j$(nproc)` | 1 | ENVIRONMENT: stale cache and macOS lacks `nproc`. |
+| `cmake --build build -j$(nproc) --target bloom_test` | 1 | ENVIRONMENT: stale cache and macOS lacks `nproc`. |
+| `getconf _NPROCESSORS_ONLN` | 0 | fallback job count `10`. |
+| `cmake -S . -B /private/tmp/gemini-bloom-stage02-build.G7fAub` | 0 | PASS fallback configure. |
+| `cmake --build /private/tmp/gemini-bloom-stage02-build.G7fAub -j10` | 0 | PASS fallback full build. |
+| `cmake --build /private/tmp/gemini-bloom-stage02-build.G7fAub -j10 --target bloom_test` | 2 | TEST_INFRA: missing GTest dylib RPATH during target execution. |
+| `bloom_filter_test` with `DYLD_LIBRARY_PATH` | 0 | PASS, 28 tests. |
+| `sb_chain_test` with `DYLD_LIBRARY_PATH` | 0 | PASS, 21 tests. |
+| `bloom_rdb_test` with `DYLD_LIBRARY_PATH` | 0 | PASS, 65 tests. |
+| `tclsh ... bloom_test.tcl /private/tmp/.../redis_bloom.so` | 6 | TEST_HARNESS / DESIGN_INTENDED expected gaps: 144 pass, 6 expected-gap failures. |
+| `redis-cli -p 53386 PING` after TCL | 1 | PASS cleanup signal: connection refused after test. |
+| `ps -axo pid,command \| rg 'redis-server.*53386|redis-server.*bloom'` | 0 | PASS cleanup signal: no redis-server process matched; only rg process appeared. |
