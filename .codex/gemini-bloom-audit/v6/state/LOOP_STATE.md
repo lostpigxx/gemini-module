@@ -15,8 +15,8 @@
 | 00 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage00/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage00/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage00/reviewer_output.md` | `fa165b27fc498da23b0861f99e5f2919d89dd897` | PUSHED | yes |
 | 01 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage01/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage01/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage01/reviewer_output.md` | `b35f0f624c6805e7610010f795420e2d592abbaa` | PUSHED | yes |
 | 02 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage02/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage02/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage02/reviewer_output.md` | `77566087a4a58a0ac3bd790b73e64276fb045a90` | PUSHED | yes |
-| 03 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage03/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 03 static deep audit` | PUSHED_BY_STAGE_GATE | yes |
-| 04 | PENDING |  |  |  |  |  |  |
+| 03 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage03/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage03/reviewer_output.md` | `dc0a3a8ad8e97e6631028d4152804f68a923ecbf` | PUSHED | yes |
+| 04 | BLOCKED | `.codex/gemini-bloom-audit/v6/agents/stage04/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage04/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage04/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 04 runtime command semantics` | PUSHED_BY_STAGE_GATE | yes |
 | 05 | PENDING |  |  |  |  |  |  |
 | 06 | PENDING |  |  |  |  |  |  |
 | 07 | PENDING |  |  |  |  |  |  |
@@ -44,8 +44,9 @@ Findings should be indexed here as they are discovered.
 
 | ID | Stage | Blocker | Impact | Evidence |
 |---|---|---|---|---|
+| GBV6-04-BLOCK-001 | 04 | Redis 6.2.16 does not expose `ACL DRYRUN` | Stage 04 cannot verify ACL dry-run permission effects; `COMMAND INFO` and `COMMAND GETKEYS` metadata were verified, but ACL DRYRUN must remain degraded and should be revisited in Stage 09 or final report | `.codex/gemini-bloom-audit/v6/evidence/stage04/runtime_matrix/failures.md` |
 
 ## Final confidence
 
 - Current confidence: `UNKNOWN`
-- Reason: Stage 03 static deep audit found RDB/wire resource-boundary and test-coverage findings. Runtime command semantics, RedisBloom oracle, persistence transport, fuzz, sanitizer, ops, perf, and final report audit remain VERIFY_LATER.
+- Reason: Stage 04 runtime command semantics audit verified all ten BF commands, with ACL DRYRUN blocked by Redis 6.2.16. RedisBloom oracle, persistence transport, fuzz, sanitizer, ops, perf, and final report audit remain VERIFY_LATER.
