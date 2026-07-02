@@ -1,0 +1,29 @@
+# Stage 01 commands
+
+```bash
+git rev-parse HEAD
+git branch --show-current
+git status --short
+git remote -v
+git branch -vv
+git log --oneline --decorate -3
+uname -a
+cat /etc/os-release
+sw_vers
+cmake --version
+c++ --version
+g++ --version
+clang++ --version
+redis-server --version
+redis-cli --version
+tclsh <<< 'puts [info patchlevel]'
+python3 --version
+docker --version
+find modules/gemini-bloom -maxdepth 4 -type f | sort
+git ls-files modules/gemini-bloom
+git status --ignored --short modules/gemini-bloom/tests/pict/__pycache__/run_pict_cases.cpython-313.pyc
+ls -ld modules/gemini-bloom/tests/compat/redisbloom-2.4.20
+ls -ld .github
+```
+
+No build, GTest, TCL integration test, redis-server launch, RedisBloom oracle, Docker container run, sanitizer, fuzz, or performance test was executed in Stage 01.

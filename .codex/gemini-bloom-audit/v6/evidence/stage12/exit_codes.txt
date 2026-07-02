@@ -1,0 +1,6 @@
+mkdir_unprivileged=1
+mkdir_escalated=0
+git_branch=0
+git_rev_parse=0
+git_status=0
+report_audit_script=0

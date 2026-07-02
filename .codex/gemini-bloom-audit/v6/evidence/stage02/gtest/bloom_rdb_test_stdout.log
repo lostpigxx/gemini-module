@@ -1,0 +1,145 @@
+Running main() from /private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_6094xsvp9s/croot/yaml-cpp-split_1714510906468/work/test/gtest-1.11.0/googletest/src/gtest_main.cc
+[==========] Running 65 tests from 3 test suites.
+[----------] Global test environment set-up.
+[----------] 41 tests from BloomRdb
+[ RUN      ] BloomRdb.EmptyFilterRoundTrip
+[       OK ] BloomRdb.EmptyFilterRoundTrip (0 ms)
+[ RUN      ] BloomRdb.PopulatedFilterRoundTrip
+[       OK ] BloomRdb.PopulatedFilterRoundTrip (0 ms)
+[ RUN      ] BloomRdb.MultiLayerRoundTrip
+[       OK ] BloomRdb.MultiLayerRoundTrip (0 ms)
+[ RUN      ] BloomRdb.MetadataPreserved
+[       OK ] BloomRdb.MetadataPreserved (0 ms)
+[ RUN      ] BloomRdb.BitArrayExactMatch
+[       OK ] BloomRdb.BitArrayExactMatch (0 ms)
+[ RUN      ] BloomRdb.FixedSizeRoundTrip
+[       OK ] BloomRdb.FixedSizeRoundTrip (0 ms)
+[ RUN      ] BloomRdb.EncVer2BackwardCompat
+[       OK ] BloomRdb.EncVer2BackwardCompat (0 ms)
+[ RUN      ] BloomRdb.RejectsUnknownEncver
+[       OK ] BloomRdb.RejectsUnknownEncver (0 ms)
+[ RUN      ] BloomRdb.RejectsUndocumentedEncvers
+[       OK ] BloomRdb.RejectsUndocumentedEncvers (0 ms)
+[ RUN      ] BloomRdb.ExpansionFactors
+[       OK ] BloomRdb.ExpansionFactors (0 ms)
+[ RUN      ] BloomRdb.DifferentFpRates
+[       OK ] BloomRdb.DifferentFpRates (0 ms)
+[ RUN      ] BloomRdb.TruncatedItemCountReturnsNull
+[       OK ] BloomRdb.TruncatedItemCountReturnsNull (0 ms)
+[ RUN      ] BloomRdb.RejectsInvalidLog2Bits
+[       OK ] BloomRdb.RejectsInvalidLog2Bits (0 ms)
+[ RUN      ] BloomRdb.RejectsExcessiveNumLayers
+[       OK ] BloomRdb.RejectsExcessiveNumLayers (0 ms)
+[ RUN      ] BloomRdb.RejectsTotalBitsZero
+[       OK ] BloomRdb.RejectsTotalBitsZero (0 ms)
+[ RUN      ] BloomRdb.RejectsFpRateNaN
+[       OK ] BloomRdb.RejectsFpRateNaN (0 ms)
+[ RUN      ] BloomRdb.RejectsFpRateInf
+[       OK ] BloomRdb.RejectsFpRateInf (0 ms)
+[ RUN      ] BloomRdb.RejectsFpRateZero
+[       OK ] BloomRdb.RejectsFpRateZero (0 ms)
+[ RUN      ] BloomRdb.RejectsFpRateOne
+[       OK ] BloomRdb.RejectsFpRateOne (0 ms)
+[ RUN      ] BloomRdb.RejectsFpRateNegative
+[       OK ] BloomRdb.RejectsFpRateNegative (0 ms)
+[ RUN      ] BloomRdb.RejectsBitsPerEntryNaN
+[       OK ] BloomRdb.RejectsBitsPerEntryNaN (0 ms)
+[ RUN      ] BloomRdb.RejectsBitsPerEntryInf
+[       OK ] BloomRdb.RejectsBitsPerEntryInf (0 ms)
+[ RUN      ] BloomRdb.RejectsBitsPerEntryZero
+[       OK ] BloomRdb.RejectsBitsPerEntryZero (0 ms)
+[ RUN      ] BloomRdb.RejectsBitsPerEntryNegative
+[       OK ] BloomRdb.RejectsBitsPerEntryNegative (0 ms)
+[ RUN      ] BloomRdb.RejectsCapacityZero
+[       OK ] BloomRdb.RejectsCapacityZero (0 ms)
+[ RUN      ] BloomRdb.RejectsHashCountZero
+[       OK ] BloomRdb.RejectsHashCountZero (0 ms)
+[ RUN      ] BloomRdb.RejectsHashCountInconsistentWithBitsPerEntry
+[       OK ] BloomRdb.RejectsHashCountInconsistentWithBitsPerEntry (0 ms)
+[ RUN      ] BloomRdb.RejectsHashCountHighBitBypass
+[       OK ] BloomRdb.RejectsHashCountHighBitBypass (0 ms)
+[ RUN      ] BloomRdb.RejectsLog2BitsHighBitBypass
+[       OK ] BloomRdb.RejectsLog2BitsHighBitBypass (0 ms)
+[ RUN      ] BloomRdb.RejectsFlagsHighBitBypass
+[       OK ] BloomRdb.RejectsFlagsHighBitBypass (0 ms)
+[ RUN      ] BloomRdb.RejectsBitsPerEntryTooLarge
+[       OK ] BloomRdb.RejectsBitsPerEntryTooLarge (0 ms)
+[ RUN      ] BloomRdb.RejectsTotalItemsMismatch
+[       OK ] BloomRdb.RejectsTotalItemsMismatch (0 ms)
+[ RUN      ] BloomRdb.RejectsItemCountExceedsCapacity
+[       OK ] BloomRdb.RejectsItemCountExceedsCapacity (0 ms)
+[ RUN      ] BloomRdb.AcceptsConsistentItemCounts
+[       OK ] BloomRdb.AcceptsConsistentItemCounts (0 ms)
+[ RUN      ] BloomRdb.RejectsShortLayerBlob
+[       OK ] BloomRdb.RejectsShortLayerBlob (0 ms)
+[ RUN      ] BloomRdb.RejectsLongLayerBlob
+[       OK ] BloomRdb.RejectsLongLayerBlob (0 ms)
+[ RUN      ] BloomRdb.RejectsScalingExpansionZero
+[       OK ] BloomRdb.RejectsScalingExpansionZero (0 ms)
+[ RUN      ] BloomRdb.AcceptsFixedExpansionZero
+[       OK ] BloomRdb.AcceptsFixedExpansionZero (0 ms)
+[ RUN      ] BloomRdb.RejectsUnknownFlags
+[       OK ] BloomRdb.RejectsUnknownFlags (0 ms)
+[ RUN      ] BloomRdb.RejectsRawBitsFlag
+[       OK ] BloomRdb.RejectsRawBitsFlag (0 ms)
+[ RUN      ] BloomRdb.LoadingFlagStrippedOnRdbRoundTrip
+[       OK ] BloomRdb.LoadingFlagStrippedOnRdbRoundTrip (0 ms)
+[----------] 41 tests from BloomRdb (1 ms total)
+
+[----------] 23 tests from BloomWire
+[ RUN      ] BloomWire.EmptyFilterHeaderRoundTrip
+[       OK ] BloomWire.EmptyFilterHeaderRoundTrip (0 ms)
+[ RUN      ] BloomWire.PopulatedFilterHeaderRoundTrip
+[       OK ] BloomWire.PopulatedFilterHeaderRoundTrip (0 ms)
+[ RUN      ] BloomWire.FullScanDumpLoadChunkRoundTrip
+[       OK ] BloomWire.FullScanDumpLoadChunkRoundTrip (0 ms)
+[ RUN      ] BloomWire.LayerMetaRoundTrip
+[       OK ] BloomWire.LayerMetaRoundTrip (0 ms)
+[ RUN      ] BloomWire.RejectsTruncatedHeader
+[       OK ] BloomWire.RejectsTruncatedHeader (0 ms)
+[ RUN      ] BloomWire.RejectsZeroLayers
+[       OK ] BloomWire.RejectsZeroLayers (0 ms)
+[ RUN      ] BloomWire.RejectsTooManyLayers
+[       OK ] BloomWire.RejectsTooManyLayers (0 ms)
+[ RUN      ] BloomWire.SetLayerOnUninitializedMemory
+[       OK ] BloomWire.SetLayerOnUninitializedMemory (0 ms)
+[ RUN      ] BloomWire.RejectsHeaderWithBadLog2Bits
+[       OK ] BloomWire.RejectsHeaderWithBadLog2Bits (0 ms)
+[ RUN      ] BloomWire.RejectsTotalItemsMismatch
+[       OK ] BloomWire.RejectsTotalItemsMismatch (0 ms)
+[ RUN      ] BloomWire.RejectsItemCountExceedsCapacity
+[       OK ] BloomWire.RejectsItemCountExceedsCapacity (0 ms)
+[ RUN      ] BloomWire.RejectsUnknownFlags
+[       OK ] BloomWire.RejectsUnknownFlags (0 ms)
+[ RUN      ] BloomWire.RejectsInvalidFpRate
+[       OK ] BloomWire.RejectsInvalidFpRate (0 ms)
+[ RUN      ] BloomWire.RejectsBitsPerEntryInf
+[       OK ] BloomWire.RejectsBitsPerEntryInf (0 ms)
+[ RUN      ] BloomWire.RejectsBitsPerEntryZero
+[       OK ] BloomWire.RejectsBitsPerEntryZero (0 ms)
+[ RUN      ] BloomWire.RejectsDataSizeMismatch
+[       OK ] BloomWire.RejectsDataSizeMismatch (0 ms)
+[ RUN      ] BloomWire.RejectsHashCountInconsistentWithBitsPerEntry
+[       OK ] BloomWire.RejectsHashCountInconsistentWithBitsPerEntry (0 ms)
+[ RUN      ] BloomWire.RejectsScalingExpansionZero
+[       OK ] BloomWire.RejectsScalingExpansionZero (0 ms)
+[ RUN      ] BloomWire.AcceptsFixedExpansionZero
+[       OK ] BloomWire.AcceptsFixedExpansionZero (0 ms)
+[ RUN      ] BloomWire.RejectsTotalBitsZero
+[       OK ] BloomWire.RejectsTotalBitsZero (0 ms)
+[ RUN      ] BloomWire.RejectsExcessiveTotalDataSize
+[       OK ] BloomWire.RejectsExcessiveTotalDataSize (0 ms)
+[ RUN      ] BloomWire.HeaderSizeScalesWithLayers
+[       OK ] BloomWire.HeaderSizeScalesWithLayers (0 ms)
+[ RUN      ] BloomWire.LoadingFlagStrippedOnHeaderRoundTrip
+[       OK ] BloomWire.LoadingFlagStrippedOnHeaderRoundTrip (0 ms)
+[----------] 23 tests from BloomWire (0 ms total)
+
+[----------] 1 test from BloomRdbStress
+[ RUN      ] BloomRdbStress.RepeatedRoundTrips
+[       OK ] BloomRdbStress.RepeatedRoundTrips (0 ms)
+[----------] 1 test from BloomRdbStress (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 65 tests from 3 test suites ran. (2 ms total)
+[  PASSED  ] 65 tests.

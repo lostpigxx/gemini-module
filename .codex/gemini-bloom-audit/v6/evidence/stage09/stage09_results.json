@@ -1,0 +1,823 @@
+{
+  "env": {
+    "git_head": "da10485e12321fa9abe0bcb698b375e70b46bdeb",
+    "git_status": " M .codex/gemini-bloom-audit/v6/state/LOOP_STATE.md\n?? .codex/gemini-bloom-audit/v6/agents/stage09/\n?? .codex/gemini-bloom-audit/v6/evidence/stage09/\n",
+    "redis_server_version": "Redis server v=6.2.17 sha=441001a4:0 malloc=libc bits=64 build=49616805317b0873",
+    "redis_cli_version": "redis-cli 6.2.17 (git:441001a4)",
+    "module_path": "/tmp/gemini-module-v6-stage09-build-workaround/redis_bloom.so",
+    "module_sha256": "8398d523fdf3408b49f5aa04165133803858dd9665fd63a7fb88130e225665e2",
+    "module_size": 404952,
+    "runtime_root": "/tmp/gemini-module-v6-stage09-runtime-1782907685362-18652",
+    "acl_dryrun_probe": {
+      "error": "ERR Unknown subcommand or wrong number of arguments for 'DRYRUN'. Try ACL HELP."
+    },
+    "command_getkeysandflags_probe": {
+      "error": "ERR Unknown subcommand or wrong number of arguments for 'GETKEYSANDFLAGS'. Try COMMAND HELP."
+    }
+  },
+  "replica": {
+    "live": {
+      "status": "PASS",
+      "checks": {
+        "live_members": true,
+        "fixed_members": true,
+        "fixed_rejected_z": true,
+        "auto_member": true,
+        "empty_item": true,
+        "nul_item": true,
+        "writes_rejected": true,
+        "readonly_success": true,
+        "info_fields_match": true
+      },
+      "live_log": [
+        {
+          "cmd": [
+            "BF.RESERVE",
+            "bf:live",
+            "0.01",
+            "4",
+            "EXPANSION",
+            "2"
+          ],
+          "reply": "OK"
+        },
+        {
+          "cmd": [
+            "BF.MADD",
+            "bf:live",
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+            "f",
+            "g",
+            "h"
+          ],
+          "reply": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "cmd": [
+            "BF.RESERVE",
+            "bf:fixed",
+            "0.01",
+            "2",
+            "NONSCALING"
+          ],
+          "reply": "OK"
+        },
+        {
+          "cmd": [
+            "BF.MADD",
+            "bf:fixed",
+            "x",
+            "y",
+            "z"
+          ],
+          "reply": [
+            1,
+            1,
+            {
+              "error": "ERR non scaling filter is full"
+            }
+          ]
+        },
+        {
+          "cmd": [
+            "BF.ADD",
+            "bf:auto",
+            "auto-1"
+          ],
+          "reply": 1
+        },
+        {
+          "cmd": [
+            "BF.ADD",
+            "bf:bin",
+            ""
+          ],
+          "reply": 1
+        },
+        {
+          "cmd": [
+            "BF.ADD",
+            "bf:bin",
+            "a\\x00b"
+          ],
+          "reply": 1
+        },
+        {
+          "cmd": [
+            "WAIT",
+            1,
+            5000
+          ],
+          "reply": 1
+        }
+      ],
+      "primary_info": {
+        "bf:live": {
+          "Capacity": 12,
+          "Size": 552,
+          "Number of filters": 2,
+          "Number of items inserted": 8,
+          "Expansion rate": 2
+        },
+        "bf:fixed": {
+          "Capacity": 2,
+          "Size": 424,
+          "Number of filters": 1,
+          "Number of items inserted": 2,
+          "Expansion rate": null
+        },
+        "bf:auto": {
+          "Capacity": 100,
+          "Size": 440,
+          "Number of filters": 1,
+          "Number of items inserted": 1,
+          "Expansion rate": 2
+        }
+      },
+      "replica_info": {
+        "bf:live": {
+          "Capacity": 12,
+          "Size": 552,
+          "Number of filters": 2,
+          "Number of items inserted": 8,
+          "Expansion rate": 2
+        },
+        "bf:fixed": {
+          "Capacity": 2,
+          "Size": 424,
+          "Number of filters": 1,
+          "Number of items inserted": 2,
+          "Expansion rate": null
+        },
+        "bf:auto": {
+          "Capacity": 100,
+          "Size": 440,
+          "Number of filters": 1,
+          "Number of items inserted": 1,
+          "Expansion rate": 2
+        }
+      },
+      "info_checks": {
+        "bf:live": {
+          "Capacity": true,
+          "Number of filters": true,
+          "Number of items inserted": true,
+          "Expansion rate": true
+        },
+        "bf:fixed": {
+          "Capacity": true,
+          "Number of filters": true,
+          "Number of items inserted": true,
+          "Expansion rate": true
+        },
+        "bf:auto": {
+          "Capacity": true,
+          "Number of filters": true,
+          "Number of items inserted": true,
+          "Expansion rate": true
+        }
+      },
+      "write_rejections": {
+        "add": {
+          "error": "READONLY You can't write against a read only replica."
+        },
+        "reserve": {
+          "error": "READONLY You can't write against a read only replica."
+        },
+        "madd": {
+          "error": "READONLY You can't write against a read only replica."
+        },
+        "insert": {
+          "error": "READONLY You can't write against a read only replica."
+        },
+        "loadchunk": {
+          "error": "READONLY You can't write against a read only replica."
+        }
+      },
+      "readonly": {
+        "exists": 1,
+        "mexists": [
+          1,
+          1
+        ],
+        "info": [
+          "Capacity",
+          12,
+          "Size",
+          552,
+          "Number of filters",
+          2,
+          "Number of items inserted",
+          8,
+          "Expansion rate",
+          2
+        ],
+        "card": 8,
+        "scandump": [
+          1,
+          {
+            "bytes_hex": "08000000000000000200000005000000020000008000000000000000000400000000000004000000000000007b14ae47e17a743fe4862fb2350e2640080000000400000000000000008000000000000000000400000000000004000000000000007b14ae47e17a643f44f7d49edef0284009000000080000000000000000",
+            "len": 126
+          }
+        ]
+      },
+      "replica_info_raw": {
+        "role": "slave",
+        "master_host": "127.0.0.1",
+        "master_port": "45376",
+        "master_link_status": "up",
+        "master_last_io_seconds_ago": "1",
+        "master_sync_in_progress": "0",
+        "slave_read_repl_offset": "453",
+        "slave_repl_offset": "453",
+        "slave_priority": "100",
+        "slave_read_only": "1",
+        "replica_announced": "1",
+        "connected_slaves": "0",
+        "master_failover_state": "no-failover",
+        "master_replid": "f6d9a8e93089bdda27c83e882334beb62ca1bb88",
+        "master_replid2": "0000000000000000000000000000000000000000",
+        "master_repl_offset": "453",
+        "second_repl_offset": "-1",
+        "repl_backlog_active": "1",
+        "repl_backlog_size": "1048576",
+        "repl_backlog_first_byte_offset": "1",
+        "repl_backlog_histlen": "453"
+      }
+    },
+    "fullsync": {
+      "status": "PASS",
+      "checks": {
+        "single_members": true,
+        "multi_members": true,
+        "fixed_members": true,
+        "ttl_member": true,
+        "ttl_plausible": true
+      },
+      "pttl_primary": 59870,
+      "pttl_replica": 59870,
+      "primary_info": {
+        "role": "master",
+        "connected_slaves": "1",
+        "slave0": "ip=127.0.0.1,port=45379,state=online,offset=0,lag=0",
+        "master_failover_state": "no-failover",
+        "master_replid": "ef62fad8a07db290968c79ce579ba93dfb5a22cf",
+        "master_replid2": "0000000000000000000000000000000000000000",
+        "master_repl_offset": "0",
+        "second_repl_offset": "-1",
+        "repl_backlog_active": "1",
+        "repl_backlog_size": "1048576",
+        "repl_backlog_first_byte_offset": "1",
+        "repl_backlog_histlen": "0"
+      },
+      "replica_info": {
+        "role": "slave",
+        "master_host": "127.0.0.1",
+        "master_port": "45378",
+        "master_link_status": "up",
+        "master_last_io_seconds_ago": "0",
+        "master_sync_in_progress": "0",
+        "slave_read_repl_offset": "0",
+        "slave_repl_offset": "0",
+        "slave_priority": "100",
+        "slave_read_only": "1",
+        "replica_announced": "1",
+        "connected_slaves": "0",
+        "master_failover_state": "no-failover",
+        "master_replid": "ef62fad8a07db290968c79ce579ba93dfb5a22cf",
+        "master_replid2": "0000000000000000000000000000000000000000",
+        "master_repl_offset": "0",
+        "second_repl_offset": "-1",
+        "repl_backlog_active": "1",
+        "repl_backlog_size": "1048576",
+        "repl_backlog_first_byte_offset": "1",
+        "repl_backlog_histlen": "0"
+      },
+      "dbsize_primary": 4,
+      "dbsize_replica": 4,
+      "log_fullsync_evidence": true
+    },
+    "reconnect": {
+      "status": "PASS",
+      "checks": {
+        "short_reconnect_members": true,
+        "forced_reconnect_members": true,
+        "readonly_after_reconnect": true,
+        "write_rejected_after_reconnect": true
+      },
+      "kill_reply": 1,
+      "short_members": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "forced_members": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "partial_resync_seen": true,
+      "full_resync_seen": true
+    },
+    "loading_partial": {
+      "status": "FAIL_CARRY_FORWARD_GBV6-07-002",
+      "load_header_reply": "OK",
+      "primary_loading_protection": {
+        "exists": {
+          "error": "ERR filter is being loaded"
+        },
+        "info": {
+          "error": "ERR filter is being loaded"
+        },
+        "card": {
+          "error": "ERR filter is being loaded"
+        },
+        "scandump": {
+          "error": "ERR filter is being loaded"
+        },
+        "add": {
+          "error": "ERR filter is being loaded"
+        }
+      },
+      "replica_exists_la": 0,
+      "replica_info": [
+        "Capacity",
+        10,
+        "Size",
+        232,
+        "Number of filters",
+        1,
+        "Number of items inserted",
+        2,
+        "Expansion rate",
+        2
+      ],
+      "readable_completed_with_false_negative": true,
+      "classification": "Operational fullsync manifestation of GBV6-07-002"
+    }
+  },
+  "command_metadata": {
+    "status": "PASS",
+    "command_info": [
+      [
+        "BF.RESERVE",
+        -1,
+        [
+          "write",
+          "denyoom"
+        ],
+        1,
+        1,
+        1,
+        []
+      ],
+      [
+        "BF.ADD",
+        -1,
+        [
+          "write",
+          "denyoom"
+        ],
+        1,
+        1,
+        1,
+        []
+      ],
+      [
+        "BF.MADD",
+        -1,
+        [
+          "write",
+          "denyoom"
+        ],
+        1,
+        1,
+        1,
+        []
+      ],
+      [
+        "BF.INSERT",
+        -1,
+        [
+          "write",
+          "denyoom"
+        ],
+        1,
+        1,
+        1,
+        []
+      ],
+      [
+        "BF.EXISTS",
+        -1,
+        [
+          "readonly"
+        ],
+        1,
+        1,
+        1,
+        []
+      ],
+      [
+        "BF.MEXISTS",
+        -1,
+        [
+          "readonly"
+        ],
+        1,
+        1,
+        1,
+        []
+      ],
+      [
+        "BF.INFO",
+        -1,
+        [
+          "readonly"
+        ],
+        1,
+        1,
+        1,
+        []
+      ],
+      [
+        "BF.CARD",
+        -1,
+        [
+          "readonly"
+        ],
+        1,
+        1,
+        1,
+        []
+      ],
+      [
+        "BF.SCANDUMP",
+        -1,
+        [
+          "readonly",
+          "fast"
+        ],
+        1,
+        1,
+        1,
+        []
+      ],
+      [
+        "BF.LOADCHUNK",
+        -1,
+        [
+          "write",
+          "denyoom"
+        ],
+        1,
+        1,
+        1,
+        []
+      ]
+    ],
+    "flag_checks": {
+      "BF.RESERVE": true,
+      "BF.ADD": true,
+      "BF.MADD": true,
+      "BF.INSERT": true,
+      "BF.EXISTS": true,
+      "BF.MEXISTS": true,
+      "BF.INFO": true,
+      "BF.CARD": true,
+      "BF.SCANDUMP": true,
+      "BF.LOADCHUNK": true
+    },
+    "getkeys": {
+      "reserve": [
+        "cmd:key"
+      ],
+      "add": [
+        "cmd:key"
+      ],
+      "madd": [
+        "cmd:key"
+      ],
+      "insert_capacity": [
+        "cmd:key"
+      ],
+      "insert_nocreate": [
+        "cmd:key"
+      ],
+      "exists": [
+        "cmd:key"
+      ],
+      "mexists": [
+        "cmd:key"
+      ],
+      "info": [
+        "cmd:key"
+      ],
+      "info_field": [
+        "cmd:key"
+      ],
+      "card": [
+        "cmd:key"
+      ],
+      "scandump": [
+        "cmd:key"
+      ],
+      "loadchunk": [
+        "cmd:key"
+      ]
+    },
+    "getkeys_checks": {
+      "reserve": true,
+      "add": true,
+      "madd": true,
+      "insert_capacity": true,
+      "insert_nocreate": true,
+      "exists": true,
+      "mexists": true,
+      "info": true,
+      "info_field": true,
+      "card": true,
+      "scandump": true,
+      "loadchunk": true
+    },
+    "getkeysandflags_probe": {
+      "error": "ERR Unknown subcommand or wrong number of arguments for 'GETKEYSANDFLAGS'. Try COMMAND HELP."
+    }
+  },
+  "acl": {
+    "status": "PASS",
+    "dryrun_supported": false,
+    "dryrun_probe": {
+      "error": "ERR Unknown subcommand or wrong number of arguments for 'DRYRUN'. Try ACL HELP."
+    },
+    "actual_acl_smoke": {
+      "exists_allowed": 1,
+      "mexists_allowed": [
+        1
+      ],
+      "info_allowed": [
+        "Capacity",
+        100,
+        "Size",
+        440,
+        "Number of filters",
+        1,
+        "Number of items inserted",
+        1,
+        "Expansion rate",
+        2
+      ],
+      "card_allowed": 1,
+      "scandump_allowed": [
+        1,
+        {
+          "bytes_hex": "01000000000000000100000005000000020000009000000000000000800400000000000001000000000000007b14ae47e17a743fe4862fb2350e264008000000640000000000000000",
+          "len": 73
+        }
+      ],
+      "add_denied": {
+        "error": "NOPERM this user has no permissions to run the 'BF.ADD' command or its subcommand"
+      },
+      "reserve_denied": {
+        "error": "NOPERM this user has no permissions to run the 'BF.RESERVE' command or its subcommand"
+      },
+      "key_pattern_denied": {
+        "error": "NOPERM this user has no permissions to access one of the keys used as arguments"
+      }
+    },
+    "actual_acl_checks": {
+      "exists_allowed": true,
+      "mexists_allowed": true,
+      "info_allowed": true,
+      "card_allowed": true,
+      "scandump_allowed": true,
+      "add_denied": true,
+      "reserve_denied": true,
+      "key_pattern_denied": true
+    },
+    "dryrun_classification": "BLOCKED_ACL_DRYRUN"
+  },
+  "cluster": {
+    "status": "PASS",
+    "ports": [
+      45386,
+      45387,
+      45388,
+      45389,
+      45390,
+      45391
+    ],
+    "slot": 7963,
+    "owner_port": 45387,
+    "replica_port": 45390,
+    "cluster_info": {
+      "cluster_state": "ok",
+      "cluster_slots_assigned": "16384",
+      "cluster_slots_ok": "16384",
+      "cluster_slots_pfail": "0",
+      "cluster_slots_fail": "0",
+      "cluster_known_nodes": "6",
+      "cluster_size": "3",
+      "cluster_current_epoch": "6",
+      "cluster_my_epoch": "1",
+      "cluster_stats_messages_ping_sent": "10",
+      "cluster_stats_messages_pong_sent": "11",
+      "cluster_stats_messages_sent": "21",
+      "cluster_stats_messages_ping_received": "6",
+      "cluster_stats_messages_pong_received": "10",
+      "cluster_stats_messages_meet_received": "5",
+      "cluster_stats_messages_received": "21"
+    },
+    "cluster_slots": [
+      [
+        0,
+        5460,
+        [
+          "127.0.0.1",
+          45386,
+          "ec863d2b9d011245b1897ce88572a1102f68ecd3"
+        ]
+      ],
+      [
+        5461,
+        10922,
+        [
+          "127.0.0.1",
+          45387,
+          "00b065d9cee16d51ef2acd276f4e1296d7bf72f8"
+        ],
+        [
+          "127.0.0.1",
+          45390,
+          "aca14f9005e251fb286fa111d4e72636f0bac93c"
+        ]
+      ],
+      [
+        10923,
+        16383,
+        [
+          "127.0.0.1",
+          45388,
+          "fc711a3c1807b147d795bfa5228f2bda52cc3236"
+        ],
+        [
+          "127.0.0.1",
+          45391,
+          "d1bb64a5a815ba30c99b7e1d5ddfe818cb60845d"
+        ]
+      ]
+    ],
+    "cluster_nodes": "d1bb64a5a815ba30c99b7e1d5ddfe818cb60845d 127.0.0.1:45391@55391 slave fc711a3c1807b147d795bfa5228f2bda52cc3236 0 1782907693574 3 connected\naca14f9005e251fb286fa111d4e72636f0bac93c 127.0.0.1:45390@55390 slave 00b065d9cee16d51ef2acd276f4e1296d7bf72f8 0 1782907692847 2 connected\nec863d2b9d011245b1897ce88572a1102f68ecd3 127.0.0.1:45386@55386 myself,master - 0 1782907692000 1 connected 0-5460\nfc711a3c1807b147d795bfa5228f2bda52cc3236 127.0.0.1:45388@55388 master - 0 1782907693366 3 connected 10923-16383\n00b065d9cee16d51ef2acd276f4e1296d7bf72f8 127.0.0.1:45387@55387 master - 0 1782907693000 2 connected 5461-10922\nd9fe42326425be81cf0ec53809ea77377af5b0d0 127.0.0.1:45389@55389 master - 0 1782907693000 4 connected\n",
+    "module_lists": {
+      "45386": [
+        [
+          "name",
+          "GeminiBloom",
+          "ver",
+          1
+        ]
+      ],
+      "45387": [
+        [
+          "name",
+          "GeminiBloom",
+          "ver",
+          1
+        ]
+      ],
+      "45388": [
+        [
+          "name",
+          "GeminiBloom",
+          "ver",
+          1
+        ]
+      ],
+      "45389": [
+        [
+          "name",
+          "GeminiBloom",
+          "ver",
+          1
+        ]
+      ],
+      "45390": [
+        [
+          "name",
+          "GeminiBloom",
+          "ver",
+          1
+        ]
+      ],
+      "45391": [
+        [
+          "name",
+          "GeminiBloom",
+          "ver",
+          1
+        ]
+      ]
+    },
+    "owner_checks": {
+      "members": true,
+      "info": true,
+      "card": true
+    },
+    "moved": {
+      "reserve": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      },
+      "add": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      },
+      "madd": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      },
+      "insert": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      },
+      "exists": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      },
+      "mexists": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      },
+      "info": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      },
+      "card": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      },
+      "scandump": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      },
+      "loadchunk": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      }
+    },
+    "moved_checks": {
+      "reserve": true,
+      "add": true,
+      "madd": true,
+      "insert": true,
+      "exists": true,
+      "mexists": true,
+      "info": true,
+      "card": true,
+      "scandump": true,
+      "loadchunk": true
+    },
+    "redis_cli_c_redirect_stdout": "1\n",
+    "redis_cli_c_redirect_stderr": "",
+    "scandump_chunk_count": 3,
+    "loadchunk_replies": [
+      "OK",
+      "OK",
+      "OK"
+    ],
+    "copy_ok": true,
+    "readonly": {
+      "status": "PASS",
+      "before_readonly": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      },
+      "readonly_reply": "OK",
+      "after_exists": 1,
+      "after_info_is_array": true,
+      "after_card": 5,
+      "after_scandump_is_array": true,
+      "write_reply": {
+        "error": "MOVED 7963 127.0.0.1:45387"
+      }
+    },
+    "checks": {
+      "cluster_state_ok": true,
+      "modules_on_nodes": true,
+      "owner_checks": true,
+      "moved_checks": true,
+      "redis_cli_c_redirect": true,
+      "scandump_loadchunk_roundtrip": true,
+      "readonly_replica": true
+    },
+    "ask": "NOT_VERIFIED"
+  }
+}

@@ -1,0 +1,2849 @@
+{
+  "corpora": {
+    "binary_items": {
+      "aof_preamble_no_self": {
+        "artifacts": [
+          {
+            "bytes": 361,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_no/binary_items/appendonly.aof",
+            "sha256": "165774fe8c2a49d7bc43a086d4b1ba8f98991294f31080c14571ecce2efc6e87"
+          }
+        ],
+        "check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "aof_preamble_yes_self": {
+        "artifacts": [
+          {
+            "bytes": 275,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_yes/binary_items/appendonly.aof",
+            "sha256": "3cc2883175cec8b75a8f9cd9e7b631816d11fffdca06fc7bf57b2c9b7d15e337"
+          }
+        ],
+        "check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "dump_restore_self": {
+        "artifact": {
+          "bytes": 161,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/dump_restore/binary_items.dump",
+          "sha256": "d7a25782833c49fa167cbc41f124d75eb1c21e80c8158011367f43a4b56f9f77"
+        },
+        "check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "expire": 1,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "restore": "OK",
+        "source_check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "source_pttl": 599999,
+        "target_pttl": 599999
+      },
+      "fullsync_self": {
+        "check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "replicaof": "OK",
+        "replication": {
+          "master_link_status": "up",
+          "master_sync_in_progress": "0"
+        },
+        "source_check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "note": "raw RESP binary item coverage",
+      "rdb_self": {
+        "artifact": {
+          "bytes": 271,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/rdb/binary_items/dump.rdb",
+          "sha256": "8ce957c51fae4990ee0bf75154c745dffd88d384fb18611662013c374fbd77d1"
+        },
+        "check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "info": [
+          "Capacity",
+          50,
+          "Size",
+          232,
+          "Number of filters",
+          1,
+          "Number of items inserted",
+          6,
+          "Expansion rate",
+          2
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "save": "OK",
+        "source_check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "scandump_self": {
+        "artifact": {
+          "bytes": 287,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/scandump_loadchunk/binary_items.chunks.json",
+          "sha256": "61547360200ebd7dbaacf76e48d704e5fe6addb7ad6f352d3c76a289f47ae875"
+        },
+        "check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "chunks": [
+          [
+            1,
+            73
+          ],
+          [
+            2,
+            128
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "critical_log_count": 0,
+        "load_replies": [
+          "OK",
+          "OK"
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 6,
+          "expected_card": 6,
+          "expected_items": 6,
+          "found": 6,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      }
+    },
+    "empty_scaling": {
+      "aof_preamble_no_self": {
+        "artifacts": [
+          {
+            "bytes": 379,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_no/empty_scaling/appendonly.aof",
+            "sha256": "dc896d283ffa44fab91df3d832e4ad9cf988e1aeb94ca851f6df9d1e06a1b88b"
+          }
+        ],
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "aof_preamble_yes_self": {
+        "artifacts": [
+          {
+            "bytes": 188,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_yes/empty_scaling/appendonly.aof",
+            "sha256": "8ab0b579ad811a475f5aef360757908bedd027709f1e450529fd8976b5a40ab6"
+          }
+        ],
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "dump_restore_self": {
+        "artifact": {
+          "bytes": 73,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/dump_restore/empty_scaling.dump",
+          "sha256": "d31ddb66bb17197e99f0d79a332ed9a3540419ec854904e10e9cb220373912fa"
+        },
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "expire": 1,
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "restore": "OK",
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "source_pttl": 600000,
+        "target_pttl": 600000
+      },
+      "fullsync_self": {
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "replicaof": "OK",
+        "replication": {
+          "master_link_status": "up",
+          "master_sync_in_progress": "0"
+        },
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "note": "empty scaling filter",
+      "rdb_self": {
+        "artifact": {
+          "bytes": 184,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/rdb/empty_scaling/dump.rdb",
+          "sha256": "3d6578671c1c0063a083f32b947687060067300209571ef6565ee944b852e631"
+        },
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "info": [
+          "Capacity",
+          100,
+          "Size",
+          248,
+          "Number of filters",
+          1,
+          "Number of items inserted",
+          0,
+          "Expansion rate",
+          2
+        ],
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "save": "OK",
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "scandump_self": {
+        "artifact": {
+          "bytes": 287,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/scandump_loadchunk/empty_scaling.chunks.json",
+          "sha256": "9705fe76ed946a9f4da1615ea3967f68b3ac5e0c31cff8790ba0e6527e8e91b7"
+        },
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "chunks": [
+          [
+            1,
+            73
+          ],
+          [
+            2,
+            144
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "critical_log_count": 0,
+        "load_replies": [
+          "OK",
+          "OK"
+        ],
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      }
+    },
+    "expansion1": {
+      "aof_preamble_no_self": {
+        "artifacts": [
+          {
+            "bytes": 1102,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_no/expansion1/appendonly.aof",
+            "sha256": "837ebccbacf024553303fb7969e258da75ab14ba7361b6810de12548b15da4cf"
+          }
+        ],
+        "check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "aof_preamble_yes_self": {
+        "artifacts": [
+          {
+            "bytes": 676,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_yes/expansion1/appendonly.aof",
+            "sha256": "443dfc355afe184156954320833195abc9d7b947e2e14ac0368ab9b579efbcaf"
+          }
+        ],
+        "check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "dump_restore_self": {
+        "artifact": {
+          "bytes": 564,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/dump_restore/expansion1.dump",
+          "sha256": "b3e4363e5b47ff5e207dbe921a60b9a62e7c94ecd7d50e8a8f9a35cf8adb41ed"
+        },
+        "check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "expire": 1,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "restore": "OK",
+        "source_check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "source_pttl": 599999,
+        "target_pttl": 599999
+      },
+      "fullsync_self": {
+        "check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "replicaof": "OK",
+        "replication": {
+          "master_link_status": "up",
+          "master_sync_in_progress": "0"
+        },
+        "source_check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "note": "many same-sized layers",
+      "rdb_self": {
+        "artifact": {
+          "bytes": 672,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/rdb/expansion1/dump.rdb",
+          "sha256": "2f6f75db2cbb826a50fbb595e5e71a0c954841a7822efe0e4c708c1ff4e3f40e"
+        },
+        "check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "info": [
+          "Capacity",
+          20,
+          "Size",
+          808,
+          "Number of filters",
+          4,
+          "Number of items inserted",
+          20,
+          "Expansion rate",
+          1
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "save": "OK",
+        "source_check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "scandump_self": {
+        "artifact": {
+          "bytes": 576,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/scandump_loadchunk/expansion1.chunks.json",
+          "sha256": "3bc0e56cd4822998c8254a1059706c08a684199364eb8d9290c1daa17acc879e"
+        },
+        "check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "chunks": [
+          [
+            1,
+            232
+          ],
+          [
+            2,
+            128
+          ],
+          [
+            3,
+            128
+          ],
+          [
+            4,
+            128
+          ],
+          [
+            5,
+            128
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "critical_log_count": 0,
+        "load_replies": [
+          "OK",
+          "OK",
+          "OK",
+          "OK",
+          "OK"
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 20,
+          "expected_card": 20,
+          "expected_items": 20,
+          "found": 20,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      }
+    },
+    "expansion4": {
+      "aof_preamble_no_self": {
+        "artifacts": [
+          {
+            "bytes": 870,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_no/expansion4/appendonly.aof",
+            "sha256": "0ad3659e48145c8f8962e644265b25780f140e38ff611e8ee6ebaacb14a4bffe"
+          }
+        ],
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "aof_preamble_yes_self": {
+        "artifacts": [
+          {
+            "bytes": 598,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_yes/expansion4/appendonly.aof",
+            "sha256": "eaba323ec65953b3c58c9a31856369fb7d000b7b0d5c9d57c1767265f45a19c7"
+          }
+        ],
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "dump_restore_self": {
+        "artifact": {
+          "bytes": 486,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/dump_restore/expansion4.dump",
+          "sha256": "a21da34180727f3ff99fdfd5d9e03189ba89d04b5c2c128fb0781ee95a16a031"
+        },
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "expire": 1,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "restore": "OK",
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "source_pttl": 599997,
+        "target_pttl": 599998
+      },
+      "fullsync_self": {
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "replicaof": "OK",
+        "replication": {
+          "master_link_status": "up",
+          "master_sync_in_progress": "0"
+        },
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "note": "larger expansion",
+      "rdb_self": {
+        "artifact": {
+          "bytes": 594,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/rdb/expansion4/dump.rdb",
+          "sha256": "6e5eff1d639fa497765870cf74162092b1e2b598c09a9a15f87fe28ad6367899"
+        },
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "info": [
+          "Capacity",
+          105,
+          "Size",
+          632,
+          "Number of filters",
+          3,
+          "Number of items inserted",
+          40,
+          "Expansion rate",
+          4
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "save": "OK",
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "scandump_self": {
+        "artifact": {
+          "bytes": 480,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/scandump_loadchunk/expansion4.chunks.json",
+          "sha256": "fc7335a638d932e44386767a35f4ba0a594ee00454b4064114cb18e8eaab6d41"
+        },
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "chunks": [
+          [
+            1,
+            179
+          ],
+          [
+            2,
+            128
+          ],
+          [
+            3,
+            128
+          ],
+          [
+            4,
+            144
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "critical_log_count": 0,
+        "load_replies": [
+          "OK",
+          "OK",
+          "OK",
+          "OK"
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      }
+    },
+    "fixed_full": {
+      "aof_preamble_no_self": {
+        "artifacts": [
+          {
+            "bytes": 357,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_no/fixed_full/appendonly.aof",
+            "sha256": "65c71f3d674024df836e6235413dad81e4424bf2c33259eae63cd2d44f9aef90"
+          }
+        ],
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "aof_preamble_yes_self": {
+        "artifacts": [
+          {
+            "bytes": 285,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_yes/fixed_full/appendonly.aof",
+            "sha256": "46aeefb5840e4c9d1b7f5455be83f57d9b2503765de9f6fe0b730b7a6a7bffd6"
+          }
+        ],
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "dump_restore_self": {
+        "artifact": {
+          "bytes": 173,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/dump_restore/fixed_full.dump",
+          "sha256": "59e433e609ee83b4b8ad69ea98fb6176b9b9fcb4678375be06939c821ba94ea9"
+        },
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "expire": 1,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "restore": "OK",
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "source_pttl": 599999,
+        "target_pttl": 599999
+      },
+      "fullsync_self": {
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "replicaof": "OK",
+        "replication": {
+          "master_link_status": "up",
+          "master_sync_in_progress": "0"
+        },
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "note": "fixed filter at capacity",
+      "rdb_self": {
+        "artifact": {
+          "bytes": 281,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/rdb/fixed_full/dump.rdb",
+          "sha256": "7ad4bf4a9be40cfab5c0ed6a44497ffe4da4040b6a60e82b0a29a5156f6890fb"
+        },
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "info": [
+          "Capacity",
+          8,
+          "Size",
+          232,
+          "Number of filters",
+          1,
+          "Number of items inserted",
+          8,
+          "Expansion rate",
+          null
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "save": "OK",
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "scandump_self": {
+        "artifact": {
+          "bytes": 287,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/scandump_loadchunk/fixed_full.chunks.json",
+          "sha256": "71530404352170631d51d303b2a0509979cfc9678c27792ae5b2d0ff79906f8b"
+        },
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "chunks": [
+          [
+            1,
+            73
+          ],
+          [
+            2,
+            128
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "critical_log_count": 0,
+        "load_replies": [
+          "OK",
+          "OK"
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      }
+    },
+    "large_empty_16mb": {
+      "aof_preamble_no_self": {
+        "artifacts": [
+          {
+            "bytes": 20677286,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_no/large_empty_16mb/appendonly.aof",
+            "sha256": "e30f34e17136799d0a2637f213ca950c602aa8ad3fea49b040b3c26c322eb430"
+          }
+        ],
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "aof_preamble_yes_self": {
+        "artifacts": [
+          {
+            "bytes": 235170,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_yes/large_empty_16mb/appendonly.aof",
+            "sha256": "df17c1e98cdc76f97e37a0778d4f12d317ee43e1a82d0b97ce4fc654d6f48653"
+          }
+        ],
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "dump_restore_self": {
+        "artifact": {
+          "bytes": 235052,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/dump_restore/large_empty_16mb.dump",
+          "sha256": "7f1b6398974c3e01b378497ffff44094729b1ce5b9066a019cc901b7778627aa"
+        },
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "expire": 1,
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "restore": "OK",
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "source_pttl": 600000,
+        "target_pttl": 600000
+      },
+      "fullsync_self": {
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "replicaof": "OK",
+        "replication": {
+          "master_link_status": "up",
+          "master_sync_in_progress": "0"
+        },
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "note": "empty large filter",
+      "rdb_self": {
+        "artifact": {
+          "bytes": 235166,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/rdb/large_empty_16mb/dump.rdb",
+          "sha256": "c748d8f2cbfc8fbc400d8477eba72cdec590026f6aff8d9a690a822c3a90ff6f"
+        },
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "info": [
+          "Capacity",
+          15000000,
+          "Size",
+          20677144,
+          "Number of filters",
+          1,
+          "Number of items inserted",
+          0,
+          "Expansion rate",
+          2
+        ],
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "save": "OK",
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "scandump_self": {
+        "artifact": {
+          "bytes": 292,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/scandump_loadchunk/large_empty_16mb.chunks.json",
+          "sha256": "0568105e129ec3786a812079c17bb49e746f119faefe15b70d14124d090a6ab6"
+        },
+        "check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "chunks": [
+          [
+            1,
+            73
+          ],
+          [
+            2,
+            20677040
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "critical_log_count": 0,
+        "load_replies": [
+          "OK",
+          "OK"
+        ],
+        "populate": {
+          "adds": [],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 0,
+          "expected_card": 0,
+          "expected_items": 0,
+          "found": 0,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      }
+    },
+    "long_item": {
+      "aof_preamble_no_self": {
+        "artifacts": [
+          {
+            "bytes": 355,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_no/long_item/appendonly.aof",
+            "sha256": "bb600012144251af482a1006db7913703ab4af81dbe5d5b8587ba290e4c7d606"
+          }
+        ],
+        "check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "aof_preamble_yes_self": {
+        "artifacts": [
+          {
+            "bytes": 194,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_yes/long_item/appendonly.aof",
+            "sha256": "ebe96ee59419f969cb3ec8923a0947a8d249b5fde9b800100ab1e4618017905e"
+          }
+        ],
+        "check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "dump_restore_self": {
+        "artifact": {
+          "bytes": 83,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/dump_restore/long_item.dump",
+          "sha256": "bb028b9b94c96169d8dc53dbbeaf22bebb617f1089523ceb9edb9148dc831531"
+        },
+        "check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "expire": 1,
+        "populate": {
+          "adds": [
+            1
+          ],
+          "reserve": "OK"
+        },
+        "restore": "OK",
+        "source_check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "source_pttl": 600000,
+        "target_pttl": 600000
+      },
+      "fullsync_self": {
+        "check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1
+          ],
+          "reserve": "OK"
+        },
+        "replicaof": "OK",
+        "replication": {
+          "master_link_status": "up",
+          "master_sync_in_progress": "0"
+        },
+        "source_check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "note": "large item payload",
+      "rdb_self": {
+        "artifact": {
+          "bytes": 190,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/rdb/long_item/dump.rdb",
+          "sha256": "de6889d8c2dfc94e039391dbcde757402bf191d0e114911ee358a18e5f9fa4aa"
+        },
+        "check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "info": [
+          "Capacity",
+          50,
+          "Size",
+          232,
+          "Number of filters",
+          1,
+          "Number of items inserted",
+          1,
+          "Expansion rate",
+          2
+        ],
+        "populate": {
+          "adds": [
+            1
+          ],
+          "reserve": "OK"
+        },
+        "save": "OK",
+        "source_check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "scandump_self": {
+        "artifact": {
+          "bytes": 287,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/scandump_loadchunk/long_item.chunks.json",
+          "sha256": "f8391b16e40b85f37dfb3ebba9c988d68acba865495a596433037b8b03cbd534"
+        },
+        "check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "chunks": [
+          [
+            1,
+            73
+          ],
+          [
+            2,
+            128
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "critical_log_count": 0,
+        "load_replies": [
+          "OK",
+          "OK"
+        ],
+        "populate": {
+          "adds": [
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 1,
+          "expected_card": 1,
+          "expected_items": 1,
+          "found": 1,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      }
+    },
+    "multi_exp2": {
+      "aof_preamble_no_self": {
+        "artifacts": [
+          {
+            "bytes": 854,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_no/multi_exp2/appendonly.aof",
+            "sha256": "8f02ea8f428ddd1271ccea8a99f3d64475a8efee077a6ff1bb13539cae6f824b"
+          }
+        ],
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "aof_preamble_yes_self": {
+        "artifacts": [
+          {
+            "bytes": 616,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_yes/multi_exp2/appendonly.aof",
+            "sha256": "932fdad512d1d286dc047a3ee7b7461eb90035463563bbd2368e9feeb1ab372d"
+          }
+        ],
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "dump_restore_self": {
+        "artifact": {
+          "bytes": 504,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/dump_restore/multi_exp2.dump",
+          "sha256": "4b3b551e2de9e5d45a82076c18aee87eb82d833f57de92ebca3108e9fdc48b44"
+        },
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "expire": 1,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "restore": "OK",
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "source_pttl": 599997,
+        "target_pttl": 599998
+      },
+      "fullsync_self": {
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "replicaof": "OK",
+        "replication": {
+          "master_link_status": "up",
+          "master_sync_in_progress": "0"
+        },
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "note": "multi-layer expansion 2",
+      "rdb_self": {
+        "artifact": {
+          "bytes": 612,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/rdb/multi_exp2/dump.rdb",
+          "sha256": "ef74880c5485c04ca41d32ae64fc77aa4396d2a5dfaa40fd78397aff968be233"
+        },
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "info": [
+          "Capacity",
+          70,
+          "Size",
+          616,
+          "Number of filters",
+          3,
+          "Number of items inserted",
+          40,
+          "Expansion rate",
+          2
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "save": "OK",
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "scandump_self": {
+        "artifact": {
+          "bytes": 480,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/scandump_loadchunk/multi_exp2.chunks.json",
+          "sha256": "3ce1a5a1b6f78afa73fa187453bfa7e18c1abd85c96c93d75d3153a810e62fa9"
+        },
+        "check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "chunks": [
+          [
+            1,
+            179
+          ],
+          [
+            2,
+            128
+          ],
+          [
+            3,
+            128
+          ],
+          [
+            4,
+            128
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "critical_log_count": 0,
+        "load_replies": [
+          "OK",
+          "OK",
+          "OK",
+          "OK"
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 40,
+          "expected_card": 40,
+          "expected_items": 40,
+          "found": 40,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      }
+    },
+    "single_layer": {
+      "aof_preamble_no_self": {
+        "artifacts": [
+          {
+            "bytes": 377,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_no/single_layer/appendonly.aof",
+            "sha256": "ed484053cce6c161e9d69306cb09cf7a7cfb430b5e2292c7dc39f546e20722cb"
+          }
+        ],
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "aof_preamble_yes_self": {
+        "artifacts": [
+          {
+            "bytes": 303,
+            "exists": true,
+            "path": "/tmp/gemini-bloom-stage06-self/aof_preamble_yes/single_layer/appendonly.aof",
+            "sha256": "f1ac72f1492fec14003dc2fc820c6d363e9495f73406c0abac3d8aa32415a885"
+          }
+        ],
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "dump_restore_self": {
+        "artifact": {
+          "bytes": 189,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/dump_restore/single_layer.dump",
+          "sha256": "ecd2ac6797d044d7ea8ed97d0783fdc0ba09af4d7739502b15fa08b63cdacf2d"
+        },
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "expire": 1,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "restore": "OK",
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "source_pttl": 599999,
+        "target_pttl": 600000
+      },
+      "fullsync_self": {
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "replicaof": "OK",
+        "replication": {
+          "master_link_status": "up",
+          "master_sync_in_progress": "0"
+        },
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "note": "single layer",
+      "rdb_self": {
+        "artifact": {
+          "bytes": 299,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/rdb/single_layer/dump.rdb",
+          "sha256": "f861f33f08980662be4ef86191f3f6ecc86505a9db0b669d10d35adbefb3e0e9"
+        },
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "critical_log_count": 0,
+        "info": [
+          "Capacity",
+          100,
+          "Size",
+          248,
+          "Number of filters",
+          1,
+          "Number of items inserted",
+          8,
+          "Expansion rate",
+          2
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "save": "OK",
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      },
+      "scandump_self": {
+        "artifact": {
+          "bytes": 287,
+          "exists": true,
+          "path": "/tmp/gemini-bloom-stage06-self/scandump_loadchunk/single_layer.chunks.json",
+          "sha256": "fbd8ec6c79247641a4dbd6d3162e09e014aef138191dc9ff4b70a9552a10383b"
+        },
+        "check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        },
+        "chunks": [
+          [
+            1,
+            73
+          ],
+          [
+            2,
+            144
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "critical_log_count": 0,
+        "load_replies": [
+          "OK",
+          "OK"
+        ],
+        "populate": {
+          "adds": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "reserve": "OK"
+        },
+        "source_check": {
+          "card": 8,
+          "expected_card": 8,
+          "expected_items": 8,
+          "found": 8,
+          "missing_count": 0,
+          "missing_samples": []
+        }
+      }
+    }
+  },
+  "env": {
+    "gemini_module": "/tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so",
+    "include_large": true,
+    "redis_server": "/workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server",
+    "workdir": "/tmp/gemini-bloom-stage06-self"
+  },
+  "scandump_safety": {
+    "bad_chunk": {
+      "error": "ERR data length mismatch for layer"
+    },
+    "check": {
+      "card": 20,
+      "expected_card": 20,
+      "expected_items": 20,
+      "found": 20,
+      "missing_count": 0,
+      "missing_samples": []
+    },
+    "completed_cursor2": {
+      "error": "ERR received bad data"
+    },
+    "critical_log_count": 0,
+    "existing_header": {
+      "error": "ERR received bad data"
+    },
+    "existing_old_after_reject": 1,
+    "finish": [
+      "OK",
+      "OK",
+      "OK"
+    ],
+    "load_header": "OK",
+    "loading_rejections": {
+      "add": {
+        "error": "ERR filter is being loaded"
+      },
+      "card": {
+        "error": "ERR filter is being loaded"
+      },
+      "exists": {
+        "error": "ERR filter is being loaded"
+      },
+      "info": {
+        "error": "ERR filter is being loaded"
+      },
+      "insert": {
+        "error": "ERR filter is being loaded"
+      },
+      "madd": {
+        "error": "ERR filter is being loaded"
+      },
+      "mexists": {
+        "error": "ERR filter is being loaded"
+      },
+      "scandump": {
+        "error": "ERR filter is being loaded"
+      }
+    },
+    "wrongtype_header": {
+      "error": "WRONGTYPE Operation against a key holding the wrong kind of value"
+    }
+  },
+  "summary": {
+    "aof_preamble_no_self": {
+      "error": 0,
+      "fail": 0,
+      "pass": 9
+    },
+    "aof_preamble_yes_self": {
+      "error": 0,
+      "fail": 0,
+      "pass": 9
+    },
+    "dump_restore_self": {
+      "error": 0,
+      "fail": 0,
+      "pass": 9
+    },
+    "fullsync_self": {
+      "error": 0,
+      "fail": 0,
+      "pass": 9
+    },
+    "rdb_self": {
+      "error": 0,
+      "fail": 0,
+      "pass": 9
+    },
+    "scandump_safety": "pass",
+    "scandump_self": {
+      "error": 0,
+      "fail": 0,
+      "pass": 9
+    }
+  }
+}

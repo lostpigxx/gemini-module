@@ -1,0 +1,22 @@
+# Stage 11 command log
+
+Commands/actions used for Stage 11 synthesis:
+
+- `git status --short`
+- `git log --oneline -5`
+- `git rev-parse --abbrev-ref HEAD`
+- `find doc/code_review/gemini-bloom/v6 -maxdepth 1 -type f -print`
+- `sed -n ... modules/gemini-bloom/DESIGN.md`
+- `sed -n ... .codex/gemini-bloom-audit/v6/LOOP_CONTROL_BATCH.md`
+- `sed -n ... .codex/gemini-bloom-audit/v6/policies/*.md`
+- `sed -n ... .codex/gemini-bloom-audit/v6/state/LOOP_STATE.md`
+- `sed -n ... .codex/gemini-bloom-audit/v6/stages/STAGE_11_FINAL_REPORT_SYNTHESIS.md`
+- `sed -n ... .codex/gemini-bloom-audit/v6/agents/stage00..stage10/stage_result.md`
+- `sed -n ... .codex/gemini-bloom-audit/v6/agents/stage00..stage10/reviewer_output.md`
+- `sed -n ... .codex/gemini-bloom-audit/v6/evidence/stage00..stage10/evidence_index.md`
+- `sed -n ... findings and compatibility/transport/runtime/resource matrices`
+- `python3 .codex/gemini-bloom-audit/v6/evidence/stage11/generate_stage11_report.py`
+- `python3 .codex/gemini-bloom-audit/v6/evidence/stage11/generate_stage11_report.py` rerun with approved escalation after sandbox write denial
+- `rg -n "完全兼容|SCANDUMP/LOADCHUNK 与 RedisBloom 互通|sanitizer 已通过|正式 benchmark|所有 Redis 版本" doc/code_review/gemini-bloom/v6 .codex/gemini-bloom-audit/v6/evidence/stage11 || true`
+
+No product tests, Redis servers, fuzzers, or sanitizer runs were executed in Stage 11.

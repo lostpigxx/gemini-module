@@ -1,0 +1,12 @@
+# Stage 03 Environment Snapshot
+
+- Stage: `03_STATIC_DEEP_AUDIT`
+- Branch: `audit/gemini-bloom-v6`
+- HEAD at Stage 03 start: `775660854aa647345cf070015242362a83109548`
+- Upstream: `origin/audit/gemini-bloom-v6`
+- OS: `Darwin ToTheMars.local 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:39:29 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T8142 arm64`
+- CMake: `3.29.0`
+- Compiler: `Apple clang 21.0.0`
+- Stage mode: static source audit only.
+- Runtime commands executed: none.
+- Build/test commands executed: none.

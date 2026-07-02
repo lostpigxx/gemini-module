@@ -1,0 +1,63 @@
+repo=/workspace/projects/VibeCoding/gemini-module
+git_branch=audit/gemini-bloom-v6
+git_head=891715d93038d3f92eb47ace972cc28dc7d36bd4
+python=3.9.21
+redis_server=/workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server
+redis_version=Redis server v=6.2.17 sha=441001a4:0 malloc=libc bits=64 build=49616805317b0873
+cmake=cmake version 3.26.5
+gxx=g++ (GCC) 14.2.1 20250110 (Red Hat 14.2.1-7)
+module_artifact=/tmp/gemini-module-v6-stage10-build-workaround/redis_bloom.so
+module_size=404952
+redis_data_dir=/tmp/redis-e1pcaana
+meminfo:
+MemTotal:        8025360 kB
+MemFree:         4643584 kB
+MemAvailable:    6821376 kB
+Buffers:          840884 kB
+Cached:           981032 kB
+SwapCached:            0 kB
+Active:          1175568 kB
+Inactive:        1310432 kB
+Active(anon):     674144 kB
+Inactive(anon):        0 kB
+Active(file):     501424 kB
+Inactive(file):  1310432 kB
+Unevictable:           0 kB
+Mlocked:               0 kB
+SwapTotal:       1048572 kB
+SwapFree:        1048572 kB
+Zswap:                 0 kB
+Zswapped:              0 kB
+Dirty:              1848 kB
+Writeback:             0 kB
+AnonPages:        659204 kB
+Mapped:           137104 kB
+Shmem:             10060 kB
+KReclaimable:     568908 kB
+Slab:             659908 kB
+SReclaimable:     568908 kB
+SUnreclaim:        91000 kB
+KernelStack:        5056 kB
+PageTables:         3460 kB
+SecPageTables:         0 kB
+NFS_Unstable:          0 kB
+Bounce:                0 kB
+WritebackTmp:          0 kB
+CommitLimit:     5061252 kB
+Committed_AS:    2160500 kB
+VmallocTotal:   135288315904 kB
+VmallocUsed:        6672 kB
+VmallocChunk:          0 kB
+Percpu:             4480 kB
+AnonHugePages:    569344 kB
+ShmemHugePages:        0 kB
+ShmemPmdMapped:        0 kB
+FileHugePages:         0 kB
+FilePmdMapped:         0 kB
+HugePages_Total:       0
+HugePages_Free:        0
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+Hugetlb:               0 kB
+

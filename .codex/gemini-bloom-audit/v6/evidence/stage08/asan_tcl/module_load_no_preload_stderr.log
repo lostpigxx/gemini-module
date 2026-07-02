@@ -1,0 +1,1 @@
+NO_STDERR: no-preload module-load probe produced no stderr; Redis wrote the load failure to its server log.

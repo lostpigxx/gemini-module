@@ -1,0 +1,21 @@
+# Stage 00 stderr
+
+`ls -ld modules/gemini-bloom/tests/compat/redisbloom-2.4.20`:
+
+```text
+ls: modules/gemini-bloom/tests/compat/redisbloom-2.4.20: No such file or directory
+```
+
+`rg --files .github`:
+
+```text
+rg: .github: IO error for operation on .github: No such file or directory (os error 2)
+```
+
+`rg -n "redisbloom-2\\.4\\.20|compat|bloom_test|bloom_rdb_test|RedisBloom|BF\\.SCANDUMP|aof-use-rdb-preamble|sanitize|asan|ubsan" .github modules/gemini-bloom CMakeLists.txt`:
+
+```text
+rg: .github: No such file or directory (os error 2)
+```
+
+Initial sandboxed writes into `.codex/gemini-bloom-audit/v6/agents/stage00` and `.codex/gemini-bloom-audit/v6/evidence/stage00` were denied with `Operation not permitted`; the same directory creation succeeded after sandbox escalation limited to audit artifact directories.

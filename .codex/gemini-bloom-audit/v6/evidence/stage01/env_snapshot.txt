@@ -1,0 +1,39 @@
+# Stage 01 Environment Snapshot
+
+## Working directory
+
+```text
+/Users/liuyu/centos_ex/projects/VibeCoding/gemini-module
+```
+
+## OS
+
+`uname -a`:
+
+```text
+Darwin ToTheMars.local 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:39:29 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T8142 arm64
+```
+
+`cat /etc/os-release`:
+
+```text
+cat: /etc/os-release: No such file or directory
+```
+
+`sw_vers`:
+
+```text
+ProductName:		macOS
+ProductVersion:		26.5.1
+BuildVersion:		25F80
+```
+
+## Audit branch
+
+- Branch: `audit/gemini-bloom-v6`
+- HEAD at Stage 01 collection: `fa165b27fc498da23b0861f99e5f2919d89dd897`
+- Stage 00 pushed branch state: `origin/audit/gemini-bloom-v6` at `fa165b2`
+
+## Scope note
+
+Stage 01 did not execute build, runtime, RedisBloom compatibility, fuzz, sanitizer, or performance tests. It only records reproducibility baselines for later stages.

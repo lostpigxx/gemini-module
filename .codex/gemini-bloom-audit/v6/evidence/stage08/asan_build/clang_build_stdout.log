@@ -1,0 +1,37 @@
+[  2%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/redis_bloom_module.cc.o
+[  5%] Building CXX object modules/gemini-json/CMakeFiles/redis_json.dir/src/redis_json_module.cc.o
+[  8%] Building CXX object modules/gemini-json/CMakeFiles/redis_json.dir/src/json_value.cc.o
+[ 11%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_filter.cc.o
+[ 14%] Building CXX object modules/gemini-json/CMakeFiles/redis_json.dir/src/json_parse.cc.o
+[ 17%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/sb_chain.cc.o
+[ 20%] Building CXX object modules/gemini-json/CMakeFiles/redis_json.dir/src/json_serialize.cc.o
+[ 23%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_commands.cc.o
+[ 26%] Building CXX object modules/gemini-json/CMakeFiles/redis_json.dir/src/json_path.cc.o
+[ 29%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_rdb.cc.o
+[ 32%] Building CXX object modules/gemini-json/CMakeFiles/redis_json.dir/src/json_type.cc.o
+[ 35%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_config.cc.o
+[ 38%] Building CXX object modules/gemini-json/CMakeFiles/redis_json.dir/src/json_commands.cc.o
+[ 41%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/murmur2.cc.o
+[ 44%] Linking CXX shared library ../../redis_bloom.so
+[ 44%] Built target redis_bloom
+[ 47%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/redis_search_module.cc.o
+[ 50%] Linking CXX shared library ../../redis_json.so
+[ 50%] Built target redis_json
+[ 52%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/index_spec.cc.o
+[ 55%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/search_commands.cc.o
+[ 58%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/document_store.cc.o
+[ 61%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/tag_index.cc.o
+[ 64%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/text_index.cc.o
+[ 67%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/query_parser.cc.o
+[ 70%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/numeric_index.cc.o
+[ 73%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/vector_index.cc.o
+[ 76%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/hnsw_index.cc.o
+[ 79%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/geo_index.cc.o
+[ 82%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/geoshape_index.cc.o
+[ 85%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/expr_engine.cc.o
+[ 88%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/suggest_dict.cc.o
+[ 91%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/search_rdb.cc.o
+[ 94%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/stemmer.cc.o
+[ 97%] Building CXX object modules/gemini-search/CMakeFiles/redis_search.dir/src/phonetic.cc.o
+[100%] Linking CXX shared library ../../redis_search.so
+[100%] Built target redis_search

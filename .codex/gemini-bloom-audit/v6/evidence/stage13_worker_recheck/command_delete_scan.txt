@@ -1,0 +1,52 @@
+modules/gemini-bloom/src/bloom_commands.cc:99:// --- BF.RESERVE ---
+modules/gemini-bloom/src/bloom_commands.cc:181:// --- BF.ADD ---
+modules/gemini-bloom/src/bloom_commands.cc:203:// --- BF.MADD ---
+modules/gemini-bloom/src/bloom_commands.cc:237:// --- BF.INSERT ---
+modules/gemini-bloom/src/bloom_commands.cc:407:// --- BF.EXISTS ---
+modules/gemini-bloom/src/bloom_commands.cc:428:// --- BF.MEXISTS ---
+modules/gemini-bloom/src/bloom_commands.cc:459:// --- BF.INFO ---
+modules/gemini-bloom/src/bloom_commands.cc:460:// Response labels are mandated by the BF.INFO protocol specification
+modules/gemini-bloom/src/bloom_commands.cc:494:    return RedisModule_ReplyWithError(ctx, "ERR unknown subcommand for BF.INFO");
+modules/gemini-bloom/src/bloom_commands.cc:515:// --- BF.CARD ---
+modules/gemini-bloom/src/bloom_commands.cc:534:// --- BF.SCANDUMP ---
+modules/gemini-bloom/src/bloom_commands.cc:590:// --- BF.LOADCHUNK ---
+modules/gemini-bloom/src/bloom_commands.cc:661:    {"BF.RESERVE",   CmdReserve,   "write deny-oom"},
+modules/gemini-bloom/src/bloom_commands.cc:662:    {"BF.ADD",       CmdAdd,       "write deny-oom"},
+modules/gemini-bloom/src/bloom_commands.cc:663:    {"BF.MADD",      CmdMadd,      "write deny-oom"},
+modules/gemini-bloom/src/bloom_commands.cc:664:    {"BF.INSERT",    CmdInsert,    "write deny-oom"},
+modules/gemini-bloom/src/bloom_commands.cc:665:    {"BF.EXISTS",    CmdExists,    "readonly"},
+modules/gemini-bloom/src/bloom_commands.cc:666:    {"BF.MEXISTS",   CmdMexists,   "readonly"},
+modules/gemini-bloom/src/bloom_commands.cc:667:    {"BF.INFO",      CmdInfo,      "readonly"},
+modules/gemini-bloom/src/bloom_commands.cc:668:    {"BF.CARD",      CmdCard,      "readonly"},
+modules/gemini-bloom/src/bloom_commands.cc:669:    {"BF.SCANDUMP",  CmdScandump,  "readonly fast"},
+modules/gemini-bloom/src/bloom_commands.cc:670:    {"BF.LOADCHUNK", CmdLoadchunk, "write deny-oom"},
+modules/gemini-bloom/DESIGN.md:30:| BF.SCANDUMP / BF.LOADCHUNK | 不兼容 | gemini 使用私有 layer-index cursor 协议，与 RedisBloom 不互通（详见 §5.4） |
+modules/gemini-bloom/DESIGN.md:154:#### 2.4.4 内存统计 (BF.INFO Size)
+modules/gemini-bloom/DESIGN.md:186:| BF.INSERT EXPANSION 0 | 映射为 NONSCALING | 拒绝（ERR Bad argument received） |
+modules/gemini-bloom/DESIGN.md:187:| BF.RESERVE EXPANSION 0 | 映射为 NONSCALING | 映射为 NONSCALING |
+modules/gemini-bloom/DESIGN.md:258:| `BF.RESERVE key error_rate capacity [EXPANSION n \| NONSCALING]` | write deny-oom | 创建 Bloom Filter |
+modules/gemini-bloom/DESIGN.md:259:| `BF.ADD key item` | write deny-oom | 添加元素，key 不存在则自动创建 |
+modules/gemini-bloom/DESIGN.md:260:| `BF.MADD key item [item ...]` | write deny-oom | 批量添加 |
+modules/gemini-bloom/DESIGN.md:261:| `BF.INSERT key [CAPACITY n] [ERROR rate] [EXPANSION n] [NOCREATE] [NONSCALING] ITEMS item [item ...]` | write deny-oom | 创建（可选）并批量添加 |
+modules/gemini-bloom/DESIGN.md:262:| `BF.EXISTS key item` | readonly | 检查元素是否可能存在 |
+modules/gemini-bloom/DESIGN.md:263:| `BF.MEXISTS key item [item ...]` | readonly | 批量检查 |
+modules/gemini-bloom/DESIGN.md:264:| `BF.INFO key [field]` | readonly | 返回 filter 元数据 |
+modules/gemini-bloom/DESIGN.md:265:| `BF.CARD key` | readonly | 返回已插入元素数 |
+modules/gemini-bloom/DESIGN.md:266:| `BF.SCANDUMP key cursor` | readonly fast | 增量导出（详见 §5.4） |
+modules/gemini-bloom/DESIGN.md:267:| `BF.LOADCHUNK key cursor data` | write deny-oom | 增量导入（详见 §5.4） |
+modules/gemini-bloom/DESIGN.md:297:| `BF.INFO key FIELD` 返回形状 | 标量 | singleton array `[value]` | 客户端解析差异 |
+modules/gemini-bloom/DESIGN.md:298:| `BF.INFO Size` 数值 | 含 struct + layer slots | 只含 chain 内部统计 | 监控数值差异 |
+modules/gemini-bloom/DESIGN.md:299:| `BF.INSERT EXPANSION 0` | 映射为 NONSCALING | 返回 ERR | gemini 更宽松 |
+modules/gemini-bloom/DESIGN.md:300:| `BF.INSERT NOCREATE + CAPACITY` | ERR NOCREATE cannot be used with CAPACITY or ERROR | ERR not found | 错误消息不同 |
+modules/gemini-bloom/DESIGN.md:301:| `BF.RESERVE` 未知 option | ERR unrecognized option | 静默接受 | gemini 更严格 |
+modules/gemini-bloom/DESIGN.md:302:| `BF.INFO` missing key | ERR key does not exist | ERR not found | 错误消息不同 |
+modules/gemini-bloom/DESIGN.md:305:| BF.INFO / BF.CARD flags | readonly | readonly fast | 性能分类标签差异 |
+modules/gemini-bloom/DESIGN.md:451:`AofRewriteBloom()` 输出 `BF.LOADCHUNK` 命令序列，使用 gemini 私有 cursor 协议（layer-index）。这些命令只能被 gemini 自身回放，不能被 RedisBloom 回放。
+modules/gemini-bloom/DESIGN.md:453:由于 Redis 6/7 默认启用 `aof-use-rdb-preamble yes`，实际 AOF 文件中的 bloom 数据以 RDB 格式存储，不包含 `BF.LOADCHUNK`。只有关闭 RDB preamble 时才会触发 command-AOF rewrite。
+modules/gemini-bloom/DESIGN.md:462:  → AOF 中 bloom 数据以 BF.LOADCHUNK 命令序列存储
+modules/gemini-bloom/DESIGN.md:520:- Loading 状态的 key：所有读写命令（BF.EXISTS/ADD/MADD/INSERT/INFO/CARD/SCANDUMP）返回 `ERR filter is being loaded`
+modules/gemini-bloom/DESIGN.md:629:- **命令基本功能**（~35 tests）：10 个 BF.* 命令的 happy path 和 arity 校验。BF.ADD 自动创建、BF.EXISTS 对不存在 key 返回 0、BF.MADD/MEXISTS 批量操作、BF.INSERT 各种 option 组合、BF.INFO 完整/单字段、BF.CARD 计数、BF.SCANDUMP/LOADCHUNK round-trip。
+modules/gemini-bloom/DESIGN.md:631:- **类型安全**（~10 tests）：所有 BF.* 命令对 string 类型 key 返回 WRONGTYPE；MADD/MEXISTS 返回 top-level error 而非 per-element error；BF.RESERVE 对已存在 bloom key 返回 `ERR item exists`、对 string key 返回 WRONGTYPE。
+modules/gemini-bloom/DESIGN.md:680:| `EXPANSION 0` 在命令中 | 映射为 NONSCALING | `BF.RESERVE` 接受，`BF.INSERT` 拒绝 |
+modules/gemini-bloom/DESIGN.md:690:3. **live replication command stream 的 BF.CARD 差异**：在 `EXPANSION 1` 等高 false-positive 场景下，command replay 路径上 RedisBloom 和 gemini 的 `BF.CARD` 可能不同（但 membership 不受影响）。fullsync replication（RDB snapshot）无此问题。
+modules/gemini-bloom/DESIGN.md:692:4. **BF.INFO Size 统计口径**：gemini 的 `Size` 包含 ScalingBloomFilter struct 和预留 layer slots，数值大于 RedisBloom 的统计。不影响 membership 正确性。

@@ -1,0 +1,2 @@
+NOT_RUN: no `sb_chain_test` sanitizer executable was produced by the Stage 08 Clang build.
+

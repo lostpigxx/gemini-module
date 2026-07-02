@@ -1,0 +1,95 @@
+===== cross_impl stdout =====
+running redis-6.2.17-redisbloom-v2.4.20 (6.2.17, v2.4.20)
+finished redis-6.2.17-redisbloom-v2.4.20 empty_scaling
+finished redis-6.2.17-redisbloom-v2.4.20 single_layer
+finished redis-6.2.17-redisbloom-v2.4.20 multi_exp2
+finished redis-6.2.17-redisbloom-v2.4.20 fixed_full
+finished redis-6.2.17-redisbloom-v2.4.20 expansion1
+finished redis-6.2.17-redisbloom-v2.4.20 expansion4
+finished redis-6.2.17-redisbloom-v2.4.20 binary_items
+finished redis-6.2.17-redisbloom-v2.4.20 long_item
+finished redis-6.2.17-redisbloom-v2.4.20 large_empty_16mb
+{
+  "redis-6.2.17-redisbloom-v2.4.20": {
+    "error": 0,
+    "fail": 38,
+    "pass": 88
+  }
+}
+wrote .codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix/cross_impl_transport_results.json
+
+===== extended stdout =====
+{
+  "bf_debug": {
+    "gemini": false,
+    "redisbloom": true
+  },
+  "incremental_aof": {
+    "error": 0,
+    "fail": 2,
+    "pass": 4
+  },
+  "loadchunk_header_over_existing_key": {
+    "gemini": {
+      "error": "ERR received bad data"
+    },
+    "redisbloom": {
+      "error": "ERR received bad data"
+    }
+  },
+  "migrate_and_dump_restore_ttl": {
+    "error": 0,
+    "fail": 0,
+    "pass": 2
+  },
+  "readonly_scandump_ok": {
+    "gemini": true,
+    "redisbloom": true
+  }
+}
+wrote .codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix/extended_transport_results.json
+
+===== gemini_self stdout =====
+stage06 self empty_scaling
+stage06 self single_layer
+stage06 self multi_exp2
+stage06 self fixed_full
+stage06 self expansion1
+stage06 self expansion4
+stage06 self binary_items
+stage06 self long_item
+stage06 self large_empty_16mb
+{
+  "aof_preamble_no_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  },
+  "aof_preamble_yes_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  },
+  "dump_restore_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  },
+  "fullsync_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  },
+  "rdb_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  },
+  "scandump_safety": "pass",
+  "scandump_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  }
+}
+

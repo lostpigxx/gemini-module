@@ -1,0 +1,21 @@
+# ASAN/UBSAN Redis Module Load Failure
+
+Status: `BLOCKED / SANITIZER_RUNTIME_LOAD`
+
+The Clang ASAN/UBSAN build produced `/tmp/gemini-module-v6-stage08-asan-clang/redis_bloom.so`, but Redis 6.2.17 could not load it:
+
+```text
+undefined symbol: __asan_option_detect_stack_use_after_return
+```
+
+The `LD_PRELOAD` fallback used the only visible GCC 11 sanitizer paths:
+
+```text
+/usr/lib/gcc/x86_64-redhat-linux/11/libasan.so
+/usr/lib/gcc/x86_64-redhat-linux/11/libubsan.so
+```
+
+Those files are linker scripts, not loadable shared objects, and the dynamic loader rejected them as "file too short". Runtime discovery found no loadable ASAN/UBSAN dynamic library under `/opt`, `/usr`, or `/lib64`, and `ldconfig -p` did not list sanitizer runtimes.
+
+Therefore ASAN/UBSAN TCL integration is blocked by the execution environment. This is not a module PASS and not a source-level memory finding.
+

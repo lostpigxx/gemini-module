@@ -1,0 +1,23 @@
+# Stage 07 environment snapshot
+2026-07-01T11:17:32Z
+
+## Git
+5dc3706c745325bd15d598c8216c8a92e703a1a2
+audit/gemini-bloom-v6
+
+## Redis
+Redis server v=6.2.17 sha=441001a4:0 malloc=libc bits=64 build=49616805317b0873
+
+## Module
+-rwxr-xr-x 1 root root 307288 Jul  1 18:23 /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so
+ac63327867716e4dbc05452942114b84b63214869c5ab13796eaec54ee4e5f06  /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so
+
+## Tooling
+/usr/bin/python3
+Python 3.9.21
+/usr/bin/redis-cli
+/usr/bin/cmake
+
+## GTest build attempt
+gmake: *** No rule to make target 'bloom_rdb_test'.  Stop.
+gtest_build_rc=2

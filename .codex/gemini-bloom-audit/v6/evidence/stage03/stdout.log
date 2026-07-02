@@ -1,0 +1,67 @@
+# Stage 03 stdout summary
+
+This file summarizes command output used as Stage 03 evidence. Full detailed findings are in `.codex/gemini-bloom-audit/v6/agents/stage03/*.md`.
+
+## Repository metadata
+
+- `git rev-parse HEAD`: `775660854aa647345cf070015242362a83109548`
+- `git status --short --branch` before Stage 03 artifact completion:
+  - `## audit/gemini-bloom-v6...origin/audit/gemini-bloom-v6`
+  - modified state file and untracked `agents/stage03/` were present as expected.
+
+## Environment metadata
+
+- OS: `Darwin ToTheMars.local 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:39:29 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T8142 arm64`
+- CMake: `cmake version 3.29.0`
+- Compiler: `Apple clang version 21.0.0 (clang-2100.1.1.101)`
+
+## Source inventory
+
+Required source/test files are present:
+
+- `modules/gemini-bloom/DESIGN.md`
+- `modules/gemini-bloom/CMakeLists.txt`
+- `modules/gemini-bloom/src/redis_bloom_module.cc`
+- `modules/gemini-bloom/src/bloom_commands.cc`
+- `modules/gemini-bloom/src/bloom_commands.h`
+- `modules/gemini-bloom/src/bloom_rdb.cc`
+- `modules/gemini-bloom/src/bloom_rdb.h`
+- `modules/gemini-bloom/src/bloom_filter.cc`
+- `modules/gemini-bloom/src/bloom_filter.h`
+- `modules/gemini-bloom/src/sb_chain.cc`
+- `modules/gemini-bloom/src/sb_chain.h`
+- `modules/gemini-bloom/src/bloom_config.cc`
+- `modules/gemini-bloom/src/bloom_config.h`
+- `modules/gemini-bloom/src/murmur2.cc`
+- `modules/gemini-bloom/src/murmur2.h`
+- `modules/gemini-bloom/src/rm_alloc.h`
+- `modules/gemini-bloom/tests/bloom_filter_test.cc`
+- `modules/gemini-bloom/tests/sb_chain_test.cc`
+- `modules/gemini-bloom/tests/bloom_rdb_test.cc`
+- `modules/gemini-bloom/tests/tcl/bloom_test.tcl`
+
+Line counts inspected:
+
+- `CMakeLists.txt`: 86
+- `bloom_commands.cc`: 679
+- `bloom_config.cc`: 58
+- `bloom_filter.cc`: 186
+- `bloom_rdb.cc`: 374
+- `murmur2.cc`: 86
+- `redis_bloom_module.cc`: 42
+- `sb_chain.cc`: 189
+- headers under `src/`: 425 total
+- `bloom_filter_test.cc`: 274
+- `bloom_rdb_test.cc`: 1386
+- `sb_chain_test.cc`: 370
+- `bloom_test.tcl`: 1615
+
+## Static observations
+
+- DESIGN resource-limit table states maximum expansion is `32768` and single-layer maximum data size is `2 GB`: `modules/gemini-bloom/DESIGN.md:552-559`.
+- Command/config paths enforce expansion upper bounds: `modules/gemini-bloom/src/bloom_commands.cc:133-137`, `modules/gemini-bloom/src/bloom_commands.cc:300-304`, `modules/gemini-bloom/src/bloom_config.cc:44-50`.
+- RDB/wire deserialization paths reject zero expansion but do not enforce `kMaxExpansion`: `modules/gemini-bloom/src/bloom_rdb.cc:180-189`, `modules/gemini-bloom/src/bloom_rdb.cc:281-305`.
+- `BloomLayer::Create` enforces a local 2GB per-layer data-size cap: `modules/gemini-bloom/src/bloom_filter.cc:123-131`.
+- `ValidateLayerFields` does not enforce the same 2GB per-layer data-size cap for RDB/wire fields: `modules/gemini-bloom/src/bloom_rdb.cc:53-68`.
+- RDB/wire deserialization enforces only total data-size cap before allocation: `modules/gemini-bloom/src/bloom_rdb.cc:203-209`, `modules/gemini-bloom/src/bloom_rdb.cc:295-297`.
+- Tests cover expansion command overflow and total wire data-size over 4GB, but do not cover RDB/wire expansion over 32768 or per-layer data-size over 2GB while total data-size remains <=4GB: `modules/gemini-bloom/tests/tcl/bloom_test.tcl:1015-1023`, `modules/gemini-bloom/tests/tcl/bloom_test.tcl:1226-1246`, `modules/gemini-bloom/tests/bloom_rdb_test.cc:1054-1074`, `modules/gemini-bloom/tests/bloom_rdb_test.cc:1251-1265`, `modules/gemini-bloom/tests/bloom_rdb_test.cc:1306-1326`.

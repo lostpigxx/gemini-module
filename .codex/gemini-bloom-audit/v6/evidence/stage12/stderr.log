@@ -1,0 +1,4 @@
+mkdir: .codex/gemini-bloom-audit/v6/agents/stage12: Operation not permitted
+mkdir: .codex/gemini-bloom-audit/v6/evidence/stage12: Operation not permitted
+Escalated mkdir retry succeeded.
+report_audit.py stderr: (none)

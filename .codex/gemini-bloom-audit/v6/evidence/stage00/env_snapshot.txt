@@ -1,0 +1,13 @@
+# Stage 00 environment snapshot
+
+- CWD: `/Users/liuyu/centos_ex/projects/VibeCoding/gemini-module`
+- Current branch: `audit/gemini-bloom-v6`
+- HEAD: `780be16fb4a675f89594600f3ce23ed018c5d1bc`
+- HEAD decorations: `HEAD -> audit/gemini-bloom-v6, origin/main, origin/HEAD, main`
+- Stage 00 started from a clean working tree on `codex/gemini-bloom-v6-review`, then created `audit/gemini-bloom-v6` from `origin/main`.
+- v6 control directory source: `codex/gemini-bloom-v6-review`
+- Static confirmation: `origin/main..codex/gemini-bloom-v6-review -- modules/gemini-bloom` had no changed paths.
+- `.github` directory: not present.
+- DESIGN.md claimed compat fixture path: `modules/gemini-bloom/tests/compat/redisbloom-2.4.20`
+- Claimed compat fixture path status: missing.
+- Stage 00 runtime scope: no build, Redis server, RedisBloom oracle, fuzz, sanitizer, or TCL/GTest execution.

@@ -1,0 +1,16 @@
+-- The CXX compiler identification is GNU 14.2.1
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /opt/rh/gcc-toolset-14/root/usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (0.8s)
+-- Generating done (0.0s)
+-- Build files have been written to: /tmp/gemini-module-v6-stage05-default-build-evidence
+[ 25%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_filter.cc.o
+[ 12%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_config.cc.o
+[ 37%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/redis_bloom_module.cc.o
+[ 62%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_commands.cc.o
+[ 75%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_rdb.cc.o
+[ 75%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/sb_chain.cc.o
+[ 87%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/murmur2.cc.o

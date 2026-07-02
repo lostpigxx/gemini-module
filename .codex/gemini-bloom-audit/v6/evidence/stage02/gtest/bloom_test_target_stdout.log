@@ -1,0 +1,18 @@
+[  0%] Building CXX object modules/gemini-bloom/CMakeFiles/sb_chain_test.dir/tests/sb_chain_test.cc.o
+[ 11%] Building CXX object modules/gemini-bloom/CMakeFiles/sb_chain_test.dir/src/sb_chain.cc.o
+[ 22%] Building CXX object modules/gemini-bloom/CMakeFiles/bloom_rdb_test.dir/tests/bloom_rdb_test.cc.o
+[ 22%] Building CXX object modules/gemini-bloom/CMakeFiles/bloom_filter_test.dir/tests/bloom_filter_test.cc.o
+[ 22%] Building CXX object modules/gemini-bloom/CMakeFiles/bloom_filter_test.dir/src/murmur2.cc.o
+[ 22%] Building CXX object modules/gemini-bloom/CMakeFiles/sb_chain_test.dir/src/bloom_filter.cc.o
+[ 33%] Building CXX object modules/gemini-bloom/CMakeFiles/sb_chain_test.dir/src/murmur2.cc.o
+[ 33%] Building CXX object modules/gemini-bloom/CMakeFiles/bloom_rdb_test.dir/src/bloom_rdb.cc.o
+[ 44%] Building CXX object modules/gemini-bloom/CMakeFiles/bloom_filter_test.dir/src/bloom_filter.cc.o
+[ 55%] Building CXX object modules/gemini-bloom/CMakeFiles/bloom_rdb_test.dir/src/sb_chain.cc.o
+[ 66%] Building CXX object modules/gemini-bloom/CMakeFiles/bloom_rdb_test.dir/src/murmur2.cc.o
+[ 66%] Building CXX object modules/gemini-bloom/CMakeFiles/bloom_rdb_test.dir/src/bloom_filter.cc.o
+[ 77%] Linking CXX executable sb_chain_test
+[ 88%] Linking CXX executable bloom_filter_test
+[ 88%] Built target sb_chain_test
+[ 88%] Built target bloom_filter_test
+[100%] Linking CXX executable bloom_rdb_test
+[100%] Built target bloom_rdb_test

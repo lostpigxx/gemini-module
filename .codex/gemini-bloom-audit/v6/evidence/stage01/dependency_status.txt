@@ -1,0 +1,22 @@
+# Stage 01 Dependency Status
+
+| Dependency / asset | Status | Evidence |
+|---|---|---|
+| Target branch `audit/gemini-bloom-v6` | Present and tracking `origin/audit/gemini-bloom-v6` at Stage 01 start | `git_snapshot.txt` |
+| CMake | Available, 3.29.0 | `tool_versions.txt` |
+| C++ compiler | Available, Apple clang 21.0.0 via `c++`, `g++`, and `clang++` | `tool_versions.txt` |
+| Redis server/client | Available, Redis 6.2.16 | `tool_versions.txt` |
+| TCL shell | Available, Tcl 8.5.9 | `tool_versions.txt` |
+| Python | Available, Python 3.13.7 | `tool_versions.txt` |
+| Docker CLI | Available, Docker 27.4.0 | `tool_versions.txt` |
+| `/etc/os-release` | Missing on macOS host; non-blocking environment fact | `env_snapshot.txt`, `stderr.log` |
+| `.github` workflows | `.github` directory absent in audited tree | `stderr.log` |
+| RedisBloom fixture path | `modules/gemini-bloom/tests/compat/redisbloom-2.4.20` absent | `stderr.log` |
+
+## Impact routing
+
+- Stage 02 can attempt CMake/GTest/TCL checks with the recorded CMake/compiler/Redis/TCL toolchain.
+- Stage 05 RedisBloom v2.4.20 oracle is not established by Stage 01. Docker CLI exists, but RedisBloom image/module availability remains `VERIFY_LATER`.
+- Redis is 6.2.16, while DESIGN.md's historical compatibility baseline references Redis 6.2.17. Any later RedisBloom comparison must record the exact Redis version used and avoid claiming Redis 6.2.17 reproduction unless it uses that version.
+- `GBV6-00-001` remains open: the documented RedisBloom fixture directory is absent.
+- Lack of `.github` means no GitHub Actions CI gate is visible in this checkout. Other CI systems are `NOT_VERIFIED`.

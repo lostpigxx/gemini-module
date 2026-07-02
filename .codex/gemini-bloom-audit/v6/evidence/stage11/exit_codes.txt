@@ -1,0 +1,4 @@
+generate_stage11_report_initial_unprivileged=1
+generate_stage11_report_escalated=0
+forbidden_wording_scan=0
+final_report_validation=PASS

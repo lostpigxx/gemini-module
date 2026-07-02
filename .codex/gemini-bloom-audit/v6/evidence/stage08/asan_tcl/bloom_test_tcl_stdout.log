@@ -1,0 +1,2 @@
+NOT_RUN: the ASAN/UBSAN Redis module could not be loaded by Redis, so the TCL integration suite was not executed with the sanitizer module.
+

@@ -1,0 +1,2 @@
+NOT_RUN: direct sanitizer GTest execution blocked because no GTest target or binary exists in `/tmp/gemini-module-v6-stage08-asan-clang`.
+

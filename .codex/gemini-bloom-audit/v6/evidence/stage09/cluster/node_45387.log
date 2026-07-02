@@ -1,0 +1,22 @@
+18769:C 01 Jul 2026 20:08:09.450 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+18769:C 01 Jul 2026 20:08:09.451 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=18769, just started
+18769:C 01 Jul 2026 20:08:09.451 # Configuration loaded
+18769:M 01 Jul 2026 20:08:09.452 * monotonic clock: POSIX clock_gettime
+18769:M 01 Jul 2026 20:08:09.454 * No cluster configuration found, I'm 00b065d9cee16d51ef2acd276f4e1296d7bf72f8
+18769:M 01 Jul 2026 20:08:09.463 * Running mode=cluster, port=45387.
+18769:M 01 Jul 2026 20:08:09.463 # Server initialized
+18769:M 01 Jul 2026 20:08:09.465 * <GeminiBloom> GeminiBloom module loaded
+18769:M 01 Jul 2026 20:08:09.465 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage09-build-workaround/redis_bloom.so
+18769:M 01 Jul 2026 20:08:09.467 * Ready to accept connections
+18769:M 01 Jul 2026 20:08:10.113 # configEpoch set to 2 via CLUSTER SET-CONFIG-EPOCH
+18769:M 01 Jul 2026 20:08:10.273 # IP address for this node updated to 127.0.0.1
+18769:M 01 Jul 2026 20:08:11.540 # Cluster state changed: ok
+18769:M 01 Jul 2026 20:08:13.130 * Replica 127.0.0.1:45390 asks for synchronization
+18769:M 01 Jul 2026 20:08:13.130 * Partial resynchronization not accepted: Replication ID mismatch (Replica asked for 'ca1e673c4ea62a3ad9edc2339597dc558415c87e', my replication IDs are '454943dfb31aba646c9beda3990b89dd758f152c' and '0000000000000000000000000000000000000000')
+18769:M 01 Jul 2026 20:08:13.130 * Replication backlog created, my new replication IDs are '3f518b4bac14e4d999e8a2096d26fe654e07710c' and '0000000000000000000000000000000000000000'
+18769:M 01 Jul 2026 20:08:13.130 * Starting BGSAVE for SYNC with target: disk
+18769:M 01 Jul 2026 20:08:13.131 * Background saving started by pid 18795
+18795:C 01 Jul 2026 20:08:13.139 * DB saved on disk
+18795:C 01 Jul 2026 20:08:13.139 * RDB: 1 MB of memory used by copy-on-write
+18769:M 01 Jul 2026 20:08:13.211 * Background saving terminated with success
+18769:M 01 Jul 2026 20:08:13.212 * Synchronization with replica 127.0.0.1:45390 succeeded

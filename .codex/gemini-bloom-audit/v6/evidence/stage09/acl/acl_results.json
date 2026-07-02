@@ -1,0 +1,53 @@
+{
+  "status": "PASS",
+  "dryrun_supported": false,
+  "dryrun_probe": {
+    "error": "ERR Unknown subcommand or wrong number of arguments for 'DRYRUN'. Try ACL HELP."
+  },
+  "actual_acl_smoke": {
+    "exists_allowed": 1,
+    "mexists_allowed": [
+      1
+    ],
+    "info_allowed": [
+      "Capacity",
+      100,
+      "Size",
+      440,
+      "Number of filters",
+      1,
+      "Number of items inserted",
+      1,
+      "Expansion rate",
+      2
+    ],
+    "card_allowed": 1,
+    "scandump_allowed": [
+      1,
+      {
+        "bytes_hex": "01000000000000000100000005000000020000009000000000000000800400000000000001000000000000007b14ae47e17a743fe4862fb2350e264008000000640000000000000000",
+        "len": 73
+      }
+    ],
+    "add_denied": {
+      "error": "NOPERM this user has no permissions to run the 'BF.ADD' command or its subcommand"
+    },
+    "reserve_denied": {
+      "error": "NOPERM this user has no permissions to run the 'BF.RESERVE' command or its subcommand"
+    },
+    "key_pattern_denied": {
+      "error": "NOPERM this user has no permissions to access one of the keys used as arguments"
+    }
+  },
+  "actual_acl_checks": {
+    "exists_allowed": true,
+    "mexists_allowed": true,
+    "info_allowed": true,
+    "card_allowed": true,
+    "scandump_allowed": true,
+    "add_denied": true,
+    "reserve_denied": true,
+    "key_pattern_denied": true
+  },
+  "dryrun_classification": "BLOCKED_ACL_DRYRUN"
+}

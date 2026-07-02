@@ -1,0 +1,434 @@
+modules/gemini-bloom/src/bloom_filter.h:25:  return static_cast<BloomFlags>(
+modules/gemini-bloom/src/bloom_filter.h:26:    static_cast<unsigned>(a) | static_cast<unsigned>(b));
+modules/gemini-bloom/src/bloom_filter.h:30:  return static_cast<BloomFlags>(
+modules/gemini-bloom/src/bloom_filter.h:31:    static_cast<unsigned>(a) & static_cast<unsigned>(b));
+modules/gemini-bloom/src/bloom_filter.h:35:  return static_cast<unsigned>(set & flag) != 0;
+modules/gemini-bloom/src/bloom_filter.h:39:  return static_cast<unsigned>(f);
+modules/gemini-bloom/src/bloom_filter.h:43:  return static_cast<BloomFlags>(v);
+modules/gemini-bloom/src/bloom_filter.h:78:  return {reinterpret_cast<const std::byte*>(data), len};
+modules/gemini-bloom/src/bloom_filter.h:82:  return {static_cast<const std::byte*>(data), len};
+modules/gemini-bloom/src/bloom_filter.h:93:  return {bitIndex >> 3, static_cast<uint8_t>(1u << (bitIndex & 7))};
+modules/gemini-bloom/src/bloom_filter.h:101:  uint64_t raw = hp.primary + static_cast<uint64_t>(probeIndex) * hp.secondary;
+modules/gemini-bloom/src/bloom_filter.h:111:class BloomLayer {
+modules/gemini-bloom/src/bloom_filter.h:113:  BloomLayer() = default;
+modules/gemini-bloom/src/bloom_filter.h:114:  ~BloomLayer();
+modules/gemini-bloom/src/bloom_filter.h:116:  BloomLayer(const BloomLayer&) = delete;
+modules/gemini-bloom/src/bloom_filter.h:117:  BloomLayer& operator=(const BloomLayer&) = delete;
+modules/gemini-bloom/src/bloom_filter.h:119:  BloomLayer(BloomLayer&& other) noexcept;
+modules/gemini-bloom/src/bloom_filter.h:120:  BloomLayer& operator=(BloomLayer&& other) noexcept;
+modules/gemini-bloom/src/bloom_filter.h:126:  static std::optional<BloomLayer> Create(uint64_t cap, double falsePositiveRate,
+modules/gemini-bloom/src/bloom_filter.h:131:  static std::optional<BloomLayer> ReadFrom(RdbReader& r, BloomFlags filterFlags);
+modules/gemini-bloom/src/bloom_filter.h:133:  // Wire format conversion for SCANDUMP/LOADCHUNK
+modules/gemini-bloom/src/bloom_filter.h:135:  static std::optional<BloomLayer> FromWireMeta(const WireLayerMeta& meta, BloomFlags filterFlags);
+modules/gemini-bloom/src/bloom_filter.h:146:  uint64_t GetDataSize() const { return dataSize_; }
+modules/gemini-bloom/src/bloom_filter.h:164:  uint64_t dataSize_ = 0;
+modules/gemini-bloom/src/bloom_rdb.cc:17:  RedisModule_SaveStringBuffer(io_, reinterpret_cast<const char*>(data), len);
+modules/gemini-bloom/src/bloom_rdb.cc:22:  uint64_t v = RedisModule_LoadUnsigned(io_);
+modules/gemini-bloom/src/bloom_rdb.cc:35:  char* buf = RedisModule_LoadStringBuffer(io_, &len);
+modules/gemini-bloom/src/bloom_rdb.cc:42:// would cause UB (divide-by-zero, shift overflow) or silent corruption.
+modules/gemini-bloom/src/bloom_rdb.cc:50:  uint64_t dataSize;
+modules/gemini-bloom/src/bloom_rdb.cc:61:  if (f.dataSize != expectedSize) return false;
+modules/gemini-bloom/src/bloom_rdb.cc:66:    static_cast<uint32_t>(std::ceil(std::numbers::ln2 * f.bitsPerEntry)));
+modules/gemini-bloom/src/bloom_rdb.cc:71:// --- BloomLayer serialization (lives here to access Redis Module API) ---
+modules/gemini-bloom/src/bloom_rdb.cc:75:void BloomLayer::WriteTo(RdbWriter& w) const {
+modules/gemini-bloom/src/bloom_rdb.cc:82:  w.PutBlob(bitArray_, dataSize_);
+modules/gemini-bloom/src/bloom_rdb.cc:85:std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFlags) {
+modules/gemini-bloom/src/bloom_rdb.cc:86:  BloomLayer layer;
+modules/gemini-bloom/src/bloom_rdb.cc:96:  layer.hashCount_ = static_cast<uint32_t>(rawHashCount);
+modules/gemini-bloom/src/bloom_rdb.cc:97:  layer.log2Bits_ = static_cast<uint8_t>(rawLog2Bits);
+modules/gemini-bloom/src/bloom_rdb.cc:99:  layer.dataSize_ = (layer.totalBits_ > 0) ? ((layer.totalBits_ + 7) / 8) : 0;
+modules/gemini-bloom/src/bloom_rdb.cc:104:                     layer.dataSize_};
+modules/gemini-bloom/src/bloom_rdb.cc:108:  if (!r.Ok() || !buf || bufLen != static_cast<size_t>(layer.dataSize_)) {
+modules/gemini-bloom/src/bloom_rdb.cc:112:  layer.bitArray_ = static_cast<uint8_t*>(RMAlloc(layer.dataSize_));
+modules/gemini-bloom/src/bloom_rdb.cc:117:  std::memcpy(layer.bitArray_, buf, bufLen);
+modules/gemini-bloom/src/bloom_rdb.cc:122:WireLayerMeta BloomLayer::ToWireMeta(size_t itemCount) const {
+modules/gemini-bloom/src/bloom_rdb.cc:124:    .dataSize = dataSize_,
+modules/gemini-bloom/src/bloom_rdb.cc:135:std::optional<BloomLayer> BloomLayer::FromWireMeta(const WireLayerMeta& meta, BloomFlags filterFlags) {
+modules/gemini-bloom/src/bloom_rdb.cc:136:  BloomLayer layer;
+modules/gemini-bloom/src/bloom_rdb.cc:144:  layer.dataSize_ = meta.dataSize;
+modules/gemini-bloom/src/bloom_rdb.cc:145:  layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
+modules/gemini-bloom/src/bloom_rdb.cc:170:  shell.numLayers = static_cast<size_t>(r.GetUint());
+modules/gemini-bloom/src/bloom_rdb.cc:176:  if (rawFlags > UINT_MAX || !ValidateFlags(static_cast<unsigned>(rawFlags)))
+modules/gemini-bloom/src/bloom_rdb.cc:178:  shell.flags = FromUnderlying(static_cast<unsigned>(rawFlags));
+modules/gemini-bloom/src/bloom_rdb.cc:184:  if (!r.Ok() || rawExpansion > UINT_MAX) return nullptr;
+modules/gemini-bloom/src/bloom_rdb.cc:185:  shell.expansionFactor = static_cast<unsigned>(rawExpansion);
+modules/gemini-bloom/src/bloom_rdb.cc:195:  uint64_t totalDataSize = 0;
+modules/gemini-bloom/src/bloom_rdb.cc:197:    auto maybeLayer = BloomLayer::ReadFrom(r, shell.flags);
+modules/gemini-bloom/src/bloom_rdb.cc:200:      RMFree(filter);
+modules/gemini-bloom/src/bloom_rdb.cc:204:        totalDataSize > kMaxTotalDataSize - maybeLayer->GetDataSize()) {
+modules/gemini-bloom/src/bloom_rdb.cc:206:      RMFree(filter);
+modules/gemini-bloom/src/bloom_rdb.cc:209:    totalDataSize += maybeLayer->GetDataSize();
+modules/gemini-bloom/src/bloom_rdb.cc:210:    size_t count = static_cast<size_t>(r.GetUint());
+modules/gemini-bloom/src/bloom_rdb.cc:213:      RMFree(filter);
+modules/gemini-bloom/src/bloom_rdb.cc:218:      RMFree(filter);
+modules/gemini-bloom/src/bloom_rdb.cc:223:      RMFree(filter);
+modules/gemini-bloom/src/bloom_rdb.cc:227:    filter->SetLayer(i, {std::move(*maybeLayer), count});
+modules/gemini-bloom/src/bloom_rdb.cc:232:    RMFree(filter);
+modules/gemini-bloom/src/bloom_rdb.cc:246:  auto* hdr = static_cast<WireFilterHeader*>(output);
+modules/gemini-bloom/src/bloom_rdb.cc:248:  hdr->numLayers = static_cast<uint32_t>(filter.NumLayers());
+modules/gemini-bloom/src/bloom_rdb.cc:252:  auto* meta = reinterpret_cast<WireLayerMeta*>(
+modules/gemini-bloom/src/bloom_rdb.cc:253:    static_cast<char*>(output) + sizeof(WireFilterHeader));
+modules/gemini-bloom/src/bloom_rdb.cc:266:                              meta.dataSize});
+modules/gemini-bloom/src/bloom_rdb.cc:272:  const auto* hdr = static_cast<const WireFilterHeader*>(data);
+modules/gemini-bloom/src/bloom_rdb.cc:285:  const auto* meta = reinterpret_cast<const WireLayerMeta*>(
+modules/gemini-bloom/src/bloom_rdb.cc:286:    static_cast<const char*>(data) + sizeof(WireFilterHeader));
+modules/gemini-bloom/src/bloom_rdb.cc:289:  uint64_t totalDataSize = 0;
+modules/gemini-bloom/src/bloom_rdb.cc:295:    if (meta[i].dataSize > kMaxTotalDataSize ||
+modules/gemini-bloom/src/bloom_rdb.cc:296:        totalDataSize > kMaxTotalDataSize - meta[i].dataSize) return nullptr;
+modules/gemini-bloom/src/bloom_rdb.cc:297:    totalDataSize += meta[i].dataSize;
+modules/gemini-bloom/src/bloom_rdb.cc:310:    auto layer = BloomLayer::FromWireMeta(meta[i], filterFlags);
+modules/gemini-bloom/src/bloom_rdb.cc:313:      RMFree(filter);
+modules/gemini-bloom/src/bloom_rdb.cc:316:    filter->SetLayer(i, {std::move(*layer), meta[i].itemCount});
+modules/gemini-bloom/src/bloom_rdb.cc:338:  static_cast<ScalingBloomFilter*>(value)->WriteTo(writer);
+modules/gemini-bloom/src/bloom_rdb.cc:342:  auto* filter = static_cast<ScalingBloomFilter*>(value);
+modules/gemini-bloom/src/bloom_rdb.cc:345:  auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
+modules/gemini-bloom/src/bloom_rdb.cc:353:  RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, (long long)1, hdrBuf, hdrBytes);
+modules/gemini-bloom/src/bloom_rdb.cc:354:  RMFree(hdrBuf);
+modules/gemini-bloom/src/bloom_rdb.cc:358:    RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, cursor++,
+modules/gemini-bloom/src/bloom_rdb.cc:359:      reinterpret_cast<const char*>(layer.bloom.GetBitArray()),
+modules/gemini-bloom/src/bloom_rdb.cc:365:  if (auto* filter = static_cast<ScalingBloomFilter*>(value)) {
+modules/gemini-bloom/src/bloom_rdb.cc:367:    RMFree(filter);
+modules/gemini-bloom/src/bloom_rdb.cc:373:  return static_cast<const ScalingBloomFilter*>(value)->BytesUsed();
+modules/gemini-bloom/src/bloom_config.cc:34:          val <= 0 || static_cast<uint64_t>(val) > kMaxCapacity) {
+modules/gemini-bloom/src/bloom_config.cc:38:      g_bloomConfig.defaultCapacity = static_cast<uint64_t>(val);
+modules/gemini-bloom/src/bloom_config.cc:46:          val < 1 || static_cast<unsigned long long>(val) > kMaxExpansion) {
+modules/gemini-bloom/src/bloom_config.cc:50:      g_bloomConfig.defaultExpansion = static_cast<unsigned>(val);
+modules/gemini-bloom/src/bloom_config.cc:53:                       static_cast<int>(len), arg);
+modules/gemini-bloom/src/sb_chain.cc:17:  if (!AppendLayer(initialCapacity, firstRate)) {
+modules/gemini-bloom/src/sb_chain.cc:18:    if (layers_) RMFree(layers_);
+modules/gemini-bloom/src/sb_chain.cc:29:  if (layers_) RMFree(layers_);
+modules/gemini-bloom/src/sb_chain.cc:48:    if (layers_) RMFree(layers_);
+modules/gemini-bloom/src/sb_chain.cc:64:bool ScalingBloomFilter::AppendLayer(uint64_t cap, double rate) {
+modules/gemini-bloom/src/sb_chain.cc:67:    if (newCap > SIZE_MAX / sizeof(FilterLayer)) return false;
+modules/gemini-bloom/src/sb_chain.cc:68:    auto* expanded = static_cast<FilterLayer*>(RMAlloc(newCap * sizeof(FilterLayer)));
+modules/gemini-bloom/src/sb_chain.cc:71:      new (&expanded[i]) FilterLayer{std::move(layers_[i].bloom), layers_[i].itemCount};
+modules/gemini-bloom/src/sb_chain.cc:74:    if (layers_) RMFree(layers_);
+modules/gemini-bloom/src/sb_chain.cc:79:  auto maybeLayer = BloomLayer::Create(cap, rate, flags_);
+modules/gemini-bloom/src/sb_chain.cc:87:  new (slot) FilterLayer{std::move(*maybeLayer), 0};
+modules/gemini-bloom/src/sb_chain.cc:116:  return (nextRate >= kMinFpRate) && AppendLayer(nextCap, nextRate);
+modules/gemini-bloom/src/sb_chain.cc:157:    [](const FilterLayer& l) { return static_cast<size_t>(l.bloom.GetDataSize()); });
+modules/gemini-bloom/src/sb_chain.cc:163:  auto* filter = static_cast<ScalingBloomFilter*>(RMAlloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/src/sb_chain.cc:166:  new (filter) ScalingBloomFilter(EmptyShellTag{});
+modules/gemini-bloom/src/sb_chain.cc:167:  filter->layers_ = static_cast<FilterLayer*>(RMCalloc(shell.numLayers, sizeof(FilterLayer)));
+modules/gemini-bloom/src/sb_chain.cc:170:    RMFree(filter);
+modules/gemini-bloom/src/sb_chain.cc:181:void ScalingBloomFilter::SetLayer(size_t index, FilterLayer&& layer) {
+modules/gemini-bloom/src/sb_chain.cc:183:    new (&layers_[index]) FilterLayer{std::move(layer.bloom), layer.itemCount};
+modules/gemini-bloom/src/sb_chain.h:18:  BloomLayer bloom;
+modules/gemini-bloom/src/sb_chain.h:31:  ScalingBloomFilter(const ScalingBloomFilter&) = delete;
+modules/gemini-bloom/src/sb_chain.h:32:  ScalingBloomFilter& operator=(const ScalingBloomFilter&) = delete;
+modules/gemini-bloom/src/sb_chain.h:69:  void SetLayer(size_t index, FilterLayer&& layer);
+modules/gemini-bloom/src/sb_chain.h:78:  bool AppendLayer(uint64_t cap, double rate);
+modules/gemini-bloom/src/sb_chain.h:88:// Wire-format structures for BF.SCANDUMP / BF.LOADCHUNK.
+modules/gemini-bloom/src/sb_chain.h:94:  uint64_t dataSize;
+modules/gemini-bloom/src/bloom_commands.cc:16:  return static_cast<ScalingBloomFilter*>(RedisModule_ModuleTypeGetValue(key));
+modules/gemini-bloom/src/bloom_commands.cc:23:  auto* mem = static_cast<ScalingBloomFilter*>(RMAlloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/src/bloom_commands.cc:25:  new (mem) ScalingBloomFilter(cap, rate, flg, expansion);
+modules/gemini-bloom/src/bloom_commands.cc:28:    RMFree(mem);
+modules/gemini-bloom/src/bloom_commands.cc:42:  auto* key = static_cast<RedisModuleKey*>(
+modules/gemini-bloom/src/bloom_commands.cc:55:      RMFree(filter);
+modules/gemini-bloom/src/bloom_commands.cc:112:      static_cast<uint64_t>(cap) > kMaxCapacity) {
+modules/gemini-bloom/src/bloom_commands.cc:135:          val < 0 || static_cast<unsigned long long>(val) > kMaxExpansion) {
+modules/gemini-bloom/src/bloom_commands.cc:141:        expansion = static_cast<unsigned>(val);
+modules/gemini-bloom/src/bloom_commands.cc:158:  auto* key = static_cast<RedisModuleKey*>(
+modules/gemini-bloom/src/bloom_commands.cc:167:  auto* filter = AllocFilter(static_cast<uint64_t>(cap), rate, expansion, fixed);
+modules/gemini-bloom/src/bloom_commands.cc:174:    RMFree(filter);
+modules/gemini-bloom/src/bloom_commands.cc:287:          static_cast<uint64_t>(val) > kMaxCapacity) {
+modules/gemini-bloom/src/bloom_commands.cc:291:      opts.capacity = static_cast<uint64_t>(val);
+modules/gemini-bloom/src/bloom_commands.cc:302:          val < 0 || static_cast<unsigned long long>(val) > kMaxExpansion) {
+modules/gemini-bloom/src/bloom_commands.cc:309:        opts.expansion = static_cast<unsigned>(val);
+modules/gemini-bloom/src/bloom_commands.cc:357:  auto* key = static_cast<RedisModuleKey*>(
+modules/gemini-bloom/src/bloom_commands.cc:373:      RMFree(filter);
+modules/gemini-bloom/src/bloom_commands.cc:412:  auto* key = static_cast<RedisModuleKey*>(
+modules/gemini-bloom/src/bloom_commands.cc:433:  auto* key = static_cast<RedisModuleKey*>(
+modules/gemini-bloom/src/bloom_commands.cc:466:  auto* key = static_cast<RedisModuleKey*>(
+modules/gemini-bloom/src/bloom_commands.cc:483:      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalCapacity()));
+modules/gemini-bloom/src/bloom_commands.cc:485:      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->BytesUsed()));
+modules/gemini-bloom/src/bloom_commands.cc:487:      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->NumLayers()));
+modules/gemini-bloom/src/bloom_commands.cc:489:      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalItems()));
+modules/gemini-bloom/src/bloom_commands.cc:499:  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalCapacity()));
+modules/gemini-bloom/src/bloom_commands.cc:501:  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->BytesUsed()));
+modules/gemini-bloom/src/bloom_commands.cc:503:  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->NumLayers()));
+modules/gemini-bloom/src/bloom_commands.cc:505:  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalItems()));
+modules/gemini-bloom/src/bloom_commands.cc:520:  auto* key = static_cast<RedisModuleKey*>(
+modules/gemini-bloom/src/bloom_commands.cc:531:  return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalItems()));
+modules/gemini-bloom/src/bloom_commands.cc:536:// what the client passes to LOADCHUNK alongside data. iter=0 means end of
+modules/gemini-bloom/src/bloom_commands.cc:547:  auto* key = static_cast<RedisModuleKey*>(
+modules/gemini-bloom/src/bloom_commands.cc:565:    auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
+modules/gemini-bloom/src/bloom_commands.cc:573:    RMFree(hdrBuf);
+modules/gemini-bloom/src/bloom_commands.cc:574:  } else if (cursor >= 1 && static_cast<size_t>(cursor - 1) < filter->NumLayers()) {
+modules/gemini-bloom/src/bloom_commands.cc:576:    size_t idx = static_cast<size_t>(cursor - 1);
+modules/gemini-bloom/src/bloom_commands.cc:580:      reinterpret_cast<const char*>(layer.bloom.GetBitArray()),
+modules/gemini-bloom/src/bloom_commands.cc:590:// --- BF.LOADCHUNK ---
+modules/gemini-bloom/src/bloom_commands.cc:603:  auto* key = static_cast<RedisModuleKey*>(
+modules/gemini-bloom/src/bloom_commands.cc:621:      RMFree(filter);
+modules/gemini-bloom/src/bloom_commands.cc:634:    size_t idx = static_cast<size_t>(cursor - 2);
+modules/gemini-bloom/src/bloom_commands.cc:639:    if (dataLen != static_cast<size_t>(layer.bloom.GetDataSize())) {
+modules/gemini-bloom/src/bloom_commands.cc:642:    std::memcpy(layer.bloom.GetBitArray(), data, dataLen);
+modules/gemini-bloom/src/bloom_commands.cc:670:    {"BF.LOADCHUNK", CmdLoadchunk, "write deny-oom"},
+modules/gemini-bloom/src/murmur2.cc:10:  uint32_t h = seed ^ static_cast<uint32_t>(len);
+modules/gemini-bloom/src/murmur2.cc:11:  const auto* data = static_cast<const unsigned char*>(key);
+modules/gemini-bloom/src/murmur2.cc:15:    k  = static_cast<uint32_t>(data[0]);
+modules/gemini-bloom/src/murmur2.cc:16:    k |= static_cast<uint32_t>(data[1]) << 8;
+modules/gemini-bloom/src/murmur2.cc:17:    k |= static_cast<uint32_t>(data[2]) << 16;
+modules/gemini-bloom/src/murmur2.cc:18:    k |= static_cast<uint32_t>(data[3]) << 24;
+modules/gemini-bloom/src/murmur2.cc:32:    case 3: h ^= static_cast<uint32_t>(data[2]) << 16; [[fallthrough]];
+modules/gemini-bloom/src/murmur2.cc:33:    case 2: h ^= static_cast<uint32_t>(data[1]) << 8; [[fallthrough]];
+modules/gemini-bloom/src/murmur2.cc:34:    case 1: h ^= static_cast<uint32_t>(data[0]); h *= m;
+modules/gemini-bloom/src/murmur2.cc:47:  uint64_t h = seed ^ (static_cast<uint64_t>(len) * m);
+modules/gemini-bloom/src/murmur2.cc:48:  const auto* data = static_cast<const unsigned char*>(key);
+modules/gemini-bloom/src/murmur2.cc:52:    k  = static_cast<uint64_t>(data[0]);
+modules/gemini-bloom/src/murmur2.cc:53:    k |= static_cast<uint64_t>(data[1]) << 8;
+modules/gemini-bloom/src/murmur2.cc:54:    k |= static_cast<uint64_t>(data[2]) << 16;
+modules/gemini-bloom/src/murmur2.cc:55:    k |= static_cast<uint64_t>(data[3]) << 24;
+modules/gemini-bloom/src/murmur2.cc:56:    k |= static_cast<uint64_t>(data[4]) << 32;
+modules/gemini-bloom/src/murmur2.cc:57:    k |= static_cast<uint64_t>(data[5]) << 40;
+modules/gemini-bloom/src/murmur2.cc:58:    k |= static_cast<uint64_t>(data[6]) << 48;
+modules/gemini-bloom/src/murmur2.cc:59:    k |= static_cast<uint64_t>(data[7]) << 56;
+modules/gemini-bloom/src/murmur2.cc:73:    case 7: h ^= static_cast<uint64_t>(data[6]) << 48; [[fallthrough]];
+modules/gemini-bloom/src/murmur2.cc:74:    case 6: h ^= static_cast<uint64_t>(data[5]) << 40; [[fallthrough]];
+modules/gemini-bloom/src/murmur2.cc:75:    case 5: h ^= static_cast<uint64_t>(data[4]) << 32; [[fallthrough]];
+modules/gemini-bloom/src/murmur2.cc:76:    case 4: h ^= static_cast<uint64_t>(data[3]) << 24; [[fallthrough]];
+modules/gemini-bloom/src/murmur2.cc:77:    case 3: h ^= static_cast<uint64_t>(data[2]) << 16; [[fallthrough]];
+modules/gemini-bloom/src/murmur2.cc:78:    case 2: h ^= static_cast<uint64_t>(data[1]) << 8; [[fallthrough]];
+modules/gemini-bloom/src/murmur2.cc:79:    case 1: h ^= static_cast<uint64_t>(data[0]); h *= m;
+modules/gemini-bloom/src/rm_alloc.h:7:inline void* RMAlloc(size_t n) { return malloc(n); }
+modules/gemini-bloom/src/rm_alloc.h:8:inline void* RMCalloc(size_t count, size_t size) { return calloc(count, size); }
+modules/gemini-bloom/src/rm_alloc.h:10:inline void RMFree(void* p) { free(p); }
+modules/gemini-bloom/src/rm_alloc.h:28:inline void* RMAlloc(size_t n) { return RedisModule_Alloc(n); }
+modules/gemini-bloom/src/rm_alloc.h:29:inline void* RMCalloc(size_t count, size_t size) { return RedisModule_Calloc(count, size); }
+modules/gemini-bloom/src/rm_alloc.h:31:inline void RMFree(void* p) { RedisModule_Free(p); }
+modules/gemini-bloom/src/bloom_filter.cc:24:  auto* ptr = reinterpret_cast<const void*>(data.data());
+modules/gemini-bloom/src/bloom_filter.cc:25:  auto len = static_cast<int>(std::min(data.size(), static_cast<size_t>(INT_MAX)));
+modules/gemini-bloom/src/bloom_filter.cc:31:  auto* ptr = reinterpret_cast<const void*>(data.data());
+modules/gemini-bloom/src/bloom_filter.cc:32:  auto len = static_cast<int>(std::min(data.size(), static_cast<size_t>(INT_MAX)));
+modules/gemini-bloom/src/bloom_filter.cc:37:// --- BloomLayer lifecycle ---
+modules/gemini-bloom/src/bloom_filter.cc:39:BloomLayer::~BloomLayer() {
+modules/gemini-bloom/src/bloom_filter.cc:41:    RMFree(bitArray_);
+modules/gemini-bloom/src/bloom_filter.cc:46:BloomLayer::BloomLayer(BloomLayer&& other) noexcept
+modules/gemini-bloom/src/bloom_filter.cc:54:      dataSize_(other.dataSize_),
+modules/gemini-bloom/src/bloom_filter.cc:59:BloomLayer& BloomLayer::operator=(BloomLayer&& other) noexcept {
+modules/gemini-bloom/src/bloom_filter.cc:61:    if (bitArray_) RMFree(bitArray_);
+modules/gemini-bloom/src/bloom_filter.cc:69:    dataSize_ = other.dataSize_;
+modules/gemini-bloom/src/bloom_filter.cc:88:    static_cast<uint32_t>(std::ceil(std::numbers::ln2 * bitsPerEntry)));
+modules/gemini-bloom/src/bloom_filter.cc:91:std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveRate,
+modules/gemini-bloom/src/bloom_filter.cc:98:  BloomLayer layer;
+modules/gemini-bloom/src/bloom_filter.cc:110:    auto rawBits = static_cast<double>(cap) * layer.bitsPerEntry_;
+modules/gemini-bloom/src/bloom_filter.cc:111:    constexpr double kMaxBits = static_cast<double>(UINT64_MAX - 7);
+modules/gemini-bloom/src/bloom_filter.cc:113:    layer.totalBits_ = static_cast<uint64_t>(std::max(rawBits, 1024.0));
+modules/gemini-bloom/src/bloom_filter.cc:120:    layer.log2Bits_ = static_cast<uint8_t>(std::bit_width(layer.totalBits_) - 1);
+modules/gemini-bloom/src/bloom_filter.cc:127:  layer.dataSize_ = bytes;
+modules/gemini-bloom/src/bloom_filter.cc:128:  if (layer.dataSize_ == 0) return std::nullopt;
+modules/gemini-bloom/src/bloom_filter.cc:131:  if (layer.dataSize_ > kMaxLayerDataSize) return std::nullopt;
+modules/gemini-bloom/src/bloom_filter.cc:133:  layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
+modules/gemini-bloom/src/bloom_filter.cc:141:uint64_t BloomLayer::ComputeModuloMask() const {
+modules/gemini-bloom/src/bloom_filter.cc:145:bool BloomLayer::TestBit(uint64_t bitIndex) const {
+modules/gemini-bloom/src/bloom_filter.cc:150:void BloomLayer::SetBit(uint64_t bitIndex) {
+modules/gemini-bloom/src/bloom_filter.cc:160:bool BloomLayer::Test(const HashPair& hp) const {
+modules/gemini-bloom/src/bloom_filter.cc:171:bool BloomLayer::Insert(const HashPair& hp) {
+modules/gemini-bloom/tests/sb_chain_test.cc:16:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:17:  new (mem) ScalingBloomFilter(1000, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:28:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:29:  new (mem) ScalingBloomFilter(1000, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:48:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:49:  new (mem) ScalingBloomFilter(1000, 0.01, flags, 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:64:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:65:  new (mem) ScalingBloomFilter(5000, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:81:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:82:  new (mem) ScalingBloomFilter(100, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:101:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:102:  new (mem) ScalingBloomFilter(100, 0.01, flg, 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:120:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:121:  new (mem) ScalingBloomFilter(2, 0.01, flg, 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:141:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:142:  new (mem) ScalingBloomFilter(2, 0.01, flg, 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:162:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:163:  new (mem) ScalingBloomFilter(1000, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:170:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:171:  new (mem) ScalingBloomFilter(1000, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:178:  auto* leftMem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:179:  auto* rightMem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:180:  new (leftMem) ScalingBloomFilter(10, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:181:  new (rightMem) ScalingBloomFilter(20, 0.001, DefaultFlags(), 4);
+modules/gemini-bloom/tests/sb_chain_test.cc:198:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:199:  new (mem) ScalingBloomFilter(10, 0.01, DefaultFlags(), 1);
+modules/gemini-bloom/tests/sb_chain_test.cc:216:// Bug regression: SetLayer must use placement new on calloc'd memory.
+modules/gemini-bloom/tests/sb_chain_test.cc:217:// FromRdbShell allocates with calloc (zero-filled), then SetLayer
+modules/gemini-bloom/tests/sb_chain_test.cc:218:// assigns into those slots. Without placement new, this is UB.
+modules/gemini-bloom/tests/sb_chain_test.cc:219:TEST(ScalingBloomTest, FromRdbShellSetLayer) {
+modules/gemini-bloom/tests/sb_chain_test.cc:221:  auto* orig = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:222:  new (orig) ScalingBloomFilter(100, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:231:  // Reconstruct via FromRdbShell + SetLayer
+modules/gemini-bloom/tests/sb_chain_test.cc:243:    auto layer = BloomLayer::Create(
+modules/gemini-bloom/tests/sb_chain_test.cc:246:    std::memcpy(layer->GetBitArray(), src.bloom.GetBitArray(),
+modules/gemini-bloom/tests/sb_chain_test.cc:248:    rebuilt->SetLayer(i, {std::move(*layer), src.itemCount});
+modules/gemini-bloom/tests/sb_chain_test.cc:253:      << "False negative after FromRdbShell+SetLayer: " << item;
+modules/gemini-bloom/tests/sb_chain_test.cc:262:// Bug regression: AppendLayer must safely move FilterLayer objects
+modules/gemini-bloom/tests/sb_chain_test.cc:267:TEST(ScalingBloomTest, AppendLayerSafeRelocation) {
+modules/gemini-bloom/tests/sb_chain_test.cc:268:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:269:  new (mem) ScalingBloomFilter(10, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:290:// instead of causing float-to-int overflow UB.
+modules/gemini-bloom/tests/sb_chain_test.cc:292:  auto layer = BloomLayer::Create(UINT64_MAX, 1e-300, DefaultFlags());
+modules/gemini-bloom/tests/sb_chain_test.cc:294:    << "Should reject extreme capacity * bitsPerEntry overflow";
+modules/gemini-bloom/tests/sb_chain_test.cc:296:  auto layer2 = BloomLayer::Create(1ULL << 50, 1e-100, DefaultFlags());
+modules/gemini-bloom/tests/sb_chain_test.cc:302:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:303:  new (mem) ScalingBloomFilter(100, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:335:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:336:  new (mem) ScalingBloomFilter(100, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/sb_chain_test.cc:355:// (SCANDUMP/LOADCHUNK round-trip) since the serialization code depends
+modules/gemini-bloom/tests/sb_chain_test.cc:359:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/sb_chain_test.cc:360:  new (mem) ScalingBloomFilter(1000, 0.01, DefaultFlags(), 2);
+modules/gemini-bloom/tests/bloom_filter_test.cc:53:TEST(BloomLayerTest, CreateRAII) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:54:  auto layer = BloomLayer::Create(1000, 0.01,
+modules/gemini-bloom/tests/bloom_filter_test.cc:64:TEST(BloomLayerTest, MoveSemantics) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:65:  auto layer = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
+modules/gemini-bloom/tests/bloom_filter_test.cc:68:  BloomLayer moved = std::move(*layer);
+modules/gemini-bloom/tests/bloom_filter_test.cc:73:TEST(BloomLayerTest, MoveAssignmentReleasesOldStorage) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:74:  auto first = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
+modules/gemini-bloom/tests/bloom_filter_test.cc:75:  auto second = BloomLayer::Create(2000, 0.001, BloomFlags::Use64Bit);
+modules/gemini-bloom/tests/bloom_filter_test.cc:89:TEST(BloomLayerTest, InsertAndTest) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:90:  auto layer = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
+modules/gemini-bloom/tests/bloom_filter_test.cc:99:TEST(BloomLayerTest, FalsePositiveRate) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:100:  auto layer = BloomLayer::Create(10000, 0.01, BloomFlags::Use64Bit);
+modules/gemini-bloom/tests/bloom_filter_test.cc:121:  double fpRate = static_cast<double>(falsePositives) / testCount;
+modules/gemini-bloom/tests/bloom_filter_test.cc:125:TEST(BloomLayerTest, PowerOfTwoViaBitCeil) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:126:  auto layer = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
+modules/gemini-bloom/tests/bloom_filter_test.cc:132:TEST(BloomLayerTest, NoRoundUsesAlignedNonPowerOfTwoBits) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:133:  auto layer = BloomLayer::Create(1000, 0.01,
+modules/gemini-bloom/tests/bloom_filter_test.cc:143:TEST(BloomLayerTest, RejectsInvalidCreateParameters) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:144:  EXPECT_FALSE(BloomLayer::Create(0, 0.01, BloomFlags::Use64Bit).has_value());
+modules/gemini-bloom/tests/bloom_filter_test.cc:145:  EXPECT_FALSE(BloomLayer::Create(100, 0.0, BloomFlags::Use64Bit).has_value());
+modules/gemini-bloom/tests/bloom_filter_test.cc:146:  EXPECT_FALSE(BloomLayer::Create(100, 1.0, BloomFlags::Use64Bit).has_value());
+modules/gemini-bloom/tests/bloom_filter_test.cc:147:  EXPECT_FALSE(BloomLayer::Create(100, -0.01, BloomFlags::Use64Bit).has_value());
+modules/gemini-bloom/tests/bloom_filter_test.cc:148:  EXPECT_FALSE(BloomLayer::Create(100,
+modules/gemini-bloom/tests/bloom_filter_test.cc:150:  EXPECT_FALSE(BloomLayer::Create(100,
+modules/gemini-bloom/tests/bloom_filter_test.cc:154:TEST(BloomLayerTest, RejectsBitsPerEntryExceedingLimit) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:156:  EXPECT_FALSE(BloomLayer::Create(1, 1e-300, BloomFlags::Use64Bit).has_value())
+modules/gemini-bloom/tests/bloom_filter_test.cc:159:  EXPECT_TRUE(BloomLayer::Create(1, 1e-200, BloomFlags::Use64Bit).has_value())
+modules/gemini-bloom/tests/bloom_filter_test.cc:195:TEST(BloomLayerTest, RawBitsCreatesZeroHashCount) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:196:  auto layer = BloomLayer::Create(1024, 0.01, BloomFlags::RawBits);
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:283:  file delete -force $cfg_dir
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:306:      file delete -force $cfg_dir
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:310:  file delete -force $cfg_dir
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:317:  file delete -force /tmp/bloom_tcl_test.rdb
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:318:  file delete -force /tmp/bloom_tcl_test.log
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:630:test_assert "NONSCALING filter rejects overflow" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:631:  r BF.RESERVE ns_overflow 0.01 10 NONSCALING
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:634:    if {[catch {r BF.ADD ns_overflow "item_$i"} err]} {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:639:  if {!$rejected} { error "Expected overflow rejection but all items accepted" }
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:643:  set info [r BF.INFO ns_overflow]
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:669:puts "\n=== BF.SCANDUMP / BF.LOADCHUNK round-trip ==="
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:671:test_assert "SCANDUMP/LOADCHUNK preserves data" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:678:  # Use official protocol: pass SCANDUMP's returned cursor to LOADCHUNK
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:687:    r BF.LOADCHUNK dump_dst $next_cursor $chunk_data
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:701:    if {$exists != 1} { error "False negative after LOADCHUNK for dump_item_$i" }
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:705:test_assert "SCANDUMP/LOADCHUNK using returned iterator directly (official protocol)" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:712:  # Official protocol: pass SCANDUMP's returned iterator to LOADCHUNK
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:721:    r BF.LOADCHUNK proto_dst $next_cursor $chunk_data
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:737:test_assert "SCANDUMP/LOADCHUNK preserves binary chunk payloads" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:753:    r BF.LOADCHUNK dump_bin_dst $next_cursor $chunk_data
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:759:    if {$exists != 1} { error "False negative after binary LOADCHUNK for <$item>" }
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:865:puts "\n=== LOADCHUNK safety ==="
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:867:test_error "BF.LOADCHUNK on string key should return WRONGTYPE, not delete" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:869:  r BF.LOADCHUNK lc_string_key 1 "invalid_header_data"
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:872:test_assert "BF.LOADCHUNK WRONGTYPE preserves original key" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:874:  if {$val ne "hello"} { error "Key was deleted! Got: $val" }
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:877:test_assert "BF.LOADCHUNK with malformed header does not delete existing bloom key" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:880:  catch {r BF.LOADCHUNK lc_bloom_key 1 "short"}
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:882:  if {$card != 1} { error "Bloom key was deleted/corrupted! Card=$card" }
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:885:test_error "BF.LOADCHUNK rejects header too short" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:887:  r BF.LOADCHUNK lc_hdr_short 1 "short"
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:890:test_error "BF.LOADCHUNK rejects header with zero layers" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:895:  r BF.LOADCHUNK lc_hdr_zero 1 $hdr
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:910:puts "\n=== Additional LOADCHUNK safety ==="
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:912:test_error "BF.LOADCHUNK cursor 0 should be rejected" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:914:  r BF.LOADCHUNK lc_cur0 0 "data"
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:917:test_error "BF.LOADCHUNK negative cursor should be rejected" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:919:  r BF.LOADCHUNK lc_neg -1 "data"
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:922:test_error "BF.LOADCHUNK data chunk on non-existent key" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:924:  r BF.LOADCHUNK lc_nokey 2 "somedata"
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:927:test_error "BF.LOADCHUNK data chunk with wrong size" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:934:  r BF.LOADCHUNK lc_badsize_dst 1 $hdr
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:936:  r BF.LOADCHUNK lc_badsize_dst 2 "short"
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:954:  r BF.INSERT insert_ns_full NOCREATE ITEMS new_overflow
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1015:puts "\n=== EXPANSION overflow / truncation ==="
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1018:  r BF.RESERVE exp_overflow 0.01 100 EXPANSION 4294967296
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1022:  r BF.INSERT exp_overflow2 EXPANSION 4294967296 ITEMS a
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1147:  catch {file delete -force /tmp/bloom_tcl_test.rdb}
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1148:  catch {file delete -force /tmp/appendonlydir}
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1216:  catch {file delete -force {*}[glob -nocomplain /tmp/appendonlydir/*]}
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1217:  catch {file delete -force /tmp/appendonlydir}
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1342:  file delete -force $cfg_dir
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1370:  file delete -force $cfg_dir
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1404:puts "\n=== LOADCHUNK half-restore safety (DESIGN-02) ==="
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1416:  r BF.LOADCHUNK half_dst $hdr_cursor $hdr_data
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1434:test_error "LOADCHUNK cursor>1 rejects completed filter" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1439:  r BF.LOADCHUNK lc_completed 2 [string repeat \x00 128]
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1518:    BF.LOADCHUNK write
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1541:test "COMMAND GETKEYS BF.LOADCHUNK returns the filter key" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1542:  r COMMAND GETKEYS BF.LOADCHUNK cmd_key 1 data
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1562:puts "\n=== LOADCHUNK existing key rejection (SAFE-07) ==="
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1564:test_error "BF.LOADCHUNK header on existing Bloom key returns error" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1573:  r BF.LOADCHUNK lc_exist_dst 1 $hdr_data
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1576:test_assert "BF.LOADCHUNK existing key rejection preserves old data" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1578:  if {$exists != 1} { error "old_item should still exist after rejected LOADCHUNK, got $exists" }
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1585:test_assert "BloomLayer::Create rejects extremely large capacity" {
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1588:  # in BloomLayer::Create should reject it
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:1613:file delete -force /tmp/bloom_tcl_test.rdb
+modules/gemini-bloom/tests/bloom_rdb_test.cc:2:// Verifies RDB encver 2/4, wire-format (SCANDUMP/LOADCHUNK) headers,
+modules/gemini-bloom/tests/bloom_rdb_test.cc:41:  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:42:  new (mem) ScalingBloomFilter(cap, fp, flags, exp);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:54:  return static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), load_encver));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:267:      reinterpret_cast<const char*>(layer.bloom.GetBitArray()),
+modules/gemini-bloom/tests/bloom_rdb_test.cc:273:  auto* loaded = static_cast<ScalingBloomFilter*>(RdbLoadBloom(v2stream.IO(), 2));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:299:  auto* loaded = static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), 99));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:313:    auto* loaded = static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), encver));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:369:// Wire format: full SCANDUMP/LOADCHUNK simulation
+modules/gemini-bloom/tests/bloom_rdb_test.cc:402:    std::memcpy(dest.GetBitArray(), layer_data[i].data(), layer_data[i].size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:420:  auto layer = BloomLayer::Create(1000, 0.01, DefaultFlags());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:433:  EXPECT_EQ(meta.dataSize, layer->GetDataSize());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:437:  auto restored = BloomLayer::FromWireMeta(meta, DefaultFlags());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:562:// Bug regression: SetLayer on calloc'd memory must use placement new,
+modules/gemini-bloom/tests/bloom_rdb_test.cc:565:// SetLayer and correctly answers membership queries.
+modules/gemini-bloom/tests/bloom_rdb_test.cc:568:TEST(BloomWire, SetLayerOnUninitializedMemory) {
+modules/gemini-bloom/tests/bloom_rdb_test.cc:593:    std::memcpy(dest.GetBitArray(), layer_data[i].data(), layer_data[i].size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:598:      << "False negative after SetLayer: " << item;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:620:  // and the first layer's BloomLayer data, but omit the itemCount
+modules/gemini-bloom/tests/bloom_rdb_test.cc:631:  // Layer 0 BloomLayer fields (complete)
+modules/gemini-bloom/tests/bloom_rdb_test.cc:640:    reinterpret_cast<const char*>(layer0.bloom.GetBitArray()),
+modules/gemini-bloom/tests/bloom_rdb_test.cc:645:  auto* loaded = static_cast<ScalingBloomFilter*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:686:    reinterpret_cast<const char*>(layer0.bloom.GetBitArray()),
+modules/gemini-bloom/tests/bloom_rdb_test.cc:691:  auto* loaded = static_cast<ScalingBloomFilter*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:702:// Bug regression: LOADCHUNK header with log2Bits >= 64 must be
+modules/gemini-bloom/tests/bloom_rdb_test.cc:715:  auto* meta = reinterpret_cast<WireLayerMeta*>(buf.data() + sizeof(WireFilterHeader));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:740:  auto* loaded = static_cast<ScalingBloomFilter*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:768:  uint64_t dataSize = (f.totalBits > 0) ? ((f.totalBits + 7) / 8) : 0;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:785:    ? static_cast<size_t>(dataSize)
+modules/gemini-bloom/tests/bloom_rdb_test.cc:792:  return static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), kCurrentEncVer));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:914:  // check, static_cast<uint32_t> truncates to 7 and passes validation.
+modules/gemini-bloom/tests/bloom_rdb_test.cc:935:  auto* loaded = static_cast<ScalingBloomFilter*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:963:  auto* loaded = static_cast<ScalingBloomFilter*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:980:  auto* loaded = static_cast<ScalingBloomFilter*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1035:  size_t expectedSize = static_cast<size_t>((f.totalBits + 7) / 8);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1040:    << "Should reject RDB layer blob shorter than metadata dataSize";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1046:  size_t expectedSize = static_cast<size_t>((f.totalBits + 7) / 8);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1050:    << "Should reject RDB layer blob longer than metadata dataSize";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1089:  auto* hdr = reinterpret_cast<WireFilterHeader*>(buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1107:  auto* meta = reinterpret_cast<WireLayerMeta*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1146:  auto* hdr = reinterpret_cast<WireFilterHeader*>(buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1167:  auto* meta = reinterpret_cast<WireLayerMeta*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1185:  auto* meta = reinterpret_cast<WireLayerMeta*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1203:  auto* meta = reinterpret_cast<WireLayerMeta*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1221:  auto* meta = reinterpret_cast<WireLayerMeta*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1223:  ASSERT_GT(meta[0].dataSize, 1u);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1224:  meta[0].dataSize -= 1;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1228:    << "Should reject wire header when dataSize != ceil(totalBits/8)";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1240:  auto* meta = reinterpret_cast<WireLayerMeta*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1257:  auto* hdr = reinterpret_cast<WireFilterHeader*>(buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1274:  auto* hdr = reinterpret_cast<WireFilterHeader*>(buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1294:  auto* meta = reinterpret_cast<WireLayerMeta*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1297:  meta[0].dataSize = 0;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1313:  auto* meta = reinterpret_cast<WireLayerMeta*>(
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1315:  // Set dataSize to 5GB — exceeds the 4GB cap
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1317:  meta[0].dataSize = hugeSize;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1323:    << "Should reject wire header with excessive totalDataSize";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1376:  auto* hdr = reinterpret_cast<const WireFilterHeader*>(buf.data());

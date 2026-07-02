@@ -1,0 +1,288 @@
+## RL-01
+- command: BF.RESERVE rl_cap_zero 0.01 0
+- elapsed_ms: 0.551
+- status: PASS
+- reply_class: error
+- reply: {"redis_error": "ERR expected a positive capacity value"}
+- used_memory_before: 939936
+- used_memory_after: 939984
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: capacity 0 must reject before allocation
+
+## RL-02a
+- command: BF.RESERVE rl_cap_min 0.01 1
+- elapsed_ms: 0.682
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 939984
+- used_memory_after: 940560
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: minimum capacity accepted
+
+## RL-02b
+- command: BF.ADD rl_cap_min one
+- elapsed_ms: 0.307
+- status: PASS
+- reply_class: int
+- reply: 1
+- used_memory_before: 940560
+- used_memory_after: 940560
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: minimum capacity add
+
+## RL-02c
+- command: BF.EXISTS rl_cap_min one
+- elapsed_ms: 0.130
+- status: PASS
+- reply_class: int
+- reply: 1
+- used_memory_before: 940560
+- used_memory_after: 940560
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: minimum capacity exists
+
+## RL-03-10
+- command: BF.RESERVE rl_cap_10 0.01 10
+- elapsed_ms: 0.109
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 940560
+- used_memory_after: 941096
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: capacity 10 accepted
+
+## RL-03-100
+- command: BF.RESERVE rl_cap_100 0.01 100
+- elapsed_ms: 0.091
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 941096
+- used_memory_after: 941648
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: capacity 100 accepted
+
+## RL-03-10000
+- command: BF.RESERVE rl_cap_10000 0.01 10000
+- elapsed_ms: 0.088
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 941648
+- used_memory_after: 955848
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: capacity 10000 accepted
+
+## RL-03-100000
+- command: BF.RESERVE rl_cap_100000 0.01 100000
+- elapsed_ms: 0.087
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 955848
+- used_memory_after: 1095584
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: capacity 100000 accepted
+
+## RL-04
+- command: BF.RESERVE rl_cap_max_safe 0.99 1073741824 NONSCALING
+- elapsed_ms: 0.269
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 1095544
+- used_memory_after: 3905800
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: capacity 2^30 high-error NONSCALING safety probe
+
+## RL-05
+- command: BF.RESERVE rl_cap_too_big 0.01 1073741825
+- elapsed_ms: 0.141
+- status: PASS
+- reply_class: error
+- reply: {"redis_error": "ERR expected a positive capacity value"}
+- used_memory_before: 3905800
+- used_memory_after: 3905800
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: capacity above DESIGN max must reject before allocation
+
+## RL-06-1
+- command: BF.RESERVE rl_exp_1 0.01 10 EXPANSION 1
+- elapsed_ms: 0.091
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 3905800
+- used_memory_after: 3906352
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: expansion 1 accepted
+
+## RL-06-2
+- command: BF.RESERVE rl_exp_2 0.01 10 EXPANSION 2
+- elapsed_ms: 0.090
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 3906352
+- used_memory_after: 3906888
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: expansion 2 accepted
+
+## RL-06-4
+- command: BF.RESERVE rl_exp_4 0.01 10 EXPANSION 4
+- elapsed_ms: 0.086
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 3906888
+- used_memory_after: 3907560
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: expansion 4 accepted
+
+## RL-06-32768
+- command: BF.RESERVE rl_exp_32768 0.01 10 EXPANSION 32768
+- elapsed_ms: 0.085
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 3907560
+- used_memory_after: 3908008
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: expansion 32768 accepted
+
+## RL-07
+- command: BF.RESERVE rl_exp_too_big 0.01 10 EXPANSION 32769
+- elapsed_ms: 0.109
+- status: PASS
+- reply_class: error
+- reply: {"redis_error": "ERR bad expansion"}
+- used_memory_before: 3908008
+- used_memory_after: 3908008
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: expansion above DESIGN max must reject
+
+## RL-08a
+- command: BF.RESERVE rl_exp_zero_reserve 0.01 10 EXPANSION 0
+- elapsed_ms: 0.084
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 3908008
+- used_memory_after: 3908560
+- used_memory_rss_before: 8773632
+- used_memory_rss_after: 8773632
+- notes: EXPANSION 0 maps to non-scaling in BF.RESERVE
+
+## RL-08b
+- command: BF.INSERT rl_exp_zero_insert EXPANSION 0 ITEMS a
+- elapsed_ms: 0.351
+- status: PASS
+- reply_class: list
+- reply: [1]
+- used_memory_before: 3908560
+- used_memory_after: 3909096
+- used_memory_rss_before: 9072640
+- used_memory_rss_after: 9072640
+- notes: EXPANSION 0 maps to non-scaling in BF.INSERT
+
+## RL-09
+- command: BF.RESERVE rl_too_large_layer 1e-7 1073741824 NONSCALING
+- elapsed_ms: 0.148
+- status: PASS
+- reply_class: error
+- reply: {"redis_error": "ERR allocation failure"}
+- used_memory_before: 3909096
+- used_memory_after: 3909096
+- used_memory_rss_before: 9072640
+- used_memory_rss_after: 9072640
+- notes: tiny error with max capacity should hit per-layer cap without allocation
+
+## RL-10
+- command: BF.RESERVE rl_bits_per_entry 1e-300 10
+- elapsed_ms: 0.231
+- status: PASS
+- reply_class: error
+- reply: {"redis_error": "ERR allocation failure"}
+- used_memory_before: 3909096
+- used_memory_after: 3909096
+- used_memory_rss_before: 9072640
+- used_memory_rss_after: 9072640
+- notes: bitsPerEntry > 1000 should reject gracefully
+
+## RL-11a
+- command: BF.RESERVE rl_nonscaling_full 0.001 10 NONSCALING
+- elapsed_ms: 0.078
+- status: PASS
+- reply_class: str
+- reply: "OK"
+- used_memory_before: 3909096
+- used_memory_after: 3909632
+- used_memory_rss_before: 9072640
+- used_memory_rss_after: 9072640
+- notes: prepare fixed-size filter
+
+## RL-11b
+- command: BF.MADD rl_nonscaling_full item0 item1 item2 item3 item4 item5 item6 item7 item8 item9 item10 item11
+- elapsed_ms: 0.264
+- status: PASS
+- reply_class: array_with_error
+- reply: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, {"redis_error": "ERR non scaling filter is full"}]
+- used_memory_before: 3909632
+- used_memory_after: 3909632
+- used_memory_rss_before: 9072640
+- used_memory_rss_after: 9072640
+- notes: MADD should truncate at first full error
+
+## RL-11c
+- command: BF.CARD rl_nonscaling_full
+- elapsed_ms: 0.094
+- status: PASS
+- reply_class: int
+- reply: 10
+- used_memory_before: 3909632
+- used_memory_after: 3909632
+- used_memory_rss_before: 9072640
+- used_memory_rss_after: 9072640
+- notes: cardinality must stay at capacity
+
+## RL-11d
+- command: BF.EXISTS rl_nonscaling_full item11
+- elapsed_ms: 0.074
+- status: PASS
+- reply_class: int
+- reply: 0
+- used_memory_before: 3909632
+- used_memory_after: 3909632
+- used_memory_rss_before: 9072640
+- used_memory_rss_after: 9072640
+- notes: later item after full error should not be processed
+
+## RL-11e
+- command: BF.INSERT rl_insert_full CAPACITY 10 ERROR 0.001 NONSCALING ITEMS item0 item1 item2 item3 item4 item5 item6 item7 item8 item9 item10 item11
+- elapsed_ms: 0.240
+- status: PASS
+- reply_class: array_with_error
+- reply: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, {"redis_error": "ERR non scaling filter is full"}]
+- used_memory_before: 3909632
+- used_memory_after: 3910168
+- used_memory_rss_before: 9072640
+- used_memory_rss_after: 9072640
+- notes: BF.INSERT fixed filter should truncate at first full error
+

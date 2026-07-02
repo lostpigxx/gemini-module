@@ -1,0 +1,71 @@
+# Stage 03 Commands
+
+Stage 03 was static-only. No build, Redis server, runtime matrix, fuzz, sanitizer, or performance command was executed.
+
+## Rehydration and state
+
+- `sed -n '1,240p' modules/gemini-bloom/DESIGN.md`
+- `sed -n '241,520p' modules/gemini-bloom/DESIGN.md`
+- `sed -n '521,900p' modules/gemini-bloom/DESIGN.md`
+- `sed -n '1,260p' .codex/gemini-bloom-audit/v6/LOOP_CONTROL_BATCH.md`
+- `sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/00_design_first_policy.md`
+- `sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/01_rehydration_policy.md`
+- `sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/02_subagent_protocol.md`
+- `sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/03_evidence_policy.md`
+- `sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/04_quality_gates.md`
+- `sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/05_commit_push_policy.md`
+- `sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/06_final_report_policy.md`
+- `sed -n '1,320p' .codex/gemini-bloom-audit/v6/state/LOOP_STATE.md`
+- `sed -n '1,260p' .codex/gemini-bloom-audit/v6/stages/STAGE_03_STATIC_DEEP_AUDIT.md`
+- `sed -n '1,260p' .codex/gemini-bloom-audit/v6/agents/stage02/stage_result.md`
+- `sed -n '1,260p' .codex/gemini-bloom-audit/v6/agents/stage02/reviewer_output.md`
+
+## Directory setup
+
+- `mkdir -p .codex/gemini-bloom-audit/v6/agents/stage03 .codex/gemini-bloom-audit/v6/evidence/stage03`
+- Same command rerun with escalation after sandbox denial.
+
+## Static inspection
+
+- `rg --files modules/gemini-bloom`
+- `rg -n "kMax|BloomFlags|Validate|RdbLoad|RdbSave|AofRewrite|SCANDUMP|LOADCHUNK|ReplicateVerbatim|CreateCommand|OpenKey|ModuleTypeSetValue|Postponed|ReplySetArrayLength|RegisterBloomCommands|Optimal|Murmur|ProbePosition|FromWireMeta|AppendLayer|SetLayer|Loading|RawBits|NoRound|Use64Bit|FixedSize" modules/gemini-bloom`
+- `wc -l modules/gemini-bloom/CMakeLists.txt modules/gemini-bloom/src/*.cc modules/gemini-bloom/src/*.h modules/gemini-bloom/tests/*.cc modules/gemini-bloom/tests/tcl/bloom_test.tcl`
+- `nl -ba modules/gemini-bloom/src/bloom_filter.h`
+- `nl -ba modules/gemini-bloom/src/bloom_filter.cc`
+- `nl -ba modules/gemini-bloom/src/sb_chain.h`
+- `nl -ba modules/gemini-bloom/src/sb_chain.cc`
+- `nl -ba modules/gemini-bloom/src/bloom_rdb.h`
+- `nl -ba modules/gemini-bloom/src/bloom_rdb.cc`
+- `nl -ba modules/gemini-bloom/src/redis_bloom_module.cc`
+- `nl -ba modules/gemini-bloom/src/rm_alloc.h`
+- `nl -ba modules/gemini-bloom/src/bloom_commands.cc | sed -n '1,240p'`
+- `nl -ba modules/gemini-bloom/src/bloom_commands.cc | sed -n '241,480p'`
+- `nl -ba modules/gemini-bloom/src/bloom_commands.cc | sed -n '481,760p'`
+- `nl -ba modules/gemini-bloom/src/bloom_commands.h`
+- `nl -ba modules/gemini-bloom/src/bloom_config.h`
+- `nl -ba modules/gemini-bloom/src/bloom_config.cc`
+- `nl -ba modules/gemini-bloom/src/murmur2.h`
+- `nl -ba modules/gemini-bloom/src/murmur2.cc`
+- `nl -ba modules/gemini-bloom/CMakeLists.txt`
+- `rg -n "TEST\\(|test_assert|test_error|test \\\"|Hash|Murmur|RawBits|bitsPerEntry|kMax|capacity|expansion|EXPANSION|Rdb|Wire|LOADCHUNK|SCANDUMP|Loading|Reject|Rejects|itemCount|totalData|dataSize|COMMAND|ACL|RESP3|EXPECTED" modules/gemini-bloom/tests/bloom_filter_test.cc modules/gemini-bloom/tests/sb_chain_test.cc modules/gemini-bloom/tests/bloom_rdb_test.cc modules/gemini-bloom/tests/tcl/bloom_test.tcl`
+- `nl -ba modules/gemini-bloom/tests/bloom_filter_test.cc`
+- `nl -ba modules/gemini-bloom/tests/sb_chain_test.cc`
+- `nl -ba modules/gemini-bloom/tests/bloom_rdb_test.cc | sed -n '720,1085p'`
+- `nl -ba modules/gemini-bloom/tests/bloom_rdb_test.cc | sed -n '1080,1390p'`
+- `nl -ba modules/gemini-bloom/tests/tcl/bloom_test.tcl | sed -n '1180,1610p'`
+- `rg -n "expansion.*32768|32768|> kMaxExpansion|kMaxExpansion|dataSize|2GB|2 GB|2147483648|4294967296|UINT32_MAX|Rejects.*Expansion|Rejects.*Data" modules/gemini-bloom/tests modules/gemini-bloom/src`
+- `nl -ba modules/gemini-bloom/tests/tcl/bloom_test.tcl | sed -n '940,1045p'`
+- `nl -ba modules/gemini-bloom/tests/tcl/bloom_test.tcl | sed -n '1,160p'`
+- `nl -ba modules/gemini-bloom/tests/tcl/bloom_test.tcl | sed -n '660,940p'`
+- `nl -ba modules/gemini-bloom/DESIGN.md | sed -n '552,566p'`
+- `nl -ba modules/gemini-bloom/DESIGN.md | sed -n '310,338p'`
+- `nl -ba modules/gemini-bloom/DESIGN.md | sed -n '236,258p'`
+- `nl -ba modules/gemini-bloom/DESIGN.md | sed -n '685,701p'`
+
+## Metadata
+
+- `git rev-parse HEAD`
+- `git status --short --branch`
+- `uname -a`
+- `cmake --version`
+- `clang --version`

@@ -1,0 +1,22 @@
+# Stage 02 stderr summary
+
+Detailed stderr is split across:
+
+- `build/configure_stderr.log`
+- `build/build_stale_stderr.log`
+- `build/configure_fallback_stderr.log`
+- `build/build_fallback_stderr.log`
+- `gtest/bloom_test_target_stderr.log`
+- `gtest/bloom_test_target_stale_stderr.log`
+- `gtest/bloom_filter_test_stderr.log`
+- `gtest/sb_chain_test_stderr.log`
+- `gtest/bloom_rdb_test_stderr.log`
+- `tcl/bloom_test_tcl_stderr.log`
+
+Important stderr facts:
+
+- `cmake -B build` failed because `build/CMakeCache.txt` was created for `/workspace/projects/VibeCoding/gemini-module`, while this checkout is `/Users/liuyu/centos_ex/projects/VibeCoding/gemini-module`.
+- Original `cmake --build build -j$(nproc)` commands also failed due stale cache and missing `nproc` portability on macOS.
+- Clean fallback `bloom_test` target failed with `dyld: Library not loaded: @rpath/libgtest_main.1.11.0.dylib`.
+- Direct GTest reruns with `DYLD_LIBRARY_PATH=/opt/anaconda3/lib` produced no stderr and exit 0.
+- TCL stderr was empty; its nonzero exit came from expected-gap test failures reported on stdout.

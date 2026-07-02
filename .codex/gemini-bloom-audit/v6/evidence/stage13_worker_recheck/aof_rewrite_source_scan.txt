@@ -1,0 +1,6 @@
+341:void AofRewriteBloom(RedisModuleIO* aof, RedisModuleString* key, void* value) {
+347:    RedisModule_LogIOError(aof, "warning",
+348:      "GeminiBloom: AOF rewrite allocation failure, key omitted");
+349:    return;
+353:  RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, (long long)1, hdrBuf, hdrBytes);
+358:    RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, cursor++,

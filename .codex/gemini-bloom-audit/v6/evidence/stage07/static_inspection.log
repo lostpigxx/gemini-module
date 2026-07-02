@@ -1,0 +1,256 @@
+modules/gemini-bloom/src/bloom_filter.h:18:  RawBits   = 2,
+modules/gemini-bloom/src/bloom_filter.h:21:  Loading   = 16,
+modules/gemini-bloom/src/bloom_filter.h:58:constexpr unsigned kMaxExpansion = 32768;
+modules/gemini-bloom/src/bloom_filter.h:134:  WireLayerMeta ToWireMeta(size_t itemCount) const;
+modules/gemini-bloom/src/bloom_filter.h:146:  uint64_t GetDataSize() const { return dataSize_; }
+modules/gemini-bloom/src/bloom_filter.h:164:  uint64_t dataSize_ = 0;
+modules/gemini-bloom/src/bloom_rdb.cc:10:constexpr uint32_t kMaxLayers = 1024;
+modules/gemini-bloom/src/bloom_rdb.cc:50:  uint64_t dataSize;
+modules/gemini-bloom/src/bloom_rdb.cc:53:static bool ValidateLayerFields(const LayerFields& f) {
+modules/gemini-bloom/src/bloom_rdb.cc:61:  if (f.dataSize != expectedSize) return false;
+modules/gemini-bloom/src/bloom_rdb.cc:82:  w.PutBlob(bitArray_, dataSize_);
+modules/gemini-bloom/src/bloom_rdb.cc:99:  layer.dataSize_ = (layer.totalBits_ > 0) ? ((layer.totalBits_ + 7) / 8) : 0;
+modules/gemini-bloom/src/bloom_rdb.cc:104:                     layer.dataSize_};
+modules/gemini-bloom/src/bloom_rdb.cc:105:  if (!ValidateLayerFields(fields)) return std::nullopt;
+modules/gemini-bloom/src/bloom_rdb.cc:108:  if (!r.Ok() || !buf || bufLen != static_cast<size_t>(layer.dataSize_)) {
+modules/gemini-bloom/src/bloom_rdb.cc:112:  layer.bitArray_ = static_cast<uint8_t*>(RMAlloc(layer.dataSize_));
+modules/gemini-bloom/src/bloom_rdb.cc:122:WireLayerMeta BloomLayer::ToWireMeta(size_t itemCount) const {
+modules/gemini-bloom/src/bloom_rdb.cc:124:    .dataSize = dataSize_,
+modules/gemini-bloom/src/bloom_rdb.cc:126:    .itemCount = itemCount,
+modules/gemini-bloom/src/bloom_rdb.cc:144:  layer.dataSize_ = meta.dataSize;
+modules/gemini-bloom/src/bloom_rdb.cc:145:  layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
+modules/gemini-bloom/src/bloom_rdb.cc:151:// Filter-level field order: totalItems, numLayers, flags, expansion, layers[]
+modules/gemini-bloom/src/bloom_rdb.cc:156:  w.PutUint(totalItems_);
+modules/gemini-bloom/src/bloom_rdb.cc:159:  w.PutUint(expansionFactor_);
+modules/gemini-bloom/src/bloom_rdb.cc:163:    w.PutUint(layer.itemCount);
+modules/gemini-bloom/src/bloom_rdb.cc:169:  shell.totalItems = r.GetUint();
+modules/gemini-bloom/src/bloom_rdb.cc:185:  shell.expansionFactor = static_cast<unsigned>(rawExpansion);
+modules/gemini-bloom/src/bloom_rdb.cc:187:  if (shell.numLayers == 0 || shell.numLayers > kMaxLayers) return nullptr;
+modules/gemini-bloom/src/bloom_rdb.cc:188:  if (!HasFlag(shell.flags, BloomFlags::FixedSize) && shell.expansionFactor == 0)
+modules/gemini-bloom/src/bloom_rdb.cc:195:  uint64_t totalDataSize = 0;
+modules/gemini-bloom/src/bloom_rdb.cc:204:        totalDataSize > kMaxTotalDataSize - maybeLayer->GetDataSize()) {
+modules/gemini-bloom/src/bloom_rdb.cc:209:    totalDataSize += maybeLayer->GetDataSize();
+modules/gemini-bloom/src/bloom_rdb.cc:230:  if (itemSum != shell.totalItems) {
+modules/gemini-bloom/src/bloom_rdb.cc:245:size_t SerializeHeader(const ScalingBloomFilter& filter, void* output) {
+modules/gemini-bloom/src/bloom_rdb.cc:247:  hdr->totalItems = filter.TotalItems();
+modules/gemini-bloom/src/bloom_rdb.cc:250:  hdr->expansionFactor = filter.ExpansionFactor();
+modules/gemini-bloom/src/bloom_rdb.cc:257:    meta[i] = layer.bloom.ToWireMeta(layer.itemCount);
+modules/gemini-bloom/src/bloom_rdb.cc:264:  return ValidateLayerFields({meta.capacity, meta.fpRate, meta.hashCount,
+modules/gemini-bloom/src/bloom_rdb.cc:266:                              meta.dataSize});
+modules/gemini-bloom/src/bloom_rdb.cc:269:ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
+modules/gemini-bloom/src/bloom_rdb.cc:273:  if (hdr->numLayers == 0 || hdr->numLayers > kMaxLayers) return nullptr;
+modules/gemini-bloom/src/bloom_rdb.cc:281:  if (!HasFlag(filterFlags, BloomFlags::FixedSize) && hdr->expansionFactor == 0) {
+modules/gemini-bloom/src/bloom_rdb.cc:289:  uint64_t totalDataSize = 0;
+modules/gemini-bloom/src/bloom_rdb.cc:292:    if (meta[i].itemCount > meta[i].capacity) return nullptr;
+modules/gemini-bloom/src/bloom_rdb.cc:293:    if (itemSum > UINT64_MAX - meta[i].itemCount) return nullptr;
+modules/gemini-bloom/src/bloom_rdb.cc:294:    itemSum += meta[i].itemCount;
+modules/gemini-bloom/src/bloom_rdb.cc:295:    if (meta[i].dataSize > kMaxTotalDataSize ||
+modules/gemini-bloom/src/bloom_rdb.cc:296:        totalDataSize > kMaxTotalDataSize - meta[i].dataSize) return nullptr;
+modules/gemini-bloom/src/bloom_rdb.cc:297:    totalDataSize += meta[i].dataSize;
+modules/gemini-bloom/src/bloom_rdb.cc:299:  if (itemSum != hdr->totalItems) return nullptr;
+modules/gemini-bloom/src/bloom_rdb.cc:302:    .totalItems = hdr->totalItems,
+modules/gemini-bloom/src/bloom_rdb.cc:305:    .expansionFactor = hdr->expansionFactor,
+modules/gemini-bloom/src/bloom_rdb.cc:316:    filter->SetLayer(i, {std::move(*layer), meta[i].itemCount});
+modules/gemini-bloom/src/bloom_rdb.cc:330:void* RdbLoadBloom(RedisModuleIO* rdb, int encver) {
+modules/gemini-bloom/src/bloom_rdb.cc:336:void RdbSaveBloom(RedisModuleIO* rdb, void* value) {
+modules/gemini-bloom/src/bloom_rdb.cc:351:  SerializeHeader(*filter, hdrBuf);
+modules/gemini-bloom/src/bloom_config.cc:46:          val < 1 || static_cast<unsigned long long>(val) > kMaxExpansion) {
+modules/gemini-bloom/src/sb_chain.cc:12:    : flags_(flg), expansionFactor_(expansion) {
+modules/gemini-bloom/src/sb_chain.cc:34:      totalItems_(other.totalItems_),
+modules/gemini-bloom/src/sb_chain.cc:38:      expansionFactor_(other.expansionFactor_) {
+modules/gemini-bloom/src/sb_chain.cc:50:    totalItems_ = other.totalItems_;
+modules/gemini-bloom/src/sb_chain.cc:54:    expansionFactor_ = other.expansionFactor_;
+modules/gemini-bloom/src/sb_chain.cc:71:      new (&expanded[i]) FilterLayer{std::move(layers_[i].bloom), layers_[i].itemCount};
+modules/gemini-bloom/src/sb_chain.cc:108:  if (top.itemCount < top.bloom.GetCapacity()) return true;
+modules/gemini-bloom/src/sb_chain.cc:112:  if (prevCap > UINT64_MAX / expansionFactor_) return false;
+modules/gemini-bloom/src/sb_chain.cc:113:  uint64_t nextCap = prevCap * expansionFactor_;
+modules/gemini-bloom/src/sb_chain.cc:129:  target.itemCount++;
+modules/gemini-bloom/src/sb_chain.cc:130:  totalItems_++;
+modules/gemini-bloom/src/sb_chain.cc:173:  filter->totalItems_ = shell.totalItems;
+modules/gemini-bloom/src/sb_chain.cc:177:  filter->expansionFactor_ = shell.expansionFactor;
+modules/gemini-bloom/src/sb_chain.cc:183:    new (&layers_[index]) FilterLayer{std::move(layer.bloom), layer.itemCount};
+modules/gemini-bloom/src/sb_chain.cc:188:// WriteTo, ReadFrom, SerializeHeader, DeserializeHeader live in bloom_rdb.cc
+modules/gemini-bloom/src/bloom_rdb.h:58:void* RdbLoadBloom(RedisModuleIO* rdb, int encver);
+modules/gemini-bloom/src/bloom_rdb.h:59:void RdbSaveBloom(RedisModuleIO* rdb, void* value);
+modules/gemini-bloom/src/sb_chain.h:19:  size_t itemCount = 0;
+modules/gemini-bloom/src/sb_chain.h:49:  size_t TotalItems() const { return totalItems_; }
+modules/gemini-bloom/src/sb_chain.h:51:  unsigned ExpansionFactor() const { return expansionFactor_; }
+modules/gemini-bloom/src/sb_chain.h:52:  bool IsLoading() const { return HasFlag(flags_, BloomFlags::Loading); }
+modules/gemini-bloom/src/sb_chain.h:53:  void SetLoading() { flags_ = flags_ | BloomFlags::Loading; }
+modules/gemini-bloom/src/sb_chain.h:54:  void ClearLoading() { flags_ = FromUnderlying(ToUnderlying(flags_) & ~ToUnderlying(BloomFlags::Loading)); }
+modules/gemini-bloom/src/sb_chain.h:63:    size_t totalItems;
+modules/gemini-bloom/src/sb_chain.h:66:    unsigned expansionFactor;
+modules/gemini-bloom/src/sb_chain.h:81:  size_t totalItems_ = 0;
+modules/gemini-bloom/src/sb_chain.h:85:  unsigned expansionFactor_ = 2;
+modules/gemini-bloom/src/sb_chain.h:94:  uint64_t dataSize;
+modules/gemini-bloom/src/sb_chain.h:96:  uint64_t itemCount;
+modules/gemini-bloom/src/sb_chain.h:105:  uint64_t totalItems;
+modules/gemini-bloom/src/sb_chain.h:108:  uint32_t expansionFactor;
+modules/gemini-bloom/src/sb_chain.h:113:size_t SerializeHeader(const ScalingBloomFilter& filter, void* output);
+modules/gemini-bloom/src/sb_chain.h:114:ScalingBloomFilter* DeserializeHeader(const void* data, size_t length);
+modules/gemini-bloom/src/bloom_commands.cc:73:  if (filter->IsLoading()) {
+modules/gemini-bloom/src/bloom_commands.cc:91:static bool RejectIfLoading(RedisModuleCtx* ctx, const ScalingBloomFilter* filter) {
+modules/gemini-bloom/src/bloom_commands.cc:92:  if (filter->IsLoading()) {
+modules/gemini-bloom/src/bloom_commands.cc:135:          val < 0 || static_cast<unsigned long long>(val) > kMaxExpansion) {
+modules/gemini-bloom/src/bloom_commands.cc:302:          val < 0 || static_cast<unsigned long long>(val) > kMaxExpansion) {
+modules/gemini-bloom/src/bloom_commands.cc:379:    if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
+modules/gemini-bloom/src/bloom_commands.cc:421:  if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
+modules/gemini-bloom/src/bloom_commands.cc:448:  if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
+modules/gemini-bloom/src/bloom_commands.cc:475:  if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
+modules/gemini-bloom/src/bloom_commands.cc:529:  if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
+modules/gemini-bloom/src/bloom_commands.cc:556:  if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
+modules/gemini-bloom/src/bloom_commands.cc:570:    SerializeHeader(*filter, hdrBuf);
+modules/gemini-bloom/src/bloom_commands.cc:614:    auto* filter = DeserializeHeader(data, dataLen);
+modules/gemini-bloom/src/bloom_commands.cc:618:    filter->SetLoading();
+modules/gemini-bloom/src/bloom_commands.cc:630:    if (!filter->IsLoading()) {
+modules/gemini-bloom/src/bloom_commands.cc:644:      filter->ClearLoading();
+modules/gemini-bloom/src/redis_bloom_module.cc:23:  tm.rdb_load = RdbLoadBloom;
+modules/gemini-bloom/src/redis_bloom_module.cc:24:  tm.rdb_save = RdbSaveBloom;
+modules/gemini-bloom/src/bloom_filter.cc:54:      dataSize_(other.dataSize_),
+modules/gemini-bloom/src/bloom_filter.cc:69:    dataSize_ = other.dataSize_;
+modules/gemini-bloom/src/bloom_filter.cc:103:  if (HasFlag(flags, BloomFlags::RawBits)) {
+modules/gemini-bloom/src/bloom_filter.cc:127:  layer.dataSize_ = bytes;
+modules/gemini-bloom/src/bloom_filter.cc:128:  if (layer.dataSize_ == 0) return std::nullopt;
+modules/gemini-bloom/src/bloom_filter.cc:131:  if (layer.dataSize_ > kMaxLayerDataSize) return std::nullopt;
+modules/gemini-bloom/src/bloom_filter.cc:133:  layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
+modules/gemini-bloom/tests/sb_chain_test.cc:233:    .totalItems = orig->TotalItems(),
+modules/gemini-bloom/tests/sb_chain_test.cc:236:    .expansionFactor = orig->ExpansionFactor(),
+modules/gemini-bloom/tests/sb_chain_test.cc:248:    rebuilt->SetLayer(i, {std::move(*layer), src.itemCount});
+modules/gemini-bloom/tests/sb_chain_test.cc:334:TEST(ScalingBloomTest, LoadingStateLifecycle) {
+modules/gemini-bloom/tests/sb_chain_test.cc:338:  EXPECT_FALSE(mem->IsLoading());
+modules/gemini-bloom/tests/sb_chain_test.cc:339:  mem->SetLoading();
+modules/gemini-bloom/tests/sb_chain_test.cc:340:  EXPECT_TRUE(mem->IsLoading());
+modules/gemini-bloom/tests/sb_chain_test.cc:341:  EXPECT_TRUE(HasFlag(mem->Flags(), BloomFlags::Loading));
+modules/gemini-bloom/tests/sb_chain_test.cc:342:  mem->ClearLoading();
+modules/gemini-bloom/tests/sb_chain_test.cc:343:  EXPECT_FALSE(mem->IsLoading());
+modules/gemini-bloom/tests/sb_chain_test.cc:344:  EXPECT_FALSE(HasFlag(mem->Flags(), BloomFlags::Loading));
+modules/gemini-bloom/tests/sb_chain_test.cc:350:TEST(ScalingBloomTest, LoadingFlagNotInSupportedFlags) {
+modules/gemini-bloom/tests/sb_chain_test.cc:351:  EXPECT_FALSE(ValidateFlags(ToUnderlying(BloomFlags::Loading)));
+modules/gemini-bloom/tests/sb_chain_test.cc:354:// SerializeDeserializeHeader test is covered by TCL integration tests
+modules/gemini-bloom/tests/bloom_filter_test.cc:189:TEST(BloomFlagsTest, ValidateFlagsRejectsRawBits) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:190:  EXPECT_FALSE(ValidateFlags(ToUnderlying(BloomFlags::RawBits)));
+modules/gemini-bloom/tests/bloom_filter_test.cc:192:    ToUnderlying(BloomFlags::Use64Bit | BloomFlags::RawBits)));
+modules/gemini-bloom/tests/bloom_filter_test.cc:195:TEST(BloomLayerTest, RawBitsCreatesZeroHashCount) {
+modules/gemini-bloom/tests/bloom_filter_test.cc:196:  auto layer = BloomLayer::Create(1024, 0.01, BloomFlags::RawBits);
+modules/gemini-bloom/tests/bloom_filter_test.cc:205:  EXPECT_EQ(kMaxExpansion, 32768u);
+modules/gemini-bloom/tests/tcl/bloom_test.tcl:893:  # WireFilterHeader: totalItems(8) + numLayers(4) + flags(4) + expansionFactor(4) = 20 bytes
+modules/gemini-bloom/tests/bloom_rdb_test.cc:52:  RdbSaveBloom(stream.IO(), src);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:54:  return static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), load_encver));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:247:  RdbSaveBloom(stream.IO(), filter);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:251:  // encver-2 stream: totalItems, numLayers, flags (no expansion), layers.
+modules/gemini-bloom/tests/bloom_rdb_test.cc:269:    Mock_SaveUnsigned(io, layer.itemCount);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:273:  auto* loaded = static_cast<ScalingBloomFilter*>(RdbLoadBloom(v2stream.IO(), 2));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:296:  RdbSaveBloom(stream.IO(), filter);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:299:  auto* loaded = static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), 99));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:311:    RdbSaveBloom(stream.IO(), filter);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:313:    auto* loaded = static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), encver));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:323:// Wire format: SerializeHeader / DeserializeHeader round-trip
+modules/gemini-bloom/tests/bloom_rdb_test.cc:333:  size_t written = SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:336:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:357:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:359:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:372:TEST(BloomWire, FullScanDumpLoadChunkRoundTrip) {
+modules/gemini-bloom/tests/bloom_rdb_test.cc:384:  SerializeHeader(*filter, hdr_buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:394:  auto* rebuilt = DeserializeHeader(hdr_buf.data(), hdr_buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:428:  EXPECT_EQ(meta.itemCount, 42u);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:433:  EXPECT_EQ(meta.dataSize, layer->GetDataSize());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:451:  auto* result = DeserializeHeader("x", 1);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:457:  hdr.totalItems = 10;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:460:  hdr.expansionFactor = 2;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:462:  auto* result = DeserializeHeader(&hdr, sizeof(hdr));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:471:  auto* result = DeserializeHeader(&hdr, sizeof(hdr));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:579:  SerializeHeader(*filter, hdr_buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:587:  auto* rebuilt = DeserializeHeader(hdr_buf.data(), hdr_buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:620:  // and the first layer's BloomLayer data, but omit the itemCount
+modules/gemini-bloom/tests/bloom_rdb_test.cc:642:  // DELIBERATELY omit: Mock_SaveUnsigned(io, layer0.itemCount);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:646:    RdbLoadBloom(truncStream.IO(), kCurrentEncVer));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:648:  // With the fix: the loader detects the truncated itemCount via
+modules/gemini-bloom/tests/bloom_rdb_test.cc:650:  // Before the fix: itemCount silently reads 0 (default from
+modules/gemini-bloom/tests/bloom_rdb_test.cc:653:    << "Expected nullptr for stream truncated before itemCount";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:688:  Mock_SaveUnsigned(io, layer0.itemCount);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:692:    RdbLoadBloom(badStream.IO(), kCurrentEncVer));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:712:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:718:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:727:// Bug regression: RDB numLayers must be capped at kMaxLayers.
+modules/gemini-bloom/tests/bloom_rdb_test.cc:734:  Mock_SaveUnsigned(io, 0);      // totalItems
+modules/gemini-bloom/tests/bloom_rdb_test.cc:735:  Mock_SaveUnsigned(io, 9999);   // numLayers (way over kMaxLayers=1024)
+modules/gemini-bloom/tests/bloom_rdb_test.cc:741:    RdbLoadBloom(bigStream.IO(), kCurrentEncVer));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:744:    << "Should reject RDB with numLayers > kMaxLayers";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:753:  uint64_t totalItems = 1;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:762:  size_t itemCount = 1;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:768:  uint64_t dataSize = (f.totalBits > 0) ? ((f.totalBits + 7) / 8) : 0;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:772:  Mock_SaveUnsigned(io, f.totalItems);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:785:    ? static_cast<size_t>(dataSize)
+modules/gemini-bloom/tests/bloom_rdb_test.cc:789:  Mock_SaveUnsigned(io, f.itemCount);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:792:  return static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), kCurrentEncVer));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:803:  f.totalItems = 1;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:804:  f.itemCount = 1;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:918:  Mock_SaveUnsigned(io, 1);  // totalItems
+modules/gemini-bloom/tests/bloom_rdb_test.cc:932:  Mock_SaveUnsigned(io, 1);     // itemCount
+modules/gemini-bloom/tests/bloom_rdb_test.cc:936:    RdbLoadBloom(stream.IO(), kCurrentEncVer));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:964:    RdbLoadBloom(stream.IO(), kCurrentEncVer));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:981:    RdbLoadBloom(stream.IO(), kCurrentEncVer));
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1003:  f.totalItems = 999;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1004:  f.itemCount = 1;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1007:    << "Should reject when totalItems != sum(layer.itemCount)";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1014:  f.itemCount = 200;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1015:  f.totalItems = 200;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1018:    << "Should reject when itemCount > capacity";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1024:  f.totalItems = 50;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1025:  f.itemCount = 50;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1029:    << "Should accept consistent totalItems == sum(itemCount)";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1040:    << "Should reject RDB layer blob shorter than metadata dataSize";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1050:    << "Should reject RDB layer blob longer than metadata dataSize";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1087:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1090:  hdr->totalItems = 9999;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1092:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1094:    << "Should reject wire header with totalItems mismatch";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1105:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1109:  meta[0].itemCount = meta[0].capacity + 1;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1111:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1113:    << "Should reject wire header with itemCount > capacity";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1131:TEST(BloomRdb, RejectsRawBitsFlag) {
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1133:  f.flags = ToUnderlying(BloomFlags::Use64Bit | BloomFlags::RawBits);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1136:    << "Should reject RawBits flag in RDB";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1144:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1149:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1165:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1171:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1183:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1189:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1201:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1207:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1219:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1223:  ASSERT_GT(meta[0].dataSize, 1u);
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1224:  meta[0].dataSize -= 1;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1226:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1228:    << "Should reject wire header when dataSize != ceil(totalBits/8)";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1238:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1244:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1255:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1258:  hdr->expansionFactor = 0;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1260:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1272:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1275:  hdr->expansionFactor = 0;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1277:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1292:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1297:  meta[0].dataSize = 0;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1299:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1311:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1315:  // Set dataSize to 5GB — exceeds the 4GB cap
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1317:  meta[0].dataSize = hugeSize;
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1321:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1323:    << "Should reject wire header with excessive totalDataSize";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1348:// Loading flag must not leak to RDB or wire format
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1351:TEST(BloomRdb, LoadingFlagStrippedOnRdbRoundTrip) {
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1354:  filter->SetLoading();
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1355:  EXPECT_TRUE(filter->IsLoading());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1359:  EXPECT_FALSE(loaded->IsLoading())
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1360:    << "Loading flag must be stripped during RDB serialization";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1367:TEST(BloomWire, LoadingFlagStrippedOnHeaderRoundTrip) {
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1370:  filter->SetLoading();
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1374:  SerializeHeader(*filter, buf.data());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1377:  EXPECT_EQ(hdr->flags & ToUnderlying(BloomFlags::Loading), 0u)
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1378:    << "Loading flag must not appear in wire header";
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1380:  auto* loaded = DeserializeHeader(buf.data(), buf.size());
+modules/gemini-bloom/tests/bloom_rdb_test.cc:1382:  EXPECT_FALSE(loaded->IsLoading());

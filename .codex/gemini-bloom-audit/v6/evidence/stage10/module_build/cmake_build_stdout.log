@@ -1,0 +1,9 @@
+[ 12%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/redis_bloom_module.cc.o
+[ 25%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_filter.cc.o
+[ 37%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/sb_chain.cc.o
+[ 50%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_commands.cc.o
+[ 62%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_rdb.cc.o
+[ 75%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/bloom_config.cc.o
+[ 87%] Building CXX object modules/gemini-bloom/CMakeFiles/redis_bloom.dir/src/murmur2.cc.o
+[100%] Linking CXX shared library ../../redis_bloom.so
+[100%] Built target redis_bloom

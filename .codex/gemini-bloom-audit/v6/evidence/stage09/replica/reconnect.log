@@ -1,0 +1,28 @@
+{
+  "status": "PASS",
+  "checks": {
+    "short_reconnect_members": true,
+    "forced_reconnect_members": true,
+    "readonly_after_reconnect": true,
+    "write_rejected_after_reconnect": true
+  },
+  "kill_reply": 1,
+  "short_members": [
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "forced_members": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "partial_resync_seen": true,
+  "full_resync_seen": true
+}
