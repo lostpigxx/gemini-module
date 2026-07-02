@@ -16,8 +16,13 @@
 | RESP3 不支持 | `DESIGN_INTENDED`，Stage 02/04 只记录 expected gap | `.codex/gemini-bloom-audit/v6/evidence/stage02/tcl/tcl_summary.md`, `.codex/gemini-bloom-audit/v6/evidence/stage04/runtime_matrix/normalized_results.md` |
 | BF.DEBUG 不支持 | `DESIGN_INTENDED` | `.codex/gemini-bloom-audit/v6/evidence/stage05/diff_normalized.md` |
 | capacity/error/expansion 命令边界 | `PASS` for command path | `.codex/gemini-bloom-audit/v6/evidence/stage04/runtime_matrix/normalized_results.md`, `.codex/gemini-bloom-audit/v6/evidence/stage10/resource_limits.log` |
+| RedisBloom 配置差异 | `DESIGN_INTENDED / PARTIAL`，gemini module load 支持 `EXPANSION` 且拒绝配置 `EXPANSION 0`；RedisBloom `CF_MAX_EXPANSIONS` 属于 Cuckoo Filter 配置，不是 gemini-bloom 承诺 | `modules/gemini-bloom/DESIGN.md:672`, `.codex/gemini-bloom-audit/v6/agents/stage00/design_claims_matrix.md` |
 | RDB/wire 非信任输入资源边界 | `FAIL` for two gaps | `.codex/gemini-bloom-audit/v6/agents/stage03/potential_findings.md`, `.codex/gemini-bloom-audit/v6/evidence/stage07/findings.md` |
 | Loading runtime-only 状态保护 | `PARTIAL`，正常路径有保护，但异常序列/持久化有 P1 缺陷 | `.codex/gemini-bloom-audit/v6/evidence/stage07/findings.md`, `.codex/gemini-bloom-audit/v6/evidence/stage09/replica/loading_partial_fullsync.log` |
+| 不支持删除 | `DESIGN_LIMIT`，Bloom Filter 固有限制；gemini 未实现 Cuckoo Filter 删除替代 | `modules/gemini-bloom/DESIGN.md:694`, `modules/gemini-bloom/src/bloom_commands.cc:660` |
+| `EXPANSION 1` 查询性能风险 | `DESIGN_LIMIT`，多 layer 查询需逐层检查；建议默认或生产配置使用 `EXPANSION 2+` | `modules/gemini-bloom/DESIGN.md:696`, `modules/gemini-bloom/src/sb_chain.cc:98` |
+| AOF rewrite header 分配失败 skip key | `DESIGN_LIMIT`，极端 OOM 下 `AofRewriteBloom()` 记录 warning 后跳过该 key；默认 RDB preamble 路径不触发 | `modules/gemini-bloom/DESIGN.md:698`, `modules/gemini-bloom/src/bloom_rdb.cc:341` |
+| RedisBloom / Redis 8 同实例互斥 | `DESIGN_OPERATIONAL_LIMIT`，命令名和 data type name 注册冲突，不能与 RedisBloom module 或 Redis 8 内置 Bloom 同实例加载 | `modules/gemini-bloom/DESIGN.md:700`, `modules/gemini-bloom/src/bloom_commands.cc:660` |
 
 ## 设计内差异
 
@@ -30,6 +35,8 @@
 - RedisBloom SCANDUMP/LOADCHUNK byte-offset 协议不互通：`.codex/gemini-bloom-audit/v6/evidence/stage06/scandump_loadchunk/summary.md`
 - command-AOF no-preamble cross replay 不互通：`.codex/gemini-bloom-audit/v6/evidence/stage06/aof_preamble_no/summary.md`
 - live command-stream `EXPANSION 1` 的 `BF.CARD` drift：`.codex/gemini-bloom-audit/v6/evidence/stage05/compatibility_matrix.md`
+- 配置差异：gemini 支持 module load `EXPANSION` 并拒绝配置 `EXPANSION 0`；RedisBloom v2.4.20 不支持该 Bloom 配置但支持 Cuckoo Filter 的 `CF_MAX_EXPANSIONS`。本轮按 DESIGN 和 gemini 配置测试记录为设计内差异，未新增 RedisBloom module-load 对照复跑。
+- 不支持删除、`EXPANSION 1` 查询成本上升、AOF rewrite OOM skip-key 语义、RedisBloom/Redis 8 同实例互斥均是 DESIGN 已知限制或操作限制，不作为本轮产品缺陷；它们需要在发布/运维文档中显式呈现。
 
 ## DESIGN 自身/文档一致性问题
 

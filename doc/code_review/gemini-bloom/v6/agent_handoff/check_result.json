@@ -1,0 +1,570 @@
+{
+  "agent_role": "check",
+  "status": "needs_worker",
+  "basis": {
+    "design_doc": "modules/gemini-bloom/DESIGN.md read fully, 700 lines",
+    "reports_reviewed": [
+      "doc/code_review/gemini-bloom/v6/00_审计总览.md",
+      "doc/code_review/gemini-bloom/v6/01_DESIGN约束与结论对齐.md",
+      "doc/code_review/gemini-bloom/v6/02_源码实现审计.md",
+      "doc/code_review/gemini-bloom/v6/03_运行时测试结果.md",
+      "doc/code_review/gemini-bloom/v6/04_RedisBloom兼容性矩阵.md",
+      "doc/code_review/gemini-bloom/v6/05_持久化迁移复制审计.md",
+      "doc/code_review/gemini-bloom/v6/06_安全与资源边界.md",
+      "doc/code_review/gemini-bloom/v6/07_问题清单与复现.md",
+      "doc/code_review/gemini-bloom/v6/08_测试覆盖与未覆盖.md",
+      "doc/code_review/gemini-bloom/v6/09_最终结论与修复优先级.md",
+      "doc/code_review/gemini-bloom/v6/10_报告自审结果.md",
+      "doc/code_review/gemini-bloom/v6/evidence_index.md"
+    ],
+    "history_reviewed": [
+      ".codex/gemini-bloom-audit/v6/agents/stage00/design_contract.md",
+      ".codex/gemini-bloom-audit/v6/agents/stage00/design_claims_matrix.md",
+      ".codex/gemini-bloom-audit/v6/agents/stage07/stage_result.md",
+      ".codex/gemini-bloom-audit/v6/agents/stage12/report_audit_matrix.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage02/gtest/gtest_summary.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage02/tcl/tcl_summary.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage04/runtime_matrix/coverage_summary.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage04/runtime_matrix/failures.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage05/compatibility_matrix.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage05/oracle_diff/gemini_default_build_stderr.log",
+      ".codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage07/findings.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage08/blocked_sanitizer.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage10/blocked_or_not_verified.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage11/blocked_not_verified_matrix.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage11/design_alignment_summary.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage11/finding_carry_forward_matrix.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage12/blocked_not_verified_coverage_check.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage12/design_intended_check.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage12/domain_coverage_check.md",
+      ".codex/gemini-bloom-audit/v6/evidence/stage12/path_existence_check.md"
+    ]
+  },
+  "overall_assessment": "v6 报告的核心判断基本正确：没有把 RedisBloom SCANDUMP/LOADCHUNK 不互通、RESP3 不支持、BF.DEBUG 不支持、command-AOF no-preamble 跨实现不兼容等 DESIGN_INTENDED 边界错误列为产品缺陷；同时也没有把 gemini 私有 LOADCHUNK 异常序列和 half-loaded 持久化/复制 P1 风险误降级为 RedisBloom 互通差异。RDB-family 兼容、P1/P2/P3 finding、blocked/not-verified 项的主要证据链可支撑结论。需要 worker 处理的是全面性问题：最终报告和 Stage 12 自审没有完整显式覆盖 DESIGN.md 已知限制中的若干项，尤其 deletion unsupported、EXPANSION 1 查询性能风险、AOF rewrite OOM skip-key 语义、配置差异，以及 RedisBloom/Redis 8 同实例互斥只以“不声明兼容”形式间接出现。",
+  "findings": [
+    {
+      "id": "CHECK-001",
+      "severity": "medium",
+      "type": "missing_design_incompatibility",
+      "design_refs": [
+        {
+          "file": "modules/gemini-bloom/DESIGN.md",
+          "line_start": 684,
+          "line_end": 700,
+          "summary": "Known limits include SCANDUMP/LOADCHUNK non-interoperability, command-AOF cross incompatibility, live replication BF.CARD drift, BF.INFO Size accounting, no delete support, EXPANSION 1 query-cost risk, AOF rewrite OOM skip-key behavior, and RedisBloom/Redis 8 same-instance conflict."
+        },
+        {
+          "file": ".codex/gemini-bloom-audit/v6/agents/stage00/design_contract.md",
+          "line_start": 130,
+          "line_end": 139,
+          "summary": "Stage 00 explicitly says these known limits must be reflected in the final report."
+        }
+      ],
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/01_DESIGN约束与结论对齐.md",
+          "line_start": 22,
+          "line_end": 32,
+          "summary": "Design-intended differences list covers RESP3, BF.DEBUG, INFO field/Size, SCANDUMP/LOADCHUNK, command-AOF no-preamble, and live BF.CARD drift, but omits deletion unsupported, EXPANSION 1 query-cost risk, AOF rewrite OOM skip-key behavior, and configuration differences."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/04_RedisBloom兼容性矩阵.md",
+          "line_start": 36,
+          "line_end": 38,
+          "summary": "Report avoids overclaiming Redis 8 or same-instance co-existence, but does not explicitly state the DESIGN mutual-exclusion operational limit."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/10_报告自审结果.md",
+          "line_start": 22,
+          "line_end": 28,
+          "summary": "Self-audit confirmation focuses on the major boundaries and does not mention the omitted known limits."
+        }
+      ],
+      "description": "The reports are mostly correct but not fully comprehensive against DESIGN.md. Several explicit known limits or intended differences from DESIGN.md are either omitted or only indirectly covered.",
+      "evidence": "Keyword scan of final reports found explicit coverage for SCANDUMP/LOADCHUNK, command-AOF no-preamble, RESP3, BF.DEBUG, INFO shape/Size, live BF.CARD drift, and non-drop-in scope. It did not find final-report coverage for no delete support, EXPANSION 1 query performance risk, AOF rewrite allocation-failure skip-key semantics, CF_MAX_EXPANSIONS/config difference, or a direct same-instance mutual-exclusion statement.",
+      "required_worker_action": "Add or supplement a DESIGN-known-limits section in the final reporting layer, or explicitly document why each omitted DESIGN.md known limit is out of scope for this audit report. Do not reclassify these as product defects unless implementation/docs contradict DESIGN.",
+      "suggested_tests_or_reaudit": [
+        "Re-run a report-only audit that checks every Stage 00 design_contract row 130-139 appears in the final report or has an explicit out-of-scope rationale.",
+        "No product test is required for deletion unsupported or EXPANSION 1 query-cost disclosure; these are documentation/completeness items."
+      ]
+    },
+    {
+      "id": "CHECK-002",
+      "severity": "low",
+      "type": "coverage_gap",
+      "design_refs": [
+        {
+          "file": "modules/gemini-bloom/DESIGN.md",
+          "line_start": 672,
+          "line_end": 680,
+          "summary": "DESIGN lists RedisBloom configuration differences, including gemini EXPANSION load arg support, RedisBloom CF_MAX_EXPANSIONS, and EXPANSION 0 behavior."
+        },
+        {
+          "file": ".codex/gemini-bloom-audit/v6/agents/stage00/design_claims_matrix.md",
+          "line_start": 57,
+          "line_end": 58,
+          "summary": "DC-047 routes configuration differences to Stage 04/05/11 as DESIGN_INTENDED."
+        }
+      ],
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/03_运行时测试结果.md",
+          "line_start": 29,
+          "line_end": 29,
+          "summary": "Runtime matrix summary mentions parser/resource boundary and command behavior but not RedisBloom configuration-difference classification."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/04_RedisBloom兼容性矩阵.md",
+          "line_start": 32,
+          "line_end": 34,
+          "summary": "Command semantic differences are summarized, but loadmodule configuration differences are not listed."
+        }
+      ],
+      "description": "RedisBloom configuration differences are explicit in DESIGN and Stage 00, but the final reports do not clearly classify them as DESIGN_INTENDED or state whether they were tested/not tested.",
+      "evidence": "Final reports contain command parser and runtime-config boundary coverage in broad terms, but no explicit reference to EXPANSION load arg support versus RedisBloom, CF_MAX_EXPANSIONS unsupported, or config EXPANSION 0 rejection.",
+      "required_worker_action": "Add a short config-difference row to DESIGN alignment or compatibility sections, with evidence if tested or a NOT_VERIFIED note if not tested against RedisBloom module-load behavior.",
+      "suggested_tests_or_reaudit": [
+        "Optional: run a small module-load comparison for RedisBloom v2.4.20 versus gemini load args, or mark this as report-only DESIGN_INTENDED if no new runtime test is desired."
+      ]
+    },
+    {
+      "id": "CHECK-003",
+      "severity": "info",
+      "type": "unsupported_assertion",
+      "design_refs": [
+        {
+          "file": "modules/gemini-bloom/DESIGN.md",
+          "line_start": 41,
+          "line_end": 45,
+          "summary": "DESIGN says RedisBloom v2.4.20 compatibility was verified over 9 corpora and that checked-in fixtures are expected under tests/compat/redisbloom-2.4.20."
+        }
+      ],
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/07_问题清单与复现.md",
+          "line_start": 94,
+          "line_end": 102,
+          "summary": "Final report correctly carries GBV6-00-001: the checked-in fixture path is absent."
+        },
+        {
+          "file": ".codex/gemini-bloom-audit/v6/evidence/stage12/path_existence_check.md",
+          "line_start": 122,
+          "line_end": 124,
+          "summary": "Stage 12 path check marks the absent fixture target as PASS with an intentional-missing note."
+        }
+      ],
+      "description": "The final report handles the missing checked-in fixture as an open P3 finding, which is correct. However, Stage 12's path-existence PASS wording can be misleading because one referenced path is intentionally absent.",
+      "evidence": "The evidence path check line for modules/gemini-bloom/tests/compat/redisbloom-2.4.20 records PASS even though the note says it is an intentional missing target for GBV6-00-001.",
+      "required_worker_action": "No product re-audit required. If Stage 12 artifacts are regenerated, classify intentional missing target separately from existing evidence paths, e.g. EXPECTED_MISSING_FINDING_TARGET rather than PASS exists.",
+      "suggested_tests_or_reaudit": []
+    }
+  ],
+  "explicit_design_incompatibilities": [
+    {
+      "design_ref": {
+        "file": "modules/gemini-bloom/DESIGN.md",
+        "line_start": 9,
+        "line_end": 19
+      },
+      "topic": "Not a RedisBloom drop-in replacement or full protocol compatibility layer",
+      "covered_by_report": true,
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/00_审计总览.md",
+          "line_start": 7,
+          "line_end": 11,
+          "summary": "Overall conclusion scopes compatibility and separates P1 LOADCHUNK bugs from RedisBloom interop."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/09_最终结论与修复优先级.md",
+          "line_start": 3,
+          "line_end": 6,
+          "summary": "Final risk posture says not to read result as unconditional release or drop-in replacement."
+        }
+      ],
+      "notes": "Correctly treated as design boundary."
+    },
+    {
+      "design_ref": {
+        "file": "modules/gemini-bloom/DESIGN.md",
+        "line_start": 30,
+        "line_end": 31
+      },
+      "topic": "RedisBloom BF.SCANDUMP/BF.LOADCHUNK and command-AOF rewrite cross incompatibility",
+      "covered_by_report": true,
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/01_DESIGN约束与结论对齐.md",
+          "line_start": 14,
+          "line_end": 15,
+          "summary": "Classified as DESIGN_INTENDED."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/04_RedisBloom兼容性矩阵.md",
+          "line_start": 22,
+          "line_end": 30,
+          "summary": "Cross SCANDUMP/LOADCHUNK and command-AOF no-preamble failures are DESIGN_INTENDED."
+        }
+      ],
+      "notes": "No misclassification found."
+    },
+    {
+      "design_ref": {
+        "file": "modules/gemini-bloom/DESIGN.md",
+        "line_start": 32,
+        "line_end": 33
+      },
+      "topic": "RESP3 and BF.DEBUG unsupported",
+      "covered_by_report": true,
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/01_DESIGN约束与结论对齐.md",
+          "line_start": 16,
+          "line_end": 17,
+          "summary": "RESP3 and BF.DEBUG are DESIGN_INTENDED."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/10_报告自审结果.md",
+          "line_start": 24,
+          "line_end": 25,
+          "summary": "Self-audit confirms these are not overclaimed."
+        }
+      ],
+      "notes": "Correctly not treated as implementation bugs."
+    },
+    {
+      "design_ref": {
+        "file": "modules/gemini-bloom/DESIGN.md",
+        "line_start": 179,
+        "line_end": 189
+      },
+      "topic": "Parser stricter than RedisBloom for unknown/repeated/conflicting options",
+      "covered_by_report": true,
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/02_源码实现审计.md",
+          "line_start": 9,
+          "line_end": 12,
+          "summary": "Parser prevalidation is listed as a static PASS."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/03_运行时测试结果.md",
+          "line_start": 29,
+          "line_end": 29,
+          "summary": "Runtime matrix covered parser/resource boundaries."
+        }
+      ],
+      "notes": "Covered as parser/runtime behavior, but not exhaustively repeated in the DESIGN_INTENDED list."
+    },
+    {
+      "design_ref": {
+        "file": "modules/gemini-bloom/DESIGN.md",
+        "line_start": 293,
+        "line_end": 307
+      },
+      "topic": "Command semantic differences: BF.INFO field shape, Size, EXPANSION 0, errors, module name/flags, LOADCHUNK overwrite/loading behavior",
+      "covered_by_report": true,
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/01_DESIGN约束与结论对齐.md",
+          "line_start": 26,
+          "line_end": 32,
+          "summary": "Several command differences are listed as design-internal differences."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/04_RedisBloom兼容性矩阵.md",
+          "line_start": 32,
+          "line_end": 34,
+          "summary": "Raw RESP diff confirms selected command semantic differences."
+        }
+      ],
+      "notes": "Partial granularity: BF.INSERT EXPANSION 0 and command flag differences are not prominent, but the report does not misclassify them."
+    },
+    {
+      "design_ref": {
+        "file": "modules/gemini-bloom/DESIGN.md",
+        "line_start": 226,
+        "line_end": 241
+      },
+      "topic": "Deserialization is stricter than RedisBloom for malformed/edge RDB cases",
+      "covered_by_report": true,
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/02_源码实现审计.md",
+          "line_start": 14,
+          "line_end": 26,
+          "summary": "RDB/wire validation gaps are reported only where implementation fails the DESIGN resource boundary."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/06_安全与资源边界.md",
+          "line_start": 3,
+          "line_end": 12,
+          "summary": "Fuzz confirms actual gaps and no crash."
+        }
+      ],
+      "notes": "Reports correctly distinguish stricter validation from bugs; bugs are tied to missed DESIGN limits."
+    },
+    {
+      "design_ref": {
+        "file": "modules/gemini-bloom/DESIGN.md",
+        "line_start": 672,
+        "line_end": 680
+      },
+      "topic": "RedisBloom configuration differences",
+      "covered_by_report": false,
+      "report_refs": [],
+      "notes": "Not clearly represented in final reports; see CHECK-002."
+    },
+    {
+      "design_ref": {
+        "file": "modules/gemini-bloom/DESIGN.md",
+        "line_start": 690,
+        "line_end": 692
+      },
+      "topic": "Live command-stream BF.CARD drift and BF.INFO Size accounting",
+      "covered_by_report": true,
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/04_RedisBloom兼容性矩阵.md",
+          "line_start": 28,
+          "line_end": 34,
+          "summary": "BF.CARD drift and BF.INFO Size differences are DESIGN_INTENDED."
+        }
+      ],
+      "notes": "Correctly handled."
+    },
+    {
+      "design_ref": {
+        "file": "modules/gemini-bloom/DESIGN.md",
+        "line_start": 694,
+        "line_end": 696
+      },
+      "topic": "No delete support and EXPANSION 1 query-performance risk",
+      "covered_by_report": false,
+      "report_refs": [],
+      "notes": "Omitted from final reports; see CHECK-001."
+    },
+    {
+      "design_ref": {
+        "file": "modules/gemini-bloom/DESIGN.md",
+        "line_start": 698,
+        "line_end": 698
+      },
+      "topic": "AOF rewrite header allocation failure can skip key",
+      "covered_by_report": false,
+      "report_refs": [],
+      "notes": "Omitted as a DESIGN known risk, distinct from the reported half-loaded AOF persistence bug."
+    },
+    {
+      "design_ref": {
+        "file": "modules/gemini-bloom/DESIGN.md",
+        "line_start": 700,
+        "line_end": 700
+      },
+      "topic": "RedisBloom / Redis 8 same-instance mutual exclusion",
+      "covered_by_report": true,
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/04_RedisBloom兼容性矩阵.md",
+          "line_start": 36,
+          "line_end": 38,
+          "summary": "Report says it does not declare same-instance RedisBloom/gemini co-existence compatibility."
+        }
+      ],
+      "notes": "Only indirectly covered; should be made explicit if the report is updated."
+    }
+  ],
+  "unrun_or_blocked_scenarios": [
+    {
+      "scenario": "ACL DRYRUN",
+      "reason": "Redis 6.2.x environment does not expose ACL DRYRUN; Stage 09 added actual ACL smoke but DRYRUN remains unavailable.",
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/03_运行时测试结果.md",
+          "line_start": 31,
+          "line_end": 35,
+          "summary": "ACL DRYRUN blocked; actual ACL smoke is limited."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/08_测试覆盖与未覆盖.md",
+          "line_start": 32,
+          "line_end": 35,
+          "summary": "Blocked matrix carries ACL DRYRUN."
+        }
+      ],
+      "must_run_now": false,
+      "fallback_if_unavailable": "Keep BLOCKED wording or rerun on a Redis version that supports ACL DRYRUN."
+    },
+    {
+      "scenario": "ASAN/UBSAN/TCL sanitizer/GTest sanitizer/Valgrind runtime coverage",
+      "reason": "Missing sanitizer runtime, unresolved ASAN symbols on Redis module load, missing sanitizer GTest targets, and valgrind unavailable.",
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/06_安全与资源边界.md",
+          "line_start": 14,
+          "line_end": 18,
+          "summary": "Sanitizer/UB/Valgrind blocked."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/08_测试覆盖与未覆盖.md",
+          "line_start": 34,
+          "line_end": 36,
+          "summary": "Blocked and NOT_VERIFIED sanitizer/UBSAN rows."
+        }
+      ],
+      "must_run_now": true,
+      "fallback_if_unavailable": "Keep confidence degraded and do not claim dynamic memory safety PASS."
+    },
+    {
+      "scenario": "Cluster ASK redirection",
+      "reason": "MOVED/redis-cli -c/READONLY paths were tested, but ASK was not deterministically produced.",
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/05_持久化迁移复制审计.md",
+          "line_start": 18,
+          "line_end": 22,
+          "summary": "ASK remains NOT_VERIFIED."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/08_测试覆盖与未覆盖.md",
+          "line_start": 37,
+          "line_end": 37,
+          "summary": "ASK NOT_VERIFIED row."
+        }
+      ],
+      "must_run_now": false,
+      "fallback_if_unavailable": "Keep NOT_VERIFIED wording; use deterministic resharding/migration harness if full cluster coverage is required."
+    },
+    {
+      "scenario": "Default/low-error-rate capacity=2^30 runtime allocation",
+      "reason": "Skipped due to GB-scale memory risk; Stage 10 used high-error-rate NONSCALING safety probe only.",
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/06_安全与资源边界.md",
+          "line_start": 31,
+          "line_end": 34,
+          "summary": "Default/low-error capacity=2^30 remains NOT_VERIFIED."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/08_测试覆盖与未覆盖.md",
+          "line_start": 38,
+          "line_end": 38,
+          "summary": "NOT_VERIFIED row."
+        }
+      ],
+      "must_run_now": false,
+      "fallback_if_unavailable": "Keep NOT_VERIFIED; use a controlled high-memory host or metadata-only proof if this boundary must be verified."
+    },
+    {
+      "scenario": "Stage 10 command-AOF no-preamble rerun",
+      "reason": "Stage 10 did not rerun it and relies on Stage 06 scoped evidence.",
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/06_安全与资源边界.md",
+          "line_start": 31,
+          "line_end": 34,
+          "summary": "Stage 10 did not rerun command-AOF no-preamble."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/08_测试覆盖与未覆盖.md",
+          "line_start": 39,
+          "line_end": 39,
+          "summary": "NOT_VERIFIED row."
+        }
+      ],
+      "must_run_now": false,
+      "fallback_if_unavailable": "Rely on Stage 06 evidence and keep Stage 10 scope explicit."
+    },
+    {
+      "scenario": "Stage 07 kill_during_bgsave fault injection",
+      "reason": "Not run because it is nondeterministic; deterministic half-loaded persistence fault injection was used instead.",
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/08_测试覆盖与未覆盖.md",
+          "line_start": 40,
+          "line_end": 40,
+          "summary": "kill_during_bgsave NOT_VERIFIED."
+        }
+      ],
+      "must_run_now": false,
+      "fallback_if_unavailable": "Keep NOT_VERIFIED or add deterministic process-kill harness if required."
+    },
+    {
+      "scenario": "Stage 07 direct bloom_rdb_test rerun",
+      "reason": "Blocked because the reused build was module-only and had no GTest target; Stage 02 direct GTest remains the source of evidence.",
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/08_测试覆盖与未覆盖.md",
+          "line_start": 41,
+          "line_end": 41,
+          "summary": "Direct bloom_rdb_test rerun BLOCKED."
+        }
+      ],
+      "must_run_now": false,
+      "fallback_if_unavailable": "Use Stage 02 GTest evidence or rebuild with GTest targets for re-audit."
+    },
+    {
+      "scenario": "COMMAND GETKEYSANDFLAGS",
+      "reason": "Redis 6.2.17 does not provide the command; COMMAND INFO and GETKEYS were tested.",
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/03_运行时测试结果.md",
+          "line_start": 35,
+          "line_end": 35,
+          "summary": "GETKEYSANDFLAGS unavailable."
+        }
+      ],
+      "must_run_now": false,
+      "fallback_if_unavailable": "Keep unavailable note or rerun on a Redis version with GETKEYSANDFLAGS."
+    },
+    {
+      "scenario": "RedisBloom / Redis 8 same-instance registration conflict",
+      "reason": "DESIGN states mutual exclusion, but final evidence does not show an operational module-load conflict test.",
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/04_RedisBloom兼容性矩阵.md",
+          "line_start": 36,
+          "line_end": 38,
+          "summary": "Report does not declare co-existence compatibility but does not show a direct conflict test."
+        }
+      ],
+      "must_run_now": false,
+      "fallback_if_unavailable": "Document the DESIGN operational limit explicitly; run a module-load conflict smoke only if operational deployment docs need direct evidence."
+    },
+    {
+      "scenario": "RedisBloom versions other than v2.4.20 and Redis 8 built-in Bloom compatibility",
+      "reason": "DESIGN and reports explicitly scope compatibility to Redis 6.2.17 + RedisBloom v2.4.20.",
+      "report_refs": [
+        {
+          "file": "doc/code_review/gemini-bloom/v6/04_RedisBloom兼容性矩阵.md",
+          "line_start": 3,
+          "line_end": 5,
+          "summary": "Oracle scope is Redis 6.2.17 + RedisBloom v2.4.20."
+        },
+        {
+          "file": "doc/code_review/gemini-bloom/v6/08_测试覆盖与未覆盖.md",
+          "line_start": 43,
+          "line_end": 45,
+          "summary": "No broad version compatibility claim."
+        }
+      ],
+      "must_run_now": false,
+      "fallback_if_unavailable": "Keep no-extrapolation wording unless the audit scope expands."
+    }
+  ],
+  "recommended_worker_scope": [
+    "Do not change source code or existing report text in this check handoff.",
+    "For a follow-up report worker, add missing DESIGN-known-limit coverage for deletion unsupported, EXPANSION 1 query cost, AOF rewrite allocation-failure skip-key behavior, config differences, and explicit same-instance RedisBloom/Redis 8 mutual exclusion.",
+    "If reports are regenerated, broaden Stage 12 DESIGN_INTENDED checks beyond the current five headline boundaries to include Stage 00 design_contract known limits rows 130-139 and design_claims_matrix DC-047/DC-049/DC-050/DC-051.",
+    "Keep all existing P1/P2/P3 findings and BLOCKED/NOT_VERIFIED items; this check found no evidence that existing findings should be removed or downgraded.",
+    "Avoid treating DESIGN-intended incompatibilities as product bugs; only documentation/test-harness overclaims around those boundaries should be findings."
+  ],
+  "acceptance_criteria_for_review": [
+    "Every DESIGN.md explicit incompatibility/known limit either appears in the final report or has a machine-readable out-of-scope rationale.",
+    "SCANDUMP/LOADCHUNK RedisBloom non-interoperability, command-AOF no-preamble cross incompatibility, RESP3 unsupported, and BF.DEBUG unsupported remain DESIGN_INTENDED, while GBV6-07-001 and GBV6-07-002 remain real gemini self-protocol data-integrity bugs.",
+    "All BLOCKED/NOT_VERIFIED scenarios remain visible and prevent overbroad PASS claims.",
+    "Evidence references for each claim point to existing files or clearly mark intentional missing targets as findings rather than normal existing evidence.",
+    "No source files or existing v6 report bodies are modified by this check agent."
+  ]
+}

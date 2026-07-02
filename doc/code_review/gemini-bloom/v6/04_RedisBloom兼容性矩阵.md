@@ -28,11 +28,19 @@ Stage 05/06 覆盖 corpus：`binary_items`、`empty_scaling`、`expansion1`、`e
 | command-AOF no-preamble cross replay | DESIGN_INTENDED | 依赖私有 LOADCHUNK；生产应保持 RDB preamble | `.codex/gemini-bloom-audit/v6/evidence/stage06/aof_preamble_no/summary.md` |
 | live command-stream `EXPANSION 1` `BF.CARD` drift | DESIGN_INTENDED_LIMITATION | membership 无 inserted-item false negative，但 CARD 不同 | `.codex/gemini-bloom-audit/v6/evidence/stage05/compatibility_matrix.md` |
 | BF.DEBUG | DESIGN_INTENDED | gemini 不支持 | `.codex/gemini-bloom-audit/v6/evidence/stage05/diff_normalized.md` |
+| module load 配置差异 | DESIGN_INTENDED / PARTIAL | gemini 支持 `EXPANSION` load arg 并拒绝配置 `EXPANSION 0`；RedisBloom v2.4.20 不支持 gemini 的 Bloom `EXPANSION` 配置，`CF_MAX_EXPANSIONS` 是 RedisBloom Cuckoo Filter 参数 | `modules/gemini-bloom/DESIGN.md:672`, `.codex/gemini-bloom-audit/v6/agents/stage00/design_claims_matrix.md` |
 
 ## 命令语义差异
 
-Stage 05 raw RESP 对比确认下列差异均符合 DESIGN：module name/version 不同、`BF.INFO FIELD` 返回标量、`BF.INFO Size` 数值不同、`BF.INSERT NOCREATE CAPACITY` 错误消息不同、BF.DEBUG 不支持。证据见 `.codex/gemini-bloom-audit/v6/evidence/stage05/diff_normalized.md` 与 `.codex/gemini-bloom-audit/v6/evidence/stage05/diff_raw_resp.log`。
+Stage 05 raw RESP 对比确认下列差异均符合 DESIGN：module name/version 不同、`BF.INFO FIELD` 返回标量、`BF.INFO Size` 数值不同、`BF.INSERT NOCREATE CAPACITY` 错误消息不同、`BF.INSERT EXPANSION 0` 映射为 NONSCALING 而 RedisBloom 拒绝、BF.DEBUG 不支持。证据见 `.codex/gemini-bloom-audit/v6/evidence/stage05/diff_normalized.md` 与 `.codex/gemini-bloom-audit/v6/evidence/stage05/diff_raw_resp.log`。
+
+## 操作限制
+
+- Bloom Filter 删除不是 gemini-bloom 的支持能力；如需删除语义，DESIGN 指向 Cuckoo Filter，但 gemini 当前未实现。
+- `EXPANSION 1` 会产生更多子 filter，查询路径需逐层检查，存在查询成本上升风险；生产建议使用 `EXPANSION 2` 或更大。
+- command-AOF rewrite 在 header buffer 分配失败时会记录 warning 并跳过该 key。该风险只属于极端 OOM 和非 RDB preamble rewrite 路径；默认 `aof-use-rdb-preamble yes` 不执行这段 command rewrite。
+- gemini-bloom 与 RedisBloom module / Redis 8 内置 Bloom 是同实例互斥部署关系。它复用 `BF.*` 命令名和 `MBbloom--` type name，同一实例中后加载者会遇到 command 或 data type 注册冲突。
 
 ## 不得外推
 
-本报告不声明其他 RedisBloom 版本、Redis 8 内置 Bloom、RESP3、RedisBloom SCANDUMP/LOADCHUNK、或同实例 RedisBloom/gemini 共存兼容。Stage 00 的 DESIGN contract 已明确这些边界，证据见 `.codex/gemini-bloom-audit/v6/agents/stage00/design_contract.md`。
+本报告不声明其他 RedisBloom 版本、Redis 8 内置 Bloom、RESP3、RedisBloom SCANDUMP/LOADCHUNK、或同实例 RedisBloom/gemini 共存兼容。对 Redis 8 内置 Bloom 和同实例共存，本报告按 DESIGN 明确为互斥部署限制，而不是未测兼容能力。Stage 00 的 DESIGN contract 已明确这些边界，证据见 `.codex/gemini-bloom-audit/v6/agents/stage00/design_contract.md`。

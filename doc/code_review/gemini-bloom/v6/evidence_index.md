@@ -17,6 +17,12 @@
 - `.codex/gemini-bloom-audit/v6/evidence/stage12/finding_detail_completeness_check.md`
 - `.codex/gemini-bloom-audit/v6/evidence/stage12/report_audit_summary.json`
 
+## Stage 13 worker recheck evidence
+
+- `.codex/gemini-bloom-audit/v6/agents/stage13_worker_recheck/stage_result.md`
+- `.codex/gemini-bloom-audit/v6/evidence/stage13_worker_recheck/evidence_index.md`
+- `.codex/gemini-bloom-audit/v6/evidence/stage13_worker_recheck/report_known_limits_coverage_after.md`
+
 ## Stage evidence roots
 
 | Stage | Evidence index |
@@ -33,6 +39,7 @@
 | 09 | `.codex/gemini-bloom-audit/v6/evidence/stage09/evidence_index.md` |
 | 10 | `.codex/gemini-bloom-audit/v6/evidence/stage10/evidence_index.md` |
 | 12 | `.codex/gemini-bloom-audit/v6/evidence/stage12/evidence_index.md` |
+| 13 worker recheck | `.codex/gemini-bloom-audit/v6/evidence/stage13_worker_recheck/evidence_index.md` |
 
 ## High-signal evidence
 
@@ -46,3 +53,4 @@
 - Sanitizer blocker：`.codex/gemini-bloom-audit/v6/evidence/stage08/blocked_sanitizer.md`
 - Replica/cluster ops：`.codex/gemini-bloom-audit/v6/evidence/stage09/evidence_index.md`
 - Resource/perf samples：`.codex/gemini-bloom-audit/v6/evidence/stage10/perf_matrix.md`
+- Worker recheck：`.codex/gemini-bloom-audit/v6/agents/stage13_worker_recheck/stage_result.md`
