@@ -1,0 +1,2 @@
+Initial unprivileged `python3 .codex/gemini-bloom-audit/v6/evidence/stage11/generate_stage11_report.py` failed with PermissionError while writing `.codex/gemini-bloom-audit/v6/evidence/stage11/input_inventory.md`.
+The same generator was rerun with approved escalation and completed successfully.
