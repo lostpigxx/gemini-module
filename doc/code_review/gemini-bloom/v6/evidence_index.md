@@ -10,6 +10,13 @@
 - `.codex/gemini-bloom-audit/v6/evidence/stage11/report_claim_evidence_map.md`
 - `.codex/gemini-bloom-audit/v6/evidence/stage11/final_report_validation.md`
 
+## Stage 12 report-audit evidence
+
+- `.codex/gemini-bloom-audit/v6/agents/stage12/report_audit_matrix.md`
+- `.codex/gemini-bloom-audit/v6/evidence/stage12/evidence_index.md`
+- `.codex/gemini-bloom-audit/v6/evidence/stage12/finding_detail_completeness_check.md`
+- `.codex/gemini-bloom-audit/v6/evidence/stage12/report_audit_summary.json`
+
 ## Stage evidence roots
 
 | Stage | Evidence index |
@@ -25,6 +32,7 @@
 | 08 | `.codex/gemini-bloom-audit/v6/evidence/stage08/evidence_index.md` |
 | 09 | `.codex/gemini-bloom-audit/v6/evidence/stage09/evidence_index.md` |
 | 10 | `.codex/gemini-bloom-audit/v6/evidence/stage10/evidence_index.md` |
+| 12 | `.codex/gemini-bloom-audit/v6/evidence/stage12/evidence_index.md` |
 
 ## High-signal evidence
 

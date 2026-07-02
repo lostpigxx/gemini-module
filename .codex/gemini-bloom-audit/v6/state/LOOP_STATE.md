@@ -23,8 +23,10 @@
 | 08 | BLOCKED | `.codex/gemini-bloom-audit/v6/agents/stage08/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage08/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage08/reviewer_output.md` | `da10485e12321fa9abe0bcb698b375e70b46bdeb` | PUSHED | yes |
 | 09 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage09/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage09/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage09/reviewer_output.md` | `891715d93038d3f92eb47ace972cc28dc7d36bd4` | PUSHED | yes |
 | 10 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage10/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage10/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage10/reviewer_output.md` | `4138087fda1f74074fd0529891a8fec99d2286e0` | PUSHED | yes |
-| 11 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage11/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage11/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage11/reviewer_output.md` | SELF: `audit(gemini-bloom): v6 stage 11 final report synthesis` | PENDING_PUSH | yes |
-| 12 | PENDING |  |  |  |  |  |  |
+| 11 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage11/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage11/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage11/reviewer_output.md` | `c45173f80fe9a47452a70252c72ab4373823a823` | PUSHED | yes |
+| 12 | PASS | `.codex/gemini-bloom-audit/v6/agents/stage12/planner_output.md` | `.codex/gemini-bloom-audit/v6/agents/stage12/stage_result.md` | `.codex/gemini-bloom-audit/v6/agents/stage12/reviewer_output.md` | `SELF: audit(gemini-bloom): v6 stage 12 final report audit` | PUSHED_BY_FINAL_GATE | yes |
+
+Stage 12 commit note: Stage 12 is the final stage commit. Its row uses a self-reference because a Git commit cannot contain its own SHA in tracked file content. The actual SHA is recorded by the post-commit gate and final response after `git push -u origin audit/gemini-bloom-v6` succeeds.
 
 ## Global findings index
 
@@ -55,5 +57,5 @@ Findings should be indexed here as they are discovered.
 
 ## Final confidence
 
-- Current confidence: `UNKNOWN`
-- Reason: Stage 07 fuzz/fault-safety audit found P1 LOADCHUNK data-integrity failures, and Stage 09 confirmed fullsync operational impact for half-loaded LOADCHUNK keys. Stage 08 sanitizer runtime coverage is BLOCKED by unavailable ASAN/UBSAN runtime, absent sanitizer GTest binaries, and unavailable valgrind. Stage 09 completed-filter replica/cluster/metadata/ACL smoke passed, but ACL DRYRUN remains blocked and cluster ASK is NOT_VERIFIED. Stage 10 resource/performance audit samples passed within bounded scope, but default/low-error `capacity=2^30` allocation and command-AOF no-preamble rerun remain NOT_VERIFIED. Stage 11 generated a Chinese final report draft with confidence `Medium-Low`; Stage 12 report audit remains VERIFY_LATER.
+- Current confidence: `Medium-Low`
+- Reason: Stage 12 final report audit passed, but confidence remains downgraded because Stage 07 found two open P1 LOADCHUNK data-integrity failures and Stage 09 confirmed fullsync operational impact for half-loaded LOADCHUNK keys. Stage 08 sanitizer runtime coverage is BLOCKED by unavailable ASAN/UBSAN runtime, absent sanitizer GTest binaries, and unavailable valgrind. Stage 09 completed-filter replica/cluster/metadata/ACL smoke passed, but ACL DRYRUN remains blocked and cluster ASK is NOT_VERIFIED. Stage 10 resource/performance audit samples passed within bounded scope, but default/low-error `capacity=2^30` allocation and command-AOF no-preamble rerun remain NOT_VERIFIED. The final Chinese report and Stage 12 self-audit record this confidence explicitly.

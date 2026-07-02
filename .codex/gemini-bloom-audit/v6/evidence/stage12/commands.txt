@@ -1,0 +1,11 @@
+mkdir -p .codex/gemini-bloom-audit/v6/agents/stage12 .codex/gemini-bloom-audit/v6/evidence/stage12
+sed -n '1,260p' modules/gemini-bloom/DESIGN.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/LOOP_CONTROL_BATCH.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/*.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/state/LOOP_STATE.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/stages/STAGE_12_FINAL_REPORT_AUDIT.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/agents/stage11/stage_result.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/agents/stage11/reviewer_output.md
+rg --files doc/code_review/gemini-bloom/v6 .codex/gemini-bloom-audit/v6/agents .codex/gemini-bloom-audit/v6/evidence | sort
+rg -n 'forbidden/broad report wording' doc/code_review/gemini-bloom/v6
+python3 .codex/gemini-bloom-audit/v6/evidence/stage12/report_audit.py
