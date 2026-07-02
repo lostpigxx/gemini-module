@@ -86,9 +86,10 @@ private:
 };
 
 // Wire-format structures for BF.SCANDUMP / BF.LOADCHUNK.
-// Field order, types, and packing match the RedisBloom binary protocol
-// for cross-implementation compatibility. Verified against RedisBloom
-// v2.4.20 (Redis 6.2.17).
+// gemini uses a private layer-index cursor protocol; these are NOT
+// interoperable with RedisBloom's byte-offset SCANDUMP/LOADCHUNK.
+// RDB-level field order matches RedisBloom v2.4.20 for DUMP/RESTORE
+// and RDB file compatibility only.
 #pragma pack(push, 1)
 struct WireLayerMeta {
   uint64_t dataSize;

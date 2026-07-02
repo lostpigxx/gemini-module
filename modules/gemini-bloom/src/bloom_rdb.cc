@@ -3,6 +3,7 @@
 #include "rm_alloc.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <numbers>
@@ -59,6 +60,7 @@ static bool ValidateLayerFields(const LayerFields& f) {
   if (f.log2Bits > 0 && f.totalBits != (1ULL << f.log2Bits)) return false;
   uint64_t expectedSize = (f.totalBits + 7) / 8;
   if (f.dataSize != expectedSize) return false;
+  if (f.dataSize > kMaxLayerDataSize) return false;
   if (!std::isfinite(f.fpRate) || f.fpRate <= 0.0 || f.fpRate >= 1.0) return false;
   if (!std::isfinite(f.bitsPerEntry) || f.bitsPerEntry <= 0.0 ||
       f.bitsPerEntry > kMaxBitsPerEntry) return false;
@@ -181,7 +183,7 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
     ? r.GetUint()
     : 2;
 
-  if (!r.Ok() || rawExpansion > UINT_MAX) return nullptr;
+  if (!r.Ok() || rawExpansion > kMaxExpansion) return nullptr;
   shell.expansionFactor = static_cast<unsigned>(rawExpansion);
 
   if (shell.numLayers == 0 || shell.numLayers > kMaxLayers) return nullptr;
@@ -278,6 +280,7 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
 
   auto filterFlags = FromUnderlying(hdr->flags);
 
+  if (hdr->expansionFactor > kMaxExpansion) return nullptr;
   if (!HasFlag(filterFlags, BloomFlags::FixedSize) && hdr->expansionFactor == 0) {
     return nullptr;
   }

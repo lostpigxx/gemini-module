@@ -127,7 +127,6 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
   layer.dataSize_ = bytes;
   if (layer.dataSize_ == 0) return std::nullopt;
 
-  constexpr uint64_t kMaxLayerDataSize = 2ULL * 1024 * 1024 * 1024;
   if (layer.dataSize_ > kMaxLayerDataSize) return std::nullopt;
 
   layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));

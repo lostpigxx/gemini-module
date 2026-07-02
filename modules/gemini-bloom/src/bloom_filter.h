@@ -57,6 +57,7 @@ constexpr bool ValidateFlags(unsigned raw) {
 constexpr uint64_t kMaxCapacity = 1ULL << 30;
 constexpr unsigned kMaxExpansion = 32768;
 constexpr double kMaxBitsPerEntry = 1000.0;
+constexpr uint64_t kMaxLayerDataSize = 2ULL * 1024 * 1024 * 1024;
 constexpr uint64_t kMaxTotalDataSize = 4ULL * 1024 * 1024 * 1024;
 
 // --- Hash pair produced by double-hashing ---
