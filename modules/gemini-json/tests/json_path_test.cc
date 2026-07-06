@@ -276,3 +276,234 @@ TEST(PathEvalTest, EmptyResult) {
   EXPECT_EQ(matches.size(), 0u);
   JsonValue::Destroy(doc);
 }
+
+// --- Union Parsing ---
+
+TEST(PathParseTest, UnionIndices) {
+  auto r = ParsePath("$.arr[0,2]");
+  EXPECT_EQ(r.error, nullptr);
+  auto& seg = r.path.segments.back();
+  EXPECT_EQ(seg.type, PathSegType::kUnion);
+  ASSERT_EQ(seg.union_params.members.size(), 2u);
+  EXPECT_TRUE(seg.union_params.members[0].is_index);
+  EXPECT_EQ(seg.union_params.members[0].index, 0);
+  EXPECT_TRUE(seg.union_params.members[1].is_index);
+  EXPECT_EQ(seg.union_params.members[1].index, 2);
+}
+
+TEST(PathParseTest, UnionKeys) {
+  auto r = ParsePath("$['name','age']");
+  EXPECT_EQ(r.error, nullptr);
+  auto& seg = r.path.segments.back();
+  EXPECT_EQ(seg.type, PathSegType::kUnion);
+  ASSERT_EQ(seg.union_params.members.size(), 2u);
+  EXPECT_FALSE(seg.union_params.members[0].is_index);
+  EXPECT_EQ(seg.union_params.members[0].key, "name");
+  EXPECT_EQ(seg.union_params.members[1].key, "age");
+}
+
+TEST(PathParseTest, UnionMultipleIndices) {
+  auto r = ParsePath("$[0,1,3]");
+  EXPECT_EQ(r.error, nullptr);
+  EXPECT_EQ(r.path.segments.back().union_params.members.size(), 3u);
+}
+
+TEST(PathParseTest, UnionNegativeIndex) {
+  auto r = ParsePath("$[0,-1]");
+  EXPECT_EQ(r.error, nullptr);
+  auto& members = r.path.segments.back().union_params.members;
+  ASSERT_EQ(members.size(), 2u);
+  EXPECT_EQ(members[1].index, -1);
+}
+
+// --- Union Evaluation ---
+
+TEST(PathEvalTest, UnionIndices) {
+  auto* doc = Parse("[10,20,30,40,50]");
+  auto pr = ParsePath("$[0,2,4]");
+  auto matches = EvaluatePath(pr.path, doc);
+  ASSERT_EQ(matches.size(), 3u);
+  EXPECT_EQ(matches[0].value->GetInteger(), 10);
+  EXPECT_EQ(matches[1].value->GetInteger(), 30);
+  EXPECT_EQ(matches[2].value->GetInteger(), 50);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, UnionKeys) {
+  auto* doc = Parse(R"({"a":1,"b":2,"c":3})");
+  auto pr = ParsePath("$['a','c']");
+  auto matches = EvaluatePath(pr.path, doc);
+  ASSERT_EQ(matches.size(), 2u);
+  EXPECT_EQ(matches[0].value->GetInteger(), 1);
+  EXPECT_EQ(matches[1].value->GetInteger(), 3);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, UnionNegativeIndex) {
+  auto* doc = Parse("[10,20,30]");
+  auto pr = ParsePath("$[0,-1]");
+  auto matches = EvaluatePath(pr.path, doc);
+  ASSERT_EQ(matches.size(), 2u);
+  EXPECT_EQ(matches[0].value->GetInteger(), 10);
+  EXPECT_EQ(matches[1].value->GetInteger(), 30);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, UnionMissingKey) {
+  auto* doc = Parse(R"({"a":1,"b":2})");
+  auto pr = ParsePath("$['a','z']");
+  auto matches = EvaluatePath(pr.path, doc);
+  ASSERT_EQ(matches.size(), 1u);
+  EXPECT_EQ(matches[0].value->GetInteger(), 1);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, UnionInChain) {
+  auto* doc = MakeTestDoc();
+  auto pr = ParsePath("$.store.book[0,2].title");
+  auto matches = EvaluatePath(pr.path, doc);
+  ASSERT_EQ(matches.size(), 2u);
+  EXPECT_EQ(matches[0].value->GetString(), "Sayings");
+  EXPECT_EQ(matches[1].value->GetString(), "Moby");
+  JsonValue::Destroy(doc);
+}
+
+// --- Filter Parsing ---
+
+TEST(PathParseTest, FilterExistence) {
+  auto r = ParsePath("$.store.book[?(@.isbn)]");
+  EXPECT_EQ(r.error, nullptr);
+  auto& seg = r.path.segments.back();
+  EXPECT_EQ(seg.type, PathSegType::kFilter);
+  ASSERT_EQ(seg.filter.field_path.size(), 1u);
+  EXPECT_EQ(seg.filter.field_path[0], "isbn");
+  EXPECT_EQ(seg.filter.op, FilterOp::kExists);
+}
+
+TEST(PathParseTest, FilterEquality) {
+  auto r = ParsePath("$.store.book[?(@.category == 'fiction')]");
+  EXPECT_EQ(r.error, nullptr);
+  auto& seg = r.path.segments.back();
+  EXPECT_EQ(seg.type, PathSegType::kFilter);
+  EXPECT_EQ(seg.filter.op, FilterOp::kEq);
+  EXPECT_EQ(seg.filter.value.kind, FilterValue::Kind::kString);
+  EXPECT_EQ(seg.filter.value.str_val, "fiction");
+}
+
+TEST(PathParseTest, FilterGreaterThan) {
+  auto r = ParsePath("$.store.book[?(@.price > 10)]");
+  EXPECT_EQ(r.error, nullptr);
+  EXPECT_EQ(r.path.segments.back().filter.op, FilterOp::kGt);
+  EXPECT_EQ(r.path.segments.back().filter.value.kind, FilterValue::Kind::kInteger);
+  EXPECT_EQ(r.path.segments.back().filter.value.int_val, 10);
+}
+
+TEST(PathParseTest, FilterLessThanEqual) {
+  auto r = ParsePath("$.store.book[?(@.price <= 8.99)]");
+  EXPECT_EQ(r.error, nullptr);
+  EXPECT_EQ(r.path.segments.back().filter.op, FilterOp::kLe);
+  EXPECT_EQ(r.path.segments.back().filter.value.kind, FilterValue::Kind::kNumber);
+  EXPECT_DOUBLE_EQ(r.path.segments.back().filter.value.num_val, 8.99);
+}
+
+TEST(PathParseTest, FilterNotEqual) {
+  auto r = ParsePath("$.arr[?(@.x != 5)]");
+  EXPECT_EQ(r.error, nullptr);
+  EXPECT_EQ(r.path.segments.back().filter.op, FilterOp::kNe);
+}
+
+TEST(PathParseTest, FilterNestedField) {
+  auto r = ParsePath("$[?(@.a.b == 1)]");
+  EXPECT_EQ(r.error, nullptr);
+  auto& fp = r.path.segments.back().filter.field_path;
+  ASSERT_EQ(fp.size(), 2u);
+  EXPECT_EQ(fp[0], "a");
+  EXPECT_EQ(fp[1], "b");
+}
+
+TEST(PathParseTest, FilterBoolValue) {
+  auto r = ParsePath("$[?(@.active == true)]");
+  EXPECT_EQ(r.error, nullptr);
+  EXPECT_EQ(r.path.segments.back().filter.value.kind, FilterValue::Kind::kBool);
+  EXPECT_TRUE(r.path.segments.back().filter.value.bool_val);
+}
+
+TEST(PathParseTest, FilterNullValue) {
+  auto r = ParsePath("$[?(@.x == null)]");
+  EXPECT_EQ(r.error, nullptr);
+  EXPECT_EQ(r.path.segments.back().filter.value.kind, FilterValue::Kind::kNull);
+}
+
+// --- Filter Evaluation ---
+
+TEST(PathEvalTest, FilterExistence) {
+  auto* doc = MakeTestDoc();
+  auto pr = ParsePath("$.store.book[?(@.category)]");
+  auto matches = EvaluatePath(pr.path, doc);
+  EXPECT_EQ(matches.size(), 4u);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, FilterEqString) {
+  auto* doc = MakeTestDoc();
+  auto pr = ParsePath("$.store.book[?(@.category == 'fiction')]");
+  auto matches = EvaluatePath(pr.path, doc);
+  EXPECT_EQ(matches.size(), 3u);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, FilterGtNumber) {
+  auto* doc = MakeTestDoc();
+  auto pr = ParsePath("$.store.book[?(@.price > 10)]");
+  auto matches = EvaluatePath(pr.path, doc);
+  EXPECT_EQ(matches.size(), 2u);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, FilterLeNumber) {
+  auto* doc = MakeTestDoc();
+  auto pr = ParsePath("$.store.book[?(@.price <= 8.99)]");
+  auto matches = EvaluatePath(pr.path, doc);
+  EXPECT_EQ(matches.size(), 2u);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, FilterNoMatch) {
+  auto* doc = MakeTestDoc();
+  auto pr = ParsePath("$.store.book[?(@.price > 100)]");
+  auto matches = EvaluatePath(pr.path, doc);
+  EXPECT_EQ(matches.size(), 0u);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, FilterWithRecursive) {
+  auto* doc = MakeTestDoc();
+  auto pr = ParsePath("$..book[?(@.price < 10)]");
+  auto matches = EvaluatePath(pr.path, doc);
+  EXPECT_EQ(matches.size(), 2u);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, FilterNestedField) {
+  auto* doc = Parse(R"([{"a":{"b":1}},{"a":{"b":2}},{"a":{"b":3}}])");
+  auto pr = ParsePath("$[?(@.a.b == 2)]");
+  auto matches = EvaluatePath(pr.path, doc);
+  ASSERT_EQ(matches.size(), 1u);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, FilterBoolValue) {
+  auto* doc = Parse(R"([{"active":true},{"active":false},{"active":true}])");
+  auto pr = ParsePath("$[?(@.active == true)]");
+  auto matches = EvaluatePath(pr.path, doc);
+  EXPECT_EQ(matches.size(), 2u);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, FilterExistencePartial) {
+  auto* doc = Parse(R"([{"name":"a","stock":5},{"name":"b"},{"name":"c","stock":0}])");
+  auto pr = ParsePath("$[?(@.stock)]");
+  auto matches = EvaluatePath(pr.path, doc);
+  EXPECT_EQ(matches.size(), 2u);
+  JsonValue::Destroy(doc);
+}

@@ -17,7 +17,7 @@ target_include_directories(redis_json PRIVATE
 target_link_libraries(redis_json PRIVATE redis_module_api)
 
 target_compile_options(redis_json PRIVATE
-  -Wall -Wextra -Wpedantic -fno-exceptions -Wno-c++20-designator -Wno-nested-anon-types
+  -Wall -Wextra -Wpedantic -fno-exceptions -Wno-c++20-designator -Wno-nested-anon-types -Wno-missing-field-initializers
 )
 
 set_target_properties(redis_json PROPERTIES

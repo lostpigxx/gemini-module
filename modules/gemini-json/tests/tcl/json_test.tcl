@@ -603,6 +603,54 @@ test_assert "JSONPath recursive descent finds all prices" {
   }
 }
 
+puts "\n=== JSONPath filter expressions ==="
+
+test_assert "Filter existence check" {
+  r JSON.SET filterdoc $ {{"items":[{"name":"a","stock":5},{"name":"b"},{"name":"c","stock":0}]}}
+  set result [r JSON.GET filterdoc {$.items[?(@.stock)]}]
+  if {[string first "a" $result] < 0} { error "Expected 'a' in result: $result" }
+  if {[string first "c" $result] < 0} { error "Expected 'c' in result: $result" }
+}
+
+test_assert "Filter equality" {
+  r JSON.SET filterdoc2 $ {{"arr":[{"x":1},{"x":2},{"x":3}]}}
+  set result [r JSON.GET filterdoc2 {$.arr[?(@.x == 2)]}]
+  if {$result ne {[{"x":2}]}} { error "Expected \[{\"x\":2}\], got $result" }
+}
+
+test_assert "Filter greater than" {
+  set result [r JSON.GET filterdoc2 {$.arr[?(@.x > 1)]}]
+  if {[string first "\"x\":2" $result] < 0} { error "Missing x:2 in result: $result" }
+  if {[string first "\"x\":3" $result] < 0} { error "Missing x:3 in result: $result" }
+}
+
+test_assert "Filter string comparison" {
+  r JSON.SET storedoc2 $ {{"store":{"book":[{"category":"reference","price":8.95},{"category":"fiction","price":12.99}]}}}
+  set result [r JSON.GET storedoc2 {$.store.book[?(@.category == 'fiction')]}]
+  if {[string first "fiction" $result] < 0} { error "Expected fiction in: $result" }
+  if {[string first "reference" $result] >= 0} { error "Unexpected reference in: $result" }
+}
+
+puts "\n=== JSONPath union syntax ==="
+
+test_assert "Union index" {
+  r JSON.SET uniondoc $ {[10,20,30,40,50]}
+  set result [r JSON.GET uniondoc {$[0,2,4]}]
+  if {$result ne {[10,30,50]}} { error "Expected \[10,30,50\], got $result" }
+}
+
+test_assert "Union key" {
+  r JSON.SET uniondoc2 $ {{"a":1,"b":2,"c":3}}
+  set result [r JSON.GET uniondoc2 {$['a','c']}]
+  if {$result ne {[1,3]}} { error "Expected \[1,3\], got $result" }
+}
+
+test_assert "Union in chain" {
+  r JSON.SET uniondoc3 $ {{"items":[{"name":"x"},{"name":"y"},{"name":"z"}]}}
+  set result [r JSON.GET uniondoc3 {$.items[0,2].name}]
+  if {$result ne {["x","z"]}} { error "Expected \[\"x\",\"z\"\], got $result" }
+}
+
 puts "\n=== RDB persistence ==="
 
 test_assert "Data survives BGSAVE + restart" {

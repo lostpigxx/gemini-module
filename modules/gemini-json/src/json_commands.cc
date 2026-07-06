@@ -1394,9 +1394,6 @@ static int CmdDebug(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 }
 
 // --- JSON.RESP ---
-// Gemini-specific RESP encoding: uses explicit type-name strings
-// ("null", "boolean", "integer", "number", "string", "array", "object")
-// as the first element of each composite, rather than punctuation markers.
 static void ReplyResp(RedisModuleCtx* ctx, const JsonValue* v) {
   switch (v->Type()) {
     case JsonType::kNull:
@@ -1420,7 +1417,7 @@ static void ReplyResp(RedisModuleCtx* ctx, const JsonValue* v) {
     }
     case JsonType::kArray: {
       RedisModule_ReplyWithArray(ctx, v->ArrayLen() + 1);
-      RedisModule_ReplyWithSimpleString(ctx, "array");
+      RedisModule_ReplyWithSimpleString(ctx, "[");
       for (uint32_t i = 0; i < v->ArrayLen(); i++) {
         ReplyResp(ctx, v->ArrayGet(i));
       }
@@ -1429,7 +1426,7 @@ static void ReplyResp(RedisModuleCtx* ctx, const JsonValue* v) {
     case JsonType::kObject: {
       auto* entries = v->ObjectEntries();
       RedisModule_ReplyWithArray(ctx, v->ObjectLen() * 2 + 1);
-      RedisModule_ReplyWithSimpleString(ctx, "object");
+      RedisModule_ReplyWithSimpleString(ctx, "{");
       for (uint32_t i = 0; i < v->ObjectLen(); i++) {
         RedisModule_ReplyWithStringBuffer(ctx, entries[i].key, entries[i].key_len);
         ReplyResp(ctx, entries[i].value);

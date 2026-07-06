@@ -14,6 +14,8 @@ enum class PathSegType : uint8_t {
   kSlice,
   kWildcard,
   kRecursive,
+  kFilter,
+  kUnion,
 };
 
 struct SliceParams {
@@ -24,11 +26,48 @@ struct SliceParams {
   bool stop_set = false;
 };
 
+enum class FilterOp : uint8_t {
+  kExists,
+  kEq,
+  kNe,
+  kGt,
+  kGe,
+  kLt,
+  kLe,
+};
+
+struct FilterValue {
+  enum class Kind : uint8_t { kNull, kBool, kInteger, kNumber, kString };
+  Kind kind = Kind::kNull;
+  bool bool_val = false;
+  int64_t int_val = 0;
+  double num_val = 0.0;
+  std::string str_val;
+};
+
+struct FilterCondition {
+  std::vector<std::string> field_path;
+  FilterOp op = FilterOp::kExists;
+  FilterValue value;
+};
+
+struct UnionMember {
+  bool is_index;
+  int32_t index = 0;
+  std::string key;
+};
+
+struct UnionParams {
+  std::vector<UnionMember> members;
+};
+
 struct PathSegment {
   PathSegType type;
   std::string key;
   int32_t index = 0;
   SliceParams slice;
+  FilterCondition filter;
+  UnionParams union_params;
 };
 
 struct JsonPath {

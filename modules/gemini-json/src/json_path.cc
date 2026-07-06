@@ -35,6 +35,20 @@ struct PathParser {
     out = static_cast<int32_t>(val);
     return true;
   }
+
+  void SkipSpaces() {
+    while (HasMore() && (*pos == ' ' || *pos == '\t')) pos++;
+  }
+
+  bool ParseDouble(double& out) {
+    if (!HasMore()) return false;
+    const char* start = pos;
+    char* endptr;
+    out = strtod(pos, &endptr);
+    if (endptr == start || endptr > end) { pos = start; return false; }
+    pos = endptr;
+    return true;
+  }
 };
 
 static bool ParseQuotedKey(PathParser& p, std::string& out) {
@@ -69,6 +83,132 @@ static bool ParseDotKey(PathParser& p, std::string& out) {
   return !out.empty();
 }
 
+static bool ParseFilterExpression(PathParser& p, FilterCondition& cond) {
+  if (!p.HasMore() || p.Peek() != '(') { p.error = "expected '(' after '?'"; return false; }
+  p.Advance();
+  p.SkipSpaces();
+
+  if (!p.HasMore() || p.Peek() != '@') { p.error = "expected '@' in filter"; return false; }
+  p.Advance();
+
+  cond.field_path.clear();
+  while (p.HasMore() && p.Peek() == '.') {
+    p.Advance();
+    std::string key;
+    if (p.HasMore() && (p.Peek() == '\'' || p.Peek() == '"')) {
+      if (!ParseQuotedKey(p, key)) { p.error = "invalid quoted key in filter"; return false; }
+    } else if (!ParseDotKey(p, key)) {
+      p.error = "expected field name after '.' in filter";
+      return false;
+    }
+    cond.field_path.push_back(std::move(key));
+  }
+
+  if (cond.field_path.empty()) { p.error = "filter requires at least one field"; return false; }
+
+  p.SkipSpaces();
+
+  if (p.HasMore() && p.Peek() == ')') {
+    p.Advance();
+    cond.op = FilterOp::kExists;
+    return true;
+  }
+
+  if (!p.HasMore()) { p.error = "unexpected end in filter"; return false; }
+  char c1 = p.Advance();
+  if (!p.HasMore()) { p.error = "unexpected end in filter operator"; return false; }
+  char c2 = p.Peek();
+
+  if (c1 == '=' && c2 == '=') { cond.op = FilterOp::kEq; p.Advance(); }
+  else if (c1 == '!' && c2 == '=') { cond.op = FilterOp::kNe; p.Advance(); }
+  else if (c1 == '>' && c2 == '=') { cond.op = FilterOp::kGe; p.Advance(); }
+  else if (c1 == '<' && c2 == '=') { cond.op = FilterOp::kLe; p.Advance(); }
+  else if (c1 == '>') { cond.op = FilterOp::kGt; }
+  else if (c1 == '<') { cond.op = FilterOp::kLt; }
+  else { p.error = "unknown filter operator"; return false; }
+
+  p.SkipSpaces();
+
+  if (!p.HasMore()) { p.error = "expected value in filter"; return false; }
+
+  if (p.Peek() == '\'' || p.Peek() == '"') {
+    std::string str;
+    if (!ParseQuotedKey(p, str)) { p.error = "invalid string in filter value"; return false; }
+    cond.value.kind = FilterValue::Kind::kString;
+    cond.value.str_val = std::move(str);
+  } else if (p.Peek() == 't' || p.Peek() == 'f') {
+    const char* start = p.pos;
+    if (p.end - p.pos >= 4 && std::memcmp(p.pos, "true", 4) == 0) {
+      cond.value.kind = FilterValue::Kind::kBool;
+      cond.value.bool_val = true;
+      p.pos += 4;
+    } else if (p.end - p.pos >= 5 && std::memcmp(p.pos, "false", 5) == 0) {
+      cond.value.kind = FilterValue::Kind::kBool;
+      cond.value.bool_val = false;
+      p.pos += 5;
+    } else {
+      p.pos = start;
+      p.error = "invalid boolean in filter value";
+      return false;
+    }
+  } else if (p.Peek() == 'n') {
+    if (p.end - p.pos >= 4 && std::memcmp(p.pos, "null", 4) == 0) {
+      cond.value.kind = FilterValue::Kind::kNull;
+      p.pos += 4;
+    } else {
+      p.error = "invalid null in filter value";
+      return false;
+    }
+  } else {
+    const char* num_start = p.pos;
+    double dval;
+    if (!p.ParseDouble(dval)) { p.error = "invalid number in filter value"; return false; }
+    bool is_int = true;
+    for (const char* s = num_start; s < p.pos; s++) {
+      if (*s == '.' || *s == 'e' || *s == 'E') { is_int = false; break; }
+    }
+    if (is_int) {
+      cond.value.kind = FilterValue::Kind::kInteger;
+      cond.value.int_val = static_cast<int64_t>(dval);
+    } else {
+      cond.value.kind = FilterValue::Kind::kNumber;
+      cond.value.num_val = dval;
+    }
+  }
+
+  p.SkipSpaces();
+
+  if (!p.HasMore() || p.Peek() != ')') { p.error = "expected ')' to close filter"; return false; }
+  p.Advance();
+  return true;
+}
+
+static bool ParseUnionContent(PathParser& p, UnionParams& params,
+                              std::vector<PathSegment>& /*segments*/) {
+  params.members.clear();
+
+  bool is_key_union = (p.HasMore() && (p.Peek() == '\'' || p.Peek() == '"'));
+
+  while (true) {
+    if (is_key_union) {
+      std::string key;
+      if (!ParseQuotedKey(p, key)) { p.error = "invalid key in union"; return false; }
+      params.members.push_back({false, 0, std::move(key)});
+    } else {
+      int32_t idx;
+      if (!p.ParseInt(idx)) { p.error = "invalid index in union"; return false; }
+      params.members.push_back({true, idx, {}});
+    }
+
+    if (!p.HasMore()) { p.error = "unterminated union"; return false; }
+    if (p.Peek() == ']') break;
+    if (p.Peek() != ',') { p.error = "expected ',' or ']' in union"; return false; }
+    p.Advance();
+  }
+
+  return true;
+}
+
 static bool ParseBracketContent(PathParser& p, std::vector<PathSegment>& segments) {
   p.Advance(); // skip '['
 
@@ -84,6 +224,49 @@ static bool ParseBracketContent(PathParser& p, std::vector<PathSegment>& segment
     return true;
   }
 
+  if (p.Peek() == '?') {
+    p.Advance();
+    FilterCondition cond;
+    if (!ParseFilterExpression(p, cond)) return false;
+    if (!p.HasMore() || p.Peek() != ']') {
+      p.error = "expected ']' after filter"; return false;
+    }
+    p.Advance();
+    PathSegment seg;
+    seg.type = PathSegType::kFilter;
+    seg.filter = std::move(cond);
+    segments.push_back(std::move(seg));
+    return true;
+  }
+
+  // Scan for ':' and ',' at bracket depth 1 to disambiguate slice/union/index/key
+  bool has_colon = false, has_comma = false;
+  {
+    const char* scan = p.pos;
+    int bracket_depth = 1;
+    while (scan < p.end && bracket_depth > 0) {
+      if (*scan == '[') bracket_depth++;
+      else if (*scan == ']') bracket_depth--;
+      else if (*scan == ':' && bracket_depth == 1) has_colon = true;
+      else if (*scan == ',' && bracket_depth == 1) has_comma = true;
+      scan++;
+    }
+  }
+
+  if (has_comma) {
+    UnionParams params;
+    if (!ParseUnionContent(p, params, segments)) return false;
+    if (!p.HasMore() || p.Peek() != ']') {
+      p.error = "expected ']' after union"; return false;
+    }
+    p.Advance();
+    PathSegment seg;
+    seg.type = PathSegType::kUnion;
+    seg.union_params = std::move(params);
+    segments.push_back(std::move(seg));
+    return true;
+  }
+
   if (p.Peek() == '\'' || p.Peek() == '"') {
     std::string key;
     if (!ParseQuotedKey(p, key)) {
@@ -94,21 +277,11 @@ static bool ParseBracketContent(PathParser& p, std::vector<PathSegment>& segment
       p.error = "expected ']' after quoted key"; return false;
     }
     p.Advance();
-    segments.push_back({PathSegType::kKey, std::move(key), 0, {}});
+    PathSegment seg;
+    seg.type = PathSegType::kKey;
+    seg.key = std::move(key);
+    segments.push_back(std::move(seg));
     return true;
-  }
-
-  // Check for slice or index
-  bool has_colon = false;
-  {
-    const char* scan = p.pos;
-    int bracket_depth = 1;
-    while (scan < p.end && bracket_depth > 0) {
-      if (*scan == '[') bracket_depth++;
-      else if (*scan == ']') bracket_depth--;
-      else if (*scan == ':' && bracket_depth == 1) has_colon = true;
-      scan++;
-    }
   }
 
   if (has_colon) {
@@ -193,6 +366,68 @@ static void ResolveSlice(const SliceParams& sp, uint32_t len,
     if (start >= n) start = n - 1;
     if (stop < -1) stop = -1;
   }
+}
+
+static JsonValue* EvalFilterField(JsonValue* element,
+                                  const std::vector<std::string>& field_path) {
+  JsonValue* cur = element;
+  for (const auto& key : field_path) {
+    if (!cur || !cur->IsObject()) return nullptr;
+    cur = cur->ObjectGet(std::string_view(key));
+  }
+  return cur;
+}
+
+static bool CompareValues(const JsonValue* lhs, FilterOp op, const FilterValue& rhs) {
+  if (op == FilterOp::kExists) return true;
+
+  if (op == FilterOp::kEq || op == FilterOp::kNe) {
+    bool eq = false;
+    switch (rhs.kind) {
+      case FilterValue::Kind::kString:
+        eq = lhs->IsString() && lhs->GetString() == rhs.str_val;
+        break;
+      case FilterValue::Kind::kInteger:
+        eq = lhs->IsNumber() && lhs->GetNumber() == static_cast<double>(rhs.int_val);
+        break;
+      case FilterValue::Kind::kNumber:
+        eq = lhs->IsNumber() && lhs->GetNumber() == rhs.num_val;
+        break;
+      case FilterValue::Kind::kBool:
+        eq = lhs->IsBool() && lhs->GetBool() == rhs.bool_val;
+        break;
+      case FilterValue::Kind::kNull:
+        eq = lhs->IsNull();
+        break;
+    }
+    return op == FilterOp::kEq ? eq : !eq;
+  }
+
+  // Ordering comparisons: >, >=, <, <=
+  if (lhs->IsNumber() && (rhs.kind == FilterValue::Kind::kInteger ||
+                           rhs.kind == FilterValue::Kind::kNumber)) {
+    double lv = lhs->GetNumber();
+    double rv = (rhs.kind == FilterValue::Kind::kInteger)
+                  ? static_cast<double>(rhs.int_val) : rhs.num_val;
+    switch (op) {
+      case FilterOp::kGt: return lv > rv;
+      case FilterOp::kGe: return lv >= rv;
+      case FilterOp::kLt: return lv < rv;
+      case FilterOp::kLe: return lv <= rv;
+      default: break;
+    }
+  }
+  if (lhs->IsString() && rhs.kind == FilterValue::Kind::kString) {
+    int cmp = lhs->GetString().compare(rhs.str_val);
+    switch (op) {
+      case FilterOp::kGt: return cmp > 0;
+      case FilterOp::kGe: return cmp >= 0;
+      case FilterOp::kLt: return cmp < 0;
+      case FilterOp::kLe: return cmp <= 0;
+      default: break;
+    }
+  }
+  return false;
 }
 
 using MatchVec = std::vector<PathMatch>;
@@ -299,6 +534,57 @@ static void Evaluate(const JsonPath& path, size_t seg_idx,
 
     case PathSegType::kRecursive:
       EvalRecursive(path, seg_idx + 1, current, parent, arr_idx, obj_key, results);
+      break;
+
+    case PathSegType::kFilter: {
+      const auto& cond = seg.filter;
+      auto TestElement = [&](JsonValue* elem, JsonValue* par, int32_t ai, const std::string& ok) {
+        auto* field_val = EvalFilterField(elem, cond.field_path);
+        bool match = false;
+        if (cond.op == FilterOp::kExists) {
+          match = (field_val != nullptr);
+        } else if (field_val) {
+          match = CompareValues(field_val, cond.op, cond.value);
+        }
+        if (match) {
+          Evaluate(path, seg_idx + 1, elem, par, ai, ok, results);
+        }
+      };
+
+      if (current->IsArray()) {
+        for (uint32_t i = 0; i < current->ArrayLen(); i++) {
+          TestElement(current->ArrayGet(i), current, static_cast<int32_t>(i), {});
+        }
+      } else if (current->IsObject()) {
+        auto* entries = current->ObjectEntries();
+        for (uint32_t i = 0; i < current->ObjectLen(); i++) {
+          TestElement(entries[i].value, current, -1,
+                      std::string(entries[i].key, entries[i].key_len));
+        }
+      }
+      break;
+    }
+
+    case PathSegType::kUnion:
+      for (const auto& member : seg.union_params.members) {
+        if (member.is_index) {
+          if (current->IsArray()) {
+            int32_t resolved = ResolveIndex(member.index, current->ArrayLen());
+            if (resolved >= 0 && static_cast<uint32_t>(resolved) < current->ArrayLen()) {
+              Evaluate(path, seg_idx + 1,
+                       current->ArrayGet(static_cast<uint32_t>(resolved)),
+                       current, resolved, {}, results);
+            }
+          }
+        } else {
+          if (current->IsObject()) {
+            auto* child = current->ObjectGet(std::string_view(member.key));
+            if (child) {
+              Evaluate(path, seg_idx + 1, child, current, -1, member.key, results);
+            }
+          }
+        }
+      }
       break;
   }
 }
