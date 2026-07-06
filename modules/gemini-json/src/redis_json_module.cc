@@ -30,7 +30,7 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
   }
 
   const char* type_name = JsonCompatMode ? kTypeNameCompat : kTypeNameNative;
-  int encver = JsonCompatMode ? kJsonEncVerCompat : kJsonEncVerMax;
+  int encver = JsonCompatMode ? kJsonEncVerMax : kJsonEncVerBinary;
 
   RedisModuleTypeMethods tm = {};
   tm.version = REDISMODULE_TYPE_METHOD_VERSION;
