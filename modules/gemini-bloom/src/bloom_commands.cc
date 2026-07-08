@@ -633,14 +633,21 @@ static int CmdLoadchunk(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
 
     size_t idx = static_cast<size_t>(cursor - 2);
     if (idx >= filter->NumLayers()) {
+      RedisModule_DeleteKey(key);
       return RedisModule_ReplyWithError(ctx, "ERR cursor exceeds layer count");
+    }
+    if (idx != filter->ChunksLoaded()) {
+      RedisModule_DeleteKey(key);
+      return RedisModule_ReplyWithError(ctx, "ERR out-of-order chunk");
     }
     auto& layer = filter->Layers()[idx];
     if (dataLen != static_cast<size_t>(layer.bloom.GetDataSize())) {
+      RedisModule_DeleteKey(key);
       return RedisModule_ReplyWithError(ctx, "ERR data length mismatch for layer");
     }
     std::memcpy(layer.bloom.GetBitArray(), data, dataLen);
-    if (idx == filter->NumLayers() - 1) {
+    filter->IncrementChunksLoaded();
+    if (filter->ChunksLoaded() == filter->NumLayers()) {
       filter->ClearLoading();
     }
   }

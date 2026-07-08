@@ -50,8 +50,10 @@ public:
   BloomFlags Flags() const { return flags_; }
   unsigned ExpansionFactor() const { return expansionFactor_; }
   bool IsLoading() const { return HasFlag(flags_, BloomFlags::Loading); }
-  void SetLoading() { flags_ = flags_ | BloomFlags::Loading; }
+  void SetLoading() { flags_ = flags_ | BloomFlags::Loading; chunksLoaded_ = 0; }
   void ClearLoading() { flags_ = FromUnderlying(ToUnderlying(flags_) & ~ToUnderlying(BloomFlags::Loading)); }
+  size_t ChunksLoaded() const { return chunksLoaded_; }
+  void IncrementChunksLoaded() { ++chunksLoaded_; }
   uint64_t TotalDataSize() const;
 
   // RDB serialization: the filter writes/reads its own structure
@@ -83,6 +85,7 @@ private:
   size_t layerCapacity_ = 0;
   BloomFlags flags_ = BloomFlags::None;
   unsigned expansionFactor_ = 2;
+  size_t chunksLoaded_ = 0;
 };
 
 // Wire-format structures for BF.SCANDUMP / BF.LOADCHUNK.

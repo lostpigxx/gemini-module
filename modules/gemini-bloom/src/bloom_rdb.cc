@@ -343,6 +343,11 @@ void RdbSaveBloom(RedisModuleIO* rdb, void* value) {
 
 void AofRewriteBloom(RedisModuleIO* aof, RedisModuleString* key, void* value) {
   auto* filter = static_cast<ScalingBloomFilter*>(value);
+  if (filter->IsLoading()) {
+    RedisModule_LogIOError(aof, "warning",
+      "GeminiBloom: skipping AOF rewrite of partially loaded filter");
+    return;
+  }
 
   size_t hdrBytes = ComputeHeaderSize(*filter);
   auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
