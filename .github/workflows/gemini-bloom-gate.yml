@@ -1,0 +1,67 @@
+name: Gemini Bloom Gate
+
+on:
+  push:
+    paths:
+      - ".github/workflows/gemini-bloom-gate.yml"
+      - "CMakeLists.txt"
+      - "include/**"
+      - "modules/gemini-bloom/**"
+  pull_request:
+    paths:
+      - ".github/workflows/gemini-bloom-gate.yml"
+      - "CMakeLists.txt"
+      - "include/**"
+      - "modules/gemini-bloom/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gemini-bloom-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            cmake \
+            g++ \
+            libgtest-dev \
+            ninja-build \
+            redis-server \
+            tcl
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build Gemini Bloom and its tests
+        run: >-
+          cmake --build build --parallel 2 --target
+          redis_bloom
+          bloom_filter_test
+          sb_chain_test
+          bloom_rdb_test
+
+      - name: Run Bloom filter unit tests
+        run: ./build/modules/gemini-bloom/bloom_filter_test --gtest_color=yes
+
+      - name: Run scaling Bloom unit tests
+        run: ./build/modules/gemini-bloom/sb_chain_test --gtest_color=yes
+
+      - name: Run Bloom persistence tests
+        run: ./build/modules/gemini-bloom/bloom_rdb_test --gtest_color=yes
+
+      - name: Run Redis integration tests
+        run: tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
