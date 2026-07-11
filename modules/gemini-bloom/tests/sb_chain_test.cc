@@ -1,7 +1,12 @@
 #include <gtest/gtest.h>
 #include "sb_chain.h"
 
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
 static std::span<const std::byte> ToSpan(const std::string& s) {
