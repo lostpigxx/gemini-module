@@ -72,4 +72,17 @@ jobs:
         run: cmake --build build --target search_test
 
       - name: Run Redis integration tests
-        run: tclsh modules/gemini-search/tests/tcl/search_test.tcl ./build/redis_search.so
+        shell: bash
+        run: |
+          set +e
+          tclsh modules/gemini-search/tests/tcl/search_test.tcl ./build/redis_search.so \
+            2>&1 | tee /tmp/search-tcl.log
+          status=${PIPESTATUS[0]}
+          if ((status != 0)); then
+            details=$(sed -n '/^Failed tests:/,$p' /tmp/search-tcl.log | tail -c 6000)
+            details=${details//'%'/'%25'}
+            details=${details//$'\n'/'%0A'}
+            details=${details//$'\r'/'%0D'}
+            echo "::error title=Search integration failures::$details"
+          fi
+          exit "$status"
