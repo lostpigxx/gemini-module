@@ -1327,13 +1327,13 @@ test_assert "HSET still triggers indexing after restart" {
 
 puts "\n--- Error cases ---"
 
-test_error "FT.CREATE ON without HASH" {
+test_error "FT.CREATE ON with unsupported source type" {
   r FT.CREATE bad ON STRING PREFIX 1 x: SCHEMA f TAG
-} {ERR only HASH is supported for ON}
+} {ERR ON requires HASH or JSON}
 
 test_error "FT.CREATE ON HASH without PREFIX" {
   r FT.CREATE bad ON HASH SCHEMA f TAG
-} {ERR expected PREFIX after ON HASH}
+} {ERR expected PREFIX after ON HASH/JSON}
 
 test_error "FT.CREATE ON HASH PREFIX without count" {
   r FT.CREATE bad ON HASH PREFIX SCHEMA f TAG
