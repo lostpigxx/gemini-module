@@ -1,0 +1,75 @@
+name: Gemini Search Gate
+
+on:
+  push:
+    paths:
+      - ".github/workflows/gemini-search-gate.yml"
+      - "CMakeLists.txt"
+      - "include/**"
+      - "modules/gemini-search/**"
+  pull_request:
+    paths:
+      - ".github/workflows/gemini-search-gate.yml"
+      - "CMakeLists.txt"
+      - "include/**"
+      - "modules/gemini-search/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gemini-search-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            cmake \
+            g++ \
+            libgtest-dev \
+            ninja-build \
+            redis-server \
+            tcl
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build Gemini Search module
+        run: cmake --build build --parallel 2 --target redis_search
+
+      - name: Build Gemini Search unit tests
+        run: >-
+          cmake --build build --parallel 2 --target
+          index_spec_test
+          document_store_test
+          tag_index_test
+          text_index_test
+          numeric_index_test
+          vector_index_test
+          hnsw_index_test
+          geo_index_test
+          phonetic_test
+          geoshape_index_test
+          suggest_dict_test
+          expr_engine_test
+          query_parser_test
+          search_rdb_test
+          search_asan_test
+
+      - name: Run Gemini Search unit tests
+        run: cmake --build build --target search_test
+
+      - name: Run Redis integration tests
+        run: tclsh modules/gemini-search/tests/tcl/search_test.tcl ./build/redis_search.so
