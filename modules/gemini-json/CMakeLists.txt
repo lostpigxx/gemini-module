@@ -26,6 +26,25 @@ set_target_properties(redis_json PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
+if(ENABLE_FUZZING)
+  add_executable(json_fuzzer EXCLUDE_FROM_ALL
+    fuzz/json_fuzzer.cc
+    src/json_value.cc
+    src/json_parse.cc
+    src/json_serialize.cc
+    src/json_path.cc
+  )
+  target_include_directories(json_fuzzer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(json_fuzzer PRIVATE redis_module_api)
+  target_compile_definitions(json_fuzzer PRIVATE REDIS_JSON_TESTING)
+  target_compile_options(json_fuzzer PRIVATE
+    -Wall -Wextra -Wpedantic -Wno-nested-anon-types -Wno-missing-field-initializers
+  )
+  configure_fuzzer(json_fuzzer)
+endif()
+
 find_package(GTest QUIET)
 if(GTest_FOUND)
   set(JSON_TEST_COMMON

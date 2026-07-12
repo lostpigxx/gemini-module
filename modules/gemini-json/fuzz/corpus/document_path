@@ -1,0 +1,2 @@
+{"items":[{"price":10},{"price":20}],"active":true}
+$.items[?(@.price >= 10)].price

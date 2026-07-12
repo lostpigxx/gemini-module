@@ -26,6 +26,24 @@ set_target_properties(redis_bloom PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
+if(ENABLE_FUZZING)
+  add_executable(bloom_fuzzer EXCLUDE_FROM_ALL
+    fuzz/bloom_fuzzer.cc
+    src/bloom_rdb.cc
+    src/sb_chain.cc
+    src/bloom_filter.cc
+    src/murmur2.cc
+  )
+  target_include_directories(bloom_fuzzer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/include
+  )
+  target_link_libraries(bloom_fuzzer PRIVATE redis_module_api)
+  target_compile_definitions(bloom_fuzzer PRIVATE REDIS_BLOOM_TESTING)
+  target_compile_options(bloom_fuzzer PRIVATE -Wall -Wextra -Wpedantic)
+  configure_fuzzer(bloom_fuzzer)
+endif()
+
 find_package(GTest QUIET)
 if(GTest_FOUND)
   add_executable(bloom_filter_test EXCLUDE_FROM_ALL

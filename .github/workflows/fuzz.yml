@@ -1,0 +1,115 @@
+name: Bloom and JSON Fuzz
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/fuzz.yml"
+      - "CMakeLists.txt"
+      - "include/**"
+      - "modules/gemini-bloom/**"
+      - "modules/gemini-json/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/fuzz.yml"
+      - "CMakeLists.txt"
+      - "include/**"
+      - "modules/gemini-bloom/**"
+      - "modules/gemini-json/**"
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Fuzzing duration
+        type: choice
+        options:
+          - short
+          - long
+        default: short
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+jobs:
+  fuzz:
+    name: ${{ matrix.module }} fuzz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: gemini-bloom
+            target: bloom_fuzzer
+            binary: build/modules/gemini-bloom/bloom_fuzzer
+            corpus: modules/gemini-bloom/fuzz/corpus
+            dictionary: ""
+          - module: gemini-json
+            target: json_fuzzer
+            binary: build/modules/gemini-json/json_fuzzer
+            corpus: modules/gemini-json/fuzz/corpus
+            dictionary: -dict=modules/gemini-json/fuzz/json.dict
+    env:
+      FUZZ_SECONDS: ${{ (github.event_name == 'schedule' || github.event.inputs.duration == 'long') && '3600' || '60' }}
+      ASAN_OPTIONS: detect_leaks=1:allocator_may_return_null=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install fuzzing toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            clang \
+            cmake \
+            libclang-rt-dev \
+            ninja-build
+
+      - name: Configure fuzz targets
+        env:
+          CC: clang
+          CXX: clang++
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DENABLE_FUZZING=ON
+
+      - name: Build ${{ matrix.target }}
+        run: cmake --build build --parallel 2 --target ${{ matrix.target }}
+
+      - name: Run ${{ matrix.target }}
+        shell: bash
+        run: |
+          mkdir -p "fuzz-artifacts/${{ matrix.module }}"
+          args=("${{ matrix.corpus }}")
+          if [[ -n "${{ matrix.dictionary }}" ]]; then
+            args+=("${{ matrix.dictionary }}")
+          fi
+
+          "${{ matrix.binary }}" \
+            "${args[@]}" \
+            -artifact_prefix="fuzz-artifacts/${{ matrix.module }}/" \
+            -max_total_time="$FUZZ_SECONDS" \
+            -max_len=65536 \
+            -rss_limit_mb=2048 \
+            -timeout=10 \
+            -print_final_stats=1
+
+      - name: Upload nightly corpus or crash artifacts
+        if: ${{ always() && (github.event_name == 'schedule' || failure()) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.module }}-fuzz-${{ github.run_id }}
+          path: |
+            ${{ matrix.corpus }}
+            fuzz-artifacts/${{ matrix.module }}
+          if-no-files-found: ignore
+          retention-days: 14
