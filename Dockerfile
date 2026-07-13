@@ -7,8 +7,11 @@ RUN apt-get update && apt-get install -y \
     cmake \
     g++ \
     libgtest-dev \
+    python3 \
+    python3-pip \
     redis-server \
     tcl \
+    && pip3 install --no-cache-dir redis \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cd /usr/src/gtest && cmake . && make && \
