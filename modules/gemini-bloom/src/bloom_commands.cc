@@ -479,17 +479,25 @@ static int CmdInfo(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     const char* field = RedisModule_StringPtrLen(argv[2], &len);
     auto sv = std::string_view{field, len};
 
+    auto ReplyWithSingleField = [&](auto value) {
+      RedisModule_ReplyWithArray(ctx, 1);
+      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(value));
+    };
+
     if (MatchArg(sv, "Capacity")) {
-      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalCapacity()));
+      return ReplyWithSingleField(filter->TotalCapacity());
     } else if (MatchArg(sv, "Size")) {
-      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->BytesUsed()));
+      return ReplyWithSingleField(filter->BytesUsed());
     } else if (MatchArg(sv, "Filters")) {
-      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->NumLayers()));
+      return ReplyWithSingleField(filter->NumLayers());
     } else if (MatchArg(sv, "Items")) {
-      return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(filter->TotalItems()));
+      return ReplyWithSingleField(filter->TotalItems());
     } else if (MatchArg(sv, "Expansion")) {
-      if (HasFlag(filter->Flags(), BloomFlags::FixedSize)) return RedisModule_ReplyWithNull(ctx);
-      return RedisModule_ReplyWithLongLong(ctx, filter->ExpansionFactor());
+      if (HasFlag(filter->Flags(), BloomFlags::FixedSize)) {
+        RedisModule_ReplyWithArray(ctx, 1);
+        return RedisModule_ReplyWithNull(ctx);
+      }
+      return ReplyWithSingleField(filter->ExpansionFactor());
     }
     return RedisModule_ReplyWithError(ctx, "ERR unknown subcommand for BF.INFO");
   }

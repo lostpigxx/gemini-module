@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     g++ \
+    git \
     libgtest-dev \
     python3 \
     python3-pip \
@@ -18,6 +19,13 @@ RUN cd /usr/src/gtest && cmake . && make && \
     cp lib/*.a /usr/lib/ 2>/dev/null; \
     cp *.a /usr/lib/ 2>/dev/null; \
     true
+
+RUN git clone --branch v2.6.25 --depth 1 https://github.com/RedisBloom/RedisBloom.git /opt/RedisBloom \
+    && cd /opt/RedisBloom \
+    && git submodule update --init --recursive \
+    && make -j$(nproc) \
+    && cp bin/*/redisbloom.so /opt/redisbloom.so \
+    && rm -rf /opt/RedisBloom
 
 WORKDIR /src
 COPY . .
