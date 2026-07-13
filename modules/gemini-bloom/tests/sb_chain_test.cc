@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "sb_chain.h"
 
+#include <cstring>
 #include <string>
 #include <vector>
 
