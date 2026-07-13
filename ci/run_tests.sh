@@ -34,6 +34,11 @@ header "Tcl: gemini-search"
 tclsh modules/gemini-search/tests/tcl/search_test.tcl "./$BUILD_DIR/redis_search.so" || \
   { red "FAIL: search tcl"; FAIL=1; }
 
+# ── Compat test (gemini-bloom vs RedisBloom) ──────────────────
+header "Compat: gemini-bloom vs RedisBloom"
+python3 ci/bloom_compat_test.py "./$BUILD_DIR/redis_bloom.so" /opt/redisbloom.so || \
+  { red "FAIL: bloom compat"; FAIL=1; }
+
 # ── Soak test (gemini-bloom, 5 min default) ───────────────────
 header "Soak: gemini-bloom (${SOAK_DURATION_SEC:-300}s)"
 SOAK_DURATION_SEC="${SOAK_DURATION_SEC:-300}" \

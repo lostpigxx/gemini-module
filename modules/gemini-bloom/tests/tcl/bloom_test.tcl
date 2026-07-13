@@ -532,7 +532,7 @@ test_assert "BF.INFO NONSCALING filter shows null expansion" {
   if {$val ne "(nil)"} { error "Expected nil but got: $val" }
 }
 
-test_assert "RESP3 BF.INFO single Capacity remains integer scalar" {
+test_assert "RESP3 BF.INFO single Capacity returns array with integer" {
   global port
   r DEL resp3_info_capacity
   r BF.RESERVE resp3_info_capacity 0.01 100
@@ -541,9 +541,15 @@ test_assert "RESP3 BF.INFO single Capacity remains integer scalar" {
   set reply [raw_command_reply $fd BF.INFO resp3_info_capacity CAPACITY]
   close $fd
   set type [lindex $reply 0]
-  set value [lindex $reply 1]
-  if {$type ne ":" || $value != 100} {
-    error "expected RESP3 integer capacity 100, got reply=$reply"
+  if {$type ne "*"} {
+    error "expected RESP3 array, got type=$type reply=$reply"
+  }
+  set arr [lindex $reply 1]
+  set elem [lindex $arr 0]
+  set elem_type [lindex $elem 0]
+  set elem_val [lindex $elem 1]
+  if {$elem_type ne ":" || $elem_val != 100} {
+    error "expected integer 100 inside array, got elem=$elem"
   }
 }
 
