@@ -6,11 +6,9 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     g++ \
-    git \
     libgtest-dev \
     python3 \
     python3-pip \
-    redis-server \
     tcl \
     && pip3 install --no-cache-dir redis \
     && rm -rf /var/lib/apt/lists/*
@@ -20,12 +18,17 @@ RUN cd /usr/src/gtest && cmake . && make && \
     cp *.a /usr/lib/ 2>/dev/null; \
     true
 
-RUN git clone --branch v2.6.25 --depth 1 https://github.com/RedisBloom/RedisBloom.git /opt/RedisBloom \
-    && cd /opt/RedisBloom \
-    && git submodule update --init --recursive \
-    && make -j$(nproc) \
+COPY deps/ /opt/deps/
+
+RUN cd /opt/deps && tar xzf redis-6.0.16.tar.gz \
+    && cd redis-6.0.16 && make -j$(nproc) \
+    && make install \
+    && cd / && rm -rf /opt/deps/redis-6.0.16
+
+RUN cd /opt/deps && tar xzf redisbloom-2.6.25.tar.gz \
+    && cd redisbloom-2.6.25 && make -j$(nproc) \
     && cp bin/*/redisbloom.so /opt/redisbloom.so \
-    && rm -rf /opt/RedisBloom
+    && cd / && rm -rf /opt/deps/redisbloom-2.6.25
 
 WORKDIR /src
 COPY . .
