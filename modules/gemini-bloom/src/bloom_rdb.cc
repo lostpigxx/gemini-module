@@ -21,20 +21,20 @@ void RdbWriter::PutBlob(const uint8_t* data, uint64_t len) {
 uint64_t RdbReader::GetUint() {
   if (!ok_) return 0;
   uint64_t v = RedisModule_LoadUnsigned(io_);
-  if (RedisModule_IsIOError(io_)) ok_ = false;
+  if (RedisModule_IsIOError && RedisModule_IsIOError(io_)) ok_ = false;
   return v;
 }
 double RdbReader::GetFloat() {
   if (!ok_) return 0.0;
   double v = RedisModule_LoadDouble(io_);
-  if (RedisModule_IsIOError(io_)) ok_ = false;
+  if (RedisModule_IsIOError && RedisModule_IsIOError(io_)) ok_ = false;
   return v;
 }
 std::pair<char*, size_t> RdbReader::GetBlob() {
   if (!ok_) return {nullptr, 0};
   size_t len = 0;
   char* buf = RedisModule_LoadStringBuffer(io_, &len);
-  if (RedisModule_IsIOError(io_)) ok_ = false;
+  if (RedisModule_IsIOError && RedisModule_IsIOError(io_)) ok_ = false;
   return {buf, len};
 }
 
