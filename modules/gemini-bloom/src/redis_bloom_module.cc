@@ -16,10 +16,14 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
     return REDISMODULE_ERR;
   }
 
+  if (RedisModule_SetModuleOptions) {
+    RedisModule_SetModuleOptions(ctx, REDISMODULE_OPTIONS_HANDLE_IO_ERRORS);
+  }
+
   // Data type name "MBbloom--" matches RedisBloom's wire format for RDB
   // interoperability. Module identity "GeminiBloom" is separate.
   RedisModuleTypeMethods tm = {};
-  tm.version = REDISMODULE_TYPE_METHOD_VERSION;
+  tm.version = 1;
   tm.rdb_load = RdbLoadBloom;
   tm.rdb_save = RdbSaveBloom;
   tm.aof_rewrite = AofRewriteBloom;
