@@ -710,41 +710,17 @@ test_error "BF.ADD on string key" {
   r BF.ADD string_key item
 } {WRONGTYPE*}
 
-test_error "BF.EXISTS on string key" {
+test "BF.EXISTS on string key returns 0" {
   r BF.EXISTS string_key item
-} {WRONGTYPE*}
+} {0}
 
 test_error "BF.INFO on string key" {
   r BF.INFO string_key
 } {WRONGTYPE*}
 
-test_assert "BF.MEXISTS on string key returns top-level WRONGTYPE (not array of errors)" {
-  # Send BF.MEXISTS raw and check the first byte of response is '-' (error), not '*' (array)
-  global redis_fd
-  set cmd "*4\r\n\$10\r\nBF.MEXISTS\r\n\$10\r\nstring_key\r\n\$1\r\na\r\n\$1\r\nb\r\n"
-  puts -nonewline $redis_fd $cmd
-  flush $redis_fd
-  gets $redis_fd line
-  set type [string index $line 0]
-  if {$type eq "*"} {
-    # Drain the array elements
-    set count [string range $line 1 end]
-    set count [string trimright $count "\r"]
-    for {set i 0} {$i < $count} {incr i} {
-      redis_read_reply $redis_fd
-    }
-    error "Got array response (type=$type) instead of top-level error"
-  }
-  if {$type ne "-"} {
-    set data [string range $line 1 end]
-    error "Expected error type '-', got '$type': $data"
-  }
-  set data [string range $line 1 end]
-  set data [string trimright $data "\r"]
-  if {![string match "WRONGTYPE*" $data]} {
-    error "Expected WRONGTYPE error, got: $data"
-  }
-}
+test "BF.MEXISTS on string key returns all zeros" {
+  r BF.MEXISTS string_key a b
+} {0 0}
 
 test_error "BF.MADD on string key returns top-level WRONGTYPE" {
   r BF.MADD string_key a b c

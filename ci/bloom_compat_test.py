@@ -329,6 +329,13 @@ def test_error_cases(g, rb):
 
     compare_both_error("ADD WRONGTYPE", g, rb, "BF.ADD", "str_key", "x")
     compare_both_error("MADD WRONGTYPE", g, rb, "BF.MADD", "str_key", "x")
+
+    g_r, rb_r = both(g, rb, "BF.EXISTS", "str_key", "x")
+    compare("EXISTS WRONGTYPE returns 0", g_r, rb_r)
+
+    g_r, rb_r = both(g, rb, "BF.MEXISTS", "str_key", "a", "b")
+    compare("MEXISTS WRONGTYPE returns zeros", g_r, rb_r)
+
     compare_both_error("INFO WRONGTYPE", g, rb, "BF.INFO", "str_key")
     compare_both_error("CARD WRONGTYPE", g, rb, "BF.CARD", "str_key")
     compare_both_error("RESERVE WRONGTYPE", g, rb, "BF.RESERVE", "str_key", 0.01, 100)

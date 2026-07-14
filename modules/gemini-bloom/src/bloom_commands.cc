@@ -417,7 +417,7 @@ static int CmdExists(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   }
 
   auto* filter = GetFilter(key);
-  if (!filter) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+  if (!filter) return RedisModule_ReplyWithLongLong(ctx, 0);
   if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
 
   size_t len;
@@ -443,7 +443,9 @@ static int CmdMexists(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   auto* filter = GetFilter(key);
   if (!filter) {
-    return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    RedisModule_ReplyWithArray(ctx, count);
+    for (int i = 0; i < count; i++) RedisModule_ReplyWithLongLong(ctx, 0);
+    return REDISMODULE_OK;
   }
   if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
 
