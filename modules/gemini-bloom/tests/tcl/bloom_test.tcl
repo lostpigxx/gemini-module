@@ -1448,6 +1448,7 @@ test "COMMAND GETKEYS BF.INFO returns the filter key" {
 test_assert "ACL DRYRUN accepts bloom commands when supported" {
   if {[catch {r ACL DRYRUN default BF.ADD acl_key item} err]} {
     if {[string match -nocase "*unknown subcommand*" $err] ||
+        [string match -nocase "*unknown command*" $err] ||
         [string match -nocase "*syntax*" $err]} {
       set unsupported 1
     } else {

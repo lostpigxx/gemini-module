@@ -121,6 +121,8 @@ def get_used_memory(r):
 def parse_bf_info(r, key):
     raw = r.execute_command("BF.INFO", key)
     inc("bf_info")
+    if isinstance(raw, dict):
+        return {(k if isinstance(k, str) else k.decode()): v for k, v in raw.items()}
     info = {}
     for i in range(0, len(raw), 2):
         k = raw[i] if isinstance(raw[i], str) else raw[i].decode()
@@ -229,11 +231,15 @@ def run_scenario(r, scenario, cycle):
 
     cap_single = r.execute_command("BF.INFO", key, "Capacity")
     inc("bf_info")
+    if isinstance(cap_single, list):
+        cap_single = cap_single[0]
     if cap_single != info_capacity:
         soak_fail(f"BF.INFO single Capacity={cap_single} != full {info_capacity}")
 
     items_single = r.execute_command("BF.INFO", key, "Items")
     inc("bf_info")
+    if isinstance(items_single, list):
+        items_single = items_single[0]
     if items_single != info_items:
         soak_fail(f"BF.INFO single Items={items_single} != full {info_items}")
 
@@ -333,7 +339,8 @@ def main():
     signal.signal(signal.SIGTERM, lambda s, f: (cleanup(s, f), sys.exit(1)))
 
     try:
-        r_conn = redis.Redis(host="127.0.0.1", port=port, decode_responses=False)
+        r_conn = redis.Redis(host="127.0.0.1", port=port, decode_responses=False,
+                             protocol=2)
         r_conn.ping()
 
         initial_memory = get_used_memory(r_conn)
