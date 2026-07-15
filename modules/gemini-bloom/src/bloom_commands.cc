@@ -136,11 +136,10 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
         return RedisModule_ReplyWithError(ctx, "ERR bad expansion");
       }
       if (val == 0) {
-        fixed = true;
-      } else {
-        expansion = static_cast<unsigned>(val);
-        expansionSet = true;
+        return RedisModule_ReplyWithError(ctx, "ERR expansion should be greater or equal to 1");
       }
+      expansion = static_cast<unsigned>(val);
+      expansionSet = true;
     } else if (MatchArg(sv, "NONSCALING")) {
       if (nonscalingSet)
         return RedisModule_ReplyWithError(ctx, "ERR duplicate NONSCALING option");
@@ -304,11 +303,11 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
         return false;
       }
       if (val == 0) {
-        opts.fixedSize = true;
-      } else {
-        opts.expansion = static_cast<unsigned>(val);
-        expansionPositive = true;
+        RedisModule_ReplyWithError(ctx, "ERR expansion should be greater or equal to 1");
+        return false;
       }
+      opts.expansion = static_cast<unsigned>(val);
+      expansionPositive = true;
     } else if (MatchArg(sv, "NOCREATE")) {
       opts.noCreate = true;
     } else if (MatchArg(sv, "NONSCALING")) {

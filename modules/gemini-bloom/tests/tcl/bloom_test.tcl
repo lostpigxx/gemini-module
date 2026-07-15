@@ -740,22 +740,20 @@ test_error "BF.SCANDUMP on string key returns WRONGTYPE" {
 
 puts "\n=== EXPANSION validation ==="
 
-test_assert "BF.RESERVE EXPANSION 0 maps to NONSCALING" {
-  set result [r BF.RESERVE exp0_test 0.01 100 EXPANSION 0]
-  if {$result ne "OK"} { error "expected OK, got $result" }
-  set exp [r BF.INFO exp0_test Expansion]
-  if {$exp ne "(nil)"} { error "expected null expansion (NONSCALING), got $exp" }
-}
+# RedisBloom 2.2/2.4 allowed EXPANSION 0 (treated as NONSCALING).
+# RedisBloom 2.6 rejects it. gemini-bloom follows the 2.6 behavior:
+# EXPANSION must be >= 1, use NONSCALING for fixed-size filters.
+test_error "BF.RESERVE EXPANSION 0 rejected (RB 2.6 compat)" {
+  r BF.RESERVE exp0_test 0.01 100 EXPANSION 0
+} {ERR*expansion*}
+
+test_error "BF.INSERT EXPANSION 0 rejected (RB 2.6 compat)" {
+  r BF.INSERT exp0_ins EXPANSION 0 ITEMS a
+} {ERR*expansion*}
 
 test_error "BF.RESERVE NONSCALING and EXPANSION together should be rejected" {
   r BF.RESERVE ns_exp_test 0.01 100 NONSCALING EXPANSION 2
 } {ERR*}
-
-test_assert "BF.INSERT EXPANSION 0 maps to NONSCALING" {
-  set result [r BF.INSERT exp0_ins EXPANSION 0 ITEMS a]
-  set exp [r BF.INFO exp0_ins Expansion]
-  if {$exp ne "(nil)"} { error "expected null expansion (NONSCALING), got $exp" }
-}
 
 test_error "BF.INSERT NONSCALING and EXPANSION together should be rejected" {
   r BF.INSERT ns_exp_ins NONSCALING EXPANSION 2 ITEMS a
