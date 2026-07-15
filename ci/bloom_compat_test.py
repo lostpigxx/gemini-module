@@ -22,7 +22,10 @@ import redis
 
 passed = 0
 failed = 0
+skipped = 0
 failures = []
+rb_has_card = True
+rb_has_info_single = True
 
 
 def find_free_port():
@@ -71,6 +74,12 @@ def stop_redis(proc):
             proc.wait()
 
 
+def skip(desc):
+    global skipped
+    skipped += 1
+    print(f"  SKIP: {desc}")
+
+
 def compare(desc, gemini_val, rb_val):
     global passed, failed
     if gemini_val == rb_val:
@@ -105,12 +114,23 @@ def both(g_conn, rb_conn, *args):
     return g, rb
 
 
+def _unwrap_info_single(val):
+    """Unwrap BF.INFO single-field response: list→first element, dict→first value."""
+    if isinstance(val, list):
+        return val[0]
+    if isinstance(val, dict):
+        return next(iter(val.values()))
+    return val
+
+
 def compare_info(desc, g_conn, rb_conn, key, skip_items=False):
     """Compare BF.INFO results. skip_items=True for multi-layer where FP causes count diff."""
     g_raw = g_conn.execute_command("BF.INFO", key)
     rb_raw = rb_conn.execute_command("BF.INFO", key)
 
     def to_dict(raw):
+        if isinstance(raw, dict):
+            return {(k if isinstance(k, str) else k.decode()): v for k, v in raw.items()}
         d = {}
         for i in range(0, len(raw), 2):
             k = raw[i] if isinstance(raw[i], str) else raw[i].decode()
@@ -128,10 +148,15 @@ def compare_info(desc, g_conn, rb_conn, key, skip_items=False):
                 g_info.get("Number of items inserted"),
                 rb_info.get("Number of items inserted"))
 
-    for single_field in ["Capacity", "Filters", "Expansion"]:
-        g_v = g_conn.execute_command("BF.INFO", key, single_field)
-        rb_v = rb_conn.execute_command("BF.INFO", key, single_field)
-        compare(f"{desc} INFO single {single_field}", g_v, rb_v)
+    if rb_has_info_single:
+        for single_field in ["Capacity", "Filters", "Expansion"]:
+            g_v = g_conn.execute_command("BF.INFO", key, single_field)
+            rb_v = rb_conn.execute_command("BF.INFO", key, single_field)
+            g_v = _unwrap_info_single(g_v)
+            rb_v = _unwrap_info_single(rb_v)
+            compare(f"{desc} INFO single {single_field}", g_v, rb_v)
+    else:
+        skip(f"{desc} INFO single-field (not supported by this RedisBloom)")
 
 
 def test_basic_scaling(g, rb):
@@ -157,8 +182,11 @@ def test_basic_scaling(g, rb):
         g_r, rb_r = both(g, rb, "BF.EXISTS", key, item)
         compare(f"EXISTS missing {item}", g_r, rb_r)
 
-    g_r, rb_r = both(g, rb, "BF.CARD", key)
-    compare("CARD", g_r, rb_r)
+    if rb_has_card:
+        g_r, rb_r = both(g, rb, "BF.CARD", key)
+        compare("CARD", g_r, rb_r)
+    else:
+        skip("CARD (not supported by this RedisBloom)")
 
     compare_info("basic", g, rb, key)
     both(g, rb, "DEL", key)
@@ -178,8 +206,11 @@ def test_high_expansion(g, rb):
 
     compare_info("exp4", g, rb, key)
 
-    g_r, rb_r = both(g, rb, "BF.CARD", key)
-    compare("CARD exp4", g_r, rb_r)
+    if rb_has_card:
+        g_r, rb_r = both(g, rb, "BF.CARD", key)
+        compare("CARD exp4", g_r, rb_r)
+    else:
+        skip("CARD exp4 (not supported by this RedisBloom)")
 
     both(g, rb, "DEL", key)
 
@@ -198,8 +229,11 @@ def test_nonscaling(g, rb):
 
     compare_info("nonscaling", g, rb, key)
 
-    g_r, rb_r = both(g, rb, "BF.CARD", key)
-    compare("CARD nonscaling", g_r, rb_r)
+    if rb_has_card:
+        g_r, rb_r = both(g, rb, "BF.CARD", key)
+        compare("CARD nonscaling", g_r, rb_r)
+    else:
+        skip("CARD nonscaling (not supported by this RedisBloom)")
 
     both(g, rb, "DEL", key)
 
@@ -282,8 +316,11 @@ def test_auto_create(g, rb):
     g_r, rb_r = both(g, rb, "BF.EXISTS", key, "nope")
     compare("EXISTS auto missing", g_r, rb_r)
 
-    g_r, rb_r = both(g, rb, "BF.CARD", key)
-    compare("CARD auto", g_r, rb_r)
+    if rb_has_card:
+        g_r, rb_r = both(g, rb, "BF.CARD", key)
+        compare("CARD auto", g_r, rb_r)
+    else:
+        skip("CARD auto (not supported by this RedisBloom)")
 
     both(g, rb, "DEL", key)
 
@@ -317,8 +354,11 @@ def test_exists_missing_key(g, rb):
     g_r, rb_r = both(g, rb, "BF.MEXISTS", "no_such_key", "a", "b")
     compare("MEXISTS missing key", g_r, rb_r)
 
-    g_r, rb_r = both(g, rb, "BF.CARD", "no_such_key")
-    compare("CARD missing key", g_r, rb_r)
+    if rb_has_card:
+        g_r, rb_r = both(g, rb, "BF.CARD", "no_such_key")
+        compare("CARD missing key", g_r, rb_r)
+    else:
+        skip("CARD missing key (not supported by this RedisBloom)")
 
 
 def test_error_cases(g, rb):
@@ -337,7 +377,10 @@ def test_error_cases(g, rb):
     compare("MEXISTS WRONGTYPE returns zeros", g_r, rb_r)
 
     compare_both_error("INFO WRONGTYPE", g, rb, "BF.INFO", "str_key")
-    compare_both_error("CARD WRONGTYPE", g, rb, "BF.CARD", "str_key")
+    if rb_has_card:
+        compare_both_error("CARD WRONGTYPE", g, rb, "BF.CARD", "str_key")
+    else:
+        skip("CARD WRONGTYPE (not supported by this RedisBloom)")
     compare_both_error("RESERVE WRONGTYPE", g, rb, "BF.RESERVE", "str_key", 0.01, 100)
 
     compare_both_error("RESERVE bad error rate", g, rb, "BF.RESERVE", "bad1", 0, 100)
@@ -423,10 +466,27 @@ def main():
     signal.signal(signal.SIGTERM, lambda s, f: (cleanup(s, f), sys.exit(1)))
 
     try:
-        g = redis.Redis(host="127.0.0.1", port=port_g, decode_responses=False)
-        rb = redis.Redis(host="127.0.0.1", port=port_rb, decode_responses=False)
+        g = redis.Redis(host="127.0.0.1", port=port_g, decode_responses=False,
+                        protocol=2)
+        rb = redis.Redis(host="127.0.0.1", port=port_rb, decode_responses=False,
+                         protocol=2)
         g.ping()
         rb.ping()
+
+        global rb_has_card, rb_has_info_single
+        rb.execute_command("BF.RESERVE", "__probe__", 0.01, 10)
+        try:
+            rb.execute_command("BF.CARD", "__probe__")
+        except redis.ResponseError:
+            rb_has_card = False
+            print("NOTE: RedisBloom does not support BF.CARD — skipping CARD comparisons")
+        try:
+            rb.execute_command("BF.INFO", "__probe__", "Capacity")
+        except redis.ResponseError:
+            rb_has_info_single = False
+            print("NOTE: RedisBloom does not support BF.INFO single-field — skipping")
+        rb.delete("__probe__")
+        g.delete("__probe__")
 
         test_basic_scaling(g, rb)
         test_high_expansion(g, rb)
@@ -443,7 +503,7 @@ def main():
         test_multi_layer_scaling(g, rb)
 
         print(f"\n{'=' * 50}")
-        print(f"Results: {passed} passed, {failed} failed")
+        print(f"Results: {passed} passed, {failed} failed, {skipped} skipped")
         print(f"{'=' * 50}")
 
         if failures:

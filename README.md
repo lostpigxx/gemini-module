@@ -104,3 +104,35 @@ tclsh modules/gemini-json/tests/tcl/json_test.tcl ./build/redis_json.so
 # gemini-search
 tclsh modules/gemini-search/tests/tcl/search_test.tcl ./build/redis_search.so
 ```
+
+## Docker CI
+
+Docker CI 提供三组环境验证 gemini-bloom 在不同 Redis 版本下的兼容性：
+
+| 环境 | Redis | RedisBloom | Dockerfile |
+|---|---|---|---|
+| redis5 | 5.0.14 | 2.2.18 | `Dockerfile.redis5` |
+| redis6 | 6.2.20 | 2.4.20 | `Dockerfile.redis6` |
+| redis7 | 7.2.11 | 2.6.25 | `Dockerfile.redis7` |
+
+每组环境运行 4 项测试：GTest 单元测试、Tcl 集成测试、gemini-bloom vs RedisBloom 兼容性对比测试、长稳 soak 测试。
+
+### 运行单组环境
+
+```bash
+docker build -f Dockerfile.redis7 -t gemini-module:redis7 .
+docker run --rm gemini-module:redis7
+
+# 缩短 soak 测试时间（默认 300s）
+docker run --rm -e SOAK_DURATION_SEC=30 gemini-module:redis7
+```
+
+### 运行全部三组环境
+
+```bash
+bash ci/run_all_envs.sh
+```
+
+### 离线构建
+
+所有外部依赖源码以 tarball 形式存放在 `deps/` 目录中，Dockerfile 从本地文件解压编译，支持纯离线构建（无外网内网环境）。
