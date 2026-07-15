@@ -45,6 +45,11 @@ if [ "$REDIS_MAJOR" -ge 6 ]; then
     { red "FAIL: bloom soak RESP2"; FAIL=1; }
 fi
 
+# ── RDB migration test (gemini-bloom ↔ RedisBloom) ───────────
+header "Migrate: RDB round-trip"
+python3 ci/bloom_migrate_test.py "./$BUILD_DIR/redis_bloom.so" /opt/redisbloom.so || \
+  { red "FAIL: bloom migrate"; FAIL=1; }
+
 # ── Summary ──────────────────────────────────────────────────
 echo
 if [ "$FAIL" -ne 0 ]; then
