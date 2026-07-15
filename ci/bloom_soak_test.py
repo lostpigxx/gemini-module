@@ -351,7 +351,8 @@ def main():
     signal.signal(signal.SIGTERM, lambda s, f: (cleanup(s, f), sys.exit(1)))
 
     try:
-        proto = detect_protocol(port)
+        forced = os.environ.get("RESP_PROTOCOL")
+        proto = int(forced) if forced else detect_protocol(port)
         print(f"Protocol: RESP{proto}")
         r_conn = redis.Redis(host="127.0.0.1", port=port, decode_responses=False,
                              protocol=proto)

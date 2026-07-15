@@ -478,8 +478,12 @@ def main():
     signal.signal(signal.SIGTERM, lambda s, f: (cleanup(s, f), sys.exit(1)))
 
     try:
-        proto_g = detect_protocol(port_g)
-        proto_rb = detect_protocol(port_rb)
+        forced = os.environ.get("RESP_PROTOCOL")
+        if forced:
+            proto_g = proto_rb = int(forced)
+        else:
+            proto_g = detect_protocol(port_g)
+            proto_rb = detect_protocol(port_rb)
         print(f"gemini-bloom protocol: RESP{proto_g}, RedisBloom protocol: RESP{proto_rb}")
         g = redis.Redis(host="127.0.0.1", port=port_g, decode_responses=False,
                         protocol=proto_g)
