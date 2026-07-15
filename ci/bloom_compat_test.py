@@ -28,6 +28,18 @@ rb_has_card = True
 rb_has_info_single = True
 
 
+def detect_protocol(port):
+    """Try RESP3 first; fall back to RESP2 if the server has no HELLO command."""
+    try:
+        r = redis.Redis(host="127.0.0.1", port=port, decode_responses=False,
+                        protocol=3)
+        r.ping()
+        r.close()
+        return 3
+    except redis.ResponseError:
+        return 2
+
+
 def find_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -466,10 +478,13 @@ def main():
     signal.signal(signal.SIGTERM, lambda s, f: (cleanup(s, f), sys.exit(1)))
 
     try:
+        proto_g = detect_protocol(port_g)
+        proto_rb = detect_protocol(port_rb)
+        print(f"gemini-bloom protocol: RESP{proto_g}, RedisBloom protocol: RESP{proto_rb}")
         g = redis.Redis(host="127.0.0.1", port=port_g, decode_responses=False,
-                        protocol=2)
+                        protocol=proto_g)
         rb = redis.Redis(host="127.0.0.1", port=port_rb, decode_responses=False,
-                         protocol=2)
+                         protocol=proto_rb)
         g.ping()
         rb.ping()
 

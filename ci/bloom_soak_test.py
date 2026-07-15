@@ -49,6 +49,18 @@ def inc(key, n=1):
     stats["total_ops"] += n
 
 
+def detect_protocol(port):
+    """Try RESP3 first; fall back to RESP2 if the server has no HELLO command."""
+    try:
+        r = redis.Redis(host="127.0.0.1", port=port, decode_responses=False,
+                        protocol=3)
+        r.ping()
+        r.close()
+        return 3
+    except redis.ResponseError:
+        return 2
+
+
 def find_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -339,8 +351,10 @@ def main():
     signal.signal(signal.SIGTERM, lambda s, f: (cleanup(s, f), sys.exit(1)))
 
     try:
+        proto = detect_protocol(port)
+        print(f"Protocol: RESP{proto}")
         r_conn = redis.Redis(host="127.0.0.1", port=port, decode_responses=False,
-                             protocol=2)
+                             protocol=proto)
         r_conn.ping()
 
         initial_memory = get_used_memory(r_conn)
