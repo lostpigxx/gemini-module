@@ -8,7 +8,8 @@ green()  { printf '\033[32m%s\033[0m\n' "$*"; }
 red()    { printf '\033[31m%s\033[0m\n' "$*"; }
 header() { printf '\n\033[1;36m========== %s ==========\033[0m\n' "$*"; }
 
-REDIS_MAJOR=$(redis-server --version | grep -oP 'v=\K[0-9]+')
+REDIS_MAJOR=$(redis-server --version | sed -n 's/.*v=\([0-9]*\).*/\1/p')
+REDIS_MAJOR=${REDIS_MAJOR:-0}
 
 # ── GTest unit tests ─────────────────────────────────────────
 header "GTest: gemini-bloom"
