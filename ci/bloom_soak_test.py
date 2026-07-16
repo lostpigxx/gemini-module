@@ -69,6 +69,7 @@ def find_free_port():
 
 def start_redis(module_path, port):
     logfile = f"/tmp/redis_soak_{port}.log"
+    log_fh = open(logfile, "w")
     proc = subprocess.Popen(
         [
             "redis-server",
@@ -79,9 +80,10 @@ def start_redis(module_path, port):
             "--save", "",
             "--loadmodule", os.path.abspath(module_path),
         ],
-        stdout=open(logfile, "w"),
+        stdout=log_fh,
         stderr=subprocess.STDOUT,
     )
+    log_fh.close()
     for _ in range(100):
         time.sleep(0.1)
         try:

@@ -15,6 +15,7 @@ Usage:
 
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -44,6 +45,7 @@ def detect_protocol(port):
 
 def start_redis(module_path, port, rdb_dir, dbfilename="migrate.rdb"):
     logfile = f"/tmp/redis_migrate_{port}.log"
+    log_fh = open(logfile, "w")
     proc = subprocess.Popen(
         [
             "redis-server",
@@ -56,9 +58,10 @@ def start_redis(module_path, port, rdb_dir, dbfilename="migrate.rdb"):
             "--dir", rdb_dir,
             "--loadmodule", os.path.abspath(module_path),
         ],
-        stdout=open(logfile, "w"),
+        stdout=log_fh,
         stderr=subprocess.STDOUT,
     )
+    log_fh.close()
     for _ in range(200):
         time.sleep(0.1)
         try:
@@ -311,13 +314,14 @@ def main():
         proto = int(forced)
     else:
         port_tmp = find_free_port()
-        proc_tmp, _ = start_redis(gemini_path, port_tmp,
-                                  tempfile.mkdtemp())
+        tmp_dir = tempfile.mkdtemp()
+        proc_tmp, _ = start_redis(gemini_path, port_tmp, tmp_dir)
         if proc_tmp:
             proto = detect_protocol(port_tmp)
             stop_redis(proc_tmp)
         else:
             proto = 2
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     print(f"Protocol: RESP{proto}")
 
     directions = [
@@ -333,8 +337,11 @@ def main():
 
     for src_mod, dst_mod, src_name, dst_name in directions:
         rdb_dir = tempfile.mkdtemp()
-        result = run_direction(src_mod, dst_mod, src_name, dst_name,
-                               CORPUS, rdb_dir, proto)
+        try:
+            result = run_direction(src_mod, dst_mod, src_name, dst_name,
+                                   CORPUS, rdb_dir, proto)
+        finally:
+            shutil.rmtree(rdb_dir, ignore_errors=True)
         if result is None:
             skipped += 1
         elif result:

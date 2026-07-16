@@ -16,7 +16,7 @@ for env in redis5 redis6 redis7; do
   fi
 
   header "Testing $env"
-  if ! docker run --rm "gemini-module:$env"; then
+  if ! docker run --rm ${SOAK_DURATION_SEC:+-e SOAK_DURATION_SEC="$SOAK_DURATION_SEC"} "gemini-module:$env"; then
     red "FAIL: tests $env"
     FAIL=1
   else
