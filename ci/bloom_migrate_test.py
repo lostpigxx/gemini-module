@@ -3,11 +3,16 @@
 RDB migration test: verify BF.EXISTS results are 100% identical after
 migrating bloom filter data between gemini-bloom and RedisBloom via RDB.
 
-Tests 4 directions per environment:
-  1. RedisBloom  → gemini-bloom  (import)
-  2. gemini-bloom → RedisBloom   (export)
-  3. gemini-bloom → gemini-bloom (self round-trip)
-  4. RedisBloom  → RedisBloom   (baseline)
+Tests 4 single-hop directions + 3 multi-hop chains per environment:
+  Single-hop:
+    1. RedisBloom  → gemini-bloom  (import)
+    2. gemini-bloom → RedisBloom   (export)
+    3. gemini-bloom → gemini-bloom (self round-trip)
+    4. RedisBloom  → RedisBloom   (baseline)
+  Multi-hop chains:
+    5. gemini-bloom → RedisBloom → gemini-bloom         (round-trip)
+    6. RedisBloom → gemini-bloom → RedisBloom            (reverse round-trip)
+    7. gemini-bloom → RB → gemini → RB → gemini          (5-hop stability)
 
 Usage:
     python3 bloom_migrate_test.py <gemini_bloom.so> <redisbloom.so>
@@ -293,6 +298,100 @@ def run_direction(src_module, dst_module, src_name, dst_name,
             pass
 
 
+def populate_and_snapshot(module_path, mod_name, corpus, rdb_dir, proto):
+    port = find_free_port()
+    proc, logfile = start_redis(module_path, port, rdb_dir)
+    if not proc:
+        print(f"  SKIP: {mod_name} failed to start (check {logfile})")
+        return None
+    try:
+        r = redis.Redis(host="127.0.0.1", port=port,
+                        decode_responses=False, protocol=proto)
+        r.ping()
+        print(f"  Populating {len(corpus)} filters on {mod_name}...")
+        populate(r, corpus)
+        print(f"  Snapshotting source results...")
+        results = snapshot_results(r, corpus)
+        total = sum(len(e["exists"]) for e in results.values())
+        print(f"  Recorded {total} EXISTS results across {len(results)} keys")
+        r.execute_command("BGSAVE")
+        time.sleep(3)
+        return results
+    finally:
+        stop_redis(proc)
+
+
+def migrate_hop(module_path, mod_name, rdb_dir, corpus, proto,
+                do_bgsave=True):
+    port = find_free_port()
+    proc, logfile = start_redis(module_path, port, rdb_dir)
+    if not proc:
+        print(f"  SKIP: {mod_name} failed to load RDB (check {logfile})")
+        return None
+    try:
+        r = redis.Redis(host="127.0.0.1", port=port,
+                        decode_responses=False, protocol=proto)
+        r.ping()
+        print(f"  Snapshotting on {mod_name}...")
+        results = snapshot_results(r, corpus)
+        if do_bgsave:
+            r.execute_command("BGSAVE")
+            time.sleep(3)
+        return results
+    finally:
+        stop_redis(proc)
+
+
+def run_chain(chain, corpus, proto):
+    labels = [name for _, name in chain]
+    chain_label = " → ".join(labels)
+    print(f"\n--- Chain: {chain_label} ---")
+
+    rdb_dir = tempfile.mkdtemp()
+    try:
+        src_mod, src_name = chain[0]
+        ground_truth = populate_and_snapshot(src_mod, src_name, corpus,
+                                            rdb_dir, proto)
+        if ground_truth is None:
+            return None
+
+        all_hops_ok = True
+        prev_results = ground_truth
+        for i in range(1, len(chain)):
+            hop_mod, hop_name = chain[i]
+            is_last = (i == len(chain) - 1)
+            prev_name = chain[i - 1][1]
+
+            print(f"  Hop {i}/{len(chain) - 1}: "
+                  f"{prev_name} → {hop_name}...")
+            hop_results = migrate_hop(hop_mod, hop_name, rdb_dir,
+                                      corpus, proto,
+                                      do_bgsave=not is_last)
+            if hop_results is None:
+                return None
+
+            hop_ok = compare_results(
+                prev_results, hop_results,
+                f"hop {i} ({prev_name} → {hop_name})")
+            if not hop_ok:
+                all_hops_ok = False
+            prev_results = hop_results
+
+        if len(chain) > 2:
+            final_ok = compare_results(
+                ground_truth, prev_results,
+                f"full chain ({chain_label}): origin vs final")
+        else:
+            final_ok = all_hops_ok
+
+        ok = all_hops_ok and final_ok
+        status = "PASS" if ok else "FAIL"
+        print(f"  [{status}] Chain: {chain_label}")
+        return ok
+    finally:
+        shutil.rmtree(rdb_dir, ignore_errors=True)
+
+
 def main():
     if len(sys.argv) < 3:
         print(f"Usage: {sys.argv[0]} <gemini_bloom.so> <redisbloom.so>",
@@ -342,6 +441,23 @@ def main():
                                    CORPUS, rdb_dir, proto)
         finally:
             shutil.rmtree(rdb_dir, ignore_errors=True)
+        if result is None:
+            skipped += 1
+        elif result:
+            passed += 1
+        else:
+            failed += 1
+
+    # Multi-hop chain tests
+    chains = [
+        [(gemini_path, "gemini-bloom"), (rb_path, "RedisBloom"), (gemini_path, "gemini-bloom")],
+        [(rb_path, "RedisBloom"), (gemini_path, "gemini-bloom"), (rb_path, "RedisBloom")],
+        [(gemini_path, "gemini-bloom"), (rb_path, "RedisBloom"), (gemini_path, "gemini-bloom"),
+         (rb_path, "RedisBloom"), (gemini_path, "gemini-bloom")],
+    ]
+
+    for chain in chains:
+        result = run_chain(chain, CORPUS, proto)
         if result is None:
             skipped += 1
         elif result:
