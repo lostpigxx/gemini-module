@@ -47,9 +47,16 @@ if [ "$REDIS_MAJOR" -ge 6 ]; then
 fi
 
 # ── RDB migration test (gemini-bloom ↔ RedisBloom) ───────────
-header "Migrate: RDB round-trip"
+header "Migrate: RDB round-trip (RESP auto)"
 python3 ci/bloom_migrate_test.py "./$BUILD_DIR/redis_bloom.so" /opt/redisbloom.so || \
   { red "FAIL: bloom migrate"; FAIL=1; }
+
+if [ "$REDIS_MAJOR" -ge 6 ]; then
+  header "Migrate: RDB round-trip (RESP2 forced)"
+  RESP_PROTOCOL=2 \
+    python3 ci/bloom_migrate_test.py "./$BUILD_DIR/redis_bloom.so" /opt/redisbloom.so || \
+    { red "FAIL: bloom migrate RESP2"; FAIL=1; }
+fi
 
 # ── Summary ──────────────────────────────────────────────────
 echo

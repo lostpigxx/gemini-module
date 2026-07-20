@@ -92,6 +92,17 @@ def stop_redis(proc):
             proc.wait()
 
 
+def wait_for_bgsave(r, timeout=30):
+    before = r.execute_command("LASTSAVE")
+    r.execute_command("BGSAVE")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if r.execute_command("LASTSAVE") != before:
+            return
+        time.sleep(0.1)
+    raise RuntimeError("BGSAVE did not complete within timeout")
+
+
 def to_info_dict(raw):
     if isinstance(raw, dict):
         return {(k if isinstance(k, str) else k.decode()): v
@@ -262,8 +273,7 @@ def run_direction(src_module, dst_module, src_name, dst_name,
         print(f"  Recorded {total_items} EXISTS results across "
               f"{len(src_results)} keys")
 
-        r_src.execute_command("BGSAVE")
-        time.sleep(3)
+        wait_for_bgsave(r_src)
     finally:
         stop_redis(proc_src)
 
@@ -314,8 +324,7 @@ def populate_and_snapshot(module_path, mod_name, corpus, rdb_dir, proto):
         results = snapshot_results(r, corpus)
         total = sum(len(e["exists"]) for e in results.values())
         print(f"  Recorded {total} EXISTS results across {len(results)} keys")
-        r.execute_command("BGSAVE")
-        time.sleep(3)
+        wait_for_bgsave(r)
         return results
     finally:
         stop_redis(proc)
@@ -335,8 +344,7 @@ def migrate_hop(module_path, mod_name, rdb_dir, corpus, proto,
         print(f"  Snapshotting on {mod_name}...")
         results = snapshot_results(r, corpus)
         if do_bgsave:
-            r.execute_command("BGSAVE")
-            time.sleep(3)
+            wait_for_bgsave(r)
         return results
     finally:
         stop_redis(proc)
