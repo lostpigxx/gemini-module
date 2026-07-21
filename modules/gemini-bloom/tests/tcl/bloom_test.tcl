@@ -1698,6 +1698,91 @@ test_assert "EVAL BF.INFO returns filter info" {
   if {$idx < 0} { error "EVAL BF.INFO missing Capacity field, got: $result" }
 }
 
+puts "\n=== False-positive rate validation ==="
+
+test_assert "FPR within bounds for error_rate=0.01 (single layer)" {
+  r DEL fpr_single
+  r BF.RESERVE fpr_single 0.01 1000 NONSCALING
+  set n 1000
+  for {set i 0} {$i < $n} {incr i} {
+    r BF.ADD fpr_single "in:$i"
+  }
+  # Verify zero false negatives
+  for {set i 0} {$i < $n} {incr i} {
+    set e [r BF.EXISTS fpr_single "in:$i"]
+    if {$e != 1} { error "False negative for in:$i" }
+  }
+  # Probe with items guaranteed not inserted
+  set probes 10000
+  set fp 0
+  for {set i 0} {$i < $probes} {incr i} {
+    set e [r BF.EXISTS fpr_single "out:$i"]
+    if {$e == 1} { incr fp }
+  }
+  set rate [expr {double($fp) / $probes}]
+  # Allow up to 3x configured rate as statistical margin
+  set limit [expr {0.01 * 3.0}]
+  if {$rate > $limit} {
+    error "FPR too high: $fp/$probes = $rate (limit $limit)"
+  }
+  puts "    (measured FPR: $fp/$probes = [format %.4f $rate])"
+}
+
+test_assert "FPR within bounds for error_rate=0.001 (tight)" {
+  r DEL fpr_tight
+  r BF.RESERVE fpr_tight 0.001 5000 NONSCALING
+  set n 5000
+  for {set i 0} {$i < $n} {incr i} {
+    r BF.ADD fpr_tight "in:$i"
+  }
+  for {set i 0} {$i < $n} {incr i} {
+    set e [r BF.EXISTS fpr_tight "in:$i"]
+    if {$e != 1} { error "False negative for in:$i" }
+  }
+  set probes 50000
+  set fp 0
+  for {set i 0} {$i < $probes} {incr i} {
+    set e [r BF.EXISTS fpr_tight "out:$i"]
+    if {$e == 1} { incr fp }
+  }
+  set rate [expr {double($fp) / $probes}]
+  set limit [expr {0.001 * 3.0}]
+  if {$rate > $limit} {
+    error "FPR too high: $fp/$probes = $rate (limit $limit)"
+  }
+  puts "    (measured FPR: $fp/$probes = [format %.5f $rate])"
+}
+
+test_assert "FPR within bounds for scaling filter (multi-layer)" {
+  r DEL fpr_scaling
+  r BF.RESERVE fpr_scaling 0.01 100 EXPANSION 2
+  set n 1000
+  for {set i 0} {$i < $n} {incr i} {
+    r BF.ADD fpr_scaling "in:$i"
+  }
+  set info [r BF.INFO fpr_scaling]
+  set idx [lsearch $info "Number of filters"]
+  set layers [lindex $info [expr {$idx + 1}]]
+  if {$layers <= 1} { error "Expected multi-layer but got $layers" }
+  for {set i 0} {$i < $n} {incr i} {
+    set e [r BF.EXISTS fpr_scaling "in:$i"]
+    if {$e != 1} { error "False negative for in:$i" }
+  }
+  set probes 10000
+  set fp 0
+  for {set i 0} {$i < $probes} {incr i} {
+    set e [r BF.EXISTS fpr_scaling "out:$i"]
+    if {$e == 1} { incr fp }
+  }
+  set rate [expr {double($fp) / $probes}]
+  # Scaling filters accumulate FP across layers; allow up to 5x base rate
+  set limit [expr {0.01 * 5.0}]
+  if {$rate > $limit} {
+    error "FPR too high: $fp/$probes = $rate (limit $limit, layers=$layers)"
+  }
+  puts "    (measured FPR: $fp/$probes = [format %.4f $rate], layers=$layers)"
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================
