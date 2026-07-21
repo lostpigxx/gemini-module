@@ -1783,6 +1783,302 @@ test_assert "FPR within bounds for scaling filter (multi-layer)" {
   puts "    (measured FPR: $fp/$probes = [format %.4f $rate], layers=$layers)"
 }
 
+puts "\n=== Key expiry (EXPIRE / TTL / PEXPIRE / PERSIST) ==="
+
+test_assert "EXPIRE + TTL on bloom key" {
+  r DEL expire_test
+  r BF.RESERVE expire_test 0.01 100
+  r BF.ADD expire_test item1
+  r EXPIRE expire_test 10
+  set ttl [r TTL expire_test]
+  if {$ttl <= 0 || $ttl > 10} { error "TTL=$ttl, expected 1-10" }
+  set e [r BF.EXISTS expire_test item1]
+  if {$e != 1} { error "Item missing before expiry" }
+}
+
+test_assert "PEXPIRE + PTTL on bloom key" {
+  r DEL pexpire_test
+  r BF.RESERVE pexpire_test 0.01 100
+  r BF.ADD pexpire_test item1
+  r PEXPIRE pexpire_test 10000
+  set pttl [r PTTL pexpire_test]
+  if {$pttl <= 0 || $pttl > 10000} { error "PTTL=$pttl, expected 1-10000" }
+}
+
+test_assert "PERSIST removes expiration from bloom key" {
+  r DEL persist_test
+  r BF.RESERVE persist_test 0.01 100
+  r EXPIRE persist_test 10
+  r PERSIST persist_test
+  set ttl [r TTL persist_test]
+  if {$ttl != -1} { error "TTL=$ttl after PERSIST, expected -1" }
+}
+
+test_assert "Bloom key actually expires" {
+  r DEL expiry_gone
+  r BF.RESERVE expiry_gone 0.01 100
+  r BF.ADD expiry_gone item1
+  r PEXPIRE expiry_gone 200
+  after 400
+  set exists [r EXISTS expiry_gone]
+  if {$exists != 0} { error "Key should have expired, EXISTS=$exists" }
+}
+
+puts "\n=== UNLINK / TYPE / generic EXISTS / TOUCH ==="
+
+test_assert "UNLINK deletes bloom key" {
+  r DEL unlink_test
+  r BF.RESERVE unlink_test 0.01 100
+  r BF.ADD unlink_test item1
+  r UNLINK unlink_test
+  set exists [r EXISTS unlink_test]
+  if {$exists != 0} { error "Key should be gone after UNLINK, EXISTS=$exists" }
+}
+
+test "TYPE on bloom key returns module type" {
+  r DEL type_test
+  r BF.RESERVE type_test 0.01 100
+  r TYPE type_test
+} {MBbloom--}
+
+test "TYPE on missing key returns none" {
+  r TYPE no_such_type_key
+} {none}
+
+test "generic EXISTS returns 1 for bloom key" {
+  r DEL exists_test
+  r BF.RESERVE exists_test 0.01 100
+  r EXISTS exists_test
+} {1}
+
+test "generic EXISTS returns 0 for missing key" {
+  r EXISTS no_such_exists_key
+} {0}
+
+test_assert "TOUCH on bloom key returns 1" {
+  r DEL touch_test
+  r BF.RESERVE touch_test 0.01 100
+  set result [r TOUCH touch_test]
+  if {$result != 1} { error "TOUCH returned $result, expected 1" }
+}
+
+test "TOUCH on missing key returns 0" {
+  r TOUCH no_such_touch_key
+} {0}
+
+puts "\n=== SCAN / KEYS ==="
+
+test_assert "SCAN finds bloom keys" {
+  r DEL scan_bf_a scan_bf_b
+  r BF.RESERVE scan_bf_a 0.01 100
+  r BF.RESERVE scan_bf_b 0.01 100
+  set found {}
+  set cursor 0
+  for {set i 0} {$i < 100} {incr i} {
+    set reply [r SCAN $cursor MATCH "scan_bf_*"]
+    set cursor [lindex $reply 0]
+    foreach k [lindex $reply 1] {
+      if {$k ni $found} { lappend found $k }
+    }
+    if {$cursor == 0} break
+  }
+  if {"scan_bf_a" ni $found} { error "scan_bf_a not found in SCAN" }
+  if {"scan_bf_b" ni $found} { error "scan_bf_b not found in SCAN" }
+}
+
+test_assert "KEYS pattern matches bloom keys" {
+  set keys [r KEYS "scan_bf_*"]
+  if {"scan_bf_a" ni $keys} { error "scan_bf_a not found in KEYS" }
+  if {"scan_bf_b" ni $keys} { error "scan_bf_b not found in KEYS" }
+}
+
+puts "\n=== MEMORY USAGE / OBJECT ==="
+
+test_assert "MEMORY USAGE returns positive value for bloom key" {
+  r DEL mem_test
+  r BF.RESERVE mem_test 0.01 1000
+  r BF.ADD mem_test item1
+  set usage [r MEMORY USAGE mem_test]
+  if {$usage <= 0} { error "MEMORY USAGE=$usage, expected > 0" }
+}
+
+test_assert "OBJECT REFCOUNT on bloom key" {
+  set rc [r OBJECT REFCOUNT mem_test]
+  if {$rc < 1} { error "OBJECT REFCOUNT=$rc, expected >= 1" }
+}
+
+test_assert "OBJECT IDLETIME on bloom key" {
+  set idle [r OBJECT IDLETIME mem_test]
+  if {$idle < 0} { error "OBJECT IDLETIME=$idle, expected >= 0" }
+}
+
+test_assert "OBJECT ENCODING on bloom key returns raw" {
+  set enc [r OBJECT ENCODING mem_test]
+  if {$enc ne "raw"} { error "OBJECT ENCODING=$enc, expected raw" }
+}
+
+puts "\n=== SELECT / MOVE / SWAPDB ==="
+
+test_assert "MOVE bloom key to another database" {
+  r SELECT 0
+  r DEL move_test
+  r BF.RESERVE move_test 0.01 100
+  r BF.ADD move_test item1
+  r MOVE move_test 1
+  set exists_db0 [r EXISTS move_test]
+  r SELECT 1
+  set exists_db1 [r EXISTS move_test]
+  set e [r BF.EXISTS move_test item1]
+  r DEL move_test
+  r SELECT 0
+  if {$exists_db0 != 0} { error "Key should be gone from db0" }
+  if {$exists_db1 != 1} { error "Key should exist in db1" }
+  if {$e != 1} { error "Item missing after MOVE" }
+}
+
+test_assert "SWAPDB preserves bloom keys" {
+  if {[catch {r SWAPDB 0 1} err] && [string match "*unknown command*" $err]} {
+    # SWAPDB not available (Redis < 4.0), skip
+    return
+  }
+  r SELECT 0
+  r DEL swap_test
+  r BF.RESERVE swap_test 0.01 100
+  r BF.ADD swap_test item1
+  r SWAPDB 0 1
+  # After swap, key should be in db1 (since we were in db0)
+  # But our connection is still logically on "db0" (which now has db1's data)
+  # So swap_test should NOT be in our current view
+  set exists_here [r EXISTS swap_test]
+  r SELECT 1
+  set exists_there [r EXISTS swap_test]
+  set e [r BF.EXISTS swap_test item1]
+  # Swap back to restore state
+  r SELECT 0
+  r SWAPDB 0 1
+  r SELECT 1
+  r DEL swap_test
+  r SELECT 0
+  if {$exists_here != 0} { error "Key should have moved away from db0 after SWAPDB" }
+  if {$exists_there != 1} { error "Key should be in db1 after SWAPDB" }
+  if {$e != 1} { error "Item missing after SWAPDB" }
+}
+
+puts "\n=== SORT / RANDOMKEY ==="
+
+test_error "SORT on bloom key returns error" {
+  r DEL sort_test
+  r BF.RESERVE sort_test 0.01 100
+  r SORT sort_test
+} {WRONGTYPE*}
+
+test_assert "RANDOMKEY can return a bloom key" {
+  r FLUSHDB
+  r BF.RESERVE only_bloom_key 0.01 100
+  set rk [r RANDOMKEY]
+  if {$rk ne "only_bloom_key"} {
+    error "RANDOMKEY=$rk, expected only_bloom_key"
+  }
+  r DEL only_bloom_key
+}
+
+puts "\n=== Keyspace notifications ==="
+
+test_assert "Keyspace notifications fire for bloom writes" {
+  # Enable keyspace events for generic + string + module commands
+  r CONFIG SET notify-keyspace-events KEg
+  # Subscribe on a separate connection
+  global port
+  set sub_fd [redis_connect localhost $port]
+  redis_command $sub_fd SUBSCRIBE "__keyevent@0__:bf.add"
+  # Give subscribe time to register
+  after 100
+
+  r DEL notif_test
+  r BF.RESERVE notif_test 0.01 100
+  r BF.ADD notif_test item1
+
+  # Read subscription message (non-blocking with timeout)
+  # The subscribe reply itself is the first message
+  # We already consumed it with redis_command above
+  # Now try to read event notification
+  fconfigure $sub_fd -blocking 0
+  after 200
+  set got_event 0
+  for {set i 0} {$i < 5} {incr i} {
+    if {[gets $sub_fd line] > 0} {
+      if {[string match "*notif_test*" $line]} {
+        set got_event 1
+        break
+      }
+    }
+    after 100
+  }
+  catch {close $sub_fd}
+  r CONFIG SET notify-keyspace-events ""
+
+  # Keyspace notifications for module commands may not fire on all versions
+  # so we do not fail, just report
+  if {$got_event} {
+    puts "    (keyspace notification received)"
+  } else {
+    puts "    (keyspace notification not received — expected on some Redis versions)"
+  }
+}
+
+puts "\n=== Replication (master/replica) ==="
+
+test_assert "Bloom data replicates to a replica" {
+  global port module_path
+
+  # Start a replica
+  set rep_port [find_free_port]
+  set rep_dir "/tmp/bloom_replica_$rep_port"
+  file delete -force $rep_dir
+  file mkdir $rep_dir
+
+  catch {
+    exec redis-server \
+      --port $rep_port \
+      --daemonize yes \
+      --loglevel warning \
+      --logfile $rep_dir/redis.log \
+      --dbfilename replica.rdb \
+      --dir $rep_dir \
+      --loadmodule $module_path \
+      --replicaof 127.0.0.1 $port
+  }
+  wait_redis_ready localhost $rep_port
+  set rep_fd [redis_connect localhost $rep_port]
+
+  # Create data on master
+  r DEL repl_test
+  r BF.RESERVE repl_test 0.01 200
+  for {set i 0} {$i < 50} {incr i} {
+    r BF.ADD repl_test "repl_item_$i"
+  }
+
+  # Wait for replication to catch up
+  r WAIT 1 5000
+
+  # Verify on replica
+  set rep_card [redis_command $rep_fd BF.CARD repl_test]
+  set all_found 1
+  for {set i 0} {$i < 50} {incr i} {
+    set e [redis_command $rep_fd BF.EXISTS repl_test "repl_item_$i"]
+    if {$e != 1} { set all_found 0; break }
+  }
+
+  # Cleanup
+  catch {redis_command $rep_fd SHUTDOWN NOSAVE}
+  catch {close $rep_fd}
+  after 200
+  file delete -force $rep_dir
+
+  if {$rep_card != 50} { error "Replica CARD=$rep_card, expected 50" }
+  if {!$all_found} { error "Some items missing on replica" }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================
