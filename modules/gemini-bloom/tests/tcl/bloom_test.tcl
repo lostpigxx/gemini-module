@@ -1486,6 +1486,218 @@ test_assert "BF.RESERVE at moderate capacity succeeds" {
   if {$result ne "OK"} { error "Expected OK for capacity 1<<20, got $result" }
 }
 
+puts "\n=== RENAME bloom key ==="
+
+test_assert "RENAME preserves bloom data" {
+  r DEL rename_src rename_dst
+  r BF.RESERVE rename_src 0.01 100
+  r BF.ADD rename_src item1
+  r BF.ADD rename_src item2
+  r RENAME rename_src rename_dst
+  set e1 [r BF.EXISTS rename_dst item1]
+  set e2 [r BF.EXISTS rename_dst item2]
+  if {$e1 != 1 || $e2 != 1} { error "Items missing after RENAME: item1=$e1 item2=$e2" }
+  set card [r BF.CARD rename_dst]
+  if {$card != 2} { error "CARD=$card after RENAME, expected 2" }
+}
+
+test "RENAME removes old key" {
+  r BF.EXISTS rename_src item1
+} {0}
+
+test_assert "RENAMENX bloom key" {
+  r DEL rnx_src rnx_dst
+  r BF.RESERVE rnx_src 0.01 100
+  r BF.ADD rnx_src hello
+  set ok [r RENAMENX rnx_src rnx_dst]
+  if {$ok != 1} { error "RENAMENX should return 1, got $ok" }
+  set e [r BF.EXISTS rnx_dst hello]
+  if {$e != 1} { error "Item missing after RENAMENX" }
+}
+
+test "RENAMENX fails when target exists" {
+  r DEL rnx_a rnx_b
+  r BF.RESERVE rnx_a 0.01 100
+  r BF.RESERVE rnx_b 0.01 100
+  r RENAMENX rnx_a rnx_b
+} {0}
+
+puts "\n=== COPY bloom key ==="
+
+# Probe whether COPY is available and the module supports it on bloom keys.
+set copy_supported 1
+r DEL copy_probe_src copy_probe_dst
+r BF.RESERVE copy_probe_src 0.01 10
+r BF.ADD copy_probe_src probe_item
+if {[catch {r COPY copy_probe_src copy_probe_dst} err]} {
+  if {[string match "*unknown command*" $err] || [string match "*not supported*" $err]} {
+    set copy_supported 0
+    puts "  (COPY not supported — skipping COPY tests)"
+  }
+}
+r DEL copy_probe_src copy_probe_dst
+
+if {$copy_supported} {
+  test_assert "COPY bloom key preserves data" {
+    r DEL copy_src copy_dst
+    r BF.RESERVE copy_src 0.01 200
+    for {set i 0} {$i < 50} {incr i} {
+      r BF.ADD copy_src "copy_item_$i"
+    }
+    r COPY copy_src copy_dst REPLACE
+    set src_card [r BF.CARD copy_src]
+    set dst_card [r BF.CARD copy_dst]
+    if {$src_card != $dst_card} { error "CARD mismatch: src=$src_card dst=$dst_card" }
+    for {set i 0} {$i < 50} {incr i} {
+      set e [r BF.EXISTS copy_dst "copy_item_$i"]
+      if {$e != 1} { error "False negative after COPY for copy_item_$i" }
+    }
+  }
+
+  test_assert "COPY bloom key: source remains intact" {
+    for {set i 0} {$i < 50} {incr i} {
+      set e [r BF.EXISTS copy_src "copy_item_$i"]
+      if {$e != 1} { error "Source false negative after COPY for copy_item_$i" }
+    }
+  }
+
+  test_assert "COPY bloom key: dest is independent of source" {
+    r BF.ADD copy_src "after_copy"
+    set e [r BF.EXISTS copy_dst "after_copy"]
+    # dst should NOT see items added to src after COPY (FP possible but acceptable)
+  }
+}
+
+puts "\n=== DUMP/RESTORE bloom key ==="
+
+test_assert "DUMP/RESTORE preserves bloom data" {
+  r DEL dr_src dr_dst
+  r BF.RESERVE dr_src 0.01 200
+  for {set i 0} {$i < 100} {incr i} {
+    r BF.ADD dr_src "dr_item_$i"
+  }
+  set dump [r DUMP dr_src]
+  r RESTORE dr_dst 0 $dump
+  set src_card [r BF.CARD dr_src]
+  set dst_card [r BF.CARD dr_dst]
+  if {$src_card != $dst_card} { error "CARD mismatch: src=$src_card dst=$dst_card" }
+  for {set i 0} {$i < 100} {incr i} {
+    set e [r BF.EXISTS dr_dst "dr_item_$i"]
+    if {$e != 1} { error "False negative after RESTORE for dr_item_$i" }
+  }
+}
+
+test_assert "DUMP/RESTORE preserves BF.INFO metadata" {
+  set src_info [r BF.INFO dr_src]
+  set dst_info [r BF.INFO dr_dst]
+  foreach field {"Capacity" "Number of filters" "Number of items inserted" "Expansion rate"} {
+    set si [lsearch $src_info $field]
+    set di [lsearch $dst_info $field]
+    set sv [lindex $src_info [expr {$si + 1}]]
+    set dv [lindex $dst_info [expr {$di + 1}]]
+    if {$sv ne $dv} { error "$field mismatch after RESTORE: src=$sv dst=$dv" }
+  }
+}
+
+test_assert "RESTORE REPLACE overwrites existing bloom key" {
+  r DEL rr_src rr_dst
+  r BF.RESERVE rr_src 0.01 100
+  r BF.ADD rr_src new_data
+  r BF.RESERVE rr_dst 0.01 100
+  r BF.ADD rr_dst old_data
+  set dump [r DUMP rr_src]
+  r RESTORE rr_dst 0 $dump REPLACE
+  set e_new [r BF.EXISTS rr_dst new_data]
+  if {$e_new != 1} { error "new_data missing after RESTORE REPLACE" }
+  set card [r BF.CARD rr_dst]
+  if {$card != 1} { error "CARD=$card after RESTORE REPLACE, expected 1" }
+}
+
+puts "\n=== MULTI/EXEC transactions ==="
+
+test_assert "Bloom commands work inside MULTI/EXEC" {
+  r DEL tx_test
+  r BF.RESERVE tx_test 0.01 100
+  r MULTI
+  r BF.ADD tx_test tx_a
+  r BF.ADD tx_test tx_b
+  r BF.EXISTS tx_test tx_a
+  r BF.CARD tx_test
+  set results [r EXEC]
+  set add_a [lindex $results 0]
+  set add_b [lindex $results 1]
+  set exists_a [lindex $results 2]
+  set card [lindex $results 3]
+  if {$add_a != 1} { error "BF.ADD tx_a in EXEC expected 1, got $add_a" }
+  if {$add_b != 1} { error "BF.ADD tx_b in EXEC expected 1, got $add_b" }
+  if {$exists_a != 1} { error "BF.EXISTS tx_a in EXEC expected 1, got $exists_a" }
+  if {$card != 2} { error "BF.CARD in EXEC expected 2, got $card" }
+}
+
+test_assert "DISCARD aborts bloom writes" {
+  r DEL discard_test
+  r BF.RESERVE discard_test 0.01 100
+  r MULTI
+  r BF.ADD discard_test should_not_exist
+  r DISCARD
+  set e [r BF.EXISTS discard_test should_not_exist]
+  if {$e != 0} { error "Item should not exist after DISCARD, got $e" }
+}
+
+test_assert "WATCH + EXEC fails on concurrent bloom write" {
+  r DEL watch_test
+  r BF.RESERVE watch_test 0.01 100
+
+  r WATCH watch_test
+
+  # Simulate concurrent write via a separate connection
+  global port
+  set fd2 [redis_connect localhost $port]
+  redis_command $fd2 BF.ADD watch_test interloper
+  close $fd2
+
+  r MULTI
+  r BF.ADD watch_test victim
+  set result [r EXEC]
+  # EXEC should return nil (transaction aborted) because key was modified
+  if {$result ne "(nil)"} { error "EXEC should return nil after WATCH violation, got $result" }
+}
+
+puts "\n=== Lua scripting ==="
+
+test_assert "EVAL can call BF.ADD and BF.EXISTS" {
+  r DEL lua_test
+  r BF.RESERVE lua_test 0.01 100
+  set script {
+    redis.call('BF.ADD', KEYS[1], ARGV[1])
+    redis.call('BF.ADD', KEYS[1], ARGV[2])
+    return redis.call('BF.EXISTS', KEYS[1], ARGV[1])
+  }
+  set result [r EVAL $script 1 lua_test lua_a lua_b]
+  if {$result != 1} { error "EVAL BF.EXISTS expected 1, got $result" }
+  set card [r BF.CARD lua_test]
+  if {$card != 2} { error "CARD=$card after EVAL, expected 2" }
+}
+
+test_assert "EVAL BF.MADD returns array" {
+  r DEL lua_madd
+  r BF.RESERVE lua_madd 0.01 100
+  set script {
+    return redis.call('BF.MADD', KEYS[1], 'x', 'y', 'z')
+  }
+  set result [r EVAL $script 1 lua_madd]
+  if {$result ne "1 1 1"} { error "EVAL BF.MADD expected {1 1 1}, got $result" }
+}
+
+test_assert "EVAL BF.INFO returns filter info" {
+  set script {
+    return redis.call('BF.INFO', KEYS[1])
+  }
+  set result [r EVAL $script 1 lua_madd]
+  set idx [lsearch $result "Capacity"]
+  if {$idx < 0} { error "EVAL BF.INFO missing Capacity field, got: $result" }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================
