@@ -1,0 +1,5 @@
+Mode: rdb, aof
+Shape: single_layer, multi_layer
+Scaling: scaling, non_scaling
+ItemShape: ascii, binary
+RestartStyle: clean_restart, shutdown_save

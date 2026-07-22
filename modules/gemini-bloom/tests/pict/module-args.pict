@@ -1,0 +1,7 @@
+ErrorRate: absent, valid_small, valid_tiny, zero, one, negative, text
+InitialSize: absent, valid_small, valid_medium, zero, negative, text
+Expansion: absent, valid_1, valid_4, zero, negative, text
+UnknownArg: absent, present
+MissingValue: none, error_rate, initial_size, expansion
+ArgOrder: canonical, reversed
+AutoCreateCheck: yes, no
