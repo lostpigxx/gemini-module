@@ -1,0 +1,8 @@
+dyld[25841]: Library not loaded: @rpath/libgtest_main.1.11.0.dylib
+  Referenced from: <C6F75636-B97A-3F13-B284-B9BD716F0A24> /private/tmp/gemini-bloom-stage02-build.G7fAub/modules/gemini-bloom/bloom_filter_test
+  Reason: no LC_RPATH's found
+/bin/sh: line 1: 25841 Abort trap: 6           ./bloom_filter_test --gtest_color=yes
+make[3]: *** [modules/gemini-bloom/CMakeFiles/bloom_test] Error 134
+make[2]: *** [modules/gemini-bloom/CMakeFiles/bloom_test.dir/all] Error 2
+make[1]: *** [modules/gemini-bloom/CMakeFiles/bloom_test.dir/rule] Error 2
+make: *** [bloom_test] Error 2

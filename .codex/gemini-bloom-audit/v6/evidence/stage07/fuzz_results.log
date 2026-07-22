@@ -1,0 +1,21 @@
+{
+  "cursor_faults": {
+    "FAIL": 2,
+    "PASS": 5
+  },
+  "existing_key_safety": {
+    "PASS": 2
+  },
+  "header_fuzz": {
+    "FAIL": 2,
+    "PASS": 92
+  },
+  "loading_state": "PASS",
+  "persistence_faults": {
+    "FAIL": 2
+  },
+  "server_alive_end": true,
+  "static_resource_boundary": {
+    "FAIL": 2
+  }
+}

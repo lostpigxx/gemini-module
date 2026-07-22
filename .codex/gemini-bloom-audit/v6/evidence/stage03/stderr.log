@@ -1,0 +1,10 @@
+# Stage 03 stderr summary
+
+One initial directory creation command failed under the restricted filesystem sandbox:
+
+```text
+mkdir: .codex/gemini-bloom-audit/v6/agents/stage03: Operation not permitted
+mkdir: .codex/gemini-bloom-audit/v6/evidence/stage03: Operation not permitted
+```
+
+The same `mkdir -p` command was rerun with approved escalation and succeeded. No Stage 03 audit item remains blocked by this sandbox denial.

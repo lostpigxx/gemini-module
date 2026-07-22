@@ -1,0 +1,47 @@
+# Stage 01 Git Snapshot
+
+## HEAD
+
+```text
+fa165b27fc498da23b0861f99e5f2919d89dd897
+```
+
+## Branch
+
+```text
+audit/gemini-bloom-v6
+```
+
+## Dirty status
+
+```text
+?? .codex/gemini-bloom-audit/v6/agents/stage01/
+```
+
+Interpretation: dirty tree at collection time consisted of Stage 01 audit artifacts being created under the allowed `.codex/gemini-bloom-audit/v6/**` path. No `modules/gemini-bloom/**` tracked production or test changes were present.
+
+## Remotes
+
+```text
+ly989264	git@github.com:ly989264/gemini-module.git (fetch)
+ly989264	git@github.com:ly989264/gemini-module.git (push)
+origin	git@github.com:lostpigxx/gemini-module.git (fetch)
+origin	git@github.com:lostpigxx/gemini-module.git (push)
+```
+
+## Branch tracking
+
+```text
+* audit/gemini-bloom-v6                           fa165b2 [origin/audit/gemini-bloom-v6] audit(gemini-bloom): v6 stage 00 design contract
+  main                                            780be16 [origin/main] Polish DESIGN.md: remove stale wording, fix cross-references, update test counts
+```
+
+Full local branch output was inspected; the active branch tracks `origin/audit/gemini-bloom-v6`.
+
+## Recent history
+
+```text
+fa165b2 (HEAD -> audit/gemini-bloom-v6, origin/audit/gemini-bloom-v6) audit(gemini-bloom): v6 stage 00 design contract
+780be16 (origin/main, origin/HEAD, main) Polish DESIGN.md: remove stale wording, fix cross-references, update test counts
+fb3f1e9 Document AOF rewrite alloc-failure as known limitation (§9.7)
+```

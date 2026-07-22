@@ -1,0 +1,29 @@
+18789:C 01 Jul 2026 20:08:09.965 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+18789:C 01 Jul 2026 20:08:09.966 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=18789, just started
+18789:C 01 Jul 2026 20:08:09.966 # Configuration loaded
+18789:M 01 Jul 2026 20:08:09.967 * monotonic clock: POSIX clock_gettime
+18789:M 01 Jul 2026 20:08:09.969 * No cluster configuration found, I'm d1bb64a5a815ba30c99b7e1d5ddfe818cb60845d
+18789:M 01 Jul 2026 20:08:09.975 * Running mode=cluster, port=45391.
+18789:M 01 Jul 2026 20:08:09.975 # Server initialized
+18789:M 01 Jul 2026 20:08:09.978 * <GeminiBloom> GeminiBloom module loaded
+18789:M 01 Jul 2026 20:08:09.978 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage09-build-workaround/redis_bloom.so
+18789:M 01 Jul 2026 20:08:09.980 * Ready to accept connections
+18789:M 01 Jul 2026 20:08:10.114 # configEpoch set to 6 via CLUSTER SET-CONFIG-EPOCH
+18789:M 01 Jul 2026 20:08:10.274 # IP address for this node updated to 127.0.0.1
+18789:M 01 Jul 2026 20:08:12.061 # Cluster state changed: ok
+18789:S 01 Jul 2026 20:08:13.128 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+18789:S 01 Jul 2026 20:08:13.129 * Connecting to MASTER 127.0.0.1:45388
+18789:S 01 Jul 2026 20:08:13.129 * MASTER <-> REPLICA sync started
+18789:S 01 Jul 2026 20:08:13.129 * Non blocking connect for SYNC fired the event.
+18789:S 01 Jul 2026 20:08:13.130 * Master replied to PING, replication can continue...
+18789:S 01 Jul 2026 20:08:13.131 * Trying a partial resynchronization (request 272dadbff1c85d8f62bcac17e2049c577cea4375:1).
+18789:S 01 Jul 2026 20:08:13.133 * Full resync from master: d4653d5612c8421d75e2c3650371e65fa8f5f8f8:0
+18789:S 01 Jul 2026 20:08:13.135 * Discarding previously cached master state.
+18789:S 01 Jul 2026 20:08:13.142 * MASTER <-> REPLICA sync: receiving 176 bytes from master to disk
+18789:S 01 Jul 2026 20:08:13.143 * MASTER <-> REPLICA sync: Flushing old data
+18789:S 01 Jul 2026 20:08:13.143 * MASTER <-> REPLICA sync: Loading DB in memory
+18789:S 01 Jul 2026 20:08:13.145 * Loading RDB produced by version 6.2.17
+18789:S 01 Jul 2026 20:08:13.145 * RDB age 0 seconds
+18789:S 01 Jul 2026 20:08:13.145 * RDB memory usage when created 2.48 Mb
+18789:S 01 Jul 2026 20:08:13.145 # Done loading RDB, keys loaded: 0, keys expired: 0.
+18789:S 01 Jul 2026 20:08:13.145 * MASTER <-> REPLICA sync: Finished with success

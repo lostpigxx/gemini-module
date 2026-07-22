@@ -1,0 +1,20 @@
+# Stage 07 executed commands
+
+# Rehydrate and static inspection
+sed -n '1,260p' modules/gemini-bloom/DESIGN.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/LOOP_CONTROL_BATCH.md
+for f in .codex/gemini-bloom-audit/v6/policies/*.md; do sed -n '1,240p' "$f"; done
+sed -n '1,180p' .codex/gemini-bloom-audit/v6/state/LOOP_STATE.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/stages/STAGE_07_FUZZ_FAULT_SAFETY.md
+sed -n '1,180p' .codex/gemini-bloom-audit/v6/agents/stage06/stage_result.md
+sed -n '1,120p' .codex/gemini-bloom-audit/v6/agents/stage06/reviewer_output.md
+grep -RInE "DeserializeHeader|SerializeHeader|ValidateLayerFields|RdbLoadBloom|RdbSaveBloom|LoadChunk|ScanDump|Loading|RawBits|kMaxExpansion|kMaxLayers|dataSize|totalDataSize|expansionFactor|itemCount|totalItems" modules/gemini-bloom/src modules/gemini-bloom/tests > .codex/gemini-bloom-audit/v6/evidence/stage07/static_inspection.log 2> .codex/gemini-bloom-audit/v6/evidence/stage07/static_inspection_stderr.log; echo $? > .codex/gemini-bloom-audit/v6/evidence/stage07/static_inspection_exit_code.txt
+
+# GTest build availability probe
+cmake --build /tmp/gemini-module-v6-stage05-build-workaround --target bloom_rdb_test -j2
+
+# Runtime fuzz/fault-safety harness
+docker exec strange_feynman bash -lc 'cd /workspace/projects/VibeCoding/gemini-module; out=.codex/gemini-bloom-audit/v6/evidence/stage07; python3 "$out/stage07_fuzz_fault_safety.py" --redis-server /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server --gemini-module /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so --seed 2970124295 --output "$out/stage07_fuzz_results.json" > "$out/fuzz_results.log" 2> "$out/fuzz_stderr.log"; rc=$?; echo $rc > "$out/fuzz_exit_code.txt"; exit $rc'
+
+# Environment snapshot
+docker exec strange_feynman bash -lc 'cd /workspace/projects/VibeCoding/gemini-module; out=.codex/gemini-bloom-audit/v6/evidence/stage07; { echo "# Stage 07 environment snapshot"; date -u +%Y-%m-%dT%H:%M:%SZ; git rev-parse HEAD; git rev-parse --abbrev-ref HEAD; /workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server --version; ls -l /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so; sha256sum /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so; python3 --version; cmake --build /tmp/gemini-module-v6-stage05-build-workaround --target bloom_rdb_test -j2; echo "gtest_build_rc=$?"; } > "$out/env_snapshot.txt" 2>&1'

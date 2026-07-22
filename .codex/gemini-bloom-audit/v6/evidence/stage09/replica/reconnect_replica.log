@@ -1,0 +1,54 @@
+18730:C 01 Jul 2026 20:08:06.797 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+18730:C 01 Jul 2026 20:08:06.798 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=18730, just started
+18730:C 01 Jul 2026 20:08:06.798 # Configuration loaded
+18730:S 01 Jul 2026 20:08:06.798 * monotonic clock: POSIX clock_gettime
+18730:S 01 Jul 2026 20:08:06.804 * Running mode=standalone, port=45381.
+18730:S 01 Jul 2026 20:08:06.804 # Server initialized
+18730:S 01 Jul 2026 20:08:06.806 * <GeminiBloom> GeminiBloom module loaded
+18730:S 01 Jul 2026 20:08:06.807 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage09-build-workaround/redis_bloom.so
+18730:S 01 Jul 2026 20:08:06.809 * Ready to accept connections
+18730:S 01 Jul 2026 20:08:06.811 * Connecting to MASTER 127.0.0.1:45380
+18730:S 01 Jul 2026 20:08:06.811 * MASTER <-> REPLICA sync started
+18730:S 01 Jul 2026 20:08:06.811 * Non blocking connect for SYNC fired the event.
+18730:S 01 Jul 2026 20:08:06.811 * Master replied to PING, replication can continue...
+18730:S 01 Jul 2026 20:08:06.812 * Partial resynchronization not possible (no cached master)
+18730:S 01 Jul 2026 20:08:06.813 * Full resync from master: 4fa48e95c94cf9b92ccd531cd50644c95a277508:0
+18730:S 01 Jul 2026 20:08:06.893 * MASTER <-> REPLICA sync: receiving 176 bytes from master to disk
+18730:S 01 Jul 2026 20:08:06.894 * MASTER <-> REPLICA sync: Flushing old data
+18730:S 01 Jul 2026 20:08:06.894 * MASTER <-> REPLICA sync: Loading DB in memory
+18730:S 01 Jul 2026 20:08:06.898 * Loading RDB produced by version 6.2.17
+18730:S 01 Jul 2026 20:08:06.898 * RDB age 0 seconds
+18730:S 01 Jul 2026 20:08:06.898 * RDB memory usage when created 1.90 Mb
+18730:S 01 Jul 2026 20:08:06.898 # Done loading RDB, keys loaded: 0, keys expired: 0.
+18730:S 01 Jul 2026 20:08:06.898 * MASTER <-> REPLICA sync: Finished with success
+18730:S 01 Jul 2026 20:08:06.906 # Connection with master lost.
+18730:S 01 Jul 2026 20:08:06.906 * Caching the disconnected master state.
+18730:S 01 Jul 2026 20:08:06.906 * Reconnecting to MASTER 127.0.0.1:45380
+18730:S 01 Jul 2026 20:08:06.906 * MASTER <-> REPLICA sync started
+18730:S 01 Jul 2026 20:08:06.906 * Non blocking connect for SYNC fired the event.
+18730:S 01 Jul 2026 20:08:06.906 * Master replied to PING, replication can continue...
+18730:S 01 Jul 2026 20:08:06.906 * Trying a partial resynchronization (request 4fa48e95c94cf9b92ccd531cd50644c95a277508:196).
+18730:S 01 Jul 2026 20:08:06.906 * Successful partial resynchronization with master.
+18730:S 01 Jul 2026 20:08:06.906 * MASTER <-> REPLICA sync: Master accepted a Partial Resynchronization.
+18730:M 01 Jul 2026 20:08:07.916 # Connection with master lost.
+18730:M 01 Jul 2026 20:08:07.916 * Caching the disconnected master state.
+18730:M 01 Jul 2026 20:08:07.917 * Discarding previously cached master state.
+18730:M 01 Jul 2026 20:08:07.917 # Setting secondary replication ID to 4fa48e95c94cf9b92ccd531cd50644c95a277508, valid up to offset: 270. New replication ID is dfbb1ea8ce9b9411da1cdb4c34434074e6a53edb
+18730:M 01 Jul 2026 20:08:07.917 * MASTER MODE enabled (user request from 'id=6 addr=127.0.0.1:59064 laddr=127.0.0.1:45381 fd=10 name= age=1 idle=0 flags=N db=0 sub=0 psub=0 multi=-1 qbuf=36 qbuf-free=32734 argv-mem=14 obl=0 oll=0 omem=0 tot-mem=49814 events=r cmd=replicaof user=default redir=-1')
+18730:S 01 Jul 2026 20:08:08.425 * Before turning into a replica, using my own master parameters to synthesize a cached master: I may be able to synchronize with the new master with just a partial transfer.
+18730:S 01 Jul 2026 20:08:08.426 * Connecting to MASTER 127.0.0.1:45380
+18730:S 01 Jul 2026 20:08:08.426 * MASTER <-> REPLICA sync started
+18730:S 01 Jul 2026 20:08:08.426 * REPLICAOF 127.0.0.1:45380 enabled (user request from 'id=6 addr=127.0.0.1:59064 laddr=127.0.0.1:45381 fd=10 name= age=2 idle=0 flags=N db=0 sub=0 psub=0 multi=-1 qbuf=45 qbuf-free=32725 argv-mem=23 obl=0 oll=0 omem=0 tot-mem=49823 events=r cmd=replicaof user=default redir=-1')
+18730:S 01 Jul 2026 20:08:08.426 * Non blocking connect for SYNC fired the event.
+18730:S 01 Jul 2026 20:08:08.426 * Master replied to PING, replication can continue...
+18730:S 01 Jul 2026 20:08:08.427 * Trying a partial resynchronization (request dfbb1ea8ce9b9411da1cdb4c34434074e6a53edb:270).
+18730:S 01 Jul 2026 20:08:08.428 * Full resync from master: 4fa48e95c94cf9b92ccd531cd50644c95a277508:329
+18730:S 01 Jul 2026 20:08:08.428 * Discarding previously cached master state.
+18730:S 01 Jul 2026 20:08:08.463 * MASTER <-> REPLICA sync: receiving 449 bytes from master to disk
+18730:S 01 Jul 2026 20:08:08.463 * MASTER <-> REPLICA sync: Flushing old data
+18730:S 01 Jul 2026 20:08:08.463 * MASTER <-> REPLICA sync: Loading DB in memory
+18730:S 01 Jul 2026 20:08:08.465 * Loading RDB produced by version 6.2.17
+18730:S 01 Jul 2026 20:08:08.465 * RDB age 0 seconds
+18730:S 01 Jul 2026 20:08:08.465 * RDB memory usage when created 1.95 Mb
+18730:S 01 Jul 2026 20:08:08.468 # Done loading RDB, keys loaded: 1, keys expired: 0.
+18730:S 01 Jul 2026 20:08:08.468 * MASTER <-> REPLICA sync: Finished with success

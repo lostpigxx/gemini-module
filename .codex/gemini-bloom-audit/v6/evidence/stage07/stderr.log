@@ -1,0 +1,5 @@
+===== fuzz_stderr =====
+
+===== static_inspection_stderr =====
+bash: line 1: rg: command not found
+

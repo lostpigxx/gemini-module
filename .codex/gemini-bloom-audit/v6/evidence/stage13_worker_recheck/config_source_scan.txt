@@ -1,0 +1,41 @@
+modules/gemini-bloom/DESIGN.md:131:**数据结构选择的影响**：RedisBloom 使用链表存储子 filter，每次扩容是 O(1) 的链表 append。gemini-bloom 使用动态数组，扩容时需要 move 所有已有层（O(n)），但查找时内存连续，cache 更友好。由于层数通常 < 20（EXPANSION 2 下），move 成本可忽略。
+modules/gemini-bloom/DESIGN.md:169:RedisBloom v2.4.20 chunk 序列示例（EXPANSION 2, 40 items）:
+modules/gemini-bloom/DESIGN.md:186:| BF.INSERT EXPANSION 0 | 映射为 NONSCALING | 拒绝（ERR Bad argument received） |
+modules/gemini-bloom/DESIGN.md:187:| BF.RESERVE EXPANSION 0 | 映射为 NONSCALING | 映射为 NONSCALING |
+modules/gemini-bloom/DESIGN.md:258:| `BF.RESERVE key error_rate capacity [EXPANSION n \| NONSCALING]` | write deny-oom | 创建 Bloom Filter |
+modules/gemini-bloom/DESIGN.md:261:| `BF.INSERT key [CAPACITY n] [ERROR rate] [EXPANSION n] [NOCREATE] [NONSCALING] ITEMS item [item ...]` | write deny-oom | 创建（可选）并批量添加 |
+modules/gemini-bloom/DESIGN.md:281:- 重复的 EXPANSION、NONSCALING、ERROR、CAPACITY 选项会被拒绝
+modules/gemini-bloom/DESIGN.md:282:- NONSCALING 和 EXPANSION > 0 互斥
+modules/gemini-bloom/DESIGN.md:299:| `BF.INSERT EXPANSION 0` | 映射为 NONSCALING | 返回 ERR | gemini 更宽松 |
+modules/gemini-bloom/DESIGN.md:613:- **扩容机制**：自动扩容后 NumLayers > 1 且所有元素仍可查；EXPANSION 1 vs 2 的层大小差异。
+modules/gemini-bloom/DESIGN.md:630:- **参数校验与错误路径**（~30 tests）：error rate / capacity / expansion 的边界值和非法值；NOCREATE + CAPACITY/ERROR 互斥；NONSCALING + EXPANSION 互斥；重复 option 拒绝（EXPANSION/NONSCALING/ERROR/CAPACITY）；未知 option 拒绝；arity 不足；缺值/非数值/超范围。
+modules/gemini-bloom/DESIGN.md:635:- **扩容与多层**（~5 tests）：自动扩容后零 false negative；EXPANSION 4 vs 1 的层数差异；expansion rate 报告正确。
+modules/gemini-bloom/DESIGN.md:638:- **模块配置**（9 tests）：默认值验证；`ERROR_RATE`/`INITIAL_SIZE`/`EXPANSION` 覆盖验证；缺值/超范围/零值/未知参数均导致模块加载失败。配置测试通过启动独立 redis-server 实例来验证模块加载行为。
+modules/gemini-bloom/DESIGN.md:668:| `EXPANSION` | 2 | 1 .. 32768 | 默认扩展因子 |
+modules/gemini-bloom/DESIGN.md:676:| `EXPANSION` 配置 | 支持（gemini 扩展） | 不支持（module load 失败） |
+modules/gemini-bloom/DESIGN.md:677:| `CF_MAX_EXPANSIONS` | 不支持（非 Bloom Filter） | 支持（Cuckoo Filter 参数） |
+modules/gemini-bloom/DESIGN.md:679:| `EXPANSION 0` 在配置中 | 拒绝 | N/A |
+modules/gemini-bloom/DESIGN.md:680:| `EXPANSION 0` 在命令中 | 映射为 NONSCALING | `BF.RESERVE` 接受，`BF.INSERT` 拒绝 |
+modules/gemini-bloom/DESIGN.md:690:3. **live replication command stream 的 BF.CARD 差异**：在 `EXPANSION 1` 等高 false-positive 场景下，command replay 路径上 RedisBloom 和 gemini 的 `BF.CARD` 可能不同（但 membership 不受影响）。fullsync replication（RDB snapshot）无此问题。
+modules/gemini-bloom/DESIGN.md:696:6. **子 filter 数量影响查询性能**：`EXPANSION 1` 会产生较多 layer，查询需要逐层检查。建议使用 `EXPANSION 2` 或更大值。
+modules/gemini-bloom/src/bloom_config.cc:33:      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
+modules/gemini-bloom/src/bloom_config.cc:39:    } else if (len == 9 && strncasecmp(arg, "EXPANSION", 9) == 0) {
+modules/gemini-bloom/src/bloom_config.cc:41:        RedisModule_Log(ctx, "warning", "EXPANSION requires a value");
+modules/gemini-bloom/src/bloom_config.cc:45:      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
+modules/gemini-bloom/src/bloom_config.cc:47:        RedisModule_Log(ctx, "warning", "Invalid EXPANSION (must be >= 1)");
+modules/gemini-bloom/src/bloom_config.cc:50:      g_bloomConfig.defaultExpansion = static_cast<unsigned>(val);
+modules/gemini-bloom/src/bloom_commands.cc:36:                      g_bloomConfig.defaultExpansion, false);
+modules/gemini-bloom/src/bloom_commands.cc:111:  if (RedisModule_StringToLongLong(argv[3], &cap) != REDISMODULE_OK || cap <= 0 ||
+modules/gemini-bloom/src/bloom_commands.cc:116:  unsigned expansion = g_bloomConfig.defaultExpansion;
+modules/gemini-bloom/src/bloom_commands.cc:127:    if (MatchArg(sv, "EXPANSION")) {
+modules/gemini-bloom/src/bloom_commands.cc:129:        return RedisModule_ReplyWithError(ctx, "ERR duplicate EXPANSION option");
+modules/gemini-bloom/src/bloom_commands.cc:132:        return RedisModule_ReplyWithError(ctx, "ERR EXPANSION expects a numeric argument");
+modules/gemini-bloom/src/bloom_commands.cc:134:      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
+modules/gemini-bloom/src/bloom_commands.cc:253:  opts.expansion = g_bloomConfig.defaultExpansion;
+modules/gemini-bloom/src/bloom_commands.cc:286:      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK || val <= 0 ||
+modules/gemini-bloom/src/bloom_commands.cc:293:    } else if (MatchArg(sv, "EXPANSION")) {
+modules/gemini-bloom/src/bloom_commands.cc:295:        RedisModule_ReplyWithError(ctx, "ERR duplicate EXPANSION option");
+modules/gemini-bloom/src/bloom_commands.cc:301:      if (RedisModule_StringToLongLong(argv[i], &val) != REDISMODULE_OK ||
+modules/gemini-bloom/src/bloom_commands.cc:331:    RedisModule_ReplyWithError(ctx, "ERR NONSCALING and EXPANSION are mutually exclusive");
+modules/gemini-bloom/src/bloom_commands.cc:559:  if (RedisModule_StringToLongLong(argv[2], &cursor) != REDISMODULE_OK || cursor < 0) {
+modules/gemini-bloom/src/bloom_commands.cc:596:  if (RedisModule_StringToLongLong(argv[2], &cursor) != REDISMODULE_OK || cursor < 1) {

@@ -1,0 +1,44 @@
+# Stage 00 commands
+
+```bash
+git fetch origin main
+git switch -c audit/gemini-bloom-v6 origin/main
+git diff --name-only origin/main..codex/gemini-bloom-v6-review -- modules/gemini-bloom
+git restore --source=codex/gemini-bloom-v6-review -- .codex/gemini-bloom-audit/v6
+sed -n '1,180p' modules/gemini-bloom/DESIGN.md
+sed -n '181,360p' modules/gemini-bloom/DESIGN.md
+sed -n '361,540p' modules/gemini-bloom/DESIGN.md
+sed -n '541,760p' modules/gemini-bloom/DESIGN.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/LOOP_CONTROL_BATCH.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/00_design_first_policy.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/01_rehydration_policy.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/02_subagent_protocol.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/03_evidence_policy.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/04_quality_gates.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/05_commit_push_policy.md
+sed -n '1,260p' .codex/gemini-bloom-audit/v6/policies/06_final_report_policy.md
+sed -n '1,220p' .codex/gemini-bloom-audit/v6/stages/STAGE_00_DESIGN_CONTRACT.md
+sed -n '1,220p' .codex/gemini-bloom-audit/v6/prompts/planner_subagent_prompt_template.md
+git rev-parse HEAD
+git show -s --format=%H%n%ci%n%D HEAD
+rg --files modules/gemini-bloom
+rg --files modules/gemini-bloom/tests
+find modules/gemini-bloom/tests -maxdepth 3 -type d -print
+ls -ld modules/gemini-bloom/tests/compat/redisbloom-2.4.20
+rg --files .github
+rg -n "redisbloom-2\\.4\\.20|compat|bloom_test|bloom_rdb_test|RedisBloom|BF\\.SCANDUMP|aof-use-rdb-preamble|sanitize|asan|ubsan" .github modules/gemini-bloom CMakeLists.txt
+sed -n '70,115p' modules/gemini-bloom/src/sb_chain.h
+sed -n '1,120p' modules/gemini-bloom/src/bloom_rdb.cc
+sed -n '1,40p' modules/gemini-bloom/src/bloom_filter.h
+rg -n "match|compatible|RedisBloom|SCANDUMP|LOADCHUNK|byte-offset|layer-index|private|binary protocol" modules/gemini-bloom/src modules/gemini-bloom/DESIGN.md
+nl -ba modules/gemini-bloom/DESIGN.md | sed -n '1,60p'
+nl -ba modules/gemini-bloom/DESIGN.md | sed -n '164,242p'
+nl -ba modules/gemini-bloom/DESIGN.md | sed -n '258,310p'
+nl -ba modules/gemini-bloom/DESIGN.md | sed -n '398,436p'
+nl -ba modules/gemini-bloom/DESIGN.md | sed -n '451,540p'
+nl -ba modules/gemini-bloom/DESIGN.md | sed -n '552,582p'
+nl -ba modules/gemini-bloom/DESIGN.md | sed -n '584,700p'
+nl -ba modules/gemini-bloom/src/sb_chain.h | sed -n '84,96p'
+```
+
+No GTest, TCL, Redis runtime, Docker, fuzz, sanitizer, or RedisBloom oracle commands were run in Stage 00.

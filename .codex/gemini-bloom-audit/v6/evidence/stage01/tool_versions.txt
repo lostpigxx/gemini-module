@@ -1,0 +1,74 @@
+# Stage 01 Tool Versions
+
+## CMake
+
+```text
+cmake version 3.29.0
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+```
+
+## C++ compiler entrypoints
+
+`c++ --version`:
+
+```text
+Apple clang version 21.0.0 (clang-2100.1.1.101)
+Target: arm64-apple-darwin25.5.0
+Thread model: posix
+InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+```
+
+`g++ --version`:
+
+```text
+Apple clang version 21.0.0 (clang-2100.1.1.101)
+Target: arm64-apple-darwin25.5.0
+Thread model: posix
+InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+```
+
+`clang++ --version`:
+
+```text
+Apple clang version 21.0.0 (clang-2100.1.1.101)
+Target: arm64-apple-darwin25.5.0
+Thread model: posix
+InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+```
+
+## Redis
+
+`redis-server --version`:
+
+```text
+Redis server v=6.2.16 sha=00000000:0 malloc=libc bits=64 build=b492cc7c23c8102a
+```
+
+`redis-cli --version`:
+
+```text
+redis-cli 6.2.16
+```
+
+Note: DESIGN.md references Redis 6.2.17 for the historical RedisBloom v2.4.20 compatibility baseline. This Stage 01 host has Redis 6.2.16.
+
+## TCL
+
+`tclsh <<< 'puts [info patchlevel]'`:
+
+```text
+8.5.9
+```
+
+## Python
+
+```text
+Python 3.13.7
+```
+
+## Docker
+
+```text
+Docker version 27.4.0, build bde2b89
+```

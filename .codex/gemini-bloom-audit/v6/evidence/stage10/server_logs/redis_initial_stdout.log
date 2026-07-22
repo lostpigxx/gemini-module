@@ -1,0 +1,32 @@
+19236:C 01 Jul 2026 20:29:52.819 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+19236:C 01 Jul 2026 20:29:52.820 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=19236, just started
+19236:C 01 Jul 2026 20:29:52.820 # Configuration loaded
+19236:M 01 Jul 2026 20:29:52.821 * monotonic clock: POSIX clock_gettime
+19236:M 01 Jul 2026 20:29:52.825 * Running mode=standalone, port=56755.
+19236:M 01 Jul 2026 20:29:52.825 # Server initialized
+19236:M 01 Jul 2026 20:29:52.827 * <GeminiBloom> GeminiBloom module loaded
+19236:M 01 Jul 2026 20:29:52.827 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage10-build-workaround/redis_bloom.so
+19236:M 01 Jul 2026 20:29:52.829 * Ready to accept connections
+19236:M 01 Jul 2026 20:29:52.919 * DB saved on disk
+19236:M 01 Jul 2026 20:29:53.253 * DB saved on disk
+19236:M 01 Jul 2026 20:29:53.254 * Background append only file rewriting started by pid 19247
+19236:M 01 Jul 2026 20:29:53.298 * AOF rewrite child asks to stop sending diffs.
+19247:C 01 Jul 2026 20:29:53.298 * Parent agreed to stop sending diffs. Finalizing AOF...
+19247:C 01 Jul 2026 20:29:53.298 * Concatenating 0.00 MB of AOF diff received from parent.
+19247:C 01 Jul 2026 20:29:53.298 * SYNC append only file rewrite performed
+19247:C 01 Jul 2026 20:29:53.298 * AOF rewrite: 1 MB of memory used by copy-on-write
+19236:M 01 Jul 2026 20:29:53.339 * Background AOF rewrite terminated with success
+19236:M 01 Jul 2026 20:29:53.339 * Residual parent diff successfully flushed to the rewritten AOF (0.00 MB)
+19236:M 01 Jul 2026 20:29:53.339 * Background AOF rewrite finished successfully
+19236:M 01 Jul 2026 20:29:53.458 * Background append only file rewriting started by pid 19248
+19236:M 01 Jul 2026 20:29:53.506 * AOF rewrite child asks to stop sending diffs.
+19248:C 01 Jul 2026 20:29:53.507 * Parent agreed to stop sending diffs. Finalizing AOF...
+19248:C 01 Jul 2026 20:29:53.507 * Concatenating 0.00 MB of AOF diff received from parent.
+19248:C 01 Jul 2026 20:29:53.507 * SYNC append only file rewrite performed
+19248:C 01 Jul 2026 20:29:53.508 * AOF rewrite: 1 MB of memory used by copy-on-write
+19236:M 01 Jul 2026 20:29:53.551 * Background AOF rewrite terminated with success
+19236:M 01 Jul 2026 20:29:53.551 * Residual parent diff successfully flushed to the rewritten AOF (0.00 MB)
+19236:M 01 Jul 2026 20:29:53.552 * Background AOF rewrite finished successfully
+19236:M 01 Jul 2026 20:29:53.663 # User requested shutdown...
+19236:M 01 Jul 2026 20:29:53.664 * Calling fsync() on the AOF file.
+19236:M 01 Jul 2026 20:29:53.664 # Redis is now ready to exit, bye bye...

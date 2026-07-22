@@ -1,0 +1,60 @@
+# Stage 01 modules/gemini-bloom repo tree
+
+Command: `find modules/gemini-bloom -maxdepth 4 -type f | sort`
+
+```text
+modules/gemini-bloom/CMakeLists.txt
+modules/gemini-bloom/DESIGN.md
+modules/gemini-bloom/src/bloom_commands.cc
+modules/gemini-bloom/src/bloom_commands.h
+modules/gemini-bloom/src/bloom_config.cc
+modules/gemini-bloom/src/bloom_config.h
+modules/gemini-bloom/src/bloom_filter.cc
+modules/gemini-bloom/src/bloom_filter.h
+modules/gemini-bloom/src/bloom_rdb.cc
+modules/gemini-bloom/src/bloom_rdb.h
+modules/gemini-bloom/src/murmur2.cc
+modules/gemini-bloom/src/murmur2.h
+modules/gemini-bloom/src/redis_bloom_module.cc
+modules/gemini-bloom/src/rm_alloc.h
+modules/gemini-bloom/src/sb_chain.cc
+modules/gemini-bloom/src/sb_chain.h
+modules/gemini-bloom/tests/bloom_filter_test.cc
+modules/gemini-bloom/tests/bloom_rdb_test.cc
+modules/gemini-bloom/tests/pict/__pycache__/run_pict_cases.cpython-313.pyc
+modules/gemini-bloom/tests/sb_chain_test.cc
+modules/gemini-bloom/tests/tcl/bloom_test.tcl
+```
+
+Tracked file cross-check: `git ls-files modules/gemini-bloom`
+
+```text
+modules/gemini-bloom/CMakeLists.txt
+modules/gemini-bloom/DESIGN.md
+modules/gemini-bloom/src/bloom_commands.cc
+modules/gemini-bloom/src/bloom_commands.h
+modules/gemini-bloom/src/bloom_config.cc
+modules/gemini-bloom/src/bloom_config.h
+modules/gemini-bloom/src/bloom_filter.cc
+modules/gemini-bloom/src/bloom_filter.h
+modules/gemini-bloom/src/bloom_rdb.cc
+modules/gemini-bloom/src/bloom_rdb.h
+modules/gemini-bloom/src/murmur2.cc
+modules/gemini-bloom/src/murmur2.h
+modules/gemini-bloom/src/redis_bloom_module.cc
+modules/gemini-bloom/src/rm_alloc.h
+modules/gemini-bloom/src/sb_chain.cc
+modules/gemini-bloom/src/sb_chain.h
+modules/gemini-bloom/tests/bloom_filter_test.cc
+modules/gemini-bloom/tests/bloom_rdb_test.cc
+modules/gemini-bloom/tests/sb_chain_test.cc
+modules/gemini-bloom/tests/tcl/bloom_test.tcl
+```
+
+Ignored file note:
+
+```text
+!! modules/gemini-bloom/tests/pict/__pycache__/
+```
+
+The `find` command sees an ignored local `__pycache__` file. It is not part of the tracked `modules/gemini-bloom` audit target.

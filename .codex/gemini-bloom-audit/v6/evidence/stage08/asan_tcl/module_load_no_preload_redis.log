@@ -1,0 +1,8 @@
+17393:C 01 Jul 2026 19:38:01.923 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+17393:C 01 Jul 2026 19:38:01.924 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=17393, just started
+17393:C 01 Jul 2026 19:38:01.924 # Configuration loaded
+17393:M 01 Jul 2026 19:38:01.925 * monotonic clock: POSIX clock_gettime
+17393:M 01 Jul 2026 19:38:01.933 * Running mode=standalone, port=58017.
+17393:M 01 Jul 2026 19:38:01.933 # Server initialized
+17393:M 01 Jul 2026 19:38:01.935 # Module /tmp/gemini-module-v6-stage08-asan-clang/redis_bloom.so failed to load: /tmp/gemini-module-v6-stage08-asan-clang/redis_bloom.so: undefined symbol: __asan_option_detect_stack_use_after_return
+17393:M 01 Jul 2026 19:38:01.935 # Can't load module from /tmp/gemini-module-v6-stage08-asan-clang/redis_bloom.so: server aborting

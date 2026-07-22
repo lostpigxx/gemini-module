@@ -1,0 +1,11 @@
+# Stage 12 Report Audit Stdout
+
+overall=PASS
+required_report_files=12
+referenced_paths_checked=197
+open_findings_checked=10
+finding_detail_rows_checked=10
+blocked_or_not_verified_items_checked=9
+bf_commands_checked=10
+domain_checks=13
+failures=none

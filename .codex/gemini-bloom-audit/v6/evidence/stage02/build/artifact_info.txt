@@ -1,0 +1,19 @@
+# Stage 02 Build Artifact Info
+
+## Fallback build artifacts
+
+```text
+-rwxr-xr-x@ 1 liuyu  wheel  254560 Jul  1 17:21 /private/tmp/gemini-bloom-stage02-build.G7fAub/modules/gemini-bloom/bloom_filter_test
+-rwxr-xr-x@ 1 liuyu  wheel  552944 Jul  1 17:21 /private/tmp/gemini-bloom-stage02-build.G7fAub/modules/gemini-bloom/bloom_rdb_test
+-rwxr-xr-x@ 1 liuyu  wheel  268112 Jul  1 17:21 /private/tmp/gemini-bloom-stage02-build.G7fAub/modules/gemini-bloom/sb_chain_test
+-rwxr-xr-x@ 1 liuyu  wheel  146064 Jul  1 17:20 /private/tmp/gemini-bloom-stage02-build.G7fAub/redis_bloom.so
+```
+
+## File types
+
+```text
+/private/tmp/gemini-bloom-stage02-build.G7fAub/redis_bloom.so:                         Mach-O 64-bit dynamically linked shared library arm64
+/private/tmp/gemini-bloom-stage02-build.G7fAub/modules/gemini-bloom/bloom_filter_test: Mach-O 64-bit executable arm64
+/private/tmp/gemini-bloom-stage02-build.G7fAub/modules/gemini-bloom/sb_chain_test:     Mach-O 64-bit executable arm64
+/private/tmp/gemini-bloom-stage02-build.G7fAub/modules/gemini-bloom/bloom_rdb_test:    Mach-O 64-bit executable arm64
+```

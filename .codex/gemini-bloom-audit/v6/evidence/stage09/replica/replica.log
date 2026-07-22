@@ -1,0 +1,25 @@
+18704:C 01 Jul 2026 20:08:05.670 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+18704:C 01 Jul 2026 20:08:05.671 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=18704, just started
+18704:C 01 Jul 2026 20:08:05.671 # Configuration loaded
+18704:S 01 Jul 2026 20:08:05.672 * monotonic clock: POSIX clock_gettime
+18704:S 01 Jul 2026 20:08:05.677 * Running mode=standalone, port=45377.
+18704:S 01 Jul 2026 20:08:05.677 # Server initialized
+18704:S 01 Jul 2026 20:08:05.680 * <GeminiBloom> GeminiBloom module loaded
+18704:S 01 Jul 2026 20:08:05.680 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage09-build-workaround/redis_bloom.so
+18704:S 01 Jul 2026 20:08:05.682 * Ready to accept connections
+18704:S 01 Jul 2026 20:08:05.684 * Connecting to MASTER 127.0.0.1:45376
+18704:S 01 Jul 2026 20:08:05.684 * MASTER <-> REPLICA sync started
+18704:S 01 Jul 2026 20:08:05.684 * Non blocking connect for SYNC fired the event.
+18704:S 01 Jul 2026 20:08:05.685 * Master replied to PING, replication can continue...
+18704:S 01 Jul 2026 20:08:05.685 * Partial resynchronization not possible (no cached master)
+18704:S 01 Jul 2026 20:08:05.686 * Full resync from master: f6d9a8e93089bdda27c83e882334beb62ca1bb88:0
+18704:S 01 Jul 2026 20:08:05.759 * MASTER <-> REPLICA sync: receiving 176 bytes from master to disk
+18704:S 01 Jul 2026 20:08:05.759 * MASTER <-> REPLICA sync: Flushing old data
+18704:S 01 Jul 2026 20:08:05.760 * MASTER <-> REPLICA sync: Loading DB in memory
+18704:S 01 Jul 2026 20:08:05.763 * Loading RDB produced by version 6.2.17
+18704:S 01 Jul 2026 20:08:05.763 * RDB age 0 seconds
+18704:S 01 Jul 2026 20:08:05.763 * RDB memory usage when created 1.90 Mb
+18704:S 01 Jul 2026 20:08:05.763 # Done loading RDB, keys loaded: 0, keys expired: 0.
+18704:S 01 Jul 2026 20:08:05.763 * MASTER <-> REPLICA sync: Finished with success
+18704:S 01 Jul 2026 20:08:05.781 # == CRITICAL == This replica is sending an error to its master: '-ERR non scaling filter is full' after processing the command 'BF.MADD'
+18704:S 01 Jul 2026 20:08:05.781 # Latest backlog is: '"*2\r\n$6\r\nSELECT\r\n$1\r\n0\r\n*6\r\n$10\r\nBF.RESERVE\r\n$7\r\nbf:live\r\n$4\r\n0.01\r\n$1\r\n4\r\n$9\r\nEXPANSION\r\n$1\r\n2\r\n*10\r\n$7\r\nBF.MADD\r\n$7\r\nbf:live\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n$1\r\nd\r\n$1\r\ne\r\n$1\r\nf\r\n$1\r\ng\r\n$1\r\nh\r\n*5\r\n$10\r\nBF.RESERVE\r\n$8\r\nbf:fixed\r\n$4\r\n0.01\r\n$1\r\n2\r\n$10\r\nNONSCALING\r\n"'

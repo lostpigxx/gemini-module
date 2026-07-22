@@ -1,0 +1,20 @@
+# Stage 02 Environment Snapshot
+
+- Branch: `audit/gemini-bloom-v6`
+- Stage 02 start HEAD: `b35f0f624c6805e7610010f795420e2d592abbaa`
+- Host OS inherited from Stage 01: macOS 26.5.1 / Darwin 25.5.0 arm64
+- CMake: 3.29.0
+- Compiler: Apple clang 21.0.0
+- Redis server/client: 6.2.16
+- Tcl: 8.5.9
+- Python: 3.13.7
+- Docker CLI: 27.4.0
+- `nproc`: unavailable on this host (`command -v nproc` exit 1)
+- `sysctl -n hw.ncpu`: blocked by sandbox (`Operation not permitted`)
+- fallback job count: `getconf _NPROCESSORS_ONLN` returned `10`
+- Existing `build/`: ignored by git, but stale CMake cache points to `/workspace/projects/VibeCoding/gemini-module`
+- Clean fallback build dir: `/private/tmp/gemini-bloom-stage02-build.G7fAub`
+
+## Scope
+
+Stage 02 ran configure/build/GTest/TCL baseline only. It did not run RedisBloom oracle, transport compatibility matrix, fuzz/fault injection, sanitizer, replica/cluster, or performance testing.

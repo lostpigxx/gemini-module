@@ -1,0 +1,12 @@
+# Stage 08 Root Stdout Summary
+
+The primary GCC ASAN/UBSAN configure path failed before build because the toolchain cannot link a trivial sanitizer binary. The Clang fallback configure/build path completed and produced `/tmp/gemini-module-v6-stage08-asan-clang/redis_bloom.so`.
+
+No GTest sanitizer binaries were produced in the Clang build. `cmake --build ... --target bloom_test` reported that the target does not exist.
+
+Redis module-load probes were attempted without preload and with the available GCC 11 sanitizer linker-script files in `LD_PRELOAD`. In both cases Redis failed to load the module because the sanitizer runtime symbols remained unresolved.
+
+Valgrind was not available in the container.
+
+Static fallback scanning completed and reviewed RAII, placement-new, RDB/wire allocation, and LOADCHUNK memory/UB hotspots.
+

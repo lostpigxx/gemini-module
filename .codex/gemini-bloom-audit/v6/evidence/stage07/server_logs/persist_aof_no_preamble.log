@@ -1,0 +1,36 @@
+16643:C 01 Jul 2026 19:17:01.206 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+16643:C 01 Jul 2026 19:17:01.206 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=16643, just started
+16643:C 01 Jul 2026 19:17:01.206 # Configuration loaded
+16643:M 01 Jul 2026 19:17:01.207 * monotonic clock: POSIX clock_gettime
+16643:M 01 Jul 2026 19:17:01.212 * Running mode=standalone, port=37529.
+16643:M 01 Jul 2026 19:17:01.212 # Server initialized
+16643:M 01 Jul 2026 19:17:01.214 * <GeminiBloom> GeminiBloom module loaded
+16643:M 01 Jul 2026 19:17:01.214 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so
+16643:M 01 Jul 2026 19:17:01.216 * Ready to accept connections
+16643:M 01 Jul 2026 19:17:01.271 * Background append only file rewriting started by pid 16647
+16643:M 01 Jul 2026 19:17:01.317 * AOF rewrite child asks to stop sending diffs.
+16647:C 01 Jul 2026 19:17:01.317 * Parent agreed to stop sending diffs. Finalizing AOF...
+16647:C 01 Jul 2026 19:17:01.317 * Concatenating 0.00 MB of AOF diff received from parent.
+16647:C 01 Jul 2026 19:17:01.318 * SYNC append only file rewrite performed
+16647:C 01 Jul 2026 19:17:01.318 * AOF rewrite: 1 MB of memory used by copy-on-write
+16643:M 01 Jul 2026 19:17:01.320 * Background AOF rewrite terminated with success
+16643:M 01 Jul 2026 19:17:01.320 * Residual parent diff successfully flushed to the rewritten AOF (0.00 MB)
+16643:M 01 Jul 2026 19:17:01.320 * Background AOF rewrite finished successfully
+16643:M 01 Jul 2026 19:17:01.324 # User requested shutdown...
+16643:M 01 Jul 2026 19:17:01.324 * Calling fsync() on the AOF file.
+16643:M 01 Jul 2026 19:17:01.324 * Removing the pid file.
+16643:M 01 Jul 2026 19:17:01.324 # Redis is now ready to exit, bye bye...
+16649:C 01 Jul 2026 19:17:01.346 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+16649:C 01 Jul 2026 19:17:01.347 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=16649, just started
+16649:C 01 Jul 2026 19:17:01.347 # Configuration loaded
+16649:M 01 Jul 2026 19:17:01.348 * monotonic clock: POSIX clock_gettime
+16649:M 01 Jul 2026 19:17:01.353 * Running mode=standalone, port=37529.
+16649:M 01 Jul 2026 19:17:01.353 # Server initialized
+16649:M 01 Jul 2026 19:17:01.356 * <GeminiBloom> GeminiBloom module loaded
+16649:M 01 Jul 2026 19:17:01.356 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so
+16649:M 01 Jul 2026 19:17:01.360 * DB loaded from append only file: 0.003 seconds
+16649:M 01 Jul 2026 19:17:01.360 * Ready to accept connections
+16649:M 01 Jul 2026 19:17:01.413 # User requested shutdown...
+16649:M 01 Jul 2026 19:17:01.413 * Calling fsync() on the AOF file.
+16649:M 01 Jul 2026 19:17:01.413 * Removing the pid file.
+16649:M 01 Jul 2026 19:17:01.413 # Redis is now ready to exit, bye bye...

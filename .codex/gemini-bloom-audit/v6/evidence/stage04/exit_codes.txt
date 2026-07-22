@@ -1,0 +1,1 @@
+stage04_runtime_matrix.py: 0; case-level FAIL/BLOCKED rows are recorded in normalized_results.md and failures.md

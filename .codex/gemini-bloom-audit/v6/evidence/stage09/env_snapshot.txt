@@ -1,0 +1,16 @@
+{
+  "git_head": "da10485e12321fa9abe0bcb698b375e70b46bdeb",
+  "git_status": " M .codex/gemini-bloom-audit/v6/state/LOOP_STATE.md\n?? .codex/gemini-bloom-audit/v6/agents/stage09/\n?? .codex/gemini-bloom-audit/v6/evidence/stage09/\n",
+  "redis_server_version": "Redis server v=6.2.17 sha=441001a4:0 malloc=libc bits=64 build=49616805317b0873",
+  "redis_cli_version": "redis-cli 6.2.17 (git:441001a4)",
+  "module_path": "/tmp/gemini-module-v6-stage09-build-workaround/redis_bloom.so",
+  "module_sha256": "8398d523fdf3408b49f5aa04165133803858dd9665fd63a7fb88130e225665e2",
+  "module_size": 404952,
+  "runtime_root": "/tmp/gemini-module-v6-stage09-runtime-1782907685362-18652",
+  "acl_dryrun_probe": {
+    "error": "ERR Unknown subcommand or wrong number of arguments for 'DRYRUN'. Try ACL HELP."
+  },
+  "command_getkeysandflags_probe": {
+    "error": "ERR Unknown subcommand or wrong number of arguments for 'GETKEYSANDFLAGS'. Try COMMAND HELP."
+  }
+}

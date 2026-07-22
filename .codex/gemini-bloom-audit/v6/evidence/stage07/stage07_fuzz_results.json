@@ -1,0 +1,1850 @@
+{
+  "cursor_faults": [
+    {
+      "name": "cursor_gt1_missing_key",
+      "reply": {
+        "error": "ERR key does not exist"
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "cursor_gt1_completed_key",
+      "reply": {
+        "error": "ERR received bad data"
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "bad_cursor_0",
+      "reply": {
+        "error": "ERR cursor must be a positive integer"
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "bad_cursor_-1",
+      "reply": {
+        "error": "ERR cursor must be a positive integer"
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "bad_cursor_abc",
+      "reply": {
+        "error": "ERR cursor must be a positive integer"
+      },
+      "status": "PASS"
+    },
+    {
+      "check": {
+        "card": 20,
+        "expected_items": 20,
+        "found": 5,
+        "missing_count": 15,
+        "missing_samples": [
+          "0:657870616e73696f6e313a6974656d3a30",
+          "1:657870616e73696f6e313a6974656d3a31",
+          "2:657870616e73696f6e313a6974656d3a32",
+          "3:657870616e73696f6e313a6974656d3a33",
+          "4:657870616e73696f6e313a6974656d3a34",
+          "5:657870616e73696f6e313a6974656d3a35",
+          "6:657870616e73696f6e313a6974656d3a36",
+          "7:657870616e73696f6e313a6974656d3a37"
+        ]
+      },
+      "classification": "FAIL_ACCEPTED_MALFORMED_SEQUENCE",
+      "load_header": "OK",
+      "name": "cursor_skip_to_final_exposes_false_negatives",
+      "note": "Header then final chunk clears Loading without earlier chunks; false negatives indicate unsafe cursor sequencing.",
+      "skip_reply": "OK",
+      "status": "FAIL"
+    },
+    {
+      "check": {
+        "card": 20,
+        "expected_items": 20,
+        "found": 5,
+        "missing_count": 15,
+        "missing_samples": [
+          "5:657870616e73696f6e313a6974656d3a35",
+          "6:657870616e73696f6e313a6974656d3a36",
+          "7:657870616e73696f6e313a6974656d3a37",
+          "8:657870616e73696f6e313a6974656d3a38",
+          "9:657870616e73696f6e313a6974656d3a39",
+          "10:657870616e73696f6e313a6974656d3a3130",
+          "11:657870616e73696f6e313a6974656d3a3131",
+          "12:657870616e73696f6e313a6974656d3a3132"
+        ]
+      },
+      "classification": "FAIL_ACCEPTED_MALFORMED_SEQUENCE",
+      "load_header": "OK",
+      "name": "repeat_first_chunk_for_all_layers",
+      "note": "Repeated same-sized layer chunk can complete key with false negatives if no chunk completion tracking exists.",
+      "replies": [
+        [
+          2,
+          "OK"
+        ],
+        [
+          3,
+          "OK"
+        ],
+        [
+          4,
+          "OK"
+        ],
+        [
+          5,
+          "OK"
+        ]
+      ],
+      "status": "FAIL"
+    }
+  ],
+  "env": {
+    "gemini_module": "/tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so",
+    "redis_server": "/workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server",
+    "workdir": "/tmp/gemini-bloom-stage07-fuzz"
+  },
+  "existing_key_safety": [
+    {
+      "name": "header_on_existing_bloom",
+      "note": "valid header on existing Bloom key must reject and preserve old item",
+      "old_exists_after": 1,
+      "reply": {
+        "error": "ERR received bad data"
+      },
+      "status": "PASS"
+    },
+    {
+      "name": "header_on_string_key",
+      "note": "valid header on string key must return WRONGTYPE and preserve value",
+      "reply": {
+        "error": "WRONGTYPE Operation against a key holding the wrong kind of value"
+      },
+      "status": "PASS",
+      "string_value_after": {
+        "bytes": 5,
+        "hex": "76616c7565"
+      }
+    }
+  ],
+  "header_fuzz": [
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "empty",
+      "note": "empty header blob",
+      "payload_len": 0,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "one_byte",
+      "note": "1-byte truncated header",
+      "payload_len": 1,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "truncated_header",
+      "note": "header shorter than WireFilterHeader",
+      "payload_len": 19,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "truncated_meta",
+      "note": "metadata truncated",
+      "payload_len": 32,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "overlong_header",
+      "note": "valid header plus trailing junk",
+      "payload_len": 236,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_header_73",
+      "note": "random bytes same length as valid header",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "num_layers_zero",
+      "note": "numLayers=0",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "num_layers_1025",
+      "note": "numLayers above kMaxLayers",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "unknown_flags",
+      "note": "unknown flag bit",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "rawbits_flag",
+      "note": "RawBits flag injection",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "loading_flag",
+      "note": "Loading flag injection",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "expansion_zero",
+      "note": "scaling filter expansion=0",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 1,
+      "exists_after": 1,
+      "expect_reject": false,
+      "loading_probe": {
+        "error": "ERR filter is being loaded"
+      },
+      "name": "expansion_limit",
+      "note": "boundary max expansion accepted by command path",
+      "payload_len": 232,
+      "reply": "OK",
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "FAIL",
+      "cleanup": 1,
+      "exists_after": 1,
+      "expect_reject": true,
+      "loading_probe": {
+        "error": "ERR filter is being loaded"
+      },
+      "name": "expansion_over_limit",
+      "note": "DESIGN max expansion violation",
+      "payload_len": 232,
+      "reply": "OK",
+      "server_alive": true,
+      "status": "FAIL"
+    },
+    {
+      "classification": "FAIL",
+      "cleanup": 1,
+      "exists_after": 1,
+      "expect_reject": true,
+      "loading_probe": {
+        "error": "ERR filter is being loaded"
+      },
+      "name": "expansion_uint_max",
+      "note": "extreme expansionFactor",
+      "payload_len": 232,
+      "reply": "OK",
+      "server_alive": true,
+      "status": "FAIL"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "item_sum_mismatch",
+      "note": "totalItems != sum(itemCount)",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "item_count_gt_capacity",
+      "note": "itemCount > capacity",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "hash_count_zero",
+      "note": "hashCount=0",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "hash_count_wrong",
+      "note": "hashCount inconsistent with bitsPerEntry",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "fp_rate_nan",
+      "note": "fpRate NaN",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "fp_rate_inf",
+      "note": "fpRate Inf",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "fp_rate_zero",
+      "note": "fpRate=0",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "fp_rate_one",
+      "note": "fpRate=1",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "bits_per_entry_nan",
+      "note": "bitsPerEntry NaN",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "bits_per_entry_inf",
+      "note": "bitsPerEntry Inf",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "bits_per_entry_zero",
+      "note": "bitsPerEntry=0",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "bits_per_entry_gt_1000",
+      "note": "bitsPerEntry above DESIGN cap",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "total_bits_zero",
+      "note": "totalBits=0",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "log2_bits_64",
+      "note": "log2Bits >= 64",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "data_size_mismatch",
+      "note": "dataSize != ceil(totalBits/8)",
+      "payload_len": 232,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_00_19",
+      "note": "seeded random payload size=19",
+      "payload_len": 19,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_01_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_02_72",
+      "note": "seeded random payload size=72",
+      "payload_len": 72,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_03_2",
+      "note": "seeded random payload size=2",
+      "payload_len": 2,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_04_2",
+      "note": "seeded random payload size=2",
+      "payload_len": 2,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_05_19",
+      "note": "seeded random payload size=19",
+      "payload_len": 19,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_06_512",
+      "note": "seeded random payload size=512",
+      "payload_len": 512,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_07_19",
+      "note": "seeded random payload size=19",
+      "payload_len": 19,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_08_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_09_73",
+      "note": "seeded random payload size=73",
+      "payload_len": 73,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_10_74",
+      "note": "seeded random payload size=74",
+      "payload_len": 74,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_11_19",
+      "note": "seeded random payload size=19",
+      "payload_len": 19,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_12_73",
+      "note": "seeded random payload size=73",
+      "payload_len": 73,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_13_0",
+      "note": "seeded random payload size=0",
+      "payload_len": 0,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_14_1",
+      "note": "seeded random payload size=1",
+      "payload_len": 1,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_15_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_16_73",
+      "note": "seeded random payload size=73",
+      "payload_len": 73,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_17_19",
+      "note": "seeded random payload size=19",
+      "payload_len": 19,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_18_0",
+      "note": "seeded random payload size=0",
+      "payload_len": 0,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_19_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_20_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_21_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_22_74",
+      "note": "seeded random payload size=74",
+      "payload_len": 74,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_23_19",
+      "note": "seeded random payload size=19",
+      "payload_len": 19,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_24_74",
+      "note": "seeded random payload size=74",
+      "payload_len": 74,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_25_74",
+      "note": "seeded random payload size=74",
+      "payload_len": 74,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_26_1",
+      "note": "seeded random payload size=1",
+      "payload_len": 1,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_27_19",
+      "note": "seeded random payload size=19",
+      "payload_len": 19,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_28_2",
+      "note": "seeded random payload size=2",
+      "payload_len": 2,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_29_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_30_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_31_72",
+      "note": "seeded random payload size=72",
+      "payload_len": 72,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_32_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_33_74",
+      "note": "seeded random payload size=74",
+      "payload_len": 74,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_34_2",
+      "note": "seeded random payload size=2",
+      "payload_len": 2,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_35_7",
+      "note": "seeded random payload size=7",
+      "payload_len": 7,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_36_20",
+      "note": "seeded random payload size=20",
+      "payload_len": 20,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_37_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_38_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_39_128",
+      "note": "seeded random payload size=128",
+      "payload_len": 128,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_40_128",
+      "note": "seeded random payload size=128",
+      "payload_len": 128,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_41_0",
+      "note": "seeded random payload size=0",
+      "payload_len": 0,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_42_7",
+      "note": "seeded random payload size=7",
+      "payload_len": 7,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_43_73",
+      "note": "seeded random payload size=73",
+      "payload_len": 73,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_44_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_45_72",
+      "note": "seeded random payload size=72",
+      "payload_len": 72,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_46_72",
+      "note": "seeded random payload size=72",
+      "payload_len": 72,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_47_1",
+      "note": "seeded random payload size=1",
+      "payload_len": 1,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_48_0",
+      "note": "seeded random payload size=0",
+      "payload_len": 0,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_49_73",
+      "note": "seeded random payload size=73",
+      "payload_len": 73,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_50_19",
+      "note": "seeded random payload size=19",
+      "payload_len": 19,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_51_72",
+      "note": "seeded random payload size=72",
+      "payload_len": 72,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_52_128",
+      "note": "seeded random payload size=128",
+      "payload_len": 128,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_53_20",
+      "note": "seeded random payload size=20",
+      "payload_len": 20,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_54_72",
+      "note": "seeded random payload size=72",
+      "payload_len": 72,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_55_512",
+      "note": "seeded random payload size=512",
+      "payload_len": 512,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_56_2",
+      "note": "seeded random payload size=2",
+      "payload_len": 2,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_57_73",
+      "note": "seeded random payload size=73",
+      "payload_len": 73,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_58_19",
+      "note": "seeded random payload size=19",
+      "payload_len": 19,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_59_21",
+      "note": "seeded random payload size=21",
+      "payload_len": 21,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_60_73",
+      "note": "seeded random payload size=73",
+      "payload_len": 73,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_61_74",
+      "note": "seeded random payload size=74",
+      "payload_len": 74,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_62_2",
+      "note": "seeded random payload size=2",
+      "payload_len": 2,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    },
+    {
+      "classification": "PASS",
+      "cleanup": 0,
+      "exists_after": 0,
+      "expect_reject": true,
+      "loading_probe": null,
+      "name": "random_63_7",
+      "note": "seeded random payload size=7",
+      "payload_len": 7,
+      "reply": {
+        "error": "ERR corrupted header payload"
+      },
+      "server_alive": true,
+      "status": "PASS"
+    }
+  ],
+  "loading_state": {
+    "bad_chunk": {
+      "error": "ERR data length mismatch for layer"
+    },
+    "blocked_after_bad": {
+      "error": "ERR filter is being loaded"
+    },
+    "blocked_commands": {
+      "add": {
+        "error": "ERR filter is being loaded"
+      },
+      "card": {
+        "error": "ERR filter is being loaded"
+      },
+      "exists": {
+        "error": "ERR filter is being loaded"
+      },
+      "info": {
+        "error": "ERR filter is being loaded"
+      },
+      "insert": {
+        "error": "ERR filter is being loaded"
+      },
+      "madd": {
+        "error": "ERR filter is being loaded"
+      },
+      "mexists": {
+        "error": "ERR filter is being loaded"
+      },
+      "scandump": {
+        "error": "ERR filter is being loaded"
+      }
+    },
+    "check": {
+      "card": 40,
+      "expected_items": 40,
+      "found": 40,
+      "missing_count": 0,
+      "missing_samples": []
+    },
+    "load_header": "OK",
+    "load_replies": [
+      [
+        2,
+        "OK"
+      ],
+      [
+        3,
+        "OK"
+      ],
+      [
+        4,
+        "OK"
+      ],
+      [
+        5,
+        "OK"
+      ]
+    ],
+    "name": "loading_state_lifecycle",
+    "overwrite_after_completion": {
+      "error": "ERR received bad data"
+    },
+    "status": "PASS"
+  },
+  "persistence_faults": [
+    {
+      "blocked_before_persist": {
+        "error": "ERR filter is being loaded"
+      },
+      "classification": "FAIL_LOADING_PERSISTED_AS_COMPLETED",
+      "load_header": "OK",
+      "name": "persist_half_loaded_rdb",
+      "note": "Half-loaded key must not restart as a normal completed filter with false negatives.",
+      "persist": "OK",
+      "post_restart_check": {
+        "card": 40,
+        "expected_items": 40,
+        "found": 0,
+        "missing_count": 40,
+        "missing_samples": [
+          "0:6d756c74695f657870323a6974656d3a30",
+          "1:6d756c74695f657870323a6974656d3a31",
+          "2:6d756c74695f657870323a6974656d3a32",
+          "3:6d756c74695f657870323a6974656d3a33",
+          "4:6d756c74695f657870323a6974656d3a34",
+          "5:6d756c74695f657870323a6974656d3a35",
+          "6:6d756c74695f657870323a6974656d3a36",
+          "7:6d756c74695f657870323a6974656d3a37"
+        ]
+      },
+      "post_restart_info": [
+        "Capacity",
+        75,
+        "Size",
+        808,
+        "Number of filters",
+        4,
+        "Number of items inserted",
+        40,
+        "Expansion rate",
+        2
+      ],
+      "post_restart_type": "MBbloom--",
+      "server_log": "16633:C 01 Jul 2026 19:17:01.034 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n16633:C 01 Jul 2026 19:17:01.035 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=16633, just started\n16633:C 01 Jul 2026 19:17:01.035 # Configuration loaded\n16633:M 01 Jul 2026 19:17:01.035 * monotonic clock: POSIX clock_gettime\n16633:M 01 Jul 2026 19:17:01.040 * Running mode=standalone, port=33447.\n16633:M 01 Jul 2026 19:17:01.040 # Server initialized\n16633:M 01 Jul 2026 19:17:01.042 * <GeminiBloom> GeminiBloom module loaded\n16633:M 01 Jul 2026 19:17:01.042 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so\n16633:M 01 Jul 2026 19:17:01.044 * Ready to accept connections\n16633:M 01 Jul 2026 19:17:01.100 * DB saved on disk\n16633:M 01 Jul 2026 19:17:01.100 # User requested shutdown...\n16633:M 01 Jul 2026 19:17:01.100 * Removing the pid file.\n16633:M 01 Jul 2026 19:17:01.100 # Redis is now ready to exit, bye bye...\n16638:C 01 Jul 2026 19:17:01.118 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n16638:C 01 Jul 2026 19:17:01.119 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=16638, just started\n16638:C 01 Jul 2026 19:17:01.119 # Configuration loaded\n16638:M 01 Jul 2026 19:17:01.120 * monotonic clock: POSIX clock_gettime\n16638:M 01 Jul 2026 19:17:01.125 * Running mode=standalone, port=33447.\n16638:M 01 Jul 2026 19:17:01.125 # Server initialized\n16638:M 01 Jul 2026 19:17:01.127 * <GeminiBloom> GeminiBloom module loaded\n16638:M 01 Jul 2026 19:17:01.127 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so\n16638:M 01 Jul 2026 19:17:01.130 * Loading RDB produced by version 6.2.17\n16638:M 01 Jul 2026 19:17:01.130 * RDB age 0 seconds\n16638:M 01 Jul 2026 19:17:01.130 * RDB memory usage when created 0.90 Mb\n16638:M 01 Jul 2026 19:17:01.131 # Done loading RDB, keys loaded: 1, keys expired: 0.\n16638:M 01 Jul 2026 19:17:01.131 * DB loaded from disk: 0.003 seconds\n16638:M 01 Jul 2026 19:17:01.131 * Ready to accept connections",
+      "status": "FAIL"
+    },
+    {
+      "blocked_before_persist": {
+        "error": "ERR filter is being loaded"
+      },
+      "classification": "FAIL_LOADING_PERSISTED_AS_COMPLETED",
+      "load_header": "OK",
+      "name": "persist_half_loaded_aof_no_preamble",
+      "note": "Half-loaded key must not restart as a normal completed filter with false negatives.",
+      "persist": {
+        "done": true,
+        "fields": {
+          "aof_base_size": "1107",
+          "aof_buffer_length": "0",
+          "aof_current_rewrite_time_sec": "-1",
+          "aof_current_size": "1107",
+          "aof_delayed_fsync": "0",
+          "aof_enabled": "1",
+          "aof_last_bgrewrite_status": "ok",
+          "aof_last_cow_size": "1183744",
+          "aof_last_rewrite_time_sec": "0",
+          "aof_last_write_status": "ok",
+          "aof_pending_bio_fsync": "0",
+          "aof_pending_rewrite": "0",
+          "aof_rewrite_buffer_length": "0",
+          "aof_rewrite_in_progress": "0",
+          "aof_rewrite_scheduled": "0",
+          "current_cow_size": "0",
+          "current_cow_size_age": "0",
+          "current_fork_perc": "0.00",
+          "current_save_keys_processed": "0",
+          "current_save_keys_total": "0",
+          "loading": "0",
+          "module_fork_in_progress": "0",
+          "module_fork_last_cow_size": "0",
+          "rdb_bgsave_in_progress": "0",
+          "rdb_changes_since_last_save": "1",
+          "rdb_current_bgsave_time_sec": "-1",
+          "rdb_last_bgsave_status": "ok",
+          "rdb_last_bgsave_time_sec": "-1",
+          "rdb_last_cow_size": "0",
+          "rdb_last_save_time": "1782904621"
+        },
+        "start": "Background append only file rewriting started"
+      },
+      "post_restart_check": {
+        "card": 40,
+        "expected_items": 40,
+        "found": 0,
+        "missing_count": 40,
+        "missing_samples": [
+          "0:6d756c74695f657870323a6974656d3a30",
+          "1:6d756c74695f657870323a6974656d3a31",
+          "2:6d756c74695f657870323a6974656d3a32",
+          "3:6d756c74695f657870323a6974656d3a33",
+          "4:6d756c74695f657870323a6974656d3a34",
+          "5:6d756c74695f657870323a6974656d3a35",
+          "6:6d756c74695f657870323a6974656d3a36",
+          "7:6d756c74695f657870323a6974656d3a37"
+        ]
+      },
+      "post_restart_info": [
+        "Capacity",
+        75,
+        "Size",
+        808,
+        "Number of filters",
+        4,
+        "Number of items inserted",
+        40,
+        "Expansion rate",
+        2
+      ],
+      "post_restart_type": "MBbloom--",
+      "server_log": "16643:C 01 Jul 2026 19:17:01.206 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n16643:C 01 Jul 2026 19:17:01.206 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=16643, just started\n16643:C 01 Jul 2026 19:17:01.206 # Configuration loaded\n16643:M 01 Jul 2026 19:17:01.207 * monotonic clock: POSIX clock_gettime\n16643:M 01 Jul 2026 19:17:01.212 * Running mode=standalone, port=37529.\n16643:M 01 Jul 2026 19:17:01.212 # Server initialized\n16643:M 01 Jul 2026 19:17:01.214 * <GeminiBloom> GeminiBloom module loaded\n16643:M 01 Jul 2026 19:17:01.214 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so\n16643:M 01 Jul 2026 19:17:01.216 * Ready to accept connections\n16643:M 01 Jul 2026 19:17:01.271 * Background append only file rewriting started by pid 16647\n16643:M 01 Jul 2026 19:17:01.317 * AOF rewrite child asks to stop sending diffs.\n16647:C 01 Jul 2026 19:17:01.317 * Parent agreed to stop sending diffs. Finalizing AOF...\n16647:C 01 Jul 2026 19:17:01.317 * Concatenating 0.00 MB of AOF diff received from parent.\n16647:C 01 Jul 2026 19:17:01.318 * SYNC append only file rewrite performed\n16647:C 01 Jul 2026 19:17:01.318 * AOF rewrite: 1 MB of memory used by copy-on-write\n16643:M 01 Jul 2026 19:17:01.320 * Background AOF rewrite terminated with success\n16643:M 01 Jul 2026 19:17:01.320 * Residual parent diff successfully flushed to the rewritten AOF (0.00 MB)\n16643:M 01 Jul 2026 19:17:01.320 * Background AOF rewrite finished successfully\n16643:M 01 Jul 2026 19:17:01.324 # User requested shutdown...\n16643:M 01 Jul 2026 19:17:01.324 * Calling fsync() on the AOF file.\n16643:M 01 Jul 2026 19:17:01.324 * Removing the pid file.\n16643:M 01 Jul 2026 19:17:01.324 # Redis is now ready to exit, bye bye...\n16649:C 01 Jul 2026 19:17:01.346 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo\n16649:C 01 Jul 2026 19:17:01.347 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=16649, just started\n16649:C 01 Jul 2026 19:17:01.347 # Configuration loaded\n16649:M 01 Jul 2026 19:17:01.348 * monotonic clock: POSIX clock_gettime\n16649:M 01 Jul 2026 19:17:01.353 * Running mode=standalone, port=37529.\n16649:M 01 Jul 2026 19:17:01.353 # Server initialized\n16649:M 01 Jul 2026 19:17:01.356 * <GeminiBloom> GeminiBloom module loaded\n16649:M 01 Jul 2026 19:17:01.356 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so\n16649:M 01 Jul 2026 19:17:01.360 * DB loaded from append only file: 0.003 seconds\n16649:M 01 Jul 2026 19:17:01.360 * Ready to accept connections",
+      "status": "FAIL"
+    }
+  ],
+  "seed": 2970124295,
+  "source_material": {
+    "expansion1": {
+      "chunks": [
+        [
+          1,
+          232
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          3,
+          128
+        ],
+        [
+          4,
+          128
+        ],
+        [
+          5,
+          128
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "num_layers": 4,
+      "source_check": {
+        "card": 20,
+        "expected_items": 20,
+        "found": 20,
+        "missing_count": 0,
+        "missing_samples": []
+      }
+    },
+    "multi_exp2": {
+      "chunks": [
+        [
+          1,
+          232
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          3,
+          128
+        ],
+        [
+          4,
+          128
+        ],
+        [
+          5,
+          128
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "num_layers": 4,
+      "source_check": {
+        "card": 40,
+        "expected_items": 40,
+        "found": 40,
+        "missing_count": 0,
+        "missing_samples": []
+      }
+    }
+  },
+  "static_resource_boundary": [
+    {
+      "classification": "FAIL_STATIC_DESIGN_VIOLATION",
+      "evidence": [
+        "modules/gemini-bloom/src/bloom_rdb.cc:53-68 ValidateLayerFields lacks per-layer 2GB cap",
+        "modules/gemini-bloom/src/bloom_rdb.cc:295-317 wire path only enforces total <=4GB before allocation",
+        ".codex/gemini-bloom-audit/v6/agents/stage03/potential_findings.md"
+      ],
+      "finding": "GBV6-03-001",
+      "name": "per_layer_data_size_gt_2gb",
+      "note": "A header with one layer just above 2GB and total <=4GB is rejected by DESIGN but not by shared field validation before allocation.",
+      "runtime_probe": "NOT_RUN_UNSAFE_ALLOCATION_RISK",
+      "status": "FAIL"
+    },
+    {
+      "classification": "FAIL_RUNTIME_CONFIRMED",
+      "evidence": [
+        "Header fuzz rows expansion_over_limit and expansion_uint_max",
+        "modules/gemini-bloom/src/bloom_rdb.cc:281-305 checks expansion zero but not kMaxExpansion"
+      ],
+      "finding": "GBV6-03-002",
+      "name": "expansion_factor_above_kmaxexpansion",
+      "note": "Runtime LOADCHUNK header fuzz confirms expansion above 32768 is accepted as a Loading filter.",
+      "status": "FAIL"
+    }
+  ],
+  "summary": {
+    "cursor_faults": {
+      "FAIL": 2,
+      "PASS": 5
+    },
+    "existing_key_safety": {
+      "PASS": 2
+    },
+    "header_fuzz": {
+      "FAIL": 2,
+      "PASS": 92
+    },
+    "loading_state": "PASS",
+    "persistence_faults": {
+      "FAIL": 2
+    },
+    "server_alive_end": true,
+    "static_resource_boundary": {
+      "FAIL": 2
+    }
+  }
+}

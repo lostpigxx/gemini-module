@@ -1,0 +1,3 @@
+cross_impl_transport=0
+extended_transport=0
+gemini_self_transport=0

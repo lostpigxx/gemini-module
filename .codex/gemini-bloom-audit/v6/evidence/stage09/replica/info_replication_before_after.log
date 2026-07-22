@@ -1,0 +1,76 @@
+{
+  "live": {
+    "role": "slave",
+    "master_host": "127.0.0.1",
+    "master_port": "45376",
+    "master_link_status": "up",
+    "master_last_io_seconds_ago": "1",
+    "master_sync_in_progress": "0",
+    "slave_read_repl_offset": "453",
+    "slave_repl_offset": "453",
+    "slave_priority": "100",
+    "slave_read_only": "1",
+    "replica_announced": "1",
+    "connected_slaves": "0",
+    "master_failover_state": "no-failover",
+    "master_replid": "f6d9a8e93089bdda27c83e882334beb62ca1bb88",
+    "master_replid2": "0000000000000000000000000000000000000000",
+    "master_repl_offset": "453",
+    "second_repl_offset": "-1",
+    "repl_backlog_active": "1",
+    "repl_backlog_size": "1048576",
+    "repl_backlog_first_byte_offset": "1",
+    "repl_backlog_histlen": "453"
+  },
+  "fullsync": {
+    "role": "slave",
+    "master_host": "127.0.0.1",
+    "master_port": "45378",
+    "master_link_status": "up",
+    "master_last_io_seconds_ago": "0",
+    "master_sync_in_progress": "0",
+    "slave_read_repl_offset": "0",
+    "slave_repl_offset": "0",
+    "slave_priority": "100",
+    "slave_read_only": "1",
+    "replica_announced": "1",
+    "connected_slaves": "0",
+    "master_failover_state": "no-failover",
+    "master_replid": "ef62fad8a07db290968c79ce579ba93dfb5a22cf",
+    "master_replid2": "0000000000000000000000000000000000000000",
+    "master_repl_offset": "0",
+    "second_repl_offset": "-1",
+    "repl_backlog_active": "1",
+    "repl_backlog_size": "1048576",
+    "repl_backlog_first_byte_offset": "1",
+    "repl_backlog_histlen": "0"
+  },
+  "reconnect": {
+    "status": "PASS",
+    "checks": {
+      "short_reconnect_members": true,
+      "forced_reconnect_members": true,
+      "readonly_after_reconnect": true,
+      "write_rejected_after_reconnect": true
+    },
+    "kill_reply": 1,
+    "short_members": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "forced_members": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "partial_resync_seen": true,
+    "full_resync_seen": true
+  }
+}

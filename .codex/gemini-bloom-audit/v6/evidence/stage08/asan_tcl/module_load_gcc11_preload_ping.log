@@ -1,0 +1,3 @@
+ERROR: ld.so: object '/usr/lib/gcc/x86_64-redhat-linux/11/libasan.so' from LD_PRELOAD cannot be preloaded (file too short): ignored.
+ERROR: ld.so: object '/usr/lib/gcc/x86_64-redhat-linux/11/libubsan.so' from LD_PRELOAD cannot be preloaded (file too short): ignored.
+Could not connect to Redis at 127.0.0.1:45841: Connection refused

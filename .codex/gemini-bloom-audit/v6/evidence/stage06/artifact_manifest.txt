@@ -1,0 +1,67 @@
+# Stage 06 Artifact Manifest
+
+## Committed evidence files
+- `.codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix/cross_impl_transport_results.json` bytes=141436 sha256=5bebd0ecdbe8cbcbb571aff04a09244676e7721c2053ab9b1105b5d098994265
+- `.codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix/extended_transport_results.json` bytes=28464 sha256=f962b7be61a9ad267f870421e6369b301f4ffccf47eb114874a83a3e5db2cd72
+- `.codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix/gemini_self_transport_results.json` bytes=63705 sha256=50cd29b668b238ee33ab768d41961395da0121c86817c746e23d3335b1ab3d1f
+- `.codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix.json` bytes=27927 sha256=34ea1aa0010128055c1de670e55350f5cdeffa679e83e4f9fb0e607d39d5621c
+- `.codex/gemini-bloom-audit/v6/evidence/stage06/transport_matrix.md` bytes=3008 sha256=13ed5e774b79c3b5c41553c3efda3d3c54d1459981821528ccff380f219131a3
+- `.codex/gemini-bloom-audit/v6/evidence/stage06/env_snapshot.txt` bytes=1634 sha256=9de3077181d4a78c00cf7fddac9dd7964b4e7898b6327a7943bacfd16b79bec8
+
+## Runtime persistence artifacts recorded by self harness
+The self harness stored generated RDB/AOF/DUMP/chunk artifacts under `/tmp/gemini-bloom-stage06-self` during execution and recorded hashes here. Large generated artifacts are not committed.
+
+### binary_items
+- rdb_self: `/tmp/gemini-bloom-stage06-self/rdb/binary_items/dump.rdb` exists=True bytes=271 sha256=8ce957c51fae4990ee0bf75154c745dffd88d384fb18611662013c374fbd77d1
+- dump_restore_self: `/tmp/gemini-bloom-stage06-self/dump_restore/binary_items.dump` exists=True bytes=161 sha256=d7a25782833c49fa167cbc41f124d75eb1c21e80c8158011367f43a4b56f9f77
+- scandump_self: `/tmp/gemini-bloom-stage06-self/scandump_loadchunk/binary_items.chunks.json` exists=True bytes=287 sha256=61547360200ebd7dbaacf76e48d704e5fe6addb7ad6f352d3c76a289f47ae875
+- aof_preamble_yes_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_yes/binary_items/appendonly.aof` exists=True bytes=275 sha256=3cc2883175cec8b75a8f9cd9e7b631816d11fffdca06fc7bf57b2c9b7d15e337
+- aof_preamble_no_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_no/binary_items/appendonly.aof` exists=True bytes=361 sha256=165774fe8c2a49d7bc43a086d4b1ba8f98991294f31080c14571ecce2efc6e87
+### empty_scaling
+- rdb_self: `/tmp/gemini-bloom-stage06-self/rdb/empty_scaling/dump.rdb` exists=True bytes=184 sha256=3d6578671c1c0063a083f32b947687060067300209571ef6565ee944b852e631
+- dump_restore_self: `/tmp/gemini-bloom-stage06-self/dump_restore/empty_scaling.dump` exists=True bytes=73 sha256=d31ddb66bb17197e99f0d79a332ed9a3540419ec854904e10e9cb220373912fa
+- scandump_self: `/tmp/gemini-bloom-stage06-self/scandump_loadchunk/empty_scaling.chunks.json` exists=True bytes=287 sha256=9705fe76ed946a9f4da1615ea3967f68b3ac5e0c31cff8790ba0e6527e8e91b7
+- aof_preamble_yes_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_yes/empty_scaling/appendonly.aof` exists=True bytes=188 sha256=8ab0b579ad811a475f5aef360757908bedd027709f1e450529fd8976b5a40ab6
+- aof_preamble_no_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_no/empty_scaling/appendonly.aof` exists=True bytes=379 sha256=dc896d283ffa44fab91df3d832e4ad9cf988e1aeb94ca851f6df9d1e06a1b88b
+### expansion1
+- rdb_self: `/tmp/gemini-bloom-stage06-self/rdb/expansion1/dump.rdb` exists=True bytes=672 sha256=2f6f75db2cbb826a50fbb595e5e71a0c954841a7822efe0e4c708c1ff4e3f40e
+- dump_restore_self: `/tmp/gemini-bloom-stage06-self/dump_restore/expansion1.dump` exists=True bytes=564 sha256=b3e4363e5b47ff5e207dbe921a60b9a62e7c94ecd7d50e8a8f9a35cf8adb41ed
+- scandump_self: `/tmp/gemini-bloom-stage06-self/scandump_loadchunk/expansion1.chunks.json` exists=True bytes=576 sha256=3bc0e56cd4822998c8254a1059706c08a684199364eb8d9290c1daa17acc879e
+- aof_preamble_yes_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_yes/expansion1/appendonly.aof` exists=True bytes=676 sha256=443dfc355afe184156954320833195abc9d7b947e2e14ac0368ab9b579efbcaf
+- aof_preamble_no_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_no/expansion1/appendonly.aof` exists=True bytes=1102 sha256=837ebccbacf024553303fb7969e258da75ab14ba7361b6810de12548b15da4cf
+### expansion4
+- rdb_self: `/tmp/gemini-bloom-stage06-self/rdb/expansion4/dump.rdb` exists=True bytes=594 sha256=6e5eff1d639fa497765870cf74162092b1e2b598c09a9a15f87fe28ad6367899
+- dump_restore_self: `/tmp/gemini-bloom-stage06-self/dump_restore/expansion4.dump` exists=True bytes=486 sha256=a21da34180727f3ff99fdfd5d9e03189ba89d04b5c2c128fb0781ee95a16a031
+- scandump_self: `/tmp/gemini-bloom-stage06-self/scandump_loadchunk/expansion4.chunks.json` exists=True bytes=480 sha256=fc7335a638d932e44386767a35f4ba0a594ee00454b4064114cb18e8eaab6d41
+- aof_preamble_yes_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_yes/expansion4/appendonly.aof` exists=True bytes=598 sha256=eaba323ec65953b3c58c9a31856369fb7d000b7b0d5c9d57c1767265f45a19c7
+- aof_preamble_no_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_no/expansion4/appendonly.aof` exists=True bytes=870 sha256=0ad3659e48145c8f8962e644265b25780f140e38ff611e8ee6ebaacb14a4bffe
+### fixed_full
+- rdb_self: `/tmp/gemini-bloom-stage06-self/rdb/fixed_full/dump.rdb` exists=True bytes=281 sha256=7ad4bf4a9be40cfab5c0ed6a44497ffe4da4040b6a60e82b0a29a5156f6890fb
+- dump_restore_self: `/tmp/gemini-bloom-stage06-self/dump_restore/fixed_full.dump` exists=True bytes=173 sha256=59e433e609ee83b4b8ad69ea98fb6176b9b9fcb4678375be06939c821ba94ea9
+- scandump_self: `/tmp/gemini-bloom-stage06-self/scandump_loadchunk/fixed_full.chunks.json` exists=True bytes=287 sha256=71530404352170631d51d303b2a0509979cfc9678c27792ae5b2d0ff79906f8b
+- aof_preamble_yes_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_yes/fixed_full/appendonly.aof` exists=True bytes=285 sha256=46aeefb5840e4c9d1b7f5455be83f57d9b2503765de9f6fe0b730b7a6a7bffd6
+- aof_preamble_no_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_no/fixed_full/appendonly.aof` exists=True bytes=357 sha256=65c71f3d674024df836e6235413dad81e4424bf2c33259eae63cd2d44f9aef90
+### large_empty_16mb
+- rdb_self: `/tmp/gemini-bloom-stage06-self/rdb/large_empty_16mb/dump.rdb` exists=True bytes=235166 sha256=c748d8f2cbfc8fbc400d8477eba72cdec590026f6aff8d9a690a822c3a90ff6f
+- dump_restore_self: `/tmp/gemini-bloom-stage06-self/dump_restore/large_empty_16mb.dump` exists=True bytes=235052 sha256=7f1b6398974c3e01b378497ffff44094729b1ce5b9066a019cc901b7778627aa
+- scandump_self: `/tmp/gemini-bloom-stage06-self/scandump_loadchunk/large_empty_16mb.chunks.json` exists=True bytes=292 sha256=0568105e129ec3786a812079c17bb49e746f119faefe15b70d14124d090a6ab6
+- aof_preamble_yes_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_yes/large_empty_16mb/appendonly.aof` exists=True bytes=235170 sha256=df17c1e98cdc76f97e37a0778d4f12d317ee43e1a82d0b97ce4fc654d6f48653
+- aof_preamble_no_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_no/large_empty_16mb/appendonly.aof` exists=True bytes=20677286 sha256=e30f34e17136799d0a2637f213ca950c602aa8ad3fea49b040b3c26c322eb430
+### long_item
+- rdb_self: `/tmp/gemini-bloom-stage06-self/rdb/long_item/dump.rdb` exists=True bytes=190 sha256=de6889d8c2dfc94e039391dbcde757402bf191d0e114911ee358a18e5f9fa4aa
+- dump_restore_self: `/tmp/gemini-bloom-stage06-self/dump_restore/long_item.dump` exists=True bytes=83 sha256=bb028b9b94c96169d8dc53dbbeaf22bebb617f1089523ceb9edb9148dc831531
+- scandump_self: `/tmp/gemini-bloom-stage06-self/scandump_loadchunk/long_item.chunks.json` exists=True bytes=287 sha256=f8391b16e40b85f37dfb3ebba9c988d68acba865495a596433037b8b03cbd534
+- aof_preamble_yes_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_yes/long_item/appendonly.aof` exists=True bytes=194 sha256=ebe96ee59419f969cb3ec8923a0947a8d249b5fde9b800100ab1e4618017905e
+- aof_preamble_no_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_no/long_item/appendonly.aof` exists=True bytes=355 sha256=bb600012144251af482a1006db7913703ab4af81dbe5d5b8587ba290e4c7d606
+### multi_exp2
+- rdb_self: `/tmp/gemini-bloom-stage06-self/rdb/multi_exp2/dump.rdb` exists=True bytes=612 sha256=ef74880c5485c04ca41d32ae64fc77aa4396d2a5dfaa40fd78397aff968be233
+- dump_restore_self: `/tmp/gemini-bloom-stage06-self/dump_restore/multi_exp2.dump` exists=True bytes=504 sha256=4b3b551e2de9e5d45a82076c18aee87eb82d833f57de92ebca3108e9fdc48b44
+- scandump_self: `/tmp/gemini-bloom-stage06-self/scandump_loadchunk/multi_exp2.chunks.json` exists=True bytes=480 sha256=3ce1a5a1b6f78afa73fa187453bfa7e18c1abd85c96c93d75d3153a810e62fa9
+- aof_preamble_yes_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_yes/multi_exp2/appendonly.aof` exists=True bytes=616 sha256=932fdad512d1d286dc047a3ee7b7461eb90035463563bbd2368e9feeb1ab372d
+- aof_preamble_no_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_no/multi_exp2/appendonly.aof` exists=True bytes=854 sha256=8f02ea8f428ddd1271ccea8a99f3d64475a8efee077a6ff1bb13539cae6f824b
+### single_layer
+- rdb_self: `/tmp/gemini-bloom-stage06-self/rdb/single_layer/dump.rdb` exists=True bytes=299 sha256=f861f33f08980662be4ef86191f3f6ecc86505a9db0b669d10d35adbefb3e0e9
+- dump_restore_self: `/tmp/gemini-bloom-stage06-self/dump_restore/single_layer.dump` exists=True bytes=189 sha256=ecd2ac6797d044d7ea8ed97d0783fdc0ba09af4d7739502b15fa08b63cdacf2d
+- scandump_self: `/tmp/gemini-bloom-stage06-self/scandump_loadchunk/single_layer.chunks.json` exists=True bytes=287 sha256=fbd8ec6c79247641a4dbd6d3162e09e014aef138191dc9ff4b70a9552a10383b
+- aof_preamble_yes_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_yes/single_layer/appendonly.aof` exists=True bytes=303 sha256=f1ac72f1492fec14003dc2fc820c6d363e9495f73406c0abac3d8aa32415a885
+- aof_preamble_no_self: `/tmp/gemini-bloom-stage06-self/aof_preamble_no/single_layer/appendonly.aof` exists=True bytes=377 sha256=ed484053cce6c161e9d69306cb09cf7a7cfb430b5e2292c7dc39f546e20722cb

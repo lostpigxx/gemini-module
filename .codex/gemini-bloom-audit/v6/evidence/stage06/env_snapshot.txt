@@ -1,0 +1,35 @@
+# Stage 06 environment snapshot
+2026-07-01T10:54:38Z
+
+## Redis server
+Redis server v=6.2.17 sha=441001a4:0 malloc=libc bits=64 build=49616805317b0873
+
+## Module files
+ac63327867716e4dbc05452942114b84b63214869c5ab13796eaec54ee4e5f06  /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so
+3525295d3d2da4b4ec538b3ebee681221441ebbaf5dd9865177cad7ece0cc7f1  /tmp/redisbloom-v2.4.20-stage05-v6/bin/linux-x64-release/redisbloom.so
+-rwxr-xr-x 1 root root 307288 Jul  1 18:23 /tmp/gemini-module-v6-stage05-build-workaround/redis_bloom.so
+-rwxr-xr-x 1 root root 439232 Jul  1 18:22 /tmp/redisbloom-v2.4.20-stage05-v6/bin/linux-x64-release/redisbloom.so
+
+## gemini MODULE LIST
+name
+GeminiBloom
+ver
+1
+16289:C 01 Jul 2026 18:54:38.763 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+16289:C 01 Jul 2026 18:54:38.764 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=16289, just started
+16289:C 01 Jul 2026 18:54:38.764 # Configuration loaded
+16289:M 01 Jul 2026 18:54:38.772 # Server initialized
+16289:M 01 Jul 2026 18:54:39.138 # User requested shutdown...
+16289:M 01 Jul 2026 18:54:39.138 # Redis is now ready to exit, bye bye...
+
+## RedisBloom MODULE LIST
+name
+bf
+ver
+20420
+16300:C 01 Jul 2026 18:54:39.194 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+16300:C 01 Jul 2026 18:54:39.194 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=16300, just started
+16300:C 01 Jul 2026 18:54:39.194 # Configuration loaded
+16300:M 01 Jul 2026 18:54:39.203 # Server initialized
+16300:M 01 Jul 2026 18:54:39.576 # User requested shutdown...
+16300:M 01 Jul 2026 18:54:39.576 # Redis is now ready to exit, bye bye...

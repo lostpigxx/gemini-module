@@ -1,0 +1,42 @@
+stage06 self empty_scaling
+stage06 self single_layer
+stage06 self multi_exp2
+stage06 self fixed_full
+stage06 self expansion1
+stage06 self expansion4
+stage06 self binary_items
+stage06 self long_item
+stage06 self large_empty_16mb
+{
+  "aof_preamble_no_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  },
+  "aof_preamble_yes_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  },
+  "dump_restore_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  },
+  "fullsync_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  },
+  "rdb_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  },
+  "scandump_safety": "pass",
+  "scandump_self": {
+    "error": 0,
+    "fail": 0,
+    "pass": 9
+  }
+}

@@ -1,0 +1,13 @@
+# Stage 08 Root Stderr Summary
+
+Key stderr/log excerpts are preserved in the detailed evidence files:
+
+- `asan_build/default_configure_stderr.log`: GCC toolset 14 sanitizer configure fails with missing `libasan_preinit.o` and `-lasan`.
+- `asan_build/workaround_configure_stderr.log`: same GCC sanitizer-runtime failure after the Stage 05 `-include climits` workaround.
+- `asan_gtest/bloom_test_target_stderr.log`: `gmake: *** No rule to make target 'bloom_test'. Stop.`
+- `asan_tcl/module_load_no_preload_redis.log`: Redis module load fails with undefined `__asan_option_detect_stack_use_after_return`.
+- `asan_tcl/module_load_gcc11_preload_stderr.log`: `LD_PRELOAD` rejects the GCC 11 sanitizer linker-script files as "file too short".
+- `asan_tcl/runtime_discovery.log`: runtime search found only linker-script placeholders, no loadable ASAN/UBSAN dynamic runtime.
+
+No sanitizer or UBSAN stack trace from `modules/gemini-bloom` was produced because the sanitizer runtime could not be loaded for Redis integration, and no sanitizer GTest executable was available.
+

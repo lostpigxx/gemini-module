@@ -1,0 +1,38 @@
+# Stage 08 Commands
+
+Working tree: `/workspace/projects/VibeCoding/gemini-module`
+
+1. Rehydration/read inputs:
+   - `modules/gemini-bloom/DESIGN.md`
+   - `.codex/gemini-bloom-audit/v6/LOOP_CONTROL_BATCH.md`
+   - `.codex/gemini-bloom-audit/v6/policies/*.md`
+   - `.codex/gemini-bloom-audit/v6/state/LOOP_STATE.md`
+   - `.codex/gemini-bloom-audit/v6/stages/STAGE_08_SANITIZER_MEMORY.md`
+   - Stage 07 result and reviewer outputs
+2. Environment snapshot:
+   - captured git, compiler, CMake, Redis, Tcl, valgrind, and sanitizer-runtime information into `env_snapshot.txt`.
+3. GCC toolset ASAN/UBSAN configure/build:
+   - `cmake -S . -B /tmp/gemini-module-v6-stage08-asan-default -DENABLE_ASAN=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"`
+   - build marked not-run after configure failed.
+4. GCC toolset ASAN/UBSAN configure/build with Stage 05 workaround:
+   - same as above with `-DCMAKE_CXX_FLAGS="-include climits -fsanitize=address,undefined -fno-omit-frame-pointer -g"`.
+   - build marked not-run after configure failed.
+5. Clang ASAN/UBSAN configure/build with Stage 05 workaround:
+   - `CC=clang CXX=clang++ cmake -S . -B /tmp/gemini-module-v6-stage08-asan-clang -DENABLE_ASAN=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_CXX_FLAGS="-include climits -fsanitize=address,undefined -fno-omit-frame-pointer -g" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"`
+   - `cmake --build /tmp/gemini-module-v6-stage08-asan-clang -j2`
+6. GTest sanitizer target probe:
+   - `cmake --build /tmp/gemini-module-v6-stage08-asan-clang -j2 --target bloom_test`
+   - target help and binary discovery confirmed no GTest targets/binaries in this build.
+7. Redis ASAN module load probes:
+   - no `LD_PRELOAD`
+   - `LD_PRELOAD=/usr/lib/gcc/x86_64-redhat-linux/11/libasan.so:/usr/lib/gcc/x86_64-redhat-linux/11/libubsan.so`
+   - both attempted against `/workspace/projects/Environments/OpenSourceRedis/redis-6.2-redisbloom/bin/redis-server` loading `/tmp/gemini-module-v6-stage08-asan-clang/redis_bloom.so`.
+8. Sanitizer runtime discovery:
+   - `nm -D /tmp/gemini-module-v6-stage08-asan-clang/redis_bloom.so | grep -E "__asan|__ubsan"`
+   - `find /opt /usr /lib64 -name "libasan*.so*" -o -name "libubsan*.so*"`
+   - `ldconfig -p | grep -E "asan|ubsan"`
+   - `clang++ -print-file-name=...`
+9. Valgrind probe:
+   - `command -v valgrind`
+10. Static fallback:
+    - `grep -RInE "RMAlloc|RMCalloc|RMFree|placement|new \\(|delete|reinterpret_cast|static_cast<|memcpy|UINT_MAX|SIZE_MAX|overflow|totalData|dataSize|LoadStringBuffer|LoadUnsigned|LOADCHUNK|SetLayer|AppendLayer|BloomLayer" modules/gemini-bloom/src modules/gemini-bloom/tests`

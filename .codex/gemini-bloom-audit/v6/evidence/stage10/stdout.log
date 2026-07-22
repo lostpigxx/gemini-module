@@ -1,0 +1,4 @@
+Stage 10 PERF_RESOURCE audit runner completed.
+module=/tmp/gemini-module-v6-stage10-build-workaround/redis_bloom.so
+redis_data_dir=/tmp/redis-e1pcaana
+statuses=394

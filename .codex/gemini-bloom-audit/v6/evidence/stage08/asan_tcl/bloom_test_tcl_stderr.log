@@ -1,0 +1,2 @@
+NOT_RUN: Redis failed module initialization before TCL integration execution. See `module_load_failure.log`, `module_load_no_preload_redis.log`, `module_load_gcc11_preload_redis.log`, and `runtime_discovery.log`.
+

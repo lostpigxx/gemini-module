@@ -1,0 +1,19 @@
+# Stage 00 exit codes
+
+| Command | Exit code | Notes |
+|---|---:|---|
+| `git fetch origin main` | 0 | Synced `origin/main`. |
+| `git switch -c audit/gemini-bloom-v6 origin/main` | 0 | Created target audit branch. |
+| `git diff --name-only origin/main..codex/gemini-bloom-v6-review -- modules/gemini-bloom` | 0 | No module implementation paths returned. |
+| `git restore --source=codex/gemini-bloom-v6-review -- .codex/gemini-bloom-audit/v6` | 0 | Restored v6 control files onto target branch. |
+| `sed` reads of DESIGN.md, control, policies, state, and Stage 00 file | 0 | All required files readable after control directory restore. |
+| Planner subagent write to `planner_output.md` | 0 | Subagent reported completed. |
+| `git rev-parse HEAD` | 0 | Branch baseline captured. |
+| `git show -s --format=%H%n%ci%n%D HEAD` | 0 | Branch baseline captured. |
+| `rg --files modules/gemini-bloom` | 0 | Module inventory captured. |
+| `rg --files modules/gemini-bloom/tests` | 0 | Test file inventory captured. |
+| `find modules/gemini-bloom/tests -maxdepth 3 -type d -print` | 0 | Test directory inventory captured. |
+| `ls -ld modules/gemini-bloom/tests/compat/redisbloom-2.4.20` | 1 | Claimed compat fixture path is missing. |
+| `rg --files .github` | 2 | `.github` directory missing. |
+| `rg -n ... .github modules/gemini-bloom CMakeLists.txt` | 2 | Search produced useful matches but returned 2 because `.github` is missing. |
+| `sed`/`rg`/`nl` reads for source comment consistency | 0 | Evidence captured. |

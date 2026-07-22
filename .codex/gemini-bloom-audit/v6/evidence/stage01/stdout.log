@@ -1,0 +1,22 @@
+# Stage 01 stdout summary
+
+Key stdout was split into dedicated evidence files:
+
+- Git: `.codex/gemini-bloom-audit/v6/evidence/stage01/git_snapshot.txt`
+- OS: `.codex/gemini-bloom-audit/v6/evidence/stage01/env_snapshot.txt`
+- Tools: `.codex/gemini-bloom-audit/v6/evidence/stage01/tool_versions.txt`
+- Repo tree: `.codex/gemini-bloom-audit/v6/evidence/stage01/repo_tree_gemini_bloom.txt`
+- Dependencies: `.codex/gemini-bloom-audit/v6/evidence/stage01/dependency_status.txt`
+
+Important stdout facts:
+
+- HEAD at Stage 01 collection: `fa165b27fc498da23b0861f99e5f2919d89dd897`.
+- Branch: `audit/gemini-bloom-v6`.
+- Branch tracking: `[origin/audit/gemini-bloom-v6]`.
+- OS: Darwin/macOS 26.5.1 on arm64.
+- CMake: 3.29.0.
+- C++ compiler: Apple clang 21.0.0.
+- Redis: 6.2.16.
+- Tcl: 8.5.9.
+- Python: 3.13.7.
+- Docker: 27.4.0.

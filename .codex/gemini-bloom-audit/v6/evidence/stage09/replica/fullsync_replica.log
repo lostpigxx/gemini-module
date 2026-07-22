@@ -1,0 +1,23 @@
+18717:C 01 Jul 2026 20:08:06.504 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+18717:C 01 Jul 2026 20:08:06.505 # Redis version=6.2.17, bits=64, commit=441001a4, modified=0, pid=18717, just started
+18717:C 01 Jul 2026 20:08:06.505 # Configuration loaded
+18717:S 01 Jul 2026 20:08:06.506 * monotonic clock: POSIX clock_gettime
+18717:S 01 Jul 2026 20:08:06.512 * Running mode=standalone, port=45379.
+18717:S 01 Jul 2026 20:08:06.512 # Server initialized
+18717:S 01 Jul 2026 20:08:06.514 * <GeminiBloom> GeminiBloom module loaded
+18717:S 01 Jul 2026 20:08:06.514 * Module 'GeminiBloom' loaded from /tmp/gemini-module-v6-stage09-build-workaround/redis_bloom.so
+18717:S 01 Jul 2026 20:08:06.516 * Ready to accept connections
+18717:S 01 Jul 2026 20:08:06.518 * Connecting to MASTER 127.0.0.1:45378
+18717:S 01 Jul 2026 20:08:06.518 * MASTER <-> REPLICA sync started
+18717:S 01 Jul 2026 20:08:06.518 * Non blocking connect for SYNC fired the event.
+18717:S 01 Jul 2026 20:08:06.519 * Master replied to PING, replication can continue...
+18717:S 01 Jul 2026 20:08:06.519 * Partial resynchronization not possible (no cached master)
+18717:S 01 Jul 2026 20:08:06.520 * Full resync from master: ef62fad8a07db290968c79ce579ba93dfb5a22cf:0
+18717:S 01 Jul 2026 20:08:06.591 * MASTER <-> REPLICA sync: receiving 817 bytes from master to disk
+18717:S 01 Jul 2026 20:08:06.591 * MASTER <-> REPLICA sync: Flushing old data
+18717:S 01 Jul 2026 20:08:06.591 * MASTER <-> REPLICA sync: Loading DB in memory
+18717:S 01 Jul 2026 20:08:06.596 * Loading RDB produced by version 6.2.17
+18717:S 01 Jul 2026 20:08:06.596 * RDB age 0 seconds
+18717:S 01 Jul 2026 20:08:06.596 * RDB memory usage when created 1.90 Mb
+18717:S 01 Jul 2026 20:08:06.597 # Done loading RDB, keys loaded: 4, keys expired: 0.
+18717:S 01 Jul 2026 20:08:06.597 * MASTER <-> REPLICA sync: Finished with success

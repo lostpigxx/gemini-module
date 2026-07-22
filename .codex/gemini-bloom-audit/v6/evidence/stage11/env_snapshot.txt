@@ -1,0 +1,8 @@
+cwd=/Users/liuyu/centos_ex/projects/VibeCoding/gemini-module
+            branch=audit/gemini-bloom-v6
+            head=4138087aa6f304fabd699fd9fd518436cb8b4001
+            status_short_before_stage11_commit=M .codex/gemini-bloom-audit/v6/state/LOOP_STATE.md
+?? .codex/gemini-bloom-audit/v6/agents/stage11/
+?? .codex/gemini-bloom-audit/v6/evidence/stage11/
+?? doc/code_review/
+            report_dir=/Users/liuyu/centos_ex/projects/VibeCoding/gemini-module/doc/code_review/gemini-bloom/v6

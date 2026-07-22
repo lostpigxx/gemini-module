@@ -1,0 +1,216 @@
+# Stage 04 runtime matrix commands
+
+$ cmake -S /Users/liuyu/centos_ex/projects/VibeCoding/gemini-module -B /private/tmp/gemini-bloom-stage04-build.pfe83z4d
+$ cmake --build /private/tmp/gemini-bloom-stage04-build.pfe83z4d --target redis_bloom -j 10
+$ /opt/homebrew/opt/redis@6.2/bin/redis-server --bind 127.0.0.1 --port 55965 --daemonize yes --loglevel notice --logfile /private/tmp/gemini-bloom-stage04-redis.i_jnp3vi/redis.log --dbfilename dump.rdb --dir /private/tmp/gemini-bloom-stage04-redis.i_jnp3vi --loadmodule /private/tmp/gemini-bloom-stage04-build.pfe83z4d/redis_bloom.so
+REDIS env-hello2: HELLO 2
+REDIS env-module-list: MODULE LIST
+REDIS env-flushall: FLUSHALL
+REDIS happy-reserve: BF.RESERVE hp_reserve 0.01 100 EXPANSION 2
+REDIS happy-add-new: BF.ADD hp_reserve a
+REDIS happy-add-dup: BF.ADD hp_reserve a
+REDIS happy-madd: BF.MADD hp_reserve b c a
+REDIS happy-insert-create: BF.INSERT hp_insert CAPACITY 10 ERROR 0.01 EXPANSION 2 ITEMS x y
+REDIS happy-exists-present: BF.EXISTS hp_insert x
+REDIS happy-exists-absent: BF.EXISTS hp_insert z
+REDIS happy-mexists: BF.MEXISTS hp_insert x z
+REDIS happy-info-full: BF.INFO hp_insert
+REDIS happy-info-items-field: BF.INFO hp_insert ITEMS
+REDIS happy-card: BF.CARD hp_insert
+REDIS info-field-capacity: BF.INFO hp_insert CAPACITY
+REDIS info-field-size: BF.INFO hp_insert SIZE
+REDIS info-field-filters: BF.INFO hp_insert FILTERS
+REDIS info-field-items: BF.INFO hp_insert ITEMS
+REDIS info-field-expansion: BF.INFO hp_insert EXPANSION
+REDIS info-field-invalid: BF.INFO hp_insert NOPE
+REDIS missing-add-autocreate: BF.ADD missing_add a
+REDIS missing-madd-autocreate: BF.MADD missing_madd a b
+REDIS missing-insert-nocreate: BF.INSERT missing_insert_no NOCREATE ITEMS a
+REDIS missing-insert-create: BF.INSERT missing_insert_yes ITEMS a
+REDIS missing-exists: BF.EXISTS missing_nope a
+REDIS missing-mexists: BF.MEXISTS missing_nope a b
+REDIS missing-info: BF.INFO missing_nope
+REDIS missing-card: BF.CARD missing_nope
+REDIS missing-scandump: BF.SCANDUMP missing_nope 0
+REDIS missing-loadchunk-data: BF.LOADCHUNK missing_nope 2 data
+REDIS dup-reserve: BF.RESERVE dup_key 0.01 100
+REDIS dup-add-a1: BF.ADD dup_key a
+REDIS dup-add-a2: BF.ADD dup_key a
+REDIS dup-madd: BF.MADD dup_key a a b
+REDIS dup-insert: BF.INSERT dup_key ITEMS b b c
+REDIS dup-card: BF.CARD dup_key
+REDIS dup-info-items: BF.INFO dup_key ITEMS
+REDIS binary-reserve: BF.RESERVE bin_key 0.01 100
+REDIS binary-add-empty: BF.ADD bin_key 
+REDIS binary-exists-empty: BF.EXISTS bin_key 
+REDIS binary-add-nul: BF.ADD bin_key 0x610062
+REDIS binary-exists-nul: BF.EXISTS bin_key 0x610062
+REDIS binary-add-nonutf8: BF.ADD bin_key 0xfffe0078
+REDIS binary-exists-nonutf8: BF.EXISTS bin_key 0xfffe0078
+REDIS binary-add-long10k: BF.ADD bin_key <bulk len=10240 sha-ish=4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c>
+REDIS binary-exists-long10k: BF.EXISTS bin_key <bulk len=10240 sha-ish=4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c>
+REDIS binary-mexists: BF.MEXISTS bin_key  0x610062 0x616273656e7400
+REDIS boundary-capacity-zero: BF.RESERVE cap_zero 0.01 0
+REDIS boundary-capacity-one: BF.RESERVE cap_one 0.01 1
+REDIS boundary-capacity-max-safe: BF.RESERVE cap_max 0.9 1073741824 NONSCALING
+REDIS boundary-capacity-over: BF.RESERVE cap_over 0.01 1073741825
+REDIS boundary-error-zero: BF.RESERVE err_zero 0 10
+REDIS boundary-error-negative: BF.RESERVE err_negative -0.1 10
+REDIS boundary-error-one: BF.RESERVE err_one 1 10
+REDIS boundary-error-gtone: BF.RESERVE err_gtone 1.5 10
+REDIS boundary-error-nan: BF.RESERVE err_nan nan 10
+REDIS boundary-error-inf: BF.RESERVE err_inf inf 10
+REDIS boundary-error-text: BF.RESERVE err_text nope 10
+REDIS boundary-error-valid-small: BF.RESERVE err_valid_small 0.0001 10
+REDIS boundary-expansion-zero: BF.RESERVE exp_zero 0.01 10 EXPANSION 0
+REDIS boundary-expansion-zero-info: BF.INFO exp_zero EXPANSION
+REDIS boundary-expansion-1: BF.RESERVE exp_1 0.9 10 EXPANSION 1
+REDIS boundary-expansion-2: BF.RESERVE exp_2 0.9 10 EXPANSION 2
+REDIS boundary-expansion-32768: BF.RESERVE exp_32768 0.9 10 EXPANSION 32768
+REDIS boundary-expansion-over: BF.RESERVE exp_over 0.01 10 EXPANSION 32769
+REDIS boundary-duplicate-expansion: BF.RESERVE dup_exp 0.01 10 EXPANSION 2 EXPANSION 3
+REDIS boundary-duplicate-nonscaling: BF.RESERVE dup_ns 0.01 10 NONSCALING NONSCALING
+REDIS boundary-unknown-option: BF.RESERVE unknown_opt 0.01 10 BOGUS
+REDIS boundary-ns-exp: BF.RESERVE ns_exp 0.01 10 NONSCALING EXPANSION 2
+REDIS boundary-insert-nocreate-capacity: BF.INSERT nokey NOCREATE CAPACITY 10 ITEMS a
+REDIS boundary-insert-nocreate-error: BF.INSERT nokey NOCREATE ERROR 0.01 ITEMS a
+REDIS boundary-insert-duplicate-error: BF.INSERT dup_err ERROR 0.01 ERROR 0.02 ITEMS a
+REDIS boundary-insert-duplicate-capacity: BF.INSERT dup_cap CAPACITY 10 CAPACITY 20 ITEMS a
+REDIS boundary-insert-exp0: BF.INSERT ins_exp0 EXPANSION 0 ITEMS a
+REDIS boundary-insert-exp0-info: BF.INFO ins_exp0 EXPANSION
+REDIS fixed-reserve: BF.RESERVE fixed_key 0.001 2 NONSCALING
+REDIS fixed-add-a: BF.ADD fixed_key a
+REDIS fixed-add-b: BF.ADD fixed_key b
+REDIS fixed-add-c-full: BF.ADD fixed_key c
+REDIS fixed-add-a-dup-after-full: BF.ADD fixed_key a
+REDIS fixed-card: BF.CARD fixed_key
+REDIS partial-madd-reserve: BF.RESERVE partial_madd 0.001 2 NONSCALING
+REDIS partial-madd: BF.MADD partial_madd a b c d
+REDIS partial-madd-card: BF.CARD partial_madd
+REDIS partial-madd-unprocessed: BF.EXISTS partial_madd d
+REDIS partial-insert-reserve: BF.RESERVE partial_insert 0.001 2 NONSCALING
+REDIS partial-insert: BF.INSERT partial_insert NOCREATE ITEMS a b c d
+REDIS partial-insert-card: BF.CARD partial_insert
+REDIS partial-insert-unprocessed: BF.EXISTS partial_insert d
+REDIS sd-reserve: BF.RESERVE sd_src 0.0001 4 EXPANSION 1
+REDIS sd-add-00: BF.ADD sd_src sd_item_0
+REDIS sd-add-01: BF.ADD sd_src sd_item_1
+REDIS sd-add-02: BF.ADD sd_src sd_item_2
+REDIS sd-add-03: BF.ADD sd_src sd_item_3
+REDIS sd-add-04: BF.ADD sd_src sd_item_4
+REDIS sd-add-05: BF.ADD sd_src sd_item_5
+REDIS sd-add-06: BF.ADD sd_src sd_item_6
+REDIS sd-add-07: BF.ADD sd_src sd_item_7
+REDIS sd-add-08: BF.ADD sd_src sd_item_8
+REDIS sd-add-09: BF.ADD sd_src sd_item_9
+REDIS sd-add-10: BF.ADD sd_src sd_item_10
+REDIS sd-add-11: BF.ADD sd_src sd_item_11
+REDIS sd-add-12: BF.ADD sd_src sd_item_12
+REDIS sd-add-13: BF.ADD sd_src sd_item_13
+REDIS sd-add-14: BF.ADD sd_src sd_item_14
+REDIS sd-add-15: BF.ADD sd_src sd_item_15
+REDIS sd-add-16: BF.ADD sd_src sd_item_16
+REDIS sd-add-17: BF.ADD sd_src sd_item_17
+REDIS sd-add-18: BF.ADD sd_src sd_item_18
+REDIS sd-add-19: BF.ADD sd_src sd_item_19
+REDIS sd-add-20: BF.ADD sd_src sd_item_20
+REDIS sd-add-21: BF.ADD sd_src sd_item_21
+REDIS sd-add-22: BF.ADD sd_src sd_item_22
+REDIS sd-add-23: BF.ADD sd_src sd_item_23
+REDIS sd-add-24: BF.ADD sd_src sd_item_24
+REDIS sd-add-25: BF.ADD sd_src sd_item_25
+REDIS sd-add-26: BF.ADD sd_src sd_item_26
+REDIS sd-add-27: BF.ADD sd_src sd_item_27
+REDIS sd-add-28: BF.ADD sd_src sd_item_28
+REDIS sd-add-29: BF.ADD sd_src sd_item_29
+REDIS sd-info-filters: BF.INFO sd_src FILTERS
+REDIS sd-scandump-0: BF.SCANDUMP sd_src 0
+REDIS sd-scandump-1: BF.SCANDUMP sd_src 1
+REDIS sd-scandump-2: BF.SCANDUMP sd_src 2
+REDIS sd-scandump-3: BF.SCANDUMP sd_src 3
+REDIS sd-scandump-4: BF.SCANDUMP sd_src 4
+REDIS sd-scandump-5: BF.SCANDUMP sd_src 5
+REDIS sd-scandump-6: BF.SCANDUMP sd_src 6
+REDIS sd-scandump-7: BF.SCANDUMP sd_src 7
+REDIS sd-scandump-8: BF.SCANDUMP sd_src 8
+REDIS sd-scandump-9: BF.SCANDUMP sd_src 9
+REDIS lc-load-header: BF.LOADCHUNK sd_dst 1 <bulk len=444 sha-ish=1e000000000000000800000005000000>
+REDIS lc-load-chunk-1: BF.LOADCHUNK sd_dst 2 <bulk len=128 sha-ish=40040000020040000010000002304004>
+REDIS lc-load-chunk-2: BF.LOADCHUNK sd_dst 3 <bulk len=128 sha-ish=00100800000082000480100004a00001>
+REDIS lc-load-chunk-3: BF.LOADCHUNK sd_dst 4 <bulk len=128 sha-ish=00600081000000010080000000080000>
+REDIS lc-load-chunk-4: BF.LOADCHUNK sd_dst 5 <bulk len=128 sha-ish=10180000020008140000000800500000>
+REDIS lc-load-chunk-5: BF.LOADCHUNK sd_dst 6 <bulk len=128 sha-ish=00080408002404000000008000000400>
+REDIS lc-load-chunk-6: BF.LOADCHUNK sd_dst 7 <bulk len=128 sha-ish=01000000220802080002000000104000>
+REDIS lc-load-chunk-7: BF.LOADCHUNK sd_dst 8 <bulk len=128 sha-ish=80008000a00000000000100080002000>
+REDIS lc-load-chunk-8: BF.LOADCHUNK sd_dst 9 <bulk len=128 sha-ish=0000000000200800000082200882208a>
+REDIS lc-card-match: BF.CARD sd_dst
+REDIS lc-membership-00: BF.EXISTS sd_dst sd_item_0
+REDIS lc-membership-01: BF.EXISTS sd_dst sd_item_1
+REDIS lc-membership-02: BF.EXISTS sd_dst sd_item_2
+REDIS lc-membership-03: BF.EXISTS sd_dst sd_item_3
+REDIS lc-membership-04: BF.EXISTS sd_dst sd_item_4
+REDIS lc-membership-05: BF.EXISTS sd_dst sd_item_5
+REDIS lc-membership-06: BF.EXISTS sd_dst sd_item_6
+REDIS lc-membership-07: BF.EXISTS sd_dst sd_item_7
+REDIS lc-membership-08: BF.EXISTS sd_dst sd_item_8
+REDIS lc-membership-09: BF.EXISTS sd_dst sd_item_9
+REDIS loading-header: BF.LOADCHUNK half_key 1 <bulk len=444 sha-ish=1e000000000000000800000005000000>
+REDIS loading-reject-bf-add: BF.ADD half_key x
+REDIS loading-reject-bf-madd: BF.MADD half_key x y
+REDIS loading-reject-bf-insert: BF.INSERT half_key NOCREATE ITEMS x
+REDIS loading-reject-bf-exists: BF.EXISTS half_key x
+REDIS loading-reject-bf-mexists: BF.MEXISTS half_key x y
+REDIS loading-reject-bf-info: BF.INFO half_key
+REDIS loading-reject-bf-card: BF.CARD half_key
+REDIS loading-reject-bf-scandump: BF.SCANDUMP half_key 0
+REDIS loading-bad-size: BF.LOADCHUNK half_key 2 short
+REDIS loading-complete-1: BF.LOADCHUNK half_key 2 <bulk len=128 sha-ish=40040000020040000010000002304004>
+REDIS loading-complete-2: BF.LOADCHUNK half_key 3 <bulk len=128 sha-ish=00100800000082000480100004a00001>
+REDIS loading-complete-3: BF.LOADCHUNK half_key 4 <bulk len=128 sha-ish=00600081000000010080000000080000>
+REDIS loading-complete-4: BF.LOADCHUNK half_key 5 <bulk len=128 sha-ish=10180000020008140000000800500000>
+REDIS loading-complete-5: BF.LOADCHUNK half_key 6 <bulk len=128 sha-ish=00080408002404000000008000000400>
+REDIS loading-complete-6: BF.LOADCHUNK half_key 7 <bulk len=128 sha-ish=01000000220802080002000000104000>
+REDIS loading-complete-7: BF.LOADCHUNK half_key 8 <bulk len=128 sha-ish=80008000a00000000000100080002000>
+REDIS loading-complete-8: BF.LOADCHUNK half_key 9 <bulk len=128 sha-ish=0000000000200800000082200882208a>
+REDIS loading-completed-reject-cursor2: BF.LOADCHUNK half_key 2 0x00000000000000000000000000000000
+REDIS existing-header-src: BF.RESERVE existing_dst 0.01 10
+REDIS existing-header-old: BF.ADD existing_dst old
+REDIS existing-header-reject: BF.LOADCHUNK existing_dst 1 <bulk len=444 sha-ish=1e000000000000000800000005000000>
+REDIS existing-header-preserve: BF.EXISTS existing_dst old
+REDIS wt-set: SET wrongtype value
+REDIS wrongtype-bf-reserve: BF.RESERVE wrongtype 0.01 10
+REDIS wrongtype-bf-add: BF.ADD wrongtype item
+REDIS wrongtype-bf-madd: BF.MADD wrongtype item
+REDIS wrongtype-bf-insert: BF.INSERT wrongtype ITEMS item
+REDIS wrongtype-bf-exists: BF.EXISTS wrongtype item
+REDIS wrongtype-bf-mexists: BF.MEXISTS wrongtype item
+REDIS wrongtype-bf-info: BF.INFO wrongtype
+REDIS wrongtype-bf-card: BF.CARD wrongtype
+REDIS wrongtype-bf-scandump: BF.SCANDUMP wrongtype 0
+REDIS wrongtype-bf-loadchunk: BF.LOADCHUNK wrongtype 1 <bulk len=444 sha-ish=1e000000000000000800000005000000>
+REDIS wrongtype-preserve: GET wrongtype
+REDIS metadata-command-info: COMMAND INFO BF.RESERVE BF.ADD BF.MADD BF.INSERT BF.EXISTS BF.MEXISTS BF.INFO BF.CARD BF.SCANDUMP BF.LOADCHUNK
+REDIS metadata-getkeys-reserve: COMMAND GETKEYS BF.RESERVE cmd_key 0.01 10
+REDIS metadata-getkeys-add: COMMAND GETKEYS BF.ADD cmd_key item
+REDIS metadata-getkeys-madd: COMMAND GETKEYS BF.MADD cmd_key a b
+REDIS metadata-getkeys-insert: COMMAND GETKEYS BF.INSERT cmd_key ITEMS a
+REDIS metadata-getkeys-exists: COMMAND GETKEYS BF.EXISTS cmd_key a
+REDIS metadata-getkeys-mexists: COMMAND GETKEYS BF.MEXISTS cmd_key a
+REDIS metadata-getkeys-info: COMMAND GETKEYS BF.INFO cmd_key
+REDIS metadata-getkeys-card: COMMAND GETKEYS BF.CARD cmd_key
+REDIS metadata-getkeys-scandump: COMMAND GETKEYS BF.SCANDUMP cmd_key 0
+REDIS metadata-getkeys-loadchunk: COMMAND GETKEYS BF.LOADCHUNK cmd_key 1 data
+REDIS metadata-acl-dryrun-default-add: ACL DRYRUN default BF.ADD acl_key item
+REDIS metadata-acl-setuser: ACL SETUSER stage04_ro on nopass ~* +@read -@write
+REDIS metadata-acl-ro-read: ACL DRYRUN stage04_ro BF.EXISTS acl_key item
+REDIS metadata-acl-ro-write: ACL DRYRUN stage04_ro BF.ADD acl_key item
+REDIS metadata-acl-deluser: ACL DELUSER stage04_ro
+REDIS resp3-hello3: HELLO 3
+REDIS resp3-add: BF.ADD resp3_key a
+REDIS resp3-exists: BF.EXISTS resp3_key a
+REDIS resp3-mexists: BF.MEXISTS resp3_key a b
+REDIS resp3-info-full: BF.INFO resp3_key
+REDIS resp3-info-field: BF.INFO resp3_key ITEMS
+REDIS resp3-scandump: BF.SCANDUMP resp3_key 0
+REDIS cleanup-hello2: HELLO 2
+REDIS cleanup-flushall: FLUSHALL

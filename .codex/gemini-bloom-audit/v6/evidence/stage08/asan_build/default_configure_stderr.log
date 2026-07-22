@@ -1,0 +1,34 @@
+CMake Error at /usr/share/cmake/Modules/CMakeTestCXXCompiler.cmake:60 (message):
+  The C++ compiler
+
+    "/opt/rh/gcc-toolset-14/root/usr/bin/c++"
+
+  is not able to compile a simple test program.
+
+  It fails with the following output:
+
+    Change Dir: /tmp/gemini-module-v6-stage08-asan-default/CMakeFiles/CMakeScratch/TryCompile-MlzCjD
+    
+    Run Build Command(s):/usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile cmTC_fa56c/fast && /usr/bin/gmake  -f CMakeFiles/cmTC_fa56c.dir/build.make CMakeFiles/cmTC_fa56c.dir/build
+    gmake[1]: Entering directory '/tmp/gemini-module-v6-stage08-asan-default/CMakeFiles/CMakeScratch/TryCompile-MlzCjD'
+    Building CXX object CMakeFiles/cmTC_fa56c.dir/testCXXCompiler.cxx.o
+    /opt/rh/gcc-toolset-14/root/usr/bin/c++   -fsanitize=address,undefined -fno-omit-frame-pointer -g  -o CMakeFiles/cmTC_fa56c.dir/testCXXCompiler.cxx.o -c /tmp/gemini-module-v6-stage08-asan-default/CMakeFiles/CMakeScratch/TryCompile-MlzCjD/testCXXCompiler.cxx
+    Linking CXX executable cmTC_fa56c
+    /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_fa56c.dir/link.txt --verbose=1
+    /opt/rh/gcc-toolset-14/root/usr/bin/c++ -fsanitize=address,undefined -fno-omit-frame-pointer -g  -fsanitize=address,undefined  CMakeFiles/cmTC_fa56c.dir/testCXXCompiler.cxx.o -o cmTC_fa56c 
+    /opt/rh/gcc-toolset-14/root/usr/libexec/gcc/x86_64-redhat-linux/14/ld: cannot find libasan_preinit.o: No such file or directory
+    /opt/rh/gcc-toolset-14/root/usr/libexec/gcc/x86_64-redhat-linux/14/ld: cannot find -lasan: No such file or directory
+    collect2: error: ld returned 1 exit status
+    gmake[1]: *** [CMakeFiles/cmTC_fa56c.dir/build.make:99: cmTC_fa56c] Error 1
+    gmake[1]: Leaving directory '/tmp/gemini-module-v6-stage08-asan-default/CMakeFiles/CMakeScratch/TryCompile-MlzCjD'
+    gmake: *** [Makefile:127: cmTC_fa56c/fast] Error 2
+    
+    
+
+  
+
+  CMake will not be able to correctly generate this project.
+Call Stack (most recent call first):
+  CMakeLists.txt:2 (project)
+
+

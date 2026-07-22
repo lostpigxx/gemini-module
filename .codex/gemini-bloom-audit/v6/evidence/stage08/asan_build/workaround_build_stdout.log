@@ -1,0 +1,1 @@
+NOT_RUN: GCC ASAN/UBSAN build with `-include climits` was not run because configure failed.

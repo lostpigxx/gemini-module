@@ -1,0 +1,83 @@
+Running main() from /private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_6094xsvp9s/croot/yaml-cpp-split_1714510906468/work/test/gtest-1.11.0/googletest/src/gtest_main.cc
+[==========] Running 28 tests from 7 test suites.
+[----------] Global test environment set-up.
+[----------] 3 tests from MurmurHash2Test
+[ RUN      ] MurmurHash2Test.Deterministic
+[       OK ] MurmurHash2Test.Deterministic (0 ms)
+[ RUN      ] MurmurHash2Test.EmptyInput
+[       OK ] MurmurHash2Test.EmptyInput (0 ms)
+[ RUN      ] MurmurHash2Test.ExactVectors
+[       OK ] MurmurHash2Test.ExactVectors (0 ms)
+[----------] 3 tests from MurmurHash2Test (0 ms total)
+
+[----------] 2 tests from MurmurHash64ATest
+[ RUN      ] MurmurHash64ATest.Deterministic
+[       OK ] MurmurHash64ATest.Deterministic (0 ms)
+[ RUN      ] MurmurHash64ATest.ExactVectors
+[       OK ] MurmurHash64ATest.ExactVectors (0 ms)
+[----------] 2 tests from MurmurHash64ATest (0 ms total)
+
+[----------] 6 tests from HashPolicyTest
+[ RUN      ] HashPolicyTest.Hash32Consistency
+[       OK ] HashPolicyTest.Hash32Consistency (0 ms)
+[ RUN      ] HashPolicyTest.Hash64Consistency
+[       OK ] HashPolicyTest.Hash64Consistency (0 ms)
+[ RUN      ] HashPolicyTest.Hash32ExactVectors
+[       OK ] HashPolicyTest.Hash32ExactVectors (0 ms)
+[ RUN      ] HashPolicyTest.Hash64ExactVectors
+[       OK ] HashPolicyTest.Hash64ExactVectors (0 ms)
+[ RUN      ] HashPolicyTest.Hash32BinaryWithNulls
+[       OK ] HashPolicyTest.Hash32BinaryWithNulls (0 ms)
+[ RUN      ] HashPolicyTest.Hash64BinaryWithNulls
+[       OK ] HashPolicyTest.Hash64BinaryWithNulls (0 ms)
+[----------] 6 tests from HashPolicyTest (0 ms total)
+
+[----------] 10 tests from BloomLayerTest
+[ RUN      ] BloomLayerTest.CreateRAII
+[       OK ] BloomLayerTest.CreateRAII (0 ms)
+[ RUN      ] BloomLayerTest.MoveSemantics
+[       OK ] BloomLayerTest.MoveSemantics (0 ms)
+[ RUN      ] BloomLayerTest.MoveAssignmentReleasesOldStorage
+[       OK ] BloomLayerTest.MoveAssignmentReleasesOldStorage (0 ms)
+[ RUN      ] BloomLayerTest.InsertAndTest
+[       OK ] BloomLayerTest.InsertAndTest (0 ms)
+[ RUN      ] BloomLayerTest.FalsePositiveRate
+[       OK ] BloomLayerTest.FalsePositiveRate (14 ms)
+[ RUN      ] BloomLayerTest.PowerOfTwoViaBitCeil
+[       OK ] BloomLayerTest.PowerOfTwoViaBitCeil (0 ms)
+[ RUN      ] BloomLayerTest.NoRoundUsesAlignedNonPowerOfTwoBits
+[       OK ] BloomLayerTest.NoRoundUsesAlignedNonPowerOfTwoBits (0 ms)
+[ RUN      ] BloomLayerTest.RejectsInvalidCreateParameters
+[       OK ] BloomLayerTest.RejectsInvalidCreateParameters (0 ms)
+[ RUN      ] BloomLayerTest.RejectsBitsPerEntryExceedingLimit
+[       OK ] BloomLayerTest.RejectsBitsPerEntryExceedingLimit (0 ms)
+[ RUN      ] BloomLayerTest.RawBitsCreatesZeroHashCount
+[       OK ] BloomLayerTest.RawBitsCreatesZeroHashCount (0 ms)
+[----------] 10 tests from BloomLayerTest (14 ms total)
+
+[----------] 5 tests from BloomFlagsTest
+[ RUN      ] BloomFlagsTest.EnumClassOperators
+[       OK ] BloomFlagsTest.EnumClassOperators (0 ms)
+[ RUN      ] BloomFlagsTest.ValidateFlagsAcceptsSupportedCombinations
+[       OK ] BloomFlagsTest.ValidateFlagsAcceptsSupportedCombinations (0 ms)
+[ RUN      ] BloomFlagsTest.ValidateFlagsRejectsUnknownBits
+[       OK ] BloomFlagsTest.ValidateFlagsRejectsUnknownBits (0 ms)
+[ RUN      ] BloomFlagsTest.ValidateFlagsRejectsRawBits
+[       OK ] BloomFlagsTest.ValidateFlagsRejectsRawBits (0 ms)
+[ RUN      ] BloomFlagsTest.ResourceLimitConstants
+[       OK ] BloomFlagsTest.ResourceLimitConstants (0 ms)
+[----------] 5 tests from BloomFlagsTest (0 ms total)
+
+[----------] 1 test from BitAddressTest
+[ RUN      ] BitAddressTest.ResolveBitMapsLinearIndexToLittleEndianByteBit
+[       OK ] BitAddressTest.ResolveBitMapsLinearIndexToLittleEndianByteBit (0 ms)
+[----------] 1 test from BitAddressTest (0 ms total)
+
+[----------] 1 test from ProbePositionTest
+[ RUN      ] ProbePositionTest.UsesMaskForPowerOfTwoAndModuloOtherwise
+[       OK ] ProbePositionTest.UsesMaskForPowerOfTwoAndModuloOtherwise (0 ms)
+[----------] 1 test from ProbePositionTest (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 28 tests from 7 test suites ran. (14 ms total)
+[  PASSED  ] 28 tests.

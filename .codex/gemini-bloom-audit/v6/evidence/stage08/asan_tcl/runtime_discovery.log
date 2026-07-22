@@ -1,0 +1,22 @@
+# sanitizer runtime discovery
+## GCC scripts
+-rw-r--r-- 1 root root 38 Oct 29  2025 /usr/lib/gcc/x86_64-redhat-linux/11/libasan.so
+-rw-r--r-- 1 root root 39 Oct 29  2025 /usr/lib/gcc/x86_64-redhat-linux/11/libubsan.so
+INPUT ( /usr/lib64/libasan.so.6.0.0 )
+INPUT ( /usr/lib64/libubsan.so.1.0.0 )
+## GCC/Clang runtime search
+-rw-r--r-- 1 root root 78 Apr 22  2025 /opt/rh/gcc-toolset-14/root/usr/lib/gcc/x86_64-redhat-linux/14/32/libasan.so
+-rw-r--r-- 1 root root 79 Apr 22  2025 /opt/rh/gcc-toolset-14/root/usr/lib/gcc/x86_64-redhat-linux/14/32/libubsan.so
+-rw-r--r-- 1 root root 36 Oct 29  2025 /usr/lib/gcc/x86_64-redhat-linux/11/32/libasan.so
+-rw-r--r-- 1 root root 37 Oct 29  2025 /usr/lib/gcc/x86_64-redhat-linux/11/32/libubsan.so
+-rw-r--r-- 1 root root 38 Oct 29  2025 /usr/lib/gcc/x86_64-redhat-linux/11/libasan.so
+-rw-r--r-- 1 root root 39 Oct 29  2025 /usr/lib/gcc/x86_64-redhat-linux/11/libubsan.so
+## ldconfig
+## clang resource lookup
+clang_so=libclang_rt.asan-x86_64.so
+clang_a=libclang_rt.asan-x86_64.a
+clang_ubsan_so=libclang_rt.ubsan_standalone-x86_64.so
+clang_ubsan_a=libclang_rt.ubsan_standalone-x86_64.a
+FILE:libclang_rt.asan-x86_64.a
+FILE:libclang_rt.asan-x86_64.so
+FILE:libclang_rt.ubsan_standalone-x86_64.so
