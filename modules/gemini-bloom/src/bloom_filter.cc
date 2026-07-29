@@ -135,6 +135,23 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
   return layer;
 }
 
+std::optional<BloomLayer> BloomLayer::Clone() const {
+  BloomLayer copy;
+  copy.hashCount_ = hashCount_;
+  copy.log2Bits_ = log2Bits_;
+  copy.use64Bit_ = use64Bit_;
+  copy.capacity_ = capacity_;
+  copy.fpRate_ = fpRate_;
+  copy.bitsPerEntry_ = bitsPerEntry_;
+  copy.totalBits_ = totalBits_;
+  copy.dataSize_ = dataSize_;
+
+  copy.bitArray_ = static_cast<uint8_t*>(RMAlloc(copy.dataSize_));
+  if (!copy.bitArray_) return std::nullopt;
+  std::memcpy(copy.bitArray_, bitArray_, copy.dataSize_);
+  return copy;
+}
+
 // --- Bit-level operations ---
 
 uint64_t BloomLayer::ComputeModuloMask() const {

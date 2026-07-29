@@ -138,6 +138,14 @@ public:
   bool Test(const HashPair& hp) const;
   bool Insert(const HashPair& hp);
 
+  // Deep copy: BloomLayer is move-only, so cloning needs an explicit method
+  // rather than a copy constructor.
+  std::optional<BloomLayer> Clone() const;
+
+  // For defrag: adopt a relocated bit-array buffer. Caller owns the
+  // relocation (e.g. via RedisModule_DefragAlloc) and transfers ownership.
+  void AdoptBitArray(uint8_t* newBitArray) { bitArray_ = newBitArray; }
+
   uint32_t GetHashCount() const { return hashCount_; }
   uint8_t GetLog2Bits() const { return log2Bits_; }
   uint64_t GetCapacity() const { return capacity_; }

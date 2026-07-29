@@ -373,3 +373,61 @@ TEST(ScalingBloomTest, SpanInterface) {
   mem->~ScalingBloomFilter();
   free(mem);
 }
+
+// --- ScalingBloomFilter::Clone ---
+
+TEST(ScalingBloomTest, CloneProducesIndependentFilter) {
+  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (mem) ScalingBloomFilter(100, 0.01, DefaultFlags(), 2);
+
+  std::vector<std::string> items;
+  for (int i = 0; i < 500; i++) {
+    items.push_back("clone_" + std::to_string(i));
+    mem->Put(ToSpan(items.back()));
+  }
+  ASSERT_GT(mem->NumLayers(), 1u);
+
+  auto* clone = mem->Clone();
+  ASSERT_NE(clone, nullptr);
+  EXPECT_EQ(clone->NumLayers(), mem->NumLayers());
+  EXPECT_EQ(clone->TotalItems(), mem->TotalItems());
+  EXPECT_EQ(clone->ExpansionFactor(), mem->ExpansionFactor());
+  EXPECT_EQ(clone->Flags(), mem->Flags());
+
+  for (const auto& item : items) {
+    EXPECT_TRUE(clone->Contains(ToSpan(item)))
+      << "False negative in clone for " << item;
+  }
+
+  // Mutating the original after cloning must not affect the clone. Since
+  // this is a bloom filter, a rare false positive is acceptable — but the
+  // clone must not report a false negative, and the FP rate stays low.
+  int falsePositives = 0;
+  for (int i = 500; i < 600; i++) {
+    auto item = "postclone_" + std::to_string(i);
+    mem->Put(ToSpan(item));
+    if (clone->Contains(ToSpan(item))) falsePositives++;
+  }
+  EXPECT_LE(falsePositives, 5) << "Unexpectedly high false-positive rate in clone";
+  EXPECT_NE(clone->TotalItems(), mem->TotalItems());
+
+  mem->~ScalingBloomFilter();
+  free(mem);
+  clone->~ScalingBloomFilter();
+  free(clone);
+}
+
+TEST(ScalingBloomTest, CloneOfEmptyFilter) {
+  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (mem) ScalingBloomFilter(1000, 0.01, DefaultFlags(), 2);
+
+  auto* clone = mem->Clone();
+  ASSERT_NE(clone, nullptr);
+  EXPECT_EQ(clone->TotalItems(), 0u);
+  EXPECT_EQ(clone->NumLayers(), 1u);
+
+  mem->~ScalingBloomFilter();
+  free(mem);
+  clone->~ScalingBloomFilter();
+  free(clone);
+}

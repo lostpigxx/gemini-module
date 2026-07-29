@@ -185,5 +185,21 @@ void ScalingBloomFilter::SetLayer(size_t index, FilterLayer&& layer) {
   }
 }
 
+ScalingBloomFilter* ScalingBloomFilter::Clone() const {
+  auto* clone = FromRdbShell({totalItems_, numLayers_, flags_, expansionFactor_});
+  if (!clone) return nullptr;
+
+  for (size_t i = 0; i < numLayers_; i++) {
+    auto clonedLayer = layers_[i].bloom.Clone();
+    if (!clonedLayer) {
+      clone->~ScalingBloomFilter();
+      RMFree(clone);
+      return nullptr;
+    }
+    clone->SetLayer(i, {std::move(*clonedLayer), layers_[i].itemCount});
+  }
+  return clone;
+}
+
 // WriteTo, ReadFrom, SerializeHeader, DeserializeHeader live in bloom_rdb.cc
 // to keep Redis Module API dependencies out of test builds.

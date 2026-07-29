@@ -242,6 +242,8 @@ proc start_redis {module_path port} {
       --logfile /tmp/bloom_tcl_test.log \
       --dbfilename bloom_tcl_test.rdb \
       --dir /tmp \
+      --enable-debug-command yes \
+      --repl-diskless-sync-delay 0 \
       --loadmodule $module_path
   }
   for {set i 0} {$i < 50} {incr i} {
@@ -1053,6 +1055,8 @@ test_assert "Data survives AOF rewrite + restart" {
       --dbfilename bloom_tcl_test.rdb \
       --dir /tmp \
       --appendonly yes \
+      --enable-debug-command yes \
+      --repl-diskless-sync-delay 0 \
       --loadmodule $module_path
   }
   for {set i 0} {$i < 50} {incr i} {
@@ -1088,6 +1092,8 @@ test_assert "Data survives AOF rewrite + restart" {
       --dbfilename bloom_tcl_test.rdb \
       --dir /tmp \
       --appendonly yes \
+      --enable-debug-command yes \
+      --repl-diskless-sync-delay 0 \
       --loadmodule $module_path
   }
   for {set i 0} {$i < 50} {incr i} {
@@ -1613,6 +1619,27 @@ test_assert "RESTORE REPLACE overwrites existing bloom key" {
   if {$card != 1} { error "CARD=$card after RESTORE REPLACE, expected 1" }
 }
 
+puts "\n=== DEBUG DIGEST-VALUE bloom key ==="
+
+test_assert "DEBUG DIGEST-VALUE is stable across DEBUG RELOAD" {
+  r DEL digest_src
+  r BF.RESERVE digest_src 0.01 200
+  for {set i 0} {$i < 50} {incr i} {
+    r BF.ADD digest_src "digest_item_$i"
+  }
+  set before [r DEBUG DIGEST-VALUE digest_src]
+  r DEBUG RELOAD
+  set after [r DEBUG DIGEST-VALUE digest_src]
+  if {$before ne $after} { error "Digest changed across DEBUG RELOAD: before=$before after=$after" }
+}
+
+test_assert "DEBUG DIGEST-VALUE changes after BF.ADD inserts a new item" {
+  set before [r DEBUG DIGEST-VALUE digest_src]
+  r BF.ADD digest_src "digest_new_item"
+  set after [r DEBUG DIGEST-VALUE digest_src]
+  if {$before eq $after} { error "Digest did not change after BF.ADD" }
+}
+
 puts "\n=== MULTI/EXEC transactions ==="
 
 test_assert "Bloom commands work inside MULTI/EXEC" {
@@ -2050,6 +2077,22 @@ test_assert "Bloom data replicates to a replica" {
   }
   wait_redis_ready localhost $rep_port
   set rep_fd [redis_connect localhost $rep_port]
+
+  # Wait for the master to recognize the replica as fully connected
+  # (PSYNC completed) before writing — otherwise writes issued while the
+  # replica is still mid-handshake are never buffered for it at all, and
+  # WAIT below would silently return 0 without failing the test.
+  set replica_linked 0
+  for {set i 0} {$i < 50} {incr i} {
+    set info [r INFO replication]
+    if {[string match "*connected_slaves:1*" $info] ||
+        [string match "*slave0:*state=online*" $info]} {
+      set replica_linked 1
+      break
+    }
+    after 100
+  }
+  if {!$replica_linked} { error "Master never saw replica as connected" }
 
   # Create data on master
   r DEL repl_test

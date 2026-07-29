@@ -16,6 +16,14 @@
 #include <cstring>
 #include <vector>
 
+#ifdef __APPLE__
+#include <malloc/malloc.h>
+#define MOCK_MALLOC_SIZE(p) malloc_size(p)
+#else
+#include <malloc.h>
+#define MOCK_MALLOC_SIZE(p) malloc_usable_size(p)
+#endif
+
 struct MockRdbStream {
   std::vector<uint8_t> buf;
   size_t read_pos = 0;
@@ -45,6 +53,51 @@ struct MockRdbStream {
 
 static inline MockRdbStream* StreamOf(RedisModuleIO* io) {
   return reinterpret_cast<MockRdbStream*>(io);
+}
+
+// Mock RedisModuleDigest for unit-testing digest callbacks without a running
+// Redis server. Accumulates raw bytes so tests can compare digests for
+// equality/inequality; this does not replicate the real SHA1 mixing, only
+// the accumulation-then-terminate call sequence a digest callback makes.
+struct MockDigest {
+  std::vector<uint8_t> bytes;
+  bool ended = false;
+
+  RedisModuleDigest* Handle() { return reinterpret_cast<RedisModuleDigest*>(this); }
+};
+
+static inline MockDigest* DigestOf(RedisModuleDigest* md) {
+  return reinterpret_cast<MockDigest*>(md);
+}
+
+static void Mock_DigestAddStringBuffer(RedisModuleDigest* md, const char* ele, size_t len) {
+  auto* d = DigestOf(md);
+  auto* p = reinterpret_cast<const uint8_t*>(ele);
+  d->bytes.insert(d->bytes.end(), p, p + len);
+}
+
+static void Mock_DigestAddLongLong(RedisModuleDigest* md, long long ele) {
+  auto* d = DigestOf(md);
+  auto* p = reinterpret_cast<const uint8_t*>(&ele);
+  d->bytes.insert(d->bytes.end(), p, p + sizeof(ele));
+}
+
+static void Mock_DigestEndSequence(RedisModuleDigest* md) {
+  DigestOf(md)->ended = true;
+}
+
+// Mock RedisModule_DefragAlloc that actually relocates memory (rather than a
+// no-op stub), so tests can verify defrag callbacks correctly update
+// pointers and preserve data, not just that they compile. Always relocates.
+static void* Mock_DefragAlloc(RedisModuleDefragCtx* ctx, void* ptr) {
+  (void)ctx;
+  if (!ptr) return nullptr;
+  size_t len = MOCK_MALLOC_SIZE(ptr);
+  void* newPtr = std::malloc(len);
+  if (!newPtr) return nullptr;
+  std::memcpy(newPtr, ptr, len);
+  std::free(ptr);
+  return newPtr;
 }
 
 // --- Mock implementations of Redis Module IO API ---
@@ -120,4 +173,8 @@ static inline void InstallMockRedisModuleIO() {
   RedisModule_LoadStringBuffer = Mock_LoadStringBuffer;
   RedisModule_Free            = Mock_Free;
   RedisModule_IsIOError       = Mock_IsIOError;
+  RedisModule_DigestAddStringBuffer = Mock_DigestAddStringBuffer;
+  RedisModule_DigestAddLongLong     = Mock_DigestAddLongLong;
+  RedisModule_DigestEndSequence     = Mock_DigestEndSequence;
+  RedisModule_DefragAlloc          = Mock_DefragAlloc;
 }

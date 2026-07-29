@@ -380,3 +380,63 @@ size_t BloomMemUsage(const void* value) {
   if (!value) return 0;
   return static_cast<const ScalingBloomFilter*>(value)->BytesUsed();
 }
+
+void DigestBloom(RedisModuleDigest* digest, void* value) {
+  auto* filter = static_cast<ScalingBloomFilter*>(value);
+
+  RedisModule_DigestAddLongLong(digest, static_cast<long long>(filter->TotalItems()));
+  RedisModule_DigestAddLongLong(digest, static_cast<long long>(filter->NumLayers()));
+  RedisModule_DigestAddLongLong(digest, static_cast<long long>(ToUnderlying(filter->Flags())));
+  RedisModule_DigestAddLongLong(digest, static_cast<long long>(filter->ExpansionFactor()));
+
+  for (const auto& layer : filter->Layers()) {
+    RedisModule_DigestAddLongLong(digest, static_cast<long long>(layer.itemCount));
+    RedisModule_DigestAddLongLong(digest, static_cast<long long>(layer.bloom.GetCapacity()));
+    RedisModule_DigestAddLongLong(digest, static_cast<long long>(layer.bloom.GetHashCount()));
+    RedisModule_DigestAddLongLong(digest, static_cast<long long>(layer.bloom.GetTotalBits()));
+    RedisModule_DigestAddStringBuffer(digest,
+      reinterpret_cast<const char*>(layer.bloom.GetBitArray()), layer.bloom.GetDataSize());
+  }
+
+  RedisModule_DigestEndSequence(digest);
+}
+
+void* CopyBloom2(RedisModuleKeyOptCtx* ctx, const void* value) {
+  (void)ctx;
+  return static_cast<const ScalingBloomFilter*>(value)->Clone();
+}
+
+// Returns a count of the individual heap allocations owned by the filter
+// (the layers array plus one bit-array buffer per layer). This is the same
+// "number of allocations" semantics Redis' built-in types use for
+// free_effort (e.g. dictSize()/quicklist length in lazyfree.c), and keeps
+// ordinary bloom keys well under both the lazy-free threshold (64) and the
+// active-defrag-max-scan-fields threshold (default 1000).
+size_t FreeEffortBloom2(RedisModuleKeyOptCtx* ctx, const void* value) {
+  (void)ctx;
+  return static_cast<const ScalingBloomFilter*>(value)->NumLayers() + 1;
+}
+
+int DefragBloom(RedisModuleDefragCtx* ctx, RedisModuleString* key, void** value) {
+  (void)key;
+  auto* filter = static_cast<ScalingBloomFilter*>(*value);
+
+  if (auto* relocated = static_cast<ScalingBloomFilter*>(RedisModule_DefragAlloc(ctx, filter))) {
+    filter = relocated;
+    *value = filter;
+  }
+
+  if (auto* relocatedLayers =
+        static_cast<FilterLayer*>(RedisModule_DefragAlloc(ctx, filter->Layers().data()))) {
+    filter->AdoptLayersArray(relocatedLayers);
+  }
+
+  for (auto& layer : filter->Layers()) {
+    if (auto* relocatedBits =
+          static_cast<uint8_t*>(RedisModule_DefragAlloc(ctx, layer.bloom.GetBitArray()))) {
+      layer.bloom.AdoptBitArray(relocatedBits);
+    }
+  }
+
+  return 0;
+}

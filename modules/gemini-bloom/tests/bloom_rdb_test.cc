@@ -1364,6 +1364,110 @@ TEST(BloomRdb, LoadingFlagStrippedOnRdbRoundTrip) {
   DestroyFilter(loaded);
 }
 
+// ==================================================================
+// Module type callbacks: CopyBloom2 / DigestBloom / FreeEffortBloom2 /
+// DefragBloom
+// ==================================================================
+
+TEST(BloomModuleType, CopyBloom2ProducesIndependentEqualClone) {
+  auto* filter = CreateFilter(200, 0.01, DefaultFlags(), 2);
+  std::vector<std::string> items;
+  for (int i = 0; i < 300; i++) {
+    items.push_back("copy2_" + std::to_string(i));
+    filter->Put(ToSpan(items.back()));
+  }
+  ASSERT_GT(filter->NumLayers(), 1u);
+
+  auto* clone = static_cast<ScalingBloomFilter*>(
+    CopyBloom2(nullptr, filter));
+  ASSERT_NE(clone, nullptr);
+  EXPECT_NE(clone, filter);
+  EXPECT_EQ(clone->NumLayers(), filter->NumLayers());
+  EXPECT_EQ(clone->TotalItems(), filter->TotalItems());
+
+  for (const auto& item : items) {
+    EXPECT_TRUE(clone->Contains(ToSpan(item)));
+  }
+
+  // Independence: mutating the source must not affect the clone.
+  filter->Put(AsBytes("post_copy", 9));
+  EXPECT_FALSE(clone->Contains(AsBytes("post_copy", 9)));
+
+  DestroyFilter(filter);
+  DestroyFilter(clone);
+}
+
+TEST(BloomModuleType, DigestBloomDeterministicAndContentSensitive) {
+  auto* filter = CreateFilter(200, 0.01, DefaultFlags(), 2);
+  for (int i = 0; i < 50; i++) {
+    filter->Put(ToSpan(std::string("digest_" + std::to_string(i))));
+  }
+
+  MockDigest d1;
+  DigestBloom(d1.Handle(), filter);
+  EXPECT_TRUE(d1.ended);
+  EXPECT_FALSE(d1.bytes.empty());
+
+  MockDigest d2;
+  DigestBloom(d2.Handle(), filter);
+  EXPECT_EQ(d1.bytes, d2.bytes);
+
+  filter->Put(AsBytes("extra_item", 10));
+  MockDigest d3;
+  DigestBloom(d3.Handle(), filter);
+  EXPECT_NE(d1.bytes, d3.bytes);
+
+  DestroyFilter(filter);
+}
+
+TEST(BloomModuleType, FreeEffortBloom2ReturnsAllocationCount) {
+  auto* filter = CreateFilter(10, 0.01, DefaultFlags(), 2);
+  EXPECT_EQ(FreeEffortBloom2(nullptr, filter), filter->NumLayers() + 1);
+
+  for (int i = 0; i < 500; i++) {
+    filter->Put(ToSpan(std::string("effort_" + std::to_string(i))));
+  }
+  ASSERT_GT(filter->NumLayers(), 1u);
+  EXPECT_EQ(FreeEffortBloom2(nullptr, filter), filter->NumLayers() + 1);
+
+  DestroyFilter(filter);
+}
+
+TEST(BloomModuleType, DefragBloomRelocatesBuffersAndPreservesData) {
+  auto* filter = CreateFilter(50, 0.01, DefaultFlags(), 2);
+  std::vector<std::string> items;
+  for (int i = 0; i < 300; i++) {
+    items.push_back("defrag_" + std::to_string(i));
+    filter->Put(ToSpan(items.back()));
+  }
+  ASSERT_GT(filter->NumLayers(), 1u);
+
+  auto* origLayersPtr = filter->Layers().data();
+  std::vector<const uint8_t*> origBitArrays;
+  for (const auto& layer : filter->Layers()) {
+    origBitArrays.push_back(layer.bloom.GetBitArray());
+  }
+
+  void* value = filter;
+  int rc = DefragBloom(nullptr, nullptr, &value);
+  EXPECT_EQ(rc, 0);
+
+  auto* relocated = static_cast<ScalingBloomFilter*>(value);
+  ASSERT_NE(relocated, nullptr);
+  EXPECT_NE(relocated->Layers().data(), origLayersPtr);
+  ASSERT_EQ(relocated->NumLayers(), origBitArrays.size());
+  for (size_t i = 0; i < origBitArrays.size(); i++) {
+    EXPECT_NE(relocated->Layers()[i].bloom.GetBitArray(), origBitArrays[i]);
+  }
+
+  for (const auto& item : items) {
+    EXPECT_TRUE(relocated->Contains(ToSpan(item)))
+      << "False negative after defrag for " << item;
+  }
+
+  DestroyFilter(relocated);
+}
+
 TEST(BloomWire, LoadingFlagStrippedOnHeaderRoundTrip) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
   filter->Put(AsBytes("x", 1));

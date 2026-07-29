@@ -70,6 +70,14 @@ public:
   static ScalingBloomFilter* FromRdbShell(RdbShell shell);
   void SetLayer(size_t index, FilterLayer&& layer);
 
+  // Deep copy: the copy constructor is deleted (move-only), so cloning
+  // needs an explicit method. Used by the COPY command's copy2 callback.
+  ScalingBloomFilter* Clone() const;
+
+  // For defrag: adopt a relocated layers array. Caller owns the
+  // relocation (e.g. via RedisModule_DefragAlloc) and transfers ownership.
+  void AdoptLayersArray(FilterLayer* newLayers) { layers_ = newLayers; }
+
 private:
   struct EmptyShellTag {};
   explicit ScalingBloomFilter(EmptyShellTag) {}

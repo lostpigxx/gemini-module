@@ -272,3 +272,47 @@ TEST(ProbePositionTest, UsesMaskForPowerOfTwoAndModuloOtherwise) {
   EXPECT_EQ(ProbePosition(hp, 3, 0, 1000, false),
             (hp.primary + 3 * hp.secondary) % 1000);
 }
+
+// --- BloomLayer::Clone ---
+
+TEST(BloomLayerTest, CloneDeepCopiesBitArray) {
+  auto layer = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
+  ASSERT_TRUE(layer.has_value());
+
+  for (int i = 0; i < 200; i++) {
+    auto item = "clone_" + std::to_string(i);
+    layer->Insert(Hash64Policy::Compute(ToSpan(item)));
+  }
+
+  auto clone = layer->Clone();
+  ASSERT_TRUE(clone.has_value());
+
+  EXPECT_NE(clone->GetBitArray(), layer->GetBitArray());
+  EXPECT_EQ(clone->GetDataSize(), layer->GetDataSize());
+  EXPECT_EQ(std::memcmp(clone->GetBitArray(), layer->GetBitArray(),
+                        layer->GetDataSize()), 0);
+  EXPECT_EQ(clone->GetCapacity(), layer->GetCapacity());
+  EXPECT_EQ(clone->GetHashCount(), layer->GetHashCount());
+  EXPECT_EQ(clone->GetTotalBits(), layer->GetTotalBits());
+  EXPECT_DOUBLE_EQ(clone->GetFpRate(), layer->GetFpRate());
+  EXPECT_DOUBLE_EQ(clone->GetBitsPerEntry(), layer->GetBitsPerEntry());
+
+  for (int i = 0; i < 200; i++) {
+    auto item = "clone_" + std::to_string(i);
+    EXPECT_TRUE(clone->Test(Hash64Policy::Compute(ToSpan(item))));
+  }
+}
+
+TEST(BloomLayerTest, CloneIsIndependentOfOriginal) {
+  auto layer = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
+  ASSERT_TRUE(layer.has_value());
+
+  auto clone = layer->Clone();
+  ASSERT_TRUE(clone.has_value());
+
+  auto hp = Hash64Policy::Compute(AsBytes("after_clone", 11));
+  layer->Insert(hp);
+
+  EXPECT_TRUE(layer->Test(hp));
+  EXPECT_FALSE(clone->Test(hp));
+}
