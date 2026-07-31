@@ -48,6 +48,19 @@ int BloomConfigLoad(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
         return REDISMODULE_ERR;
       }
       g_bloomConfig.defaultExpansion = static_cast<unsigned>(val);
+    } else if ((len == 14 && strncasecmp(arg, "CF_BUCKET_SIZE", 14) == 0) ||
+               (len == 15 && strncasecmp(arg, "CF_INITIAL_SIZE", 15) == 0) ||
+               (len == 17 && strncasecmp(arg, "CF_MAX_ITERATIONS", 17) == 0) ||
+               (len == 12 && strncasecmp(arg, "CF_EXPANSION", 12) == 0) ||
+               (len == 17 && strncasecmp(arg, "CF_MAX_EXPANSIONS", 17) == 0)) {
+      // Recognized by CfConfigLoad (cf_config.cc), which shares this same
+      // argv and validates the value. Skip over the key/value pair here so
+      // BloomConfigLoad doesn't treat it as unrecognized.
+      if (++i >= argc) {
+        RedisModule_Log(ctx, "warning", "%.*s requires a value",
+                         static_cast<int>(len), arg);
+        return REDISMODULE_ERR;
+      }
     } else {
       RedisModule_Log(ctx, "warning", "Unrecognized config argument: %.*s",
                        static_cast<int>(len), arg);

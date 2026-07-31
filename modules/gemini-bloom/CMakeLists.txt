@@ -6,6 +6,11 @@ set(BLOOM_SOURCES
   src/bloom_rdb.cc
   src/bloom_config.cc
   src/murmur2.cc
+  src/cuckoo_filter.cc
+  src/cf_chain.cc
+  src/cf_commands.cc
+  src/cf_rdb.cc
+  src/cf_config.cc
 )
 
 add_library(redis_bloom SHARED ${BLOOM_SOURCES})
@@ -77,10 +82,66 @@ if(GTest_FOUND)
   target_compile_definitions(bloom_rdb_test PRIVATE REDIS_BLOOM_TESTING)
   target_compile_options(bloom_rdb_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
 
+  add_executable(cuckoo_filter_test EXCLUDE_FROM_ALL
+    tests/cuckoo_filter_test.cc
+    src/cuckoo_filter.cc
+    src/murmur2.cc
+  )
+  target_include_directories(cuckoo_filter_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(cuckoo_filter_test PRIVATE
+    redis_module_api
+    GTest::gtest_main
+  )
+  target_compile_definitions(cuckoo_filter_test PRIVATE REDIS_BLOOM_TESTING)
+  target_compile_options(cuckoo_filter_test PRIVATE -Wall -Wextra -Wpedantic)
+
+  add_executable(cf_chain_test EXCLUDE_FROM_ALL
+    tests/cf_chain_test.cc
+    src/cf_chain.cc
+    src/cuckoo_filter.cc
+    src/murmur2.cc
+  )
+  target_include_directories(cf_chain_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(cf_chain_test PRIVATE
+    redis_module_api
+    GTest::gtest_main
+  )
+  target_compile_definitions(cf_chain_test PRIVATE REDIS_BLOOM_TESTING)
+  target_compile_options(cf_chain_test PRIVATE -Wall -Wextra -Wpedantic)
+
+  add_executable(cf_rdb_test EXCLUDE_FROM_ALL
+    tests/cf_rdb_test.cc
+    src/cf_rdb.cc
+    src/bloom_rdb.cc
+    src/sb_chain.cc
+    src/bloom_filter.cc
+    src/cf_chain.cc
+    src/cuckoo_filter.cc
+    src/murmur2.cc
+  )
+  target_include_directories(cf_rdb_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/include
+  )
+  target_link_libraries(cf_rdb_test PRIVATE
+    redis_module_api
+    GTest::gtest_main
+  )
+  target_compile_definitions(cf_rdb_test PRIVATE REDIS_BLOOM_TESTING)
+  target_compile_options(cf_rdb_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
+
   add_custom_target(bloom_test
     COMMAND bloom_filter_test --gtest_color=yes
     COMMAND sb_chain_test --gtest_color=yes
     COMMAND bloom_rdb_test --gtest_color=yes
+    COMMAND cuckoo_filter_test --gtest_color=yes
+    COMMAND cf_chain_test --gtest_color=yes
+    COMMAND cf_rdb_test --gtest_color=yes
     DEPENDS bloom_filter_test sb_chain_test bloom_rdb_test
+            cuckoo_filter_test cf_chain_test cf_rdb_test
   )
 endif()
