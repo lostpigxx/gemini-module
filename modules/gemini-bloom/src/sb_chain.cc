@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <ranges>
 
 // --- Lifecycle ---
 

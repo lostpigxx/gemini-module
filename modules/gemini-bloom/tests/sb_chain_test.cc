@@ -234,12 +234,8 @@ TEST(ScalingBloomTest, FromRdbShellSetLayer) {
   EXPECT_GT(orig->NumLayers(), 1u);
 
   // Reconstruct via FromRdbShell + SetLayer
-  ScalingBloomFilter::RdbShell shell{
-    .totalItems = orig->TotalItems(),
-    .numLayers = orig->NumLayers(),
-    .flags = orig->Flags(),
-    .expansionFactor = orig->ExpansionFactor(),
-  };
+  ScalingBloomFilter::RdbShell shell{orig->TotalItems(), orig->NumLayers(),
+                                      orig->Flags(), orig->ExpansionFactor()};
   auto* rebuilt = ScalingBloomFilter::FromRdbShell(shell);
   ASSERT_NE(rebuilt, nullptr);
 

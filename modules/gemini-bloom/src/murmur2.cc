@@ -29,8 +29,8 @@ uint32_t MurmurHash2(const void* key, int len, uint32_t seed) {
   }
 
   switch (len) {
-    case 3: h ^= static_cast<uint32_t>(data[2]) << 16; [[fallthrough]];
-    case 2: h ^= static_cast<uint32_t>(data[1]) << 8; [[fallthrough]];
+    case 3: h ^= static_cast<uint32_t>(data[2]) << 16; /* fall through */
+    case 2: h ^= static_cast<uint32_t>(data[1]) << 8; /* fall through */
     case 1: h ^= static_cast<uint32_t>(data[0]); h *= m;
   }
 
@@ -70,12 +70,12 @@ uint64_t MurmurHash64A(const void* key, int len, uint64_t seed) {
   }
 
   switch (len) {
-    case 7: h ^= static_cast<uint64_t>(data[6]) << 48; [[fallthrough]];
-    case 6: h ^= static_cast<uint64_t>(data[5]) << 40; [[fallthrough]];
-    case 5: h ^= static_cast<uint64_t>(data[4]) << 32; [[fallthrough]];
-    case 4: h ^= static_cast<uint64_t>(data[3]) << 24; [[fallthrough]];
-    case 3: h ^= static_cast<uint64_t>(data[2]) << 16; [[fallthrough]];
-    case 2: h ^= static_cast<uint64_t>(data[1]) << 8; [[fallthrough]];
+    case 7: h ^= static_cast<uint64_t>(data[6]) << 48; /* fall through */
+    case 6: h ^= static_cast<uint64_t>(data[5]) << 40; /* fall through */
+    case 5: h ^= static_cast<uint64_t>(data[4]) << 32; /* fall through */
+    case 4: h ^= static_cast<uint64_t>(data[3]) << 24; /* fall through */
+    case 3: h ^= static_cast<uint64_t>(data[2]) << 16; /* fall through */
+    case 2: h ^= static_cast<uint64_t>(data[1]) << 8; /* fall through */
     case 1: h ^= static_cast<uint64_t>(data[0]); h *= m;
   }
 

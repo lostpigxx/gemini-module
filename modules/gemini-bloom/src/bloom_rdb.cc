@@ -6,7 +6,6 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
-#include <numbers>
 
 constexpr uint32_t kMaxLayers = 1024;
 
@@ -106,7 +105,9 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
                      layer.dataSize_};
   if (!ValidateLayerFields(fields)) return std::nullopt;
 
-  auto [buf, bufLen] = r.GetBlob();
+  std::pair<char*, size_t> blob = r.GetBlob();
+  char* buf = blob.first;
+  size_t bufLen = blob.second;
   if (!r.Ok() || !buf || bufLen != static_cast<size_t>(layer.dataSize_)) {
     if (buf) RedisModule_Free(buf);
     return std::nullopt;
@@ -118,19 +119,19 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   }
   std::memcpy(layer.bitArray_, buf, bufLen);
   RedisModule_Free(buf);
-  return layer;
+  return std::move(layer);
 }
 
 WireLayerMeta BloomLayer::ToWireMeta(size_t itemCount) const {
   return {
-    .dataSize = dataSize_,
-    .totalBits = totalBits_,
-    .itemCount = itemCount,
-    .fpRate = fpRate_,
-    .bitsPerEntry = bitsPerEntry_,
-    .hashCount = hashCount_,
-    .capacity = capacity_,
-    .log2Bits = log2Bits_,
+    dataSize_,
+    totalBits_,
+    itemCount,
+    fpRate_,
+    bitsPerEntry_,
+    hashCount_,
+    capacity_,
+    log2Bits_,
   };
 }
 
@@ -146,7 +147,7 @@ std::optional<BloomLayer> BloomLayer::FromWireMeta(const WireLayerMeta& meta, Bl
   layer.dataSize_ = meta.dataSize;
   layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
   if (!layer.bitArray_) return std::nullopt;
-  return layer;
+  return std::move(layer);
 }
 
 // --- ScalingBloomFilter RDB serialization ---
@@ -301,12 +302,8 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   }
   if (itemSum != hdr->totalItems) return nullptr;
 
-  auto* filter = ScalingBloomFilter::FromRdbShell({
-    .totalItems = hdr->totalItems,
-    .numLayers = hdr->numLayers,
-    .flags = filterFlags,
-    .expansionFactor = hdr->expansionFactor,
-  });
+  auto* filter = ScalingBloomFilter::FromRdbShell({hdr->totalItems, hdr->numLayers,
+                                                   filterFlags, hdr->expansionFactor});
   if (!filter) return nullptr;
 
   for (size_t i = 0; i < hdr->numLayers; i++) {

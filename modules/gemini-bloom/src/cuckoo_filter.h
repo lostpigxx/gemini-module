@@ -1,9 +1,9 @@
 #pragma once
 
+#include "cxx14_compat.h"
+
 #include <cstddef>
 #include <cstdint>
-#include <optional>
-#include <span>
 
 // --- Cuckoo filter: a single fixed-size bucket-array sub-filter ---
 //

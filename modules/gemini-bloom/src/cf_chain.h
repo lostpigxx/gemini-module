@@ -4,8 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
-#include <span>
 
 // One layer in a cuckoo filter chain.
 struct CfFilterLayer {

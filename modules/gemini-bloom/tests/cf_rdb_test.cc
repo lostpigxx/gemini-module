@@ -27,7 +27,7 @@ class CfRdbTestEnv : public ::testing::Environment {
 public:
   void SetUp() override { InstallMockRedisModuleIO(); }
 };
-static auto* const gEnv [[maybe_unused]] =
+static auto* const gEnv =
   ::testing::AddGlobalTestEnvironment(new CfRdbTestEnv);
 
 // ------------------------------------------------------------------

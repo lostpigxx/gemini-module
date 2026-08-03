@@ -109,7 +109,7 @@ std::optional<CuckooFilter> CuckooFilter::Create(uint64_t numBuckets, uint32_t b
   filter.buckets_ = static_cast<uint8_t*>(RMCalloc(dataSize, 1));
   if (!filter.buckets_) return std::nullopt;
 
-  return filter;
+  return std::move(filter);
 }
 
 std::optional<CuckooFilter> CuckooFilter::Clone() const {
@@ -123,7 +123,7 @@ std::optional<CuckooFilter> CuckooFilter::Clone() const {
   copy.buckets_ = static_cast<uint8_t*>(RMAlloc(dataSize));
   if (!copy.buckets_) return std::nullopt;
   std::memcpy(copy.buckets_, buckets_, dataSize);
-  return copy;
+  return std::move(copy);
 }
 
 // --- Slot lookup helpers ---
@@ -147,12 +147,14 @@ std::optional<bool> CuckooFilter::Insert(std::span<const std::byte> item) {
   uint64_t i1 = CfIndexOf(item, numBuckets_);
   uint64_t i2 = CfAltIndex(i1, fp, numBuckets_);
 
-  if (int slot = FindEmptySlot(i1); slot >= 0) {
+  int slot = FindEmptySlot(i1);
+  if (slot >= 0) {
     SlotsOf(i1)[slot] = fp;
     numItems_++;
     return true;
   }
-  if (int slot = FindEmptySlot(i2); slot >= 0) {
+  slot = FindEmptySlot(i2);
+  if (slot >= 0) {
     SlotsOf(i2)[slot] = fp;
     numItems_++;
     return true;
@@ -189,7 +191,8 @@ std::optional<bool> CuckooFilter::Insert(std::span<const std::byte> item) {
     curFp = evicted;
     curIndex = CfAltIndex(curIndex, curFp, numBuckets_);
 
-    if (int slot = FindEmptySlot(curIndex); slot >= 0) {
+    slot = FindEmptySlot(curIndex);
+    if (slot >= 0) {
       SlotsOf(curIndex)[slot] = curFp;
       numItems_++;
       RMFree(history);
@@ -216,12 +219,14 @@ bool CuckooFilter::Delete(std::span<const std::byte> item) {
   uint64_t i1 = CfIndexOf(item, numBuckets_);
   uint64_t i2 = CfAltIndex(i1, fp, numBuckets_);
 
-  if (int slot = FindSlot(i1, fp); slot >= 0) {
+  int slot = FindSlot(i1, fp);
+  if (slot >= 0) {
     SlotsOf(i1)[slot] = 0;
     numItems_--;
     return true;
   }
-  if (int slot = FindSlot(i2, fp); slot >= 0) {
+  slot = FindSlot(i2, fp);
+  if (slot >= 0) {
     SlotsOf(i2)[slot] = 0;
     numItems_--;
     return true;

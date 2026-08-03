@@ -14,6 +14,11 @@ set(BLOOM_SOURCES
 )
 
 add_library(redis_bloom SHARED ${BLOOM_SOURCES})
+set_target_properties(redis_bloom PROPERTIES
+  CXX_STANDARD 14
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
 
 target_include_directories(redis_bloom PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -22,7 +27,7 @@ target_include_directories(redis_bloom PRIVATE
 target_link_libraries(redis_bloom PRIVATE redis_module_api)
 
 target_compile_options(redis_bloom PRIVATE
-  -Wall -Wextra -Wpedantic -fno-exceptions -Wno-c++20-designator
+  -Wall -Wextra -Wpedantic -fno-exceptions
 )
 
 set_target_properties(redis_bloom PROPERTIES
@@ -33,6 +38,16 @@ set_target_properties(redis_bloom PROPERTIES
 
 find_package(GTest QUIET)
 if(GTest_FOUND)
+  function(configure_bloom_test_target target)
+    set_target_properties(${target} PROPERTIES
+      CXX_STANDARD 14
+      CXX_STANDARD_REQUIRED ON
+      CXX_EXTENSIONS OFF
+    )
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_definitions(${target} PRIVATE REDIS_BLOOM_TESTING)
+  endfunction()
+
   add_executable(bloom_filter_test EXCLUDE_FROM_ALL
     tests/bloom_filter_test.cc
     src/bloom_filter.cc
@@ -45,8 +60,7 @@ if(GTest_FOUND)
     redis_module_api
     GTest::gtest_main
   )
-  target_compile_definitions(bloom_filter_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(bloom_filter_test PRIVATE -Wall -Wextra -Wpedantic)
+  configure_bloom_test_target(bloom_filter_test)
 
   add_executable(sb_chain_test EXCLUDE_FROM_ALL
     tests/sb_chain_test.cc
@@ -61,8 +75,7 @@ if(GTest_FOUND)
     redis_module_api
     GTest::gtest_main
   )
-  target_compile_definitions(sb_chain_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(sb_chain_test PRIVATE -Wall -Wextra -Wpedantic)
+  configure_bloom_test_target(sb_chain_test)
 
   add_executable(bloom_rdb_test EXCLUDE_FROM_ALL
     tests/bloom_rdb_test.cc
@@ -79,8 +92,7 @@ if(GTest_FOUND)
     redis_module_api
     GTest::gtest_main
   )
-  target_compile_definitions(bloom_rdb_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(bloom_rdb_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
+  configure_bloom_test_target(bloom_rdb_test)
 
   add_executable(cuckoo_filter_test EXCLUDE_FROM_ALL
     tests/cuckoo_filter_test.cc
@@ -94,8 +106,7 @@ if(GTest_FOUND)
     redis_module_api
     GTest::gtest_main
   )
-  target_compile_definitions(cuckoo_filter_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(cuckoo_filter_test PRIVATE -Wall -Wextra -Wpedantic)
+  configure_bloom_test_target(cuckoo_filter_test)
 
   add_executable(cf_chain_test EXCLUDE_FROM_ALL
     tests/cf_chain_test.cc
@@ -110,8 +121,7 @@ if(GTest_FOUND)
     redis_module_api
     GTest::gtest_main
   )
-  target_compile_definitions(cf_chain_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(cf_chain_test PRIVATE -Wall -Wextra -Wpedantic)
+  configure_bloom_test_target(cf_chain_test)
 
   add_executable(cf_rdb_test EXCLUDE_FROM_ALL
     tests/cf_rdb_test.cc
@@ -131,8 +141,7 @@ if(GTest_FOUND)
     redis_module_api
     GTest::gtest_main
   )
-  target_compile_definitions(cf_rdb_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(cf_rdb_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
+  configure_bloom_test_target(cf_rdb_test)
 
   add_custom_target(bloom_test
     COMMAND bloom_filter_test --gtest_color=yes

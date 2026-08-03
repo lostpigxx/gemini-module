@@ -3,11 +3,9 @@
 #include "rm_alloc.h"
 
 #include <algorithm>
-#include <bit>
 #include <climits>
 #include <cmath>
 #include <cstring>
-#include <numbers>
 
 // --- Hash policies ---
 // The double-hashing scheme follows Kirsch & Mitzenmacher (ESA 2006):
@@ -132,7 +130,7 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
   layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
   if (!layer.bitArray_) return std::nullopt;
 
-  return layer;
+  return std::move(layer);
 }
 
 std::optional<BloomLayer> BloomLayer::Clone() const {
@@ -149,7 +147,7 @@ std::optional<BloomLayer> BloomLayer::Clone() const {
   copy.bitArray_ = static_cast<uint8_t*>(RMAlloc(copy.dataSize_));
   if (!copy.bitArray_) return std::nullopt;
   std::memcpy(copy.bitArray_, bitArray_, copy.dataSize_);
-  return copy;
+  return std::move(copy);
 }
 
 // --- Bit-level operations ---
@@ -159,13 +157,13 @@ uint64_t BloomLayer::ComputeModuloMask() const {
 }
 
 bool BloomLayer::TestBit(uint64_t bitIndex) const {
-  auto [byteOff, mask] = ResolveBit(bitIndex);
-  return (bitArray_[byteOff] & mask) != 0;
+  BitAddress bit = ResolveBit(bitIndex);
+  return (bitArray_[bit.byteOffset] & bit.mask) != 0;
 }
 
 void BloomLayer::SetBit(uint64_t bitIndex) {
-  auto [byteOff, mask] = ResolveBit(bitIndex);
-  bitArray_[byteOff] |= mask;
+  BitAddress bit = ResolveBit(bitIndex);
+  bitArray_[bit.byteOffset] |= bit.mask;
 }
 
 // --- Membership queries ---
@@ -191,10 +189,10 @@ bool BloomLayer::Insert(const HashPair& hp) {
 
   for (uint32_t probe = 0; probe < hashCount_; probe++) {
     uint64_t pos = ProbePosition(hp, probe, mask, totalBits_, isPow2);
-    auto [byteOff, bitMask] = ResolveBit(pos);
-    uint8_t old = bitArray_[byteOff];
-    if ((old & bitMask) == 0) {
-      bitArray_[byteOff] = old | bitMask;
+    BitAddress bit = ResolveBit(pos);
+    uint8_t old = bitArray_[bit.byteOffset];
+    if ((old & bit.mask) == 0) {
+      bitArray_[bit.byteOffset] = old | bit.mask;
       anyNew = true;
     }
   }

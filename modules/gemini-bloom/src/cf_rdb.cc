@@ -5,6 +5,7 @@
 #include "rm_alloc.h"
 
 #include <cstring>
+#include <utility>
 
 constexpr uint32_t kCfMaxLayers = 1024;
 
@@ -94,7 +95,9 @@ static CuckooChain* ReadCfChain(RdbReader& r) {
   uint64_t itemSum = 0;
   for (uint32_t i = 0; i < shell.numLayers; i++) {
     uint64_t numBuckets = r.GetUint();
-    auto [buf, bufLen] = r.GetBlob();
+    std::pair<char*, size_t> blob = r.GetBlob();
+    char* buf = blob.first;
+    size_t bufLen = blob.second;
     if (!r.Ok() || !buf) {
       if (buf) RedisModule_Free(buf);
       chain->~CuckooChain();
@@ -192,13 +195,13 @@ CuckooChain* CfDeserializeHeader(const void* data, size_t length) {
   }
 
   auto* chain = CuckooChain::FromRdbShell({
-    .totalItems = hdr->totalItems,
-    .totalDeleted = hdr->totalDeleted,
-    .numLayers = hdr->numLayers,
-    .bucketSize = hdr->bucketSize,
-    .maxIterations = hdr->maxIterations,
-    .expansion = hdr->expansion,
-    .maxExpansions = hdr->maxExpansions,
+    hdr->totalItems,
+    hdr->totalDeleted,
+    hdr->numLayers,
+    hdr->bucketSize,
+    hdr->maxIterations,
+    hdr->expansion,
+    hdr->maxExpansions,
   });
   if (!chain) return nullptr;
 

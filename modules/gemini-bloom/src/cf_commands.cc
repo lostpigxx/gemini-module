@@ -9,7 +9,6 @@
 #include <climits>
 #include <cstring>
 #include <strings.h>
-#include <string_view>
 
 // --- Helpers ---
 
@@ -78,7 +77,7 @@ static CuckooChain* OpenOrCreate(RedisModuleCtx* ctx, RedisModuleString* keyName
   return filter;
 }
 
-static bool MatchArg(std::string_view arg, std::string_view target) {
+static bool MatchArg(gemini_bloom::string_view arg, gemini_bloom::string_view target) {
   if (arg.size() != target.size()) return false;
   return strncasecmp(arg.data(), target.data(), arg.size()) == 0;
 }
@@ -110,7 +109,7 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   for (int i = 3; i < argc; i++) {
     size_t len;
     const char* arg = RedisModule_StringPtrLen(argv[i], &len);
-    auto sv = std::string_view{arg, len};
+    auto sv = gemini_bloom::string_view{arg, len};
 
     if (MatchArg(sv, "BUCKETSIZE")) {
       if (bucketSizeSet) return RedisModule_ReplyWithError(ctx, "ERR duplicate BUCKETSIZE option");
@@ -222,7 +221,7 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv, in
   for (int i = 2; i < argc; i++) {
     size_t len;
     const char* arg = RedisModule_StringPtrLen(argv[i], &len);
-    auto sv = std::string_view{arg, len};
+    auto sv = gemini_bloom::string_view{arg, len};
 
     if (MatchArg(sv, "CAPACITY")) {
       if (capacitySet) {

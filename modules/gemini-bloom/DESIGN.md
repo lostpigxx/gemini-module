@@ -2,7 +2,7 @@
 
 ## 1. 概述
 
-gemini-bloom 是一个 C++20 实现的 Redis Module，提供 Scalable Bloom Filter 数据结构。它实现了 RedisBloom 的 `BF.*` 命令接口，并通过复用 RedisBloom 的 RDB data type name `MBbloom--` 实现 RDB 级别的数据互通。
+gemini-bloom 是一个 C++14 实现的 Redis Module，提供 Scalable Bloom Filter 数据结构。它实现了 RedisBloom 的 `BF.*` 命令接口，并通过复用 RedisBloom 的 RDB data type name `MBbloom--` 实现 RDB 级别的数据互通。
 
 ### 1.1 产品定位
 
@@ -121,7 +121,7 @@ gemini-bloom 的 seed 值和 `h2 = hash(data, seed=h1)` 模式与 RedisBloom 一
 
 | 维度 | gemini-bloom | RedisBloom |
 |---|---|---|
-| 语言 | C++20 | C |
+| 语言 | C++14 | C |
 | 多层容器 | `FilterLayer*` 动态数组 + placement new | `SBChain` 链表 + `SBLink` 节点 |
 | 单层抽象 | `BloomLayer` 类 (RAII) | `struct bloom` (手动 malloc/free) |
 | 内存管理 | RAII + move 语义，析构自动释放 | 手动 `RedisModule_Alloc`/`Free` |

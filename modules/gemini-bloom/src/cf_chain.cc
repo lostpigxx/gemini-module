@@ -2,7 +2,6 @@
 #include "rm_alloc.h"
 
 #include <algorithm>
-#include <bit>
 #include <cstdint>
 
 namespace {

@@ -2,7 +2,6 @@
 #include "bloom_filter.h"
 #include "murmur2.h"
 
-#include <bit>
 #include <cstring>
 #include <limits>
 #include <string>
