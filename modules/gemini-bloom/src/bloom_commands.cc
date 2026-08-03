@@ -76,9 +76,9 @@ static ScalingBloomFilter* OpenOrCreate(RedisModuleCtx* ctx, RedisModuleString* 
   return filter;
 }
 
-static bool MatchArg(const char* arg, size_t argLen, const char* target) {
-  size_t targetLen = std::strlen(target);
-  return argLen == targetLen && strncasecmp(arg, target, argLen) == 0;
+static bool MatchArg(const char* lhs, size_t lhsLen,
+                     const char* rhs, size_t rhsLen) {
+  return lhsLen == rhsLen && strncasecmp(lhs, rhs, lhsLen) == 0;
 }
 
 static const char* FilterFullError(const ScalingBloomFilter* filter) {
@@ -121,7 +121,7 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   for (int i = 4; i < argc; i++) {
     size_t len;
     const char* arg = RedisModule_StringPtrLen(argv[i], &len);
-    if (MatchArg(arg, len, "EXPANSION")) {
+    if (MatchArg(arg, len, "EXPANSION", sizeof("EXPANSION") - 1)) {
       if (expansionSeen)
         return RedisModule_ReplyWithError(ctx, "ERR duplicate EXPANSION option");
       expansionSeen = true;
@@ -137,7 +137,7 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       }
       expansion = static_cast<unsigned>(val);
       expansionSet = true;
-    } else if (MatchArg(arg, len, "NONSCALING")) {
+    } else if (MatchArg(arg, len, "NONSCALING", sizeof("NONSCALING") - 1)) {
       if (nonscalingSet)
         return RedisModule_ReplyWithError(ctx, "ERR duplicate NONSCALING option");
       nonscalingSet = true;
@@ -256,7 +256,7 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
   for (int i = 2; i < argc; i++) {
     size_t len;
     const char* arg = RedisModule_StringPtrLen(argv[i], &len);
-    if (MatchArg(arg, len, "ERROR")) {
+    if (MatchArg(arg, len, "ERROR", sizeof("ERROR") - 1)) {
       if (errorSet) {
         RedisModule_ReplyWithError(ctx, "ERR duplicate ERROR option");
         return false;
@@ -270,7 +270,7 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
       opts.errorRate = val;
       errorSet = true;
-    } else if (MatchArg(arg, len, "CAPACITY")) {
+    } else if (MatchArg(arg, len, "CAPACITY", sizeof("CAPACITY") - 1)) {
       if (capacitySet) {
         RedisModule_ReplyWithError(ctx, "ERR duplicate CAPACITY option");
         return false;
@@ -284,7 +284,7 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
       opts.capacity = static_cast<uint64_t>(val);
       capacitySet = true;
-    } else if (MatchArg(arg, len, "EXPANSION")) {
+    } else if (MatchArg(arg, len, "EXPANSION", sizeof("EXPANSION") - 1)) {
       if (expansionSeen) {
         RedisModule_ReplyWithError(ctx, "ERR duplicate EXPANSION option");
         return false;
@@ -303,16 +303,16 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
       opts.expansion = static_cast<unsigned>(val);
       expansionPositive = true;
-    } else if (MatchArg(arg, len, "NOCREATE")) {
+    } else if (MatchArg(arg, len, "NOCREATE", sizeof("NOCREATE") - 1)) {
       opts.noCreate = true;
-    } else if (MatchArg(arg, len, "NONSCALING")) {
+    } else if (MatchArg(arg, len, "NONSCALING", sizeof("NONSCALING") - 1)) {
       if (nonscalingSet) {
         RedisModule_ReplyWithError(ctx, "ERR duplicate NONSCALING option");
         return false;
       }
       nonscalingSet = true;
       opts.fixedSize = true;
-    } else if (MatchArg(arg, len, "ITEMS")) {
+    } else if (MatchArg(arg, len, "ITEMS", sizeof("ITEMS") - 1)) {
       opts.itemsStart = i + 1;
       break;
     } else {
@@ -478,15 +478,15 @@ static int CmdInfo(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(value));
     };
 
-    if (MatchArg(field, len, "Capacity")) {
+    if (MatchArg(field, len, "Capacity", sizeof("Capacity") - 1)) {
       return ReplyWithSingleField(filter->TotalCapacity());
-    } else if (MatchArg(field, len, "Size")) {
+    } else if (MatchArg(field, len, "Size", sizeof("Size") - 1)) {
       return ReplyWithSingleField(filter->BytesUsed());
-    } else if (MatchArg(field, len, "Filters")) {
+    } else if (MatchArg(field, len, "Filters", sizeof("Filters") - 1)) {
       return ReplyWithSingleField(filter->NumLayers());
-    } else if (MatchArg(field, len, "Items")) {
+    } else if (MatchArg(field, len, "Items", sizeof("Items") - 1)) {
       return ReplyWithSingleField(filter->TotalItems());
-    } else if (MatchArg(field, len, "Expansion")) {
+    } else if (MatchArg(field, len, "Expansion", sizeof("Expansion") - 1)) {
       if (HasFlag(filter->Flags(), BloomFlags::FixedSize)) {
         RedisModule_ReplyWithArray(ctx, 1);
         return RedisModule_ReplyWithNull(ctx);
