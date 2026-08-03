@@ -4,10 +4,13 @@ A collection of Redis modules, built from scratch with C++20.
 
 ## Modules
 
-### gemini-bloom — Bloom Filter
+### gemini-bloom — Bloom Filter / Cuckoo Filter
 
 Scalable Bloom Filter data structures with auto-expansion, supporting the full `BF.*` command set:
 `BF.RESERVE`, `BF.ADD`, `BF.MADD`, `BF.INSERT`, `BF.EXISTS`, `BF.MEXISTS`, `BF.INFO`, `BF.CARD`, `BF.SCANDUMP`, `BF.LOADCHUNK`.
+
+Also includes a scaling Cuckoo Filter data type, supporting the full `CF.*` command set:
+`CF.RESERVE`, `CF.ADD`, `CF.ADDNX`, `CF.INSERT`, `CF.INSERTNX`, `CF.EXISTS`, `CF.MEXISTS`, `CF.DEL`, `CF.COUNT`, `CF.INFO`, `CF.SCANDUMP`, `CF.LOADCHUNK`.
 
 ### gemini-json — JSON Data Type
 
@@ -98,6 +101,9 @@ Requires a `redis-server` binary in `$PATH`:
 # gemini-bloom
 tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
 
+# gemini-bloom Cuckoo Filter
+tclsh modules/gemini-bloom/tests/tcl/cf_test.tcl ./build/redis_bloom.so
+
 # gemini-json
 tclsh modules/gemini-json/tests/tcl/json_test.tcl ./build/redis_json.so
 
@@ -119,8 +125,8 @@ Docker CI 提供三组环境验证 gemini-bloom 在不同 Redis 版本下的兼�
 
 | 测试项 | 说明 |
 |---|---|
-| GTest 单元测试 | bloom_filter_test、bloom_rdb_test、sb_chain_test |
-| Tcl 集成测试 | 启动 redis-server 加载模块，验证命令行为 |
+| GTest 单元测试 | bloom_filter_test、bloom_rdb_test、sb_chain_test、cuckoo_filter_test、cf_chain_test、cf_rdb_test |
+| Tcl 集成测试 | 启动 redis-server 加载模块，验证 BF.\* 与 CF.\* 命令行为 |
 | Compat 对比测试 | 同时启动 gemini-bloom 和 RedisBloom，对比所有 BF.* 命令返回值 |
 | Soak 长稳测试 | 持续运行 BF.* 命令验证零 false negative、内存无泄漏（默认 300s） |
 | RDB 迁移测试 | 4 方向 RDB 迁入迁出（RB→GB、GB→RB、GB→GB、RB→RB），验证 BF.EXISTS 100% 一致（含 false positive），覆盖 16 种 filter 配置、约 30 万 items |

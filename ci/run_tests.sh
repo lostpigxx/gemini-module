@@ -21,6 +21,10 @@ header "Tcl: gemini-bloom"
 tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl "./$BUILD_DIR/redis_bloom.so" || \
   { red "FAIL: bloom tcl"; FAIL=1; }
 
+header "Tcl: gemini-bloom Cuckoo Filter"
+tclsh modules/gemini-bloom/tests/tcl/cf_test.tcl "./$BUILD_DIR/redis_bloom.so" || \
+  { red "FAIL: cuckoo filter tcl"; FAIL=1; }
+
 # ── Compat test (gemini-bloom vs RedisBloom) ─────────────────
 header "Compat: gemini-bloom vs RedisBloom (RESP auto)"
 python3 ci/bloom_compat_test.py "./$BUILD_DIR/redis_bloom.so" /opt/redisbloom.so || \
