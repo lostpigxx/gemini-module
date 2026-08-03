@@ -5,8 +5,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
-#include <optional>
-#include <span>
 
 // Error tightening ratio from Almeida et al. (2007) §3:
 // each successive layer halves the per-layer FP rate so the

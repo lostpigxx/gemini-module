@@ -7,7 +7,6 @@
 #include <climits>
 #include <cstring>
 #include <strings.h>
-#include <string_view>
 
 // --- Helpers ---
 
@@ -77,7 +76,7 @@ static ScalingBloomFilter* OpenOrCreate(RedisModuleCtx* ctx, RedisModuleString* 
   return filter;
 }
 
-static bool MatchArg(std::string_view arg, std::string_view target) {
+static bool MatchArg(bloom_compat::StringView arg, bloom_compat::StringView target) {
   if (arg.size() != target.size()) return false;
   return strncasecmp(arg.data(), target.data(), arg.size()) == 0;
 }
@@ -122,7 +121,7 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   for (int i = 4; i < argc; i++) {
     size_t len;
     const char* arg = RedisModule_StringPtrLen(argv[i], &len);
-    auto sv = std::string_view{arg, len};
+    auto sv = bloom_compat::StringView{arg, len};
 
     if (MatchArg(sv, "EXPANSION")) {
       if (expansionSeen)
@@ -259,7 +258,7 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
   for (int i = 2; i < argc; i++) {
     size_t len;
     const char* arg = RedisModule_StringPtrLen(argv[i], &len);
-    auto sv = std::string_view{arg, len};
+    auto sv = bloom_compat::StringView{arg, len};
 
     if (MatchArg(sv, "ERROR")) {
       if (errorSet) {
@@ -478,7 +477,7 @@ static int CmdInfo(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (argc == 3) {
     size_t len;
     const char* field = RedisModule_StringPtrLen(argv[2], &len);
-    auto sv = std::string_view{field, len};
+    auto sv = bloom_compat::StringView{field, len};
 
     auto ReplyWithSingleField = [&](auto value) {
       RedisModule_ReplyWithArray(ctx, 1);

@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <ranges>
 
 // --- Lifecycle ---
 
@@ -136,25 +135,27 @@ bool ScalingBloomFilter::Contains(std::span<const std::byte> data) const {
 }
 
 uint64_t ScalingBloomFilter::TotalCapacity() const {
-  auto layerSpan = Layers();
-  return std::transform_reduce(layerSpan.begin(), layerSpan.end(),
-    uint64_t{0}, std::plus<>{},
-    [](const FilterLayer& l) { return l.bloom.GetCapacity(); });
+  uint64_t total = 0;
+  for (const auto& layer : Layers()) {
+    total += layer.bloom.GetCapacity();
+  }
+  return total;
 }
 
 uint64_t ScalingBloomFilter::TotalDataSize() const {
-  auto layerSpan = Layers();
-  return std::transform_reduce(layerSpan.begin(), layerSpan.end(),
-    uint64_t{0}, std::plus<>{},
-    [](const FilterLayer& l) { return l.bloom.GetDataSize(); });
+  uint64_t total = 0;
+  for (const auto& layer : Layers()) {
+    total += layer.bloom.GetDataSize();
+  }
+  return total;
 }
 
 size_t ScalingBloomFilter::BytesUsed() const {
   size_t base = sizeof(ScalingBloomFilter) + layerCapacity_ * sizeof(FilterLayer);
-  auto layerSpan = Layers();
-  return std::transform_reduce(layerSpan.begin(), layerSpan.end(),
-    base, std::plus<>{},
-    [](const FilterLayer& l) { return static_cast<size_t>(l.bloom.GetDataSize()); });
+  for (const auto& layer : Layers()) {
+    base += static_cast<size_t>(layer.bloom.GetDataSize());
+  }
+  return base;
 }
 
 // --- Shell construction for deserialization ---

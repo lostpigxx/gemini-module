@@ -6,7 +6,6 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
-#include <numbers>
 
 constexpr uint32_t kMaxLayers = 1024;
 
@@ -106,7 +105,9 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
                      layer.dataSize_};
   if (!ValidateLayerFields(fields)) return std::nullopt;
 
-  auto [buf, bufLen] = r.GetBlob();
+  std::pair<char*, size_t> blob = r.GetBlob();
+  char* buf = blob.first;
+  size_t bufLen = blob.second;
   if (!r.Ok() || !buf || bufLen != static_cast<size_t>(layer.dataSize_)) {
     if (buf) RedisModule_Free(buf);
     return std::nullopt;
@@ -122,16 +123,16 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
 }
 
 WireLayerMeta BloomLayer::ToWireMeta(size_t itemCount) const {
-  return {
-    .dataSize = dataSize_,
-    .totalBits = totalBits_,
-    .itemCount = itemCount,
-    .fpRate = fpRate_,
-    .bitsPerEntry = bitsPerEntry_,
-    .hashCount = hashCount_,
-    .capacity = capacity_,
-    .log2Bits = log2Bits_,
-  };
+  WireLayerMeta meta = {};
+  meta.dataSize = dataSize_;
+  meta.totalBits = totalBits_;
+  meta.itemCount = itemCount;
+  meta.fpRate = fpRate_;
+  meta.bitsPerEntry = bitsPerEntry_;
+  meta.hashCount = hashCount_;
+  meta.capacity = capacity_;
+  meta.log2Bits = log2Bits_;
+  return meta;
 }
 
 std::optional<BloomLayer> BloomLayer::FromWireMeta(const WireLayerMeta& meta, BloomFlags filterFlags) {
@@ -301,12 +302,12 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   }
   if (itemSum != hdr->totalItems) return nullptr;
 
-  auto* filter = ScalingBloomFilter::FromRdbShell({
-    .totalItems = hdr->totalItems,
-    .numLayers = hdr->numLayers,
-    .flags = filterFlags,
-    .expansionFactor = hdr->expansionFactor,
-  });
+  ScalingBloomFilter::RdbShell shell = {};
+  shell.totalItems = hdr->totalItems;
+  shell.numLayers = hdr->numLayers;
+  shell.flags = filterFlags;
+  shell.expansionFactor = hdr->expansionFactor;
+  auto* filter = ScalingBloomFilter::FromRdbShell(shell);
   if (!filter) return nullptr;
 
   for (size_t i = 0; i < hdr->numLayers; i++) {

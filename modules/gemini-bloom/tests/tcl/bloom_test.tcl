@@ -233,6 +233,23 @@ proc find_free_port {} {
   return $port
 }
 
+proc redis_major_version {} {
+  if {[catch {exec redis-server --version} version]} {
+    return 0
+  }
+  if {[regexp {v=([0-9]+)} $version -> major]} {
+    return $major
+  }
+  return 0
+}
+
+proc redis_debug_args {} {
+  if {[redis_major_version] >= 7} {
+    return [list --enable-debug-command yes]
+  }
+  return [list]
+}
+
 proc start_redis {module_path port} {
   catch {
     exec redis-server \
@@ -242,7 +259,7 @@ proc start_redis {module_path port} {
       --logfile /tmp/bloom_tcl_test.log \
       --dbfilename bloom_tcl_test.rdb \
       --dir /tmp \
-      --enable-debug-command yes \
+      {*}[redis_debug_args] \
       --repl-diskless-sync-delay 0 \
       --loadmodule $module_path
   }
@@ -1055,7 +1072,7 @@ test_assert "Data survives AOF rewrite + restart" {
       --dbfilename bloom_tcl_test.rdb \
       --dir /tmp \
       --appendonly yes \
-      --enable-debug-command yes \
+      {*}[redis_debug_args] \
       --repl-diskless-sync-delay 0 \
       --loadmodule $module_path
   }
@@ -1092,7 +1109,7 @@ test_assert "Data survives AOF rewrite + restart" {
       --dbfilename bloom_tcl_test.rdb \
       --dir /tmp \
       --appendonly yes \
-      --enable-debug-command yes \
+      {*}[redis_debug_args] \
       --repl-diskless-sync-delay 0 \
       --loadmodule $module_path
   }

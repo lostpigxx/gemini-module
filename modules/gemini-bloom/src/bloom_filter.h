@@ -1,11 +1,9 @@
 #pragma once
 
-#include <bit>
+#include "cpp14_compat.h"
+
 #include <cstddef>
 #include <cstdint>
-#include <numbers>
-#include <optional>
-#include <span>
 #include <type_traits>
 
 // --- Bloom filter flags ---

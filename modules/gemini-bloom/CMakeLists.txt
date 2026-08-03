@@ -10,6 +10,12 @@ set(BLOOM_SOURCES
 
 add_library(redis_bloom SHARED ${BLOOM_SOURCES})
 
+set_target_properties(redis_bloom PROPERTIES
+  CXX_STANDARD 14
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+
 target_include_directories(redis_bloom PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
@@ -17,7 +23,9 @@ target_include_directories(redis_bloom PRIVATE
 target_link_libraries(redis_bloom PRIVATE redis_module_api)
 
 target_compile_options(redis_bloom PRIVATE
-  -Wall -Wextra -Wpedantic -fno-exceptions -Wno-c++20-designator
+  -Wall -Wextra -Wpedantic -fno-exceptions
+  $<$<CXX_COMPILER_ID:AppleClang,Clang>:-Wno-c++20-designator>
+  $<$<CXX_COMPILER_ID:GNU>:-Wno-pedantic>
 )
 
 set_target_properties(redis_bloom PROPERTIES
@@ -33,6 +41,11 @@ if(GTest_FOUND)
     src/bloom_filter.cc
     src/murmur2.cc
   )
+  set_target_properties(bloom_filter_test PROPERTIES
+    CXX_STANDARD 14
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+  )
   target_include_directories(bloom_filter_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
@@ -41,13 +54,21 @@ if(GTest_FOUND)
     GTest::gtest_main
   )
   target_compile_definitions(bloom_filter_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(bloom_filter_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(bloom_filter_test PRIVATE
+    -Wall -Wextra -Wpedantic
+    $<$<CXX_COMPILER_ID:GNU>:-Wno-pedantic>
+  )
 
   add_executable(sb_chain_test EXCLUDE_FROM_ALL
     tests/sb_chain_test.cc
     src/sb_chain.cc
     src/bloom_filter.cc
     src/murmur2.cc
+  )
+  set_target_properties(sb_chain_test PROPERTIES
+    CXX_STANDARD 14
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
   )
   target_include_directories(sb_chain_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -57,7 +78,10 @@ if(GTest_FOUND)
     GTest::gtest_main
   )
   target_compile_definitions(sb_chain_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(sb_chain_test PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(sb_chain_test PRIVATE
+    -Wall -Wextra -Wpedantic
+    $<$<CXX_COMPILER_ID:GNU>:-Wno-pedantic>
+  )
 
   add_executable(bloom_rdb_test EXCLUDE_FROM_ALL
     tests/bloom_rdb_test.cc
@@ -65,6 +89,11 @@ if(GTest_FOUND)
     src/sb_chain.cc
     src/bloom_filter.cc
     src/murmur2.cc
+  )
+  set_target_properties(bloom_rdb_test PROPERTIES
+    CXX_STANDARD 14
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
   )
   target_include_directories(bloom_rdb_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -75,7 +104,11 @@ if(GTest_FOUND)
     GTest::gtest_main
   )
   target_compile_definitions(bloom_rdb_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(bloom_rdb_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
+  target_compile_options(bloom_rdb_test PRIVATE
+    -Wall -Wextra -Wpedantic
+    $<$<CXX_COMPILER_ID:AppleClang,Clang>:-Wno-c++20-designator>
+    $<$<CXX_COMPILER_ID:GNU>:-Wno-pedantic>
+  )
 
   add_custom_target(bloom_test
     COMMAND bloom_filter_test --gtest_color=yes

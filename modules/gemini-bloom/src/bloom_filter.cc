@@ -3,11 +3,9 @@
 #include "rm_alloc.h"
 
 #include <algorithm>
-#include <bit>
 #include <climits>
 #include <cmath>
 #include <cstring>
-#include <numbers>
 
 // --- Hash policies ---
 // The double-hashing scheme follows Kirsch & Mitzenmacher (ESA 2006):
@@ -159,13 +157,13 @@ uint64_t BloomLayer::ComputeModuloMask() const {
 }
 
 bool BloomLayer::TestBit(uint64_t bitIndex) const {
-  auto [byteOff, mask] = ResolveBit(bitIndex);
-  return (bitArray_[byteOff] & mask) != 0;
+  BitAddress addr = ResolveBit(bitIndex);
+  return (bitArray_[addr.byteOffset] & addr.mask) != 0;
 }
 
 void BloomLayer::SetBit(uint64_t bitIndex) {
-  auto [byteOff, mask] = ResolveBit(bitIndex);
-  bitArray_[byteOff] |= mask;
+  BitAddress addr = ResolveBit(bitIndex);
+  bitArray_[addr.byteOffset] |= addr.mask;
 }
 
 // --- Membership queries ---
@@ -191,10 +189,10 @@ bool BloomLayer::Insert(const HashPair& hp) {
 
   for (uint32_t probe = 0; probe < hashCount_; probe++) {
     uint64_t pos = ProbePosition(hp, probe, mask, totalBits_, isPow2);
-    auto [byteOff, bitMask] = ResolveBit(pos);
-    uint8_t old = bitArray_[byteOff];
-    if ((old & bitMask) == 0) {
-      bitArray_[byteOff] = old | bitMask;
+    BitAddress addr = ResolveBit(pos);
+    uint8_t old = bitArray_[addr.byteOffset];
+    if ((old & addr.mask) == 0) {
+      bitArray_[addr.byteOffset] = old | addr.mask;
       anyNew = true;
     }
   }
