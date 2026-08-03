@@ -1,7 +1,5 @@
 #pragma once
 
-#include "cpp14_compat.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -57,6 +55,7 @@ constexpr unsigned kMaxExpansion = 32768;
 constexpr double kMaxBitsPerEntry = 1000.0;
 constexpr uint64_t kMaxLayerDataSize = 2ULL * 1024 * 1024 * 1024;
 constexpr uint64_t kMaxTotalDataSize = 4ULL * 1024 * 1024 * 1024;
+constexpr double kLn2 = 0.693147180559945309417232121458176568;
 
 // --- Hash pair produced by double-hashing ---
 struct HashPair {
@@ -66,20 +65,12 @@ struct HashPair {
 
 // Hash policy types — stateless strategy objects for compile-time dispatch
 struct Hash32Policy {
-  static HashPair Compute(std::span<const std::byte> data);
+  static HashPair Compute(const void* data, size_t len);
 };
 
 struct Hash64Policy {
-  static HashPair Compute(std::span<const std::byte> data);
+  static HashPair Compute(const void* data, size_t len);
 };
-
-inline std::span<const std::byte> AsBytes(const char* data, size_t len) {
-  return {reinterpret_cast<const std::byte*>(data), len};
-}
-
-inline std::span<const std::byte> AsBytes(const void* data, size_t len) {
-  return {static_cast<const std::byte*>(data), len};
-}
 
 // --- Bit-level addressing within a byte array ---
 // Encapsulates the mapping from a linear bit index to (byte_offset, bit_mask).
@@ -122,23 +113,24 @@ public:
   //   bpe = -log(fpRate) / (ln2)^2
   //   k   = ceil(ln2 * bpe)
   // Reference: Bloom (1970), Mitzenmacher & Upfal (2005)
-  static std::optional<BloomLayer> Create(uint64_t cap, double falsePositiveRate,
-                                           BloomFlags flags);
+  static bool Create(uint64_t cap, double falsePositiveRate,
+                     BloomFlags flags, BloomLayer* out);
 
   // Serialization: each object knows how to persist itself
   void WriteTo(RdbWriter& w) const;
-  static std::optional<BloomLayer> ReadFrom(RdbReader& r, BloomFlags filterFlags);
+  static bool ReadFrom(RdbReader& r, BloomFlags filterFlags, BloomLayer* out);
 
   // Wire format conversion for SCANDUMP/LOADCHUNK
   WireLayerMeta ToWireMeta(size_t itemCount) const;
-  static std::optional<BloomLayer> FromWireMeta(const WireLayerMeta& meta, BloomFlags filterFlags);
+  static bool FromWireMeta(const WireLayerMeta& meta, BloomFlags filterFlags,
+                           BloomLayer* out);
 
   bool Test(const HashPair& hp) const;
   bool Insert(const HashPair& hp);
 
   // Deep copy: BloomLayer is move-only, so cloning needs an explicit method
   // rather than a copy constructor.
-  std::optional<BloomLayer> Clone() const;
+  bool Clone(BloomLayer* out) const;
 
   // For defrag: adopt a relocated bit-array buffer. Caller owns the
   // relocation (e.g. via RedisModule_DefragAlloc) and transfers ownership.

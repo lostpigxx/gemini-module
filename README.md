@@ -1,6 +1,6 @@
 # gemini-module
 
-A collection of Redis modules, built from scratch with C++20.
+A collection of Redis modules, built from scratch with modern C++.
 
 ## Modules
 
@@ -38,7 +38,8 @@ gemini-module/
 
 ## Build
 
-Requires CMake 3.14+ and a C++20 compiler.
+Requires CMake 3.14+. `gemini-bloom` is built as C++14; the other modules
+currently require C++20.
 
 ```bash
 cmake -B build
@@ -126,6 +127,14 @@ Docker CI 提供三组环境验证 gemini-bloom 在不同 Redis 版本下的兼�
 | RDB 迁移测试 | 4 方向 RDB 迁入迁出（RB→GB、GB→RB、GB→GB、RB→RB），验证 BF.EXISTS 100% 一致（含 false positive），覆盖 16 种 filter 配置、约 30 万 items |
 
 Redis 6/7 环境下 Compat 和 Soak 会跑两轮（RESP3 + RESP2），Redis 5 只跑 RESP2。
+
+GCC 7.3.0 的 Linux 构建只编译 `gemini-bloom`，并使用严格 C++14 选项运行
+全部 GTest 单元测试：
+
+```bash
+docker build -f Dockerfile.gcc73 -t gemini-bloom:gcc73 .
+docker run --rm gemini-bloom:gcc73
+```
 
 ### 运行单组环境
 

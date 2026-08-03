@@ -6,10 +6,6 @@
 #include <limits>
 #include <string>
 
-static std::span<const std::byte> ToSpan(const std::string& s) {
-  return AsBytes(s.data(), s.size());
-}
-
 TEST(MurmurHash2Test, Deterministic) {
   const char* key = "hello";
   uint32_t h1 = MurmurHash2(key, 5, 0x9747b28c);
@@ -34,79 +30,79 @@ TEST(MurmurHash2Test, EmptyInput) {
 }
 
 TEST(HashPolicyTest, Hash32Consistency) {
-  auto a = Hash32Policy::Compute(AsBytes("test", 4));
-  auto b = Hash32Policy::Compute(AsBytes("test", 4));
+  auto a = Hash32Policy::Compute("test", 4);
+  auto b = Hash32Policy::Compute("test", 4);
   EXPECT_EQ(a.primary, b.primary);
   EXPECT_EQ(a.secondary, b.secondary);
-  auto c = Hash32Policy::Compute(AsBytes("other", 5));
+  auto c = Hash32Policy::Compute("other", 5);
   EXPECT_NE(a.primary, c.primary);
 }
 
 TEST(HashPolicyTest, Hash64Consistency) {
-  auto a = Hash64Policy::Compute(AsBytes("test", 4));
-  auto b = Hash64Policy::Compute(AsBytes("test", 4));
+  auto a = Hash64Policy::Compute("test", 4);
+  auto b = Hash64Policy::Compute("test", 4);
   EXPECT_EQ(a.primary, b.primary);
   EXPECT_EQ(a.secondary, b.secondary);
 }
 
 TEST(BloomLayerTest, CreateRAII) {
-  auto layer = BloomLayer::Create(1000, 0.01,
-    BloomFlags::Use64Bit | BloomFlags::NoRound);
-  ASSERT_TRUE(layer.has_value());
-  EXPECT_GT(layer->GetHashCount(), 0u);
-  EXPECT_GT(layer->GetTotalBits(), 0u);
-  EXPECT_GT(layer->GetDataSize(), 0u);
-  EXPECT_NE(layer->GetBitArray(), nullptr);
-  EXPECT_GT(layer->GetBitsPerEntry(), 0.0);
+  BloomLayer layer;
+  ASSERT_TRUE(BloomLayer::Create(1000, 0.01,
+    BloomFlags::Use64Bit | BloomFlags::NoRound, &layer));
+  EXPECT_GT(layer.GetHashCount(), 0u);
+  EXPECT_GT(layer.GetTotalBits(), 0u);
+  EXPECT_GT(layer.GetDataSize(), 0u);
+  EXPECT_NE(layer.GetBitArray(), nullptr);
+  EXPECT_GT(layer.GetBitsPerEntry(), 0.0);
 }
 
 TEST(BloomLayerTest, MoveSemantics) {
-  auto layer = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
-  ASSERT_TRUE(layer.has_value());
+  BloomLayer layer;
+  ASSERT_TRUE(BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit, &layer));
 
-  BloomLayer moved = std::move(*layer);
+  BloomLayer moved = std::move(layer);
   EXPECT_NE(moved.GetBitArray(), nullptr);
-  EXPECT_EQ(layer->GetBitArray(), nullptr);
+  EXPECT_EQ(layer.GetBitArray(), nullptr);
 }
 
 TEST(BloomLayerTest, MoveAssignmentReleasesOldStorage) {
-  auto first = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
-  auto second = BloomLayer::Create(2000, 0.001, BloomFlags::Use64Bit);
-  ASSERT_TRUE(first.has_value());
-  ASSERT_TRUE(second.has_value());
+  BloomLayer first;
+  BloomLayer second;
+  ASSERT_TRUE(BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit, &first));
+  ASSERT_TRUE(BloomLayer::Create(2000, 0.001, BloomFlags::Use64Bit, &second));
 
-  uint64_t secondCapacity = second->GetCapacity();
-  uint64_t secondBits = second->GetTotalBits();
-  *first = std::move(*second);
+  uint64_t secondCapacity = second.GetCapacity();
+  uint64_t secondBits = second.GetTotalBits();
+  first = std::move(second);
 
-  EXPECT_EQ(first->GetCapacity(), secondCapacity);
-  EXPECT_EQ(first->GetTotalBits(), secondBits);
-  EXPECT_NE(first->GetBitArray(), nullptr);
-  EXPECT_EQ(second->GetBitArray(), nullptr);
+  EXPECT_EQ(first.GetCapacity(), secondCapacity);
+  EXPECT_EQ(first.GetTotalBits(), secondBits);
+  EXPECT_NE(first.GetBitArray(), nullptr);
+  EXPECT_EQ(second.GetBitArray(), nullptr);
 }
 
 TEST(BloomLayerTest, InsertAndTest) {
-  auto layer = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
-  ASSERT_TRUE(layer.has_value());
+  BloomLayer layer;
+  ASSERT_TRUE(BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit, &layer));
 
-  auto hp = Hash64Policy::Compute(AsBytes("hello", 5));
-  EXPECT_TRUE(layer->Insert(hp));
-  EXPECT_FALSE(layer->Insert(hp));
-  EXPECT_TRUE(layer->Test(hp));
+  auto hp = Hash64Policy::Compute("hello", 5);
+  EXPECT_TRUE(layer.Insert(hp));
+  EXPECT_FALSE(layer.Insert(hp));
+  EXPECT_TRUE(layer.Test(hp));
 }
 
 TEST(BloomLayerTest, FalsePositiveRate) {
-  auto layer = BloomLayer::Create(10000, 0.01, BloomFlags::Use64Bit);
-  ASSERT_TRUE(layer.has_value());
+  BloomLayer layer;
+  ASSERT_TRUE(BloomLayer::Create(10000, 0.01, BloomFlags::Use64Bit, &layer));
 
   for (int i = 0; i < 10000; i++) {
     auto item = "item_" + std::to_string(i);
-    layer->Insert(Hash64Policy::Compute(ToSpan(item)));
+    layer.Insert(Hash64Policy::Compute(item.data(), item.size()));
   }
 
   for (int i = 0; i < 10000; i++) {
     auto item = "item_" + std::to_string(i);
-    EXPECT_TRUE(layer->Test(Hash64Policy::Compute(ToSpan(item))))
+    EXPECT_TRUE(layer.Test(Hash64Policy::Compute(item.data(), item.size())))
       << "False negative for " << item;
   }
 
@@ -114,7 +110,7 @@ TEST(BloomLayerTest, FalsePositiveRate) {
   constexpr int testCount = 100000;
   for (int i = 10000; i < 10000 + testCount; i++) {
     auto item = "other_" + std::to_string(i);
-    if (layer->Test(Hash64Policy::Compute(ToSpan(item)))) falsePositives++;
+    if (layer.Test(Hash64Policy::Compute(item.data(), item.size()))) falsePositives++;
   }
 
   double fpRate = static_cast<double>(falsePositives) / testCount;
@@ -122,40 +118,42 @@ TEST(BloomLayerTest, FalsePositiveRate) {
 }
 
 TEST(BloomLayerTest, PowerOfTwoViaBitCeil) {
-  auto layer = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
-  ASSERT_TRUE(layer.has_value());
-  EXPECT_GT(layer->GetLog2Bits(), 0);
-  EXPECT_EQ(layer->GetTotalBits(), 1ULL << layer->GetLog2Bits());
+  BloomLayer layer;
+  ASSERT_TRUE(BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit, &layer));
+  EXPECT_GT(layer.GetLog2Bits(), 0);
+  EXPECT_EQ(layer.GetTotalBits(), 1ULL << layer.GetLog2Bits());
 }
 
 TEST(BloomLayerTest, NoRoundUsesAlignedNonPowerOfTwoBits) {
-  auto layer = BloomLayer::Create(1000, 0.01,
-    BloomFlags::Use64Bit | BloomFlags::NoRound);
-  ASSERT_TRUE(layer.has_value());
+  BloomLayer layer;
+  ASSERT_TRUE(BloomLayer::Create(1000, 0.01,
+    BloomFlags::Use64Bit | BloomFlags::NoRound, &layer));
 
-  EXPECT_EQ(layer->GetLog2Bits(), 0);
-  EXPECT_EQ(layer->GetTotalBits() % 64, 0u);
-  EXPECT_EQ(layer->GetDataSize(), layer->GetTotalBits() / 8);
-  EXPECT_NE(layer->GetTotalBits(), 1ULL << std::bit_width(layer->GetTotalBits() - 1));
+  EXPECT_EQ(layer.GetLog2Bits(), 0);
+  EXPECT_EQ(layer.GetTotalBits() % 64, 0u);
+  EXPECT_EQ(layer.GetDataSize(), layer.GetTotalBits() / 8);
+  EXPECT_NE(layer.GetTotalBits() & (layer.GetTotalBits() - 1), 0u);
 }
 
 TEST(BloomLayerTest, RejectsInvalidCreateParameters) {
-  EXPECT_FALSE(BloomLayer::Create(0, 0.01, BloomFlags::Use64Bit).has_value());
-  EXPECT_FALSE(BloomLayer::Create(100, 0.0, BloomFlags::Use64Bit).has_value());
-  EXPECT_FALSE(BloomLayer::Create(100, 1.0, BloomFlags::Use64Bit).has_value());
-  EXPECT_FALSE(BloomLayer::Create(100, -0.01, BloomFlags::Use64Bit).has_value());
+  BloomLayer layer;
+  EXPECT_FALSE(BloomLayer::Create(0, 0.01, BloomFlags::Use64Bit, &layer));
+  EXPECT_FALSE(BloomLayer::Create(100, 0.0, BloomFlags::Use64Bit, &layer));
+  EXPECT_FALSE(BloomLayer::Create(100, 1.0, BloomFlags::Use64Bit, &layer));
+  EXPECT_FALSE(BloomLayer::Create(100, -0.01, BloomFlags::Use64Bit, &layer));
   EXPECT_FALSE(BloomLayer::Create(100,
-    std::numeric_limits<double>::quiet_NaN(), BloomFlags::Use64Bit).has_value());
+    std::numeric_limits<double>::quiet_NaN(), BloomFlags::Use64Bit, &layer));
   EXPECT_FALSE(BloomLayer::Create(100,
-    std::numeric_limits<double>::infinity(), BloomFlags::Use64Bit).has_value());
+    std::numeric_limits<double>::infinity(), BloomFlags::Use64Bit, &layer));
 }
 
 TEST(BloomLayerTest, RejectsBitsPerEntryExceedingLimit) {
+  BloomLayer layer;
   // 1e-300 yields bitsPerEntry ≈ 1438 > kMaxBitsPerEntry (1000)
-  EXPECT_FALSE(BloomLayer::Create(1, 1e-300, BloomFlags::Use64Bit).has_value())
+  EXPECT_FALSE(BloomLayer::Create(1, 1e-300, BloomFlags::Use64Bit, &layer))
     << "Should reject fpRate that produces bitsPerEntry > 1000";
   // Boundary: 1e-200 yields bitsPerEntry ≈ 958, should still be accepted
-  EXPECT_TRUE(BloomLayer::Create(1, 1e-200, BloomFlags::Use64Bit).has_value())
+  EXPECT_TRUE(BloomLayer::Create(1, 1e-200, BloomFlags::Use64Bit, &layer))
     << "Should accept fpRate that produces bitsPerEntry <= 1000";
 }
 
@@ -192,11 +190,11 @@ TEST(BloomFlagsTest, ValidateFlagsRejectsRawBits) {
 }
 
 TEST(BloomLayerTest, RawBitsCreatesZeroHashCount) {
-  auto layer = BloomLayer::Create(1024, 0.01, BloomFlags::RawBits);
-  ASSERT_TRUE(layer.has_value());
-  EXPECT_EQ(layer->GetHashCount(), 0u);
-  auto hp = Hash32Policy::Compute(AsBytes("test", 4));
-  EXPECT_TRUE(layer->Test(hp)) << "hashCount=0 makes Test() always true";
+  BloomLayer layer;
+  ASSERT_TRUE(BloomLayer::Create(1024, 0.01, BloomFlags::RawBits, &layer));
+  EXPECT_EQ(layer.GetHashCount(), 0u);
+  auto hp = Hash32Policy::Compute("test", 4);
+  EXPECT_TRUE(layer.Test(hp)) << "hashCount=0 makes Test() always true";
 }
 
 TEST(BloomFlagsTest, ResourceLimitConstants) {
@@ -225,27 +223,27 @@ TEST(MurmurHash64ATest, ExactVectors) {
 }
 
 TEST(HashPolicyTest, Hash32ExactVectors) {
-  auto hp = Hash32Policy::Compute(AsBytes("hello", 5));
+  auto hp = Hash32Policy::Compute("hello", 5);
   EXPECT_EQ(hp.primary, 0x7f1ddbbdu);
   EXPECT_EQ(hp.secondary, 0xed999d2du);
 }
 
 TEST(HashPolicyTest, Hash64ExactVectors) {
-  auto hp = Hash64Policy::Compute(AsBytes("hello", 5));
+  auto hp = Hash64Policy::Compute("hello", 5);
   EXPECT_EQ(hp.primary, 0x5ba5b8a59803e699ULL);
   EXPECT_EQ(hp.secondary, 0xa7d451d588a0c2a4ULL);
 }
 
 TEST(HashPolicyTest, Hash32BinaryWithNulls) {
   char bin[] = "hello\0world";
-  auto hp = Hash32Policy::Compute(AsBytes(bin, 11));
+  auto hp = Hash32Policy::Compute(bin, 11);
   EXPECT_EQ(hp.primary, 0xd8e4f032u);
   EXPECT_EQ(hp.secondary, 0x2117a707u);
 }
 
 TEST(HashPolicyTest, Hash64BinaryWithNulls) {
   char bin[] = "hello\0world";
-  auto hp = Hash64Policy::Compute(AsBytes(bin, 11));
+  auto hp = Hash64Policy::Compute(bin, 11);
   EXPECT_EQ(hp.primary, 0xdcd0bc9f75315849ULL);
   EXPECT_EQ(hp.secondary, 0xcf5f620f7200160dULL);
 }
@@ -275,43 +273,43 @@ TEST(ProbePositionTest, UsesMaskForPowerOfTwoAndModuloOtherwise) {
 // --- BloomLayer::Clone ---
 
 TEST(BloomLayerTest, CloneDeepCopiesBitArray) {
-  auto layer = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
-  ASSERT_TRUE(layer.has_value());
+  BloomLayer layer;
+  ASSERT_TRUE(BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit, &layer));
 
   for (int i = 0; i < 200; i++) {
     auto item = "clone_" + std::to_string(i);
-    layer->Insert(Hash64Policy::Compute(ToSpan(item)));
+    layer.Insert(Hash64Policy::Compute(item.data(), item.size()));
   }
 
-  auto clone = layer->Clone();
-  ASSERT_TRUE(clone.has_value());
+  BloomLayer clone;
+  ASSERT_TRUE(layer.Clone(&clone));
 
-  EXPECT_NE(clone->GetBitArray(), layer->GetBitArray());
-  EXPECT_EQ(clone->GetDataSize(), layer->GetDataSize());
-  EXPECT_EQ(std::memcmp(clone->GetBitArray(), layer->GetBitArray(),
-                        layer->GetDataSize()), 0);
-  EXPECT_EQ(clone->GetCapacity(), layer->GetCapacity());
-  EXPECT_EQ(clone->GetHashCount(), layer->GetHashCount());
-  EXPECT_EQ(clone->GetTotalBits(), layer->GetTotalBits());
-  EXPECT_DOUBLE_EQ(clone->GetFpRate(), layer->GetFpRate());
-  EXPECT_DOUBLE_EQ(clone->GetBitsPerEntry(), layer->GetBitsPerEntry());
+  EXPECT_NE(clone.GetBitArray(), layer.GetBitArray());
+  EXPECT_EQ(clone.GetDataSize(), layer.GetDataSize());
+  EXPECT_EQ(std::memcmp(clone.GetBitArray(), layer.GetBitArray(),
+                        layer.GetDataSize()), 0);
+  EXPECT_EQ(clone.GetCapacity(), layer.GetCapacity());
+  EXPECT_EQ(clone.GetHashCount(), layer.GetHashCount());
+  EXPECT_EQ(clone.GetTotalBits(), layer.GetTotalBits());
+  EXPECT_DOUBLE_EQ(clone.GetFpRate(), layer.GetFpRate());
+  EXPECT_DOUBLE_EQ(clone.GetBitsPerEntry(), layer.GetBitsPerEntry());
 
   for (int i = 0; i < 200; i++) {
     auto item = "clone_" + std::to_string(i);
-    EXPECT_TRUE(clone->Test(Hash64Policy::Compute(ToSpan(item))));
+    EXPECT_TRUE(clone.Test(Hash64Policy::Compute(item.data(), item.size())));
   }
 }
 
 TEST(BloomLayerTest, CloneIsIndependentOfOriginal) {
-  auto layer = BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit);
-  ASSERT_TRUE(layer.has_value());
+  BloomLayer layer;
+  ASSERT_TRUE(BloomLayer::Create(1000, 0.01, BloomFlags::Use64Bit, &layer));
 
-  auto clone = layer->Clone();
-  ASSERT_TRUE(clone.has_value());
+  BloomLayer clone;
+  ASSERT_TRUE(layer.Clone(&clone));
 
-  auto hp = Hash64Policy::Compute(AsBytes("after_clone", 11));
-  layer->Insert(hp);
+  auto hp = Hash64Policy::Compute("after_clone", 11);
+  layer.Insert(hp);
 
-  EXPECT_TRUE(layer->Test(hp));
-  EXPECT_FALSE(clone->Test(hp));
+  EXPECT_TRUE(layer.Test(hp));
+  EXPECT_FALSE(clone.Test(hp));
 }

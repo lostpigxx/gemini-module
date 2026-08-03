@@ -17,6 +17,12 @@ struct FilterLayer {
   size_t itemCount = 0;
 };
 
+enum class PutResult {
+  Inserted,
+  Duplicate,
+  Full,
+};
+
 // Scaling bloom filter with RAII lifetime management.
 // Layers grow automatically when capacity is exceeded.
 // Based on "Scalable Bloom Filters" by Almeida, Baquero et al. (2007).
@@ -33,16 +39,15 @@ public:
 
   bool IsValid() const { return layers_ != nullptr; }
 
-  // Returns: true = inserted, false = duplicate, nullopt = full (fixed-size mode)
-  std::optional<bool> Put(std::span<const std::byte> data);
-  bool Contains(std::span<const std::byte> data) const;
+  PutResult Put(const void* data, size_t len);
+  bool Contains(const void* data, size_t len) const;
 
   uint64_t TotalCapacity() const;
   size_t BytesUsed() const;
 
   // Layer access for RDB / SCANDUMP
-  std::span<FilterLayer> Layers() { return {layers_, numLayers_}; }
-  std::span<const FilterLayer> Layers() const { return {layers_, numLayers_}; }
+  FilterLayer* Layers() { return layers_; }
+  const FilterLayer* Layers() const { return layers_; }
   size_t NumLayers() const { return numLayers_; }
   size_t TotalItems() const { return totalItems_; }
   BloomFlags Flags() const { return flags_; }
@@ -80,7 +85,7 @@ private:
   struct EmptyShellTag {};
   explicit ScalingBloomFilter(EmptyShellTag) {}
 
-  HashPair ComputeHash(std::span<const std::byte> data) const;
+  HashPair ComputeHash(const void* data, size_t len) const;
   bool IsDuplicate(const HashPair& hp) const;
   bool GrowIfNeeded();
   bool AppendLayer(uint64_t cap, double rate);

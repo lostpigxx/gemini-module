@@ -64,7 +64,7 @@ static bool ValidateLayerFields(const LayerFields& f) {
   if (!std::isfinite(f.bitsPerEntry) || f.bitsPerEntry <= 0.0 ||
       f.bitsPerEntry > kMaxBitsPerEntry) return false;
   uint32_t expectedHash = std::max(1u,
-    static_cast<uint32_t>(std::ceil(std::numbers::ln2 * f.bitsPerEntry)));
+    static_cast<uint32_t>(std::ceil(kLn2 * f.bitsPerEntry)));
   if (f.hashCount != expectedHash) return false;
   return true;
 }
@@ -83,7 +83,8 @@ void BloomLayer::WriteTo(RdbWriter& w) const {
   w.PutBlob(bitArray_, dataSize_);
 }
 
-std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFlags) {
+bool BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFlags, BloomLayer* out) {
+  if (!out) return false;
   BloomLayer layer;
   layer.capacity_ = r.GetUint();
   layer.fpRate_ = r.GetFloat();
@@ -92,8 +93,8 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   layer.totalBits_ = r.GetUint();
   uint64_t rawLog2Bits = r.GetUint();
 
-  if (!r.Ok()) return std::nullopt;
-  if (rawHashCount > UINT32_MAX || rawLog2Bits > 255) return std::nullopt;
+  if (!r.Ok()) return false;
+  if (rawHashCount > UINT32_MAX || rawLog2Bits > 255) return false;
   layer.hashCount_ = static_cast<uint32_t>(rawHashCount);
   layer.log2Bits_ = static_cast<uint8_t>(rawLog2Bits);
 
@@ -103,23 +104,24 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   LayerFields fields{layer.capacity_, layer.fpRate_, layer.hashCount_,
                      layer.bitsPerEntry_, layer.totalBits_, layer.log2Bits_,
                      layer.dataSize_};
-  if (!ValidateLayerFields(fields)) return std::nullopt;
+  if (!ValidateLayerFields(fields)) return false;
 
   std::pair<char*, size_t> blob = r.GetBlob();
   char* buf = blob.first;
   size_t bufLen = blob.second;
   if (!r.Ok() || !buf || bufLen != static_cast<size_t>(layer.dataSize_)) {
     if (buf) RedisModule_Free(buf);
-    return std::nullopt;
+    return false;
   }
   layer.bitArray_ = static_cast<uint8_t*>(RMAlloc(layer.dataSize_));
   if (!layer.bitArray_) {
     RedisModule_Free(buf);
-    return std::nullopt;
+    return false;
   }
   std::memcpy(layer.bitArray_, buf, bufLen);
   RedisModule_Free(buf);
-  return layer;
+  *out = std::move(layer);
+  return true;
 }
 
 WireLayerMeta BloomLayer::ToWireMeta(size_t itemCount) const {
@@ -135,7 +137,9 @@ WireLayerMeta BloomLayer::ToWireMeta(size_t itemCount) const {
   return meta;
 }
 
-std::optional<BloomLayer> BloomLayer::FromWireMeta(const WireLayerMeta& meta, BloomFlags filterFlags) {
+bool BloomLayer::FromWireMeta(const WireLayerMeta& meta, BloomFlags filterFlags,
+                              BloomLayer* out) {
+  if (!out) return false;
   BloomLayer layer;
   layer.hashCount_ = meta.hashCount;
   layer.log2Bits_ = meta.log2Bits;
@@ -146,8 +150,9 @@ std::optional<BloomLayer> BloomLayer::FromWireMeta(const WireLayerMeta& meta, Bl
   layer.totalBits_ = meta.totalBits;
   layer.dataSize_ = meta.dataSize;
   layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
-  if (!layer.bitArray_) return std::nullopt;
-  return layer;
+  if (!layer.bitArray_) return false;
+  *out = std::move(layer);
+  return true;
 }
 
 // --- ScalingBloomFilter RDB serialization ---
@@ -161,9 +166,9 @@ void ScalingBloomFilter::WriteTo(RdbWriter& w) const {
   w.PutUint(ToUnderlying(flags_) & kPersistentFlagsMask);
   w.PutUint(expansionFactor_);
 
-  for (const auto& layer : Layers()) {
-    layer.bloom.WriteTo(w);
-    w.PutUint(layer.itemCount);
+  for (size_t i = 0; i < numLayers_; ++i) {
+    layers_[i].bloom.WriteTo(w);
+    w.PutUint(layers_[i].itemCount);
   }
 }
 
@@ -197,26 +202,26 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
   uint64_t itemSum = 0;
   uint64_t totalDataSize = 0;
   for (size_t i = 0; i < shell.numLayers; i++) {
-    auto maybeLayer = BloomLayer::ReadFrom(r, shell.flags);
-    if (!maybeLayer) {
+    BloomLayer layer;
+    if (!BloomLayer::ReadFrom(r, shell.flags, &layer)) {
       filter->~ScalingBloomFilter();
       RMFree(filter);
       return nullptr;
     }
-    if (maybeLayer->GetDataSize() > kMaxTotalDataSize ||
-        totalDataSize > kMaxTotalDataSize - maybeLayer->GetDataSize()) {
+    if (layer.GetDataSize() > kMaxTotalDataSize ||
+        totalDataSize > kMaxTotalDataSize - layer.GetDataSize()) {
       filter->~ScalingBloomFilter();
       RMFree(filter);
       return nullptr;
     }
-    totalDataSize += maybeLayer->GetDataSize();
+    totalDataSize += layer.GetDataSize();
     size_t count = static_cast<size_t>(r.GetUint());
     if (!r.Ok()) {
       filter->~ScalingBloomFilter();
       RMFree(filter);
       return nullptr;
     }
-    if (count > maybeLayer->GetCapacity()) {
+    if (count > layer.GetCapacity()) {
       filter->~ScalingBloomFilter();
       RMFree(filter);
       return nullptr;
@@ -227,7 +232,7 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
       return nullptr;
     }
     itemSum += count;
-    filter->SetLayer(i, {std::move(*maybeLayer), count});
+    filter->SetLayer(i, {std::move(layer), count});
   }
 
   if (itemSum != shell.totalItems) {
@@ -311,13 +316,13 @@ ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   if (!filter) return nullptr;
 
   for (size_t i = 0; i < hdr->numLayers; i++) {
-    auto layer = BloomLayer::FromWireMeta(meta[i], filterFlags);
-    if (!layer) {
+    BloomLayer layer;
+    if (!BloomLayer::FromWireMeta(meta[i], filterFlags, &layer)) {
       filter->~ScalingBloomFilter();
       RMFree(filter);
       return nullptr;
     }
-    filter->SetLayer(i, {std::move(*layer), meta[i].itemCount});
+    filter->SetLayer(i, {std::move(layer), meta[i].itemCount});
   }
 
   return filter;
@@ -363,7 +368,8 @@ void AofRewriteBloom(RedisModuleIO* aof, RedisModuleString* key, void* value) {
   RMFree(hdrBuf);
 
   long long cursor = 2;
-  for (const auto& layer : filter->Layers()) {
+  for (size_t i = 0; i < filter->NumLayers(); ++i) {
+    const auto& layer = filter->Layers()[i];
     RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, cursor++,
       reinterpret_cast<const char*>(layer.bloom.GetBitArray()),
       layer.bloom.GetDataSize());
@@ -390,7 +396,8 @@ void DigestBloom(RedisModuleDigest* digest, void* value) {
   RedisModule_DigestAddLongLong(digest, static_cast<long long>(ToUnderlying(filter->Flags())));
   RedisModule_DigestAddLongLong(digest, static_cast<long long>(filter->ExpansionFactor()));
 
-  for (const auto& layer : filter->Layers()) {
+  for (size_t i = 0; i < filter->NumLayers(); ++i) {
+    const auto& layer = filter->Layers()[i];
     RedisModule_DigestAddLongLong(digest, static_cast<long long>(layer.itemCount));
     RedisModule_DigestAddLongLong(digest, static_cast<long long>(layer.bloom.GetCapacity()));
     RedisModule_DigestAddLongLong(digest, static_cast<long long>(layer.bloom.GetHashCount()));
@@ -428,11 +435,12 @@ int DefragBloom(RedisModuleDefragCtx* ctx, RedisModuleString* key, void** value)
   }
 
   if (auto* relocatedLayers =
-        static_cast<FilterLayer*>(RedisModule_DefragAlloc(ctx, filter->Layers().data()))) {
+        static_cast<FilterLayer*>(RedisModule_DefragAlloc(ctx, filter->Layers()))) {
     filter->AdoptLayersArray(relocatedLayers);
   }
 
-  for (auto& layer : filter->Layers()) {
+  for (size_t i = 0; i < filter->NumLayers(); ++i) {
+    auto& layer = filter->Layers()[i];
     if (auto* relocatedBits =
           static_cast<uint8_t*>(RedisModule_DefragAlloc(ctx, layer.bloom.GetBitArray()))) {
       layer.bloom.AdoptBitArray(relocatedBits);

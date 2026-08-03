@@ -1,0 +1,18 @@
+FROM gcc:7.3.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Debian Stretch is archived. GTest is installed as source and compiled by
+# the test script with the same GCC 7.3.0 toolchain as gemini-bloom.
+RUN printf 'deb [trusted=yes] http://archive.debian.org/debian stretch main\n' \
+      > /etc/apt/sources.list \
+    && printf 'Acquire::Check-Valid-Until false;\n' \
+      > /etc/apt/apt.conf.d/99archive \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends libgtest-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+CMD ["bash", "ci/run_gcc73_bloom_tests.sh"]

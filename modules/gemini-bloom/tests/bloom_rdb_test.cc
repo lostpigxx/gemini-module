@@ -25,7 +25,7 @@ class BloomRdbTestEnv : public ::testing::Environment {
 public:
   void SetUp() override { InstallMockRedisModuleIO(); }
 };
-static auto* const gEnv [[maybe_unused]] =
+::testing::Environment* const gEnv =
   ::testing::AddGlobalTestEnvironment(new BloomRdbTestEnv);
 
 // ------------------------------------------------------------------
@@ -52,10 +52,6 @@ static ScalingBloomFilter* RdbRoundTrip(ScalingBloomFilter* src, int load_encver
   RdbSaveBloom(stream.IO(), src);
   stream.Rewind();
   return static_cast<ScalingBloomFilter*>(RdbLoadBloom(stream.IO(), load_encver));
-}
-
-static std::span<const std::byte> ToSpan(const std::string& s) {
-  return AsBytes(s.data(), s.size());
 }
 
 // ==================================================================
@@ -89,7 +85,7 @@ TEST(BloomRdb, PopulatedFilterRoundTrip) {
   std::vector<std::string> items;
   for (int i = 0; i < 500; i++) {
     items.push_back("item_" + std::to_string(i));
-    filter->Put(ToSpan(items.back()));
+    filter->Put(items.back().data(), items.back().size());
   }
   EXPECT_EQ(filter->TotalItems(), 500u);
 
@@ -99,7 +95,7 @@ TEST(BloomRdb, PopulatedFilterRoundTrip) {
 
   // Every inserted item MUST be found — zero false negatives
   for (const auto& item : items) {
-    EXPECT_TRUE(loaded->Contains(ToSpan(item)))
+    EXPECT_TRUE(loaded->Contains(item.data(), item.size()))
       << "False negative after RDB round-trip: " << item;
   }
 
@@ -117,7 +113,7 @@ TEST(BloomRdb, MultiLayerRoundTrip) {
   std::vector<std::string> items;
   for (int i = 0; i < 500; i++) {
     items.push_back("multi_" + std::to_string(i));
-    filter->Put(ToSpan(items.back()));
+    filter->Put(items.back().data(), items.back().size());
   }
   EXPECT_GT(filter->NumLayers(), 1u);
   size_t orig_layers = filter->NumLayers();
@@ -129,7 +125,7 @@ TEST(BloomRdb, MultiLayerRoundTrip) {
   EXPECT_EQ(loaded->TotalItems(), orig_items);
 
   for (const auto& item : items) {
-    EXPECT_TRUE(loaded->Contains(ToSpan(item)));
+    EXPECT_TRUE(loaded->Contains(item.data(), item.size()));
   }
 
   DestroyFilter(filter);
@@ -143,7 +139,7 @@ TEST(BloomRdb, MultiLayerRoundTrip) {
 TEST(BloomRdb, MetadataPreserved) {
   auto flags = BloomFlags::Use64Bit | BloomFlags::NoRound;
   auto* filter = CreateFilter(2000, 0.001, flags, 4);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
 
   auto* loaded = RdbRoundTrip(filter, kCurrentEncVer);
   ASSERT_NE(loaded, nullptr);
@@ -175,12 +171,13 @@ TEST(BloomRdb, BitArrayExactMatch) {
   auto* filter = CreateFilter(1000, 0.01, DefaultFlags(), 2);
   for (int i = 0; i < 200; i++) {
     auto s = "bits_" + std::to_string(i);
-    filter->Put(ToSpan(s));
+    filter->Put(s.data(), s.size());
   }
 
   // Save original bit arrays
   std::vector<std::vector<uint8_t>> orig_bits;
-  for (const auto& layer : filter->Layers()) {
+  for (size_t i = 0; i < filter->NumLayers(); ++i) {
+    const auto& layer = filter->Layers()[i];
     orig_bits.emplace_back(layer.bloom.GetBitArray(),
                            layer.bloom.GetBitArray() + layer.bloom.GetDataSize());
   }
@@ -211,7 +208,7 @@ TEST(BloomRdb, FixedSizeRoundTrip) {
 
   for (int i = 0; i < 50; i++) {
     auto s = "fixed_" + std::to_string(i);
-    filter->Put(ToSpan(s));
+    filter->Put(s.data(), s.size());
   }
   EXPECT_EQ(filter->NumLayers(), 1u);
   EXPECT_TRUE(HasFlag(filter->Flags(), BloomFlags::FixedSize));
@@ -223,7 +220,7 @@ TEST(BloomRdb, FixedSizeRoundTrip) {
 
   for (int i = 0; i < 50; i++) {
     auto s = "fixed_" + std::to_string(i);
-    EXPECT_TRUE(loaded->Contains(ToSpan(s)));
+    EXPECT_TRUE(loaded->Contains(s.data(), s.size()));
   }
 
   DestroyFilter(filter);
@@ -239,7 +236,7 @@ TEST(BloomRdb, EncVer2BackwardCompat) {
   auto* filter = CreateFilter(500, 0.01, DefaultFlags(), 2);
   for (int i = 0; i < 100; i++) {
     auto s = "v2_" + std::to_string(i);
-    filter->Put(ToSpan(s));
+    filter->Put(s.data(), s.size());
   }
 
   // Serialize using current format
@@ -256,7 +253,8 @@ TEST(BloomRdb, EncVer2BackwardCompat) {
   Mock_SaveUnsigned(io, ToUnderlying(filter->Flags()));
   // NOTE: no expansion factor in encver 2!
 
-  for (const auto& layer : filter->Layers()) {
+  for (size_t i = 0; i < filter->NumLayers(); ++i) {
+    const auto& layer = filter->Layers()[i];
     Mock_SaveUnsigned(io, layer.bloom.GetCapacity());
     Mock_SaveDouble(io, layer.bloom.GetFpRate());
     Mock_SaveUnsigned(io, layer.bloom.GetHashCount());
@@ -279,7 +277,7 @@ TEST(BloomRdb, EncVer2BackwardCompat) {
 
   for (int i = 0; i < 100; i++) {
     auto s = "v2_" + std::to_string(i);
-    EXPECT_TRUE(loaded->Contains(ToSpan(s)));
+    EXPECT_TRUE(loaded->Contains(s.data(), s.size()));
   }
 
   DestroyFilter(filter);
@@ -304,7 +302,7 @@ TEST(BloomRdb, RejectsUnknownEncver) {
 
 TEST(BloomRdb, RejectsUndocumentedEncvers) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
 
   for (int encver : {0, 1, 3}) {
     MockRdbStream stream;
@@ -348,7 +346,7 @@ TEST(BloomWire, PopulatedFilterHeaderRoundTrip) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
   for (int i = 0; i < 300; i++) {
     auto s = "wire_" + std::to_string(i);
-    filter->Put(ToSpan(s));
+    filter->Put(s.data(), s.size());
   }
   EXPECT_GT(filter->NumLayers(), 1u);
 
@@ -374,7 +372,7 @@ TEST(BloomWire, FullScanDumpLoadChunkRoundTrip) {
   std::vector<std::string> items;
   for (int i = 0; i < 400; i++) {
     items.push_back("scandump_" + std::to_string(i));
-    filter->Put(ToSpan(items.back()));
+    filter->Put(items.back().data(), items.back().size());
   }
   EXPECT_GT(filter->NumLayers(), 1u);
 
@@ -385,7 +383,8 @@ TEST(BloomWire, FullScanDumpLoadChunkRoundTrip) {
 
   // Phase 2: save per-layer bit arrays
   std::vector<std::vector<uint8_t>> layer_data;
-  for (const auto& layer : filter->Layers()) {
+  for (size_t i = 0; i < filter->NumLayers(); ++i) {
+    const auto& layer = filter->Layers()[i];
     layer_data.emplace_back(layer.bloom.GetBitArray(),
                             layer.bloom.GetBitArray() + layer.bloom.GetDataSize());
   }
@@ -404,7 +403,7 @@ TEST(BloomWire, FullScanDumpLoadChunkRoundTrip) {
 
   // Verify: every item must be found
   for (const auto& item : items) {
-    EXPECT_TRUE(rebuilt->Contains(ToSpan(item)))
+    EXPECT_TRUE(rebuilt->Contains(item.data(), item.size()))
       << "False negative after wire-format round-trip: " << item;
   }
 
@@ -417,30 +416,30 @@ TEST(BloomWire, FullScanDumpLoadChunkRoundTrip) {
 // ==================================================================
 
 TEST(BloomWire, LayerMetaRoundTrip) {
-  auto layer = BloomLayer::Create(1000, 0.01, DefaultFlags());
-  ASSERT_TRUE(layer.has_value());
+  BloomLayer layer;
+  ASSERT_TRUE(BloomLayer::Create(1000, 0.01, DefaultFlags(), &layer));
 
   // Insert some data so the bit array is non-zero
-  auto hp = Hash64Policy::Compute(AsBytes("test", 4));
-  layer->Insert(hp);
+  auto hp = Hash64Policy::Compute("test", 4);
+  layer.Insert(hp);
 
-  WireLayerMeta meta = layer->ToWireMeta(42);
+  WireLayerMeta meta = layer.ToWireMeta(42);
   EXPECT_EQ(meta.itemCount, 42u);
-  EXPECT_EQ(meta.capacity, layer->GetCapacity());
-  EXPECT_DOUBLE_EQ(meta.fpRate, layer->GetFpRate());
-  EXPECT_EQ(meta.hashCount, layer->GetHashCount());
-  EXPECT_EQ(meta.totalBits, layer->GetTotalBits());
-  EXPECT_EQ(meta.dataSize, layer->GetDataSize());
-  EXPECT_EQ(meta.log2Bits, layer->GetLog2Bits());
-  EXPECT_DOUBLE_EQ(meta.bitsPerEntry, layer->GetBitsPerEntry());
+  EXPECT_EQ(meta.capacity, layer.GetCapacity());
+  EXPECT_DOUBLE_EQ(meta.fpRate, layer.GetFpRate());
+  EXPECT_EQ(meta.hashCount, layer.GetHashCount());
+  EXPECT_EQ(meta.totalBits, layer.GetTotalBits());
+  EXPECT_EQ(meta.dataSize, layer.GetDataSize());
+  EXPECT_EQ(meta.log2Bits, layer.GetLog2Bits());
+  EXPECT_DOUBLE_EQ(meta.bitsPerEntry, layer.GetBitsPerEntry());
 
-  auto restored = BloomLayer::FromWireMeta(meta, DefaultFlags());
-  ASSERT_TRUE(restored.has_value());
-  EXPECT_EQ(restored->GetCapacity(), layer->GetCapacity());
-  EXPECT_DOUBLE_EQ(restored->GetFpRate(), layer->GetFpRate());
-  EXPECT_EQ(restored->GetHashCount(), layer->GetHashCount());
-  EXPECT_EQ(restored->GetTotalBits(), layer->GetTotalBits());
-  EXPECT_EQ(restored->GetDataSize(), layer->GetDataSize());
+  BloomLayer restored;
+  ASSERT_TRUE(BloomLayer::FromWireMeta(meta, DefaultFlags(), &restored));
+  EXPECT_EQ(restored.GetCapacity(), layer.GetCapacity());
+  EXPECT_DOUBLE_EQ(restored.GetFpRate(), layer.GetFpRate());
+  EXPECT_EQ(restored.GetHashCount(), layer.GetHashCount());
+  EXPECT_EQ(restored.GetTotalBits(), layer.GetTotalBits());
+  EXPECT_EQ(restored.GetDataSize(), layer.GetDataSize());
 }
 
 // ==================================================================
@@ -480,7 +479,7 @@ TEST(BloomRdbStress, RepeatedRoundTrips) {
   auto* filter = CreateFilter(500, 0.01, DefaultFlags(), 2);
   for (int i = 0; i < 200; i++) {
     auto s = "stress_" + std::to_string(i);
-    filter->Put(ToSpan(s));
+    filter->Put(s.data(), s.size());
   }
 
   for (int round = 0; round < 50; round++) {
@@ -490,8 +489,10 @@ TEST(BloomRdbStress, RepeatedRoundTrips) {
     EXPECT_EQ(loaded->NumLayers(), filter->NumLayers());
 
     // Spot-check a few items
-    EXPECT_TRUE(loaded->Contains(ToSpan(std::string("stress_0"))));
-    EXPECT_TRUE(loaded->Contains(ToSpan(std::string("stress_199"))));
+    const std::string first = "stress_0";
+    const std::string last = "stress_199";
+    EXPECT_TRUE(loaded->Contains(first.data(), first.size()));
+    EXPECT_TRUE(loaded->Contains(last.data(), last.size()));
 
     DestroyFilter(loaded);
   }
@@ -508,7 +509,7 @@ TEST(BloomRdb, ExpansionFactors) {
     auto* filter = CreateFilter(100, 0.01, DefaultFlags(), exp);
     for (int i = 0; i < 50; i++) {
       auto s = "exp_" + std::to_string(exp) + "_" + std::to_string(i);
-      filter->Put(ToSpan(s));
+      filter->Put(s.data(), s.size());
     }
 
     auto* loaded = RdbRoundTrip(filter, kCurrentEncVer);
@@ -517,7 +518,7 @@ TEST(BloomRdb, ExpansionFactors) {
 
     for (int i = 0; i < 50; i++) {
       auto s = "exp_" + std::to_string(exp) + "_" + std::to_string(i);
-      EXPECT_TRUE(loaded->Contains(ToSpan(s)));
+      EXPECT_TRUE(loaded->Contains(s.data(), s.size()));
     }
 
     DestroyFilter(filter);
@@ -534,7 +535,7 @@ TEST(BloomRdb, DifferentFpRates) {
     auto* filter = CreateFilter(500, fp, DefaultFlags(), 2);
     for (int i = 0; i < 100; i++) {
       auto s = "fp_" + std::to_string(i);
-      filter->Put(ToSpan(s));
+      filter->Put(s.data(), s.size());
     }
 
     auto* loaded = RdbRoundTrip(filter, kCurrentEncVer);
@@ -546,7 +547,7 @@ TEST(BloomRdb, DifferentFpRates) {
 
     for (int i = 0; i < 100; i++) {
       auto s = "fp_" + std::to_string(i);
-      EXPECT_TRUE(loaded->Contains(ToSpan(s)));
+      EXPECT_TRUE(loaded->Contains(s.data(), s.size()));
     }
 
     DestroyFilter(filter);
@@ -570,7 +571,7 @@ TEST(BloomWire, SetLayerOnUninitializedMemory) {
   std::vector<std::string> items;
   for (int i = 0; i < 200; i++) {
     items.push_back("setlayer_" + std::to_string(i));
-    filter->Put(ToSpan(items.back()));
+    filter->Put(items.back().data(), items.back().size());
   }
   EXPECT_GT(filter->NumLayers(), 1u);
 
@@ -579,7 +580,8 @@ TEST(BloomWire, SetLayerOnUninitializedMemory) {
   SerializeHeader(*filter, hdr_buf.data());
 
   std::vector<std::vector<uint8_t>> layer_data;
-  for (const auto& layer : filter->Layers()) {
+  for (size_t i = 0; i < filter->NumLayers(); ++i) {
+    const auto& layer = filter->Layers()[i];
     layer_data.emplace_back(layer.bloom.GetBitArray(),
                             layer.bloom.GetBitArray() + layer.bloom.GetDataSize());
   }
@@ -594,7 +596,7 @@ TEST(BloomWire, SetLayerOnUninitializedMemory) {
   }
 
   for (const auto& item : items) {
-    EXPECT_TRUE(rebuilt->Contains(ToSpan(item)))
+    EXPECT_TRUE(rebuilt->Contains(item.data(), item.size()))
       << "False negative after SetLayer: " << item;
   }
 
@@ -612,7 +614,7 @@ TEST(BloomRdb, TruncatedItemCountReturnsNull) {
   auto* filter = CreateFilter(500, 0.01, DefaultFlags(), 2);
   for (int i = 0; i < 100; i++) {
     auto s = "trunc_" + std::to_string(i);
-    filter->Put(ToSpan(s));
+    filter->Put(s.data(), s.size());
   }
   ASSERT_EQ(filter->NumLayers(), 1u);
 
@@ -664,7 +666,7 @@ TEST(BloomRdb, TruncatedItemCountReturnsNull) {
 
 TEST(BloomRdb, RejectsInvalidLog2Bits) {
   auto* filter = CreateFilter(500, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
 
   // Build a stream with log2Bits = 64 (invalid)
   MockRdbStream badStream;
@@ -705,7 +707,7 @@ TEST(BloomRdb, RejectsInvalidLog2Bits) {
 
 TEST(BloomWire, RejectsHeaderWithBadLog2Bits) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
 
   size_t hdr_size = ComputeHeaderSize(*filter);
   std::vector<uint8_t> buf(hdr_size);
@@ -1079,8 +1081,8 @@ TEST(BloomRdb, AcceptsFixedExpansionZero) {
 
 TEST(BloomWire, RejectsTotalItemsMismatch) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("a", 1));
-  filter->Put(AsBytes("b", 1));
+  filter->Put("a", 1);
+  filter->Put("b", 1);
 
   size_t hdr_size = ComputeHeaderSize(*filter);
   std::vector<uint8_t> buf(hdr_size);
@@ -1098,7 +1100,7 @@ TEST(BloomWire, RejectsTotalItemsMismatch) {
 
 TEST(BloomWire, RejectsItemCountExceedsCapacity) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("a", 1));
+  filter->Put("a", 1);
 
   size_t hdr_size = ComputeHeaderSize(*filter);
   std::vector<uint8_t> buf(hdr_size);
@@ -1159,7 +1161,7 @@ TEST(BloomWire, RejectsUnknownFlags) {
 
 TEST(BloomWire, RejectsInvalidFpRate) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
   size_t hdr_size = ComputeHeaderSize(*filter);
   std::vector<uint8_t> buf(hdr_size);
   SerializeHeader(*filter, buf.data());
@@ -1177,7 +1179,7 @@ TEST(BloomWire, RejectsInvalidFpRate) {
 
 TEST(BloomWire, RejectsBitsPerEntryInf) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
   size_t hdr_size = ComputeHeaderSize(*filter);
   std::vector<uint8_t> buf(hdr_size);
   SerializeHeader(*filter, buf.data());
@@ -1195,7 +1197,7 @@ TEST(BloomWire, RejectsBitsPerEntryInf) {
 
 TEST(BloomWire, RejectsBitsPerEntryZero) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
   size_t hdr_size = ComputeHeaderSize(*filter);
   std::vector<uint8_t> buf(hdr_size);
   SerializeHeader(*filter, buf.data());
@@ -1213,7 +1215,7 @@ TEST(BloomWire, RejectsBitsPerEntryZero) {
 
 TEST(BloomWire, RejectsDataSizeMismatch) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
   size_t hdr_size = ComputeHeaderSize(*filter);
   std::vector<uint8_t> buf(hdr_size);
   SerializeHeader(*filter, buf.data());
@@ -1232,7 +1234,7 @@ TEST(BloomWire, RejectsDataSizeMismatch) {
 
 TEST(BloomWire, RejectsHashCountInconsistentWithBitsPerEntry) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
   size_t hdr_size = ComputeHeaderSize(*filter);
   std::vector<uint8_t> buf(hdr_size);
   SerializeHeader(*filter, buf.data());
@@ -1286,7 +1288,7 @@ TEST(BloomWire, AcceptsFixedExpansionZero) {
 
 TEST(BloomWire, RejectsTotalBitsZero) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
   size_t hdr_size = ComputeHeaderSize(*filter);
   std::vector<uint8_t> buf(hdr_size);
   SerializeHeader(*filter, buf.data());
@@ -1305,7 +1307,7 @@ TEST(BloomWire, RejectsTotalBitsZero) {
 
 TEST(BloomWire, RejectsExcessiveTotalDataSize) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
   size_t hdr_size = ComputeHeaderSize(*filter);
   std::vector<uint8_t> buf(hdr_size);
   SerializeHeader(*filter, buf.data());
@@ -1334,7 +1336,7 @@ TEST(BloomWire, HeaderSizeScalesWithLayers) {
   auto* f3 = CreateFilter(10, 0.01, DefaultFlags(), 2);
   for (int i = 0; i < 200; i++) {
     auto s = "grow_" + std::to_string(i);
-    f3->Put(ToSpan(s));
+    f3->Put(s.data(), s.size());
   }
   EXPECT_GT(f3->NumLayers(), 1u);
   size_t s3 = ComputeHeaderSize(*f3);
@@ -1350,7 +1352,7 @@ TEST(BloomWire, HeaderSizeScalesWithLayers) {
 
 TEST(BloomRdb, LoadingFlagStrippedOnRdbRoundTrip) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
   filter->SetLoading();
   EXPECT_TRUE(filter->IsLoading());
 
@@ -1358,7 +1360,7 @@ TEST(BloomRdb, LoadingFlagStrippedOnRdbRoundTrip) {
   ASSERT_NE(loaded, nullptr);
   EXPECT_FALSE(loaded->IsLoading())
     << "Loading flag must be stripped during RDB serialization";
-  EXPECT_TRUE(loaded->Contains(AsBytes("x", 1)));
+  EXPECT_TRUE(loaded->Contains("x", 1));
 
   DestroyFilter(filter);
   DestroyFilter(loaded);
@@ -1374,7 +1376,7 @@ TEST(BloomModuleType, CopyBloom2ProducesIndependentEqualClone) {
   std::vector<std::string> items;
   for (int i = 0; i < 300; i++) {
     items.push_back("copy2_" + std::to_string(i));
-    filter->Put(ToSpan(items.back()));
+    filter->Put(items.back().data(), items.back().size());
   }
   ASSERT_GT(filter->NumLayers(), 1u);
 
@@ -1386,12 +1388,12 @@ TEST(BloomModuleType, CopyBloom2ProducesIndependentEqualClone) {
   EXPECT_EQ(clone->TotalItems(), filter->TotalItems());
 
   for (const auto& item : items) {
-    EXPECT_TRUE(clone->Contains(ToSpan(item)));
+    EXPECT_TRUE(clone->Contains(item.data(), item.size()));
   }
 
   // Independence: mutating the source must not affect the clone.
-  filter->Put(AsBytes("post_copy", 9));
-  EXPECT_FALSE(clone->Contains(AsBytes("post_copy", 9)));
+  filter->Put("post_copy", 9);
+  EXPECT_FALSE(clone->Contains("post_copy", 9));
 
   DestroyFilter(filter);
   DestroyFilter(clone);
@@ -1400,7 +1402,8 @@ TEST(BloomModuleType, CopyBloom2ProducesIndependentEqualClone) {
 TEST(BloomModuleType, DigestBloomDeterministicAndContentSensitive) {
   auto* filter = CreateFilter(200, 0.01, DefaultFlags(), 2);
   for (int i = 0; i < 50; i++) {
-    filter->Put(ToSpan(std::string("digest_" + std::to_string(i))));
+    std::string item = "digest_" + std::to_string(i);
+    filter->Put(item.data(), item.size());
   }
 
   MockDigest d1;
@@ -1412,7 +1415,7 @@ TEST(BloomModuleType, DigestBloomDeterministicAndContentSensitive) {
   DigestBloom(d2.Handle(), filter);
   EXPECT_EQ(d1.bytes, d2.bytes);
 
-  filter->Put(AsBytes("extra_item", 10));
+  filter->Put("extra_item", 10);
   MockDigest d3;
   DigestBloom(d3.Handle(), filter);
   EXPECT_NE(d1.bytes, d3.bytes);
@@ -1425,7 +1428,8 @@ TEST(BloomModuleType, FreeEffortBloom2ReturnsAllocationCount) {
   EXPECT_EQ(FreeEffortBloom2(nullptr, filter), filter->NumLayers() + 1);
 
   for (int i = 0; i < 500; i++) {
-    filter->Put(ToSpan(std::string("effort_" + std::to_string(i))));
+    std::string item = "effort_" + std::to_string(i);
+    filter->Put(item.data(), item.size());
   }
   ASSERT_GT(filter->NumLayers(), 1u);
   EXPECT_EQ(FreeEffortBloom2(nullptr, filter), filter->NumLayers() + 1);
@@ -1438,14 +1442,14 @@ TEST(BloomModuleType, DefragBloomRelocatesBuffersAndPreservesData) {
   std::vector<std::string> items;
   for (int i = 0; i < 300; i++) {
     items.push_back("defrag_" + std::to_string(i));
-    filter->Put(ToSpan(items.back()));
+    filter->Put(items.back().data(), items.back().size());
   }
   ASSERT_GT(filter->NumLayers(), 1u);
 
-  auto* origLayersPtr = filter->Layers().data();
+  auto* origLayersPtr = filter->Layers();
   std::vector<const uint8_t*> origBitArrays;
-  for (const auto& layer : filter->Layers()) {
-    origBitArrays.push_back(layer.bloom.GetBitArray());
+  for (size_t i = 0; i < filter->NumLayers(); ++i) {
+    origBitArrays.push_back(filter->Layers()[i].bloom.GetBitArray());
   }
 
   void* value = filter;
@@ -1454,14 +1458,14 @@ TEST(BloomModuleType, DefragBloomRelocatesBuffersAndPreservesData) {
 
   auto* relocated = static_cast<ScalingBloomFilter*>(value);
   ASSERT_NE(relocated, nullptr);
-  EXPECT_NE(relocated->Layers().data(), origLayersPtr);
+  EXPECT_NE(relocated->Layers(), origLayersPtr);
   ASSERT_EQ(relocated->NumLayers(), origBitArrays.size());
   for (size_t i = 0; i < origBitArrays.size(); i++) {
     EXPECT_NE(relocated->Layers()[i].bloom.GetBitArray(), origBitArrays[i]);
   }
 
   for (const auto& item : items) {
-    EXPECT_TRUE(relocated->Contains(ToSpan(item)))
+    EXPECT_TRUE(relocated->Contains(item.data(), item.size()))
       << "False negative after defrag for " << item;
   }
 
@@ -1470,7 +1474,7 @@ TEST(BloomModuleType, DefragBloomRelocatesBuffersAndPreservesData) {
 
 TEST(BloomWire, LoadingFlagStrippedOnHeaderRoundTrip) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
-  filter->Put(AsBytes("x", 1));
+  filter->Put("x", 1);
   filter->SetLoading();
 
   size_t hdr_size = ComputeHeaderSize(*filter);

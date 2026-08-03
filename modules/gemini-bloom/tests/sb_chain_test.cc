@@ -9,10 +9,6 @@
 #include <utility>
 #include <vector>
 
-static std::span<const std::byte> ToSpan(const std::string& s) {
-  return AsBytes(s.data(), s.size());
-}
-
 static auto DefaultFlags() {
   return BloomFlags::Use64Bit | BloomFlags::NoRound;
 }
@@ -33,15 +29,13 @@ TEST(ScalingBloomTest, PutAndContains) {
   auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
   new (mem) ScalingBloomFilter(1000, 0.01, DefaultFlags(), 2);
 
-  auto r1 = mem->Put(AsBytes("hello", 5));
-  ASSERT_TRUE(r1.has_value());
-  EXPECT_TRUE(*r1);
+  auto r1 = mem->Put("hello", 5);
+  EXPECT_EQ(r1, PutResult::Inserted);
 
-  auto r2 = mem->Put(AsBytes("hello", 5));
-  ASSERT_TRUE(r2.has_value());
-  EXPECT_FALSE(*r2);
+  auto r2 = mem->Put("hello", 5);
+  EXPECT_EQ(r2, PutResult::Duplicate);
 
-  EXPECT_TRUE(mem->Contains(AsBytes("hello", 5)));
+  EXPECT_TRUE(mem->Contains("hello", 5));
   EXPECT_EQ(mem->TotalItems(), 1u);
 
   mem->~ScalingBloomFilter();
@@ -55,11 +49,10 @@ TEST(ScalingBloomTest, Uses32BitHashWhenFlagIsAbsent) {
 
   ASSERT_TRUE(mem->IsValid());
   EXPECT_EQ(mem->Flags(), flags);
-  auto r1 = mem->Put(AsBytes("hash32", 6));
-  ASSERT_TRUE(r1.has_value());
-  EXPECT_TRUE(*r1);
-  EXPECT_TRUE(mem->Contains(AsBytes("hash32", 6)));
-  EXPECT_FALSE(mem->Contains(AsBytes("hash64", 6)));
+  auto r1 = mem->Put("hash32", 6);
+  EXPECT_EQ(r1, PutResult::Inserted);
+  EXPECT_TRUE(mem->Contains("hash32", 6));
+  EXPECT_FALSE(mem->Contains("hash64", 6));
 
   mem->~ScalingBloomFilter();
   free(mem);
@@ -73,9 +66,9 @@ TEST(ScalingBloomTest, NoFalseNegatives) {
   for (int i = 0; i < 5000; i++) {
     items.push_back("item_" + std::to_string(i));
   }
-  for (const auto& item : items) mem->Put(ToSpan(item));
+  for (const auto& item : items) mem->Put(item.data(), item.size());
   for (const auto& item : items) {
-    EXPECT_TRUE(mem->Contains(ToSpan(item))) << "False negative for " << item;
+    EXPECT_TRUE(mem->Contains(item.data(), item.size())) << "False negative for " << item;
   }
 
   mem->~ScalingBloomFilter();
@@ -88,13 +81,13 @@ TEST(ScalingBloomTest, AutoExpansion) {
 
   for (int i = 0; i < 500; i++) {
     auto item = "expand_" + std::to_string(i);
-    mem->Put(ToSpan(item));
+    mem->Put(item.data(), item.size());
   }
   EXPECT_GT(mem->NumLayers(), 1u);
 
   for (int i = 0; i < 500; i++) {
     auto item = "expand_" + std::to_string(i);
-    EXPECT_TRUE(mem->Contains(ToSpan(item)));
+    EXPECT_TRUE(mem->Contains(item.data(), item.size()));
   }
 
   mem->~ScalingBloomFilter();
@@ -109,9 +102,9 @@ TEST(ScalingBloomTest, FixedSizeRejectsOverflow) {
   int inserted = 0;
   for (int i = 0; i < 200; i++) {
     auto item = "fixed_" + std::to_string(i);
-    auto result = mem->Put(ToSpan(item));
-    if (!result.has_value()) break;
-    if (*result) inserted++;
+    auto result = mem->Put(item.data(), item.size());
+    if (result == PutResult::Full) break;
+    if (result == PutResult::Inserted) inserted++;
   }
   EXPECT_EQ(mem->NumLayers(), 1u);
   EXPECT_LE(inserted, 100);
@@ -120,22 +113,20 @@ TEST(ScalingBloomTest, FixedSizeRejectsOverflow) {
   free(mem);
 }
 
-TEST(ScalingBloomTest, OptionalReturnSemantics) {
+TEST(ScalingBloomTest, PutResultSemantics) {
   auto flg = DefaultFlags() | BloomFlags::FixedSize;
   auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
   new (mem) ScalingBloomFilter(2, 0.01, flg, 2);
 
-  auto r1 = mem->Put(AsBytes("a", 1));
-  EXPECT_TRUE(r1.has_value());
-  EXPECT_TRUE(*r1);
+  auto r1 = mem->Put("a", 1);
+  EXPECT_EQ(r1, PutResult::Inserted);
 
-  auto r2 = mem->Put(AsBytes("a", 1));
-  EXPECT_TRUE(r2.has_value());
-  EXPECT_FALSE(*r2);
+  auto r2 = mem->Put("a", 1);
+  EXPECT_EQ(r2, PutResult::Duplicate);
 
-  mem->Put(AsBytes("b", 1));
-  auto r3 = mem->Put(AsBytes("c", 1));
-  EXPECT_FALSE(r3.has_value());
+  mem->Put("b", 1);
+  auto r3 = mem->Put("c", 1);
+  EXPECT_EQ(r3, PutResult::Full);
 
   mem->~ScalingBloomFilter();
   free(mem);
@@ -146,18 +137,16 @@ TEST(ScalingBloomTest, FixedSizeDuplicateDoesNotConsumeCapacity) {
   auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
   new (mem) ScalingBloomFilter(2, 0.01, flg, 2);
 
-  ASSERT_TRUE(mem->Put(AsBytes("a", 1)).has_value());
+  ASSERT_EQ(mem->Put("a", 1), PutResult::Inserted);
   for (int i = 0; i < 5; i++) {
-    auto duplicate = mem->Put(AsBytes("a", 1));
-    ASSERT_TRUE(duplicate.has_value());
-    EXPECT_FALSE(*duplicate);
+    auto duplicate = mem->Put("a", 1);
+    EXPECT_EQ(duplicate, PutResult::Duplicate);
   }
 
-  auto b = mem->Put(AsBytes("b", 1));
-  ASSERT_TRUE(b.has_value());
-  EXPECT_TRUE(*b);
+  auto b = mem->Put("b", 1);
+  EXPECT_EQ(b, PutResult::Inserted);
   EXPECT_EQ(mem->TotalItems(), 2u);
-  EXPECT_FALSE(mem->Put(AsBytes("c", 1)).has_value());
+  EXPECT_EQ(mem->Put("c", 1), PutResult::Full);
 
   mem->~ScalingBloomFilter();
   free(mem);
@@ -185,10 +174,10 @@ TEST(ScalingBloomTest, MoveAssignmentTransfersOwnership) {
   new (leftMem) ScalingBloomFilter(10, 0.01, DefaultFlags(), 2);
   new (rightMem) ScalingBloomFilter(20, 0.001, DefaultFlags(), 4);
 
-  rightMem->Put(AsBytes("moved", 5));
+  rightMem->Put("moved", 5);
   *leftMem = std::move(*rightMem);
 
-  EXPECT_TRUE(leftMem->Contains(AsBytes("moved", 5)));
+  EXPECT_TRUE(leftMem->Contains("moved", 5));
   EXPECT_EQ(leftMem->ExpansionFactor(), 4u);
   EXPECT_EQ(leftMem->TotalItems(), 1u);
   EXPECT_FALSE(rightMem->IsValid());
@@ -205,12 +194,12 @@ TEST(ScalingBloomTest, ExpansionOneAddsSameSizedLayers) {
 
   for (int i = 0; i < 35; i++) {
     auto item = "exp1_" + std::to_string(i);
-    mem->Put(ToSpan(item));
+    mem->Put(item.data(), item.size());
   }
 
   ASSERT_GT(mem->NumLayers(), 1u);
-  for (const auto& layer : mem->Layers()) {
-    EXPECT_EQ(layer.bloom.GetCapacity(), 10u);
+  for (size_t i = 0; i < mem->NumLayers(); ++i) {
+    EXPECT_EQ(mem->Layers()[i].bloom.GetCapacity(), 10u);
   }
   EXPECT_EQ(mem->TotalCapacity(), mem->NumLayers() * 10u);
 
@@ -229,7 +218,7 @@ TEST(ScalingBloomTest, FromRdbShellSetLayer) {
   std::vector<std::string> items;
   for (int i = 0; i < 300; i++) {
     items.push_back("shell_" + std::to_string(i));
-    orig->Put(ToSpan(items.back()));
+    orig->Put(items.back().data(), items.back().size());
   }
   EXPECT_GT(orig->NumLayers(), 1u);
 
@@ -244,16 +233,16 @@ TEST(ScalingBloomTest, FromRdbShellSetLayer) {
 
   for (size_t i = 0; i < orig->NumLayers(); i++) {
     auto& src = orig->Layers()[i];
-    auto layer = BloomLayer::Create(
-      src.bloom.GetCapacity(), src.bloom.GetFpRate(), orig->Flags());
-    ASSERT_TRUE(layer.has_value());
-    std::memcpy(layer->GetBitArray(), src.bloom.GetBitArray(),
+    BloomLayer layer;
+    ASSERT_TRUE(BloomLayer::Create(
+      src.bloom.GetCapacity(), src.bloom.GetFpRate(), orig->Flags(), &layer));
+    std::memcpy(layer.GetBitArray(), src.bloom.GetBitArray(),
                 src.bloom.GetDataSize());
-    rebuilt->SetLayer(i, {std::move(*layer), src.itemCount});
+    rebuilt->SetLayer(i, {std::move(layer), src.itemCount});
   }
 
   for (const auto& item : items) {
-    EXPECT_TRUE(rebuilt->Contains(ToSpan(item)))
+    EXPECT_TRUE(rebuilt->Contains(item.data(), item.size()))
       << "False negative after FromRdbShell+SetLayer: " << item;
   }
 
@@ -275,14 +264,14 @@ TEST(ScalingBloomTest, AppendLayerSafeRelocation) {
   std::vector<std::string> items;
   for (int i = 0; i < 500; i++) {
     auto item = "reloc_" + std::to_string(i);
-    auto result = mem->Put(ToSpan(item));
-    if (!result.has_value()) break;
+    auto result = mem->Put(item.data(), item.size());
+    if (result == PutResult::Full) break;
     items.push_back(std::move(item));
   }
   EXPECT_GT(mem->NumLayers(), 4u);
 
   for (const auto& item : items) {
-    EXPECT_TRUE(mem->Contains(ToSpan(item)))
+    EXPECT_TRUE(mem->Contains(item.data(), item.size()))
       << "False negative after layer relocation: " << item;
   }
 
@@ -293,12 +282,11 @@ TEST(ScalingBloomTest, AppendLayerSafeRelocation) {
 // Bug regression: extreme capacity/fpRate should be rejected
 // instead of causing float-to-int overflow UB.
 TEST(ScalingBloomTest, ExtremeParamsRejected) {
-  auto layer = BloomLayer::Create(UINT64_MAX, 1e-300, DefaultFlags());
-  EXPECT_FALSE(layer.has_value())
+  BloomLayer layer;
+  EXPECT_FALSE(BloomLayer::Create(UINT64_MAX, 1e-300, DefaultFlags(), &layer))
     << "Should reject extreme capacity * bitsPerEntry overflow";
 
-  auto layer2 = BloomLayer::Create(1ULL << 50, 1e-100, DefaultFlags());
-  EXPECT_FALSE(layer2.has_value())
+  EXPECT_FALSE(BloomLayer::Create(1ULL << 50, 1e-100, DefaultFlags(), &layer))
     << "Should reject large capacity with tiny fpRate";
 }
 
@@ -312,14 +300,14 @@ TEST(ScalingBloomTest, TotalDataSizeAccumulates) {
 
   for (int i = 0; i < 500; i++) {
     auto item = "grow_" + std::to_string(i);
-    mem->Put(ToSpan(item));
+    mem->Put(item.data(), item.size());
   }
   EXPECT_GT(mem->NumLayers(), 1u);
   EXPECT_GT(mem->TotalDataSize(), initialDataSize);
 
   uint64_t summed = 0;
-  for (const auto& layer : mem->Layers()) {
-    summed += layer.bloom.GetDataSize();
+  for (size_t i = 0; i < mem->NumLayers(); ++i) {
+    summed += mem->Layers()[i].bloom.GetDataSize();
   }
   EXPECT_EQ(mem->TotalDataSize(), summed);
 
@@ -359,15 +347,14 @@ TEST(ScalingBloomTest, LoadingFlagNotInSupportedFlags) {
 // (SCANDUMP/LOADCHUNK round-trip) since the serialization code depends
 // on the Redis Module API.
 
-TEST(ScalingBloomTest, SpanInterface) {
+TEST(ScalingBloomTest, BufferInterface) {
   auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
   new (mem) ScalingBloomFilter(1000, 0.01, DefaultFlags(), 2);
 
-  std::string data = "test_span";
-  auto result = mem->Put(ToSpan(data));
-  ASSERT_TRUE(result.has_value());
-  EXPECT_TRUE(*result);
-  EXPECT_TRUE(mem->Contains(ToSpan(data)));
+  std::string data = "test_buffer";
+  auto result = mem->Put(data.data(), data.size());
+  EXPECT_EQ(result, PutResult::Inserted);
+  EXPECT_TRUE(mem->Contains(data.data(), data.size()));
 
   mem->~ScalingBloomFilter();
   free(mem);
@@ -382,7 +369,7 @@ TEST(ScalingBloomTest, CloneProducesIndependentFilter) {
   std::vector<std::string> items;
   for (int i = 0; i < 500; i++) {
     items.push_back("clone_" + std::to_string(i));
-    mem->Put(ToSpan(items.back()));
+    mem->Put(items.back().data(), items.back().size());
   }
   ASSERT_GT(mem->NumLayers(), 1u);
 
@@ -394,7 +381,7 @@ TEST(ScalingBloomTest, CloneProducesIndependentFilter) {
   EXPECT_EQ(clone->Flags(), mem->Flags());
 
   for (const auto& item : items) {
-    EXPECT_TRUE(clone->Contains(ToSpan(item)))
+    EXPECT_TRUE(clone->Contains(item.data(), item.size()))
       << "False negative in clone for " << item;
   }
 
@@ -404,8 +391,8 @@ TEST(ScalingBloomTest, CloneProducesIndependentFilter) {
   int falsePositives = 0;
   for (int i = 500; i < 600; i++) {
     auto item = "postclone_" + std::to_string(i);
-    mem->Put(ToSpan(item));
-    if (clone->Contains(ToSpan(item))) falsePositives++;
+    mem->Put(item.data(), item.size());
+    if (clone->Contains(item.data(), item.size())) falsePositives++;
   }
   EXPECT_LE(falsePositives, 5) << "Unexpectedly high false-positive rate in clone";
   EXPECT_NE(clone->TotalItems(), mem->TotalItems());

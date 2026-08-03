@@ -445,10 +445,10 @@ typedef struct {
 } RedisModuleCommandInfoVersion;
 
 static const RedisModuleCommandInfoVersion RedisModule_CurrentCommandInfoVersion = {
-    .version = 1,
-    .sizeof_historyentry = sizeof(RedisModuleCommandHistoryEntry),
-    .sizeof_keyspec = sizeof(RedisModuleCommandKeySpec),
-    .sizeof_arg = sizeof(RedisModuleCommandArg)
+    1,
+    sizeof(RedisModuleCommandHistoryEntry),
+    sizeof(RedisModuleCommandKeySpec),
+    sizeof(RedisModuleCommandArg)
 };
 
 #define REDISMODULE_COMMAND_INFO_VERSION (&RedisModule_CurrentCommandInfoVersion)

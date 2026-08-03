@@ -75,29 +75,28 @@ bool ScalingBloomFilter::AppendLayer(uint64_t cap, double rate) {
     layerCapacity_ = newCap;
   }
 
-  auto maybeLayer = BloomLayer::Create(cap, rate, flags_);
-  if (!maybeLayer) return false;
+  BloomLayer layer;
+  if (!BloomLayer::Create(cap, rate, flags_, &layer)) return false;
 
-  uint64_t newDataSize = maybeLayer->GetDataSize();
+  uint64_t newDataSize = layer.GetDataSize();
   if (newDataSize > kMaxTotalDataSize || TotalDataSize() > kMaxTotalDataSize - newDataSize)
     return false;
 
   auto* slot = &layers_[numLayers_];
-  new (slot) FilterLayer{std::move(*maybeLayer), 0};
+  new (slot) FilterLayer{std::move(layer), 0};
   numLayers_++;
   return true;
 }
 
-HashPair ScalingBloomFilter::ComputeHash(std::span<const std::byte> data) const {
+HashPair ScalingBloomFilter::ComputeHash(const void* data, size_t len) const {
   return HasFlag(flags_, BloomFlags::Use64Bit)
-    ? Hash64Policy::Compute(data)
-    : Hash32Policy::Compute(data);
+    ? Hash64Policy::Compute(data, len)
+    : Hash32Policy::Compute(data, len);
 }
 
 bool ScalingBloomFilter::IsDuplicate(const HashPair& hp) const {
-  auto layers = Layers();
-  for (auto it = layers.rbegin(); it != layers.rend(); ++it) {
-    if (it->bloom.Test(hp)) return true;
+  for (size_t i = numLayers_; i > 0; --i) {
+    if (layers_[i - 1].bloom.Test(hp)) return true;
   }
   return false;
 }
@@ -117,43 +116,43 @@ bool ScalingBloomFilter::GrowIfNeeded() {
 
 // --- Public API ---
 
-std::optional<bool> ScalingBloomFilter::Put(std::span<const std::byte> data) {
-  auto hp = ComputeHash(data);
+PutResult ScalingBloomFilter::Put(const void* data, size_t len) {
+  auto hp = ComputeHash(data, len);
 
-  if (IsDuplicate(hp)) return false;
-  if (!GrowIfNeeded()) return std::nullopt;
+  if (IsDuplicate(hp)) return PutResult::Duplicate;
+  if (!GrowIfNeeded()) return PutResult::Full;
 
   auto& target = layers_[numLayers_ - 1];
   target.bloom.Insert(hp);
   target.itemCount++;
   totalItems_++;
-  return true;
+  return PutResult::Inserted;
 }
 
-bool ScalingBloomFilter::Contains(std::span<const std::byte> data) const {
-  return IsDuplicate(ComputeHash(data));
+bool ScalingBloomFilter::Contains(const void* data, size_t len) const {
+  return IsDuplicate(ComputeHash(data, len));
 }
 
 uint64_t ScalingBloomFilter::TotalCapacity() const {
   uint64_t total = 0;
-  for (const auto& layer : Layers()) {
-    total += layer.bloom.GetCapacity();
+  for (size_t i = 0; i < numLayers_; ++i) {
+    total += layers_[i].bloom.GetCapacity();
   }
   return total;
 }
 
 uint64_t ScalingBloomFilter::TotalDataSize() const {
   uint64_t total = 0;
-  for (const auto& layer : Layers()) {
-    total += layer.bloom.GetDataSize();
+  for (size_t i = 0; i < numLayers_; ++i) {
+    total += layers_[i].bloom.GetDataSize();
   }
   return total;
 }
 
 size_t ScalingBloomFilter::BytesUsed() const {
   size_t base = sizeof(ScalingBloomFilter) + layerCapacity_ * sizeof(FilterLayer);
-  for (const auto& layer : Layers()) {
-    base += static_cast<size_t>(layer.bloom.GetDataSize());
+  for (size_t i = 0; i < numLayers_; ++i) {
+    base += static_cast<size_t>(layers_[i].bloom.GetDataSize());
   }
   return base;
 }
@@ -191,13 +190,13 @@ ScalingBloomFilter* ScalingBloomFilter::Clone() const {
   if (!clone) return nullptr;
 
   for (size_t i = 0; i < numLayers_; i++) {
-    auto clonedLayer = layers_[i].bloom.Clone();
-    if (!clonedLayer) {
+    BloomLayer clonedLayer;
+    if (!layers_[i].bloom.Clone(&clonedLayer)) {
       clone->~ScalingBloomFilter();
       RMFree(clone);
       return nullptr;
     }
-    clone->SetLayer(i, {std::move(*clonedLayer), layers_[i].itemCount});
+    clone->SetLayer(i, {std::move(clonedLayer), layers_[i].itemCount});
   }
   return clone;
 }

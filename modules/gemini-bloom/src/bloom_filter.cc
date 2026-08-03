@@ -18,18 +18,16 @@
 //   32-bit seed: 0x9747b28c  (MurmurHash2 conventional default)
 //   64-bit seed: 0xc6a4a7935bd1e995  (MurmurHash64A mixing constant m)
 
-HashPair Hash32Policy::Compute(std::span<const std::byte> data) {
-  auto* ptr = reinterpret_cast<const void*>(data.data());
-  auto len = static_cast<int>(std::min(data.size(), static_cast<size_t>(INT_MAX)));
-  uint32_t h1 = MurmurHash2(ptr, len, 0x9747b28c);
-  return {h1, MurmurHash2(ptr, len, h1)};
+HashPair Hash32Policy::Compute(const void* data, size_t len) {
+  int hashLen = static_cast<int>(std::min(len, static_cast<size_t>(INT_MAX)));
+  uint32_t h1 = MurmurHash2(data, hashLen, 0x9747b28c);
+  return {h1, MurmurHash2(data, hashLen, h1)};
 }
 
-HashPair Hash64Policy::Compute(std::span<const std::byte> data) {
-  auto* ptr = reinterpret_cast<const void*>(data.data());
-  auto len = static_cast<int>(std::min(data.size(), static_cast<size_t>(INT_MAX)));
-  uint64_t h1 = MurmurHash64A(ptr, len, 0xc6a4a7935bd1e995ULL);
-  return {h1, MurmurHash64A(ptr, len, h1)};
+HashPair Hash64Policy::Compute(const void* data, size_t len) {
+  int hashLen = static_cast<int>(std::min(len, static_cast<size_t>(INT_MAX)));
+  uint64_t h1 = MurmurHash64A(data, hashLen, 0xc6a4a7935bd1e995ULL);
+  return {h1, MurmurHash64A(data, hashLen, h1)};
 }
 
 // --- BloomLayer lifecycle ---
@@ -77,20 +75,21 @@ BloomLayer& BloomLayer::operator=(BloomLayer&& other) noexcept {
 //   k   = (m/n) * ln(2)           (optimal hash count)
 
 static double OptimalBitsPerEntry(double fpRate) {
-  constexpr double kLn2Squared = std::numbers::ln2 * std::numbers::ln2;
+  constexpr double kLn2Squared = kLn2 * kLn2;
   return -std::log(fpRate) / kLn2Squared;
 }
 
 static uint32_t OptimalHashCount(double bitsPerEntry) {
   return std::max(1u,
-    static_cast<uint32_t>(std::ceil(std::numbers::ln2 * bitsPerEntry)));
+    static_cast<uint32_t>(std::ceil(kLn2 * bitsPerEntry)));
 }
 
-std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveRate,
-                                              BloomFlags flags) {
+bool BloomLayer::Create(uint64_t cap, double falsePositiveRate,
+                        BloomFlags flags, BloomLayer* out) {
+  if (!out) return false;
   if (cap == 0 || !std::isfinite(falsePositiveRate) ||
       falsePositiveRate <= 0.0 || falsePositiveRate >= 1.0) {
-    return std::nullopt;
+    return false;
   }
 
   BloomLayer layer;
@@ -104,18 +103,24 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
     layer.hashCount_ = 0;
   } else {
     layer.bitsPerEntry_ = OptimalBitsPerEntry(falsePositiveRate);
-    if (layer.bitsPerEntry_ > kMaxBitsPerEntry) return std::nullopt;
+    if (layer.bitsPerEntry_ > kMaxBitsPerEntry) return false;
     auto rawBits = static_cast<double>(cap) * layer.bitsPerEntry_;
     constexpr double kMaxBits = static_cast<double>(UINT64_MAX - 7);
-    if (!std::isfinite(rawBits) || rawBits > kMaxBits) return std::nullopt;
+    if (!std::isfinite(rawBits) || rawBits > kMaxBits) return false;
     layer.totalBits_ = static_cast<uint64_t>(std::max(rawBits, 1024.0));
     layer.hashCount_ = OptimalHashCount(layer.bitsPerEntry_);
   }
 
   if (!HasFlag(flags, BloomFlags::NoRound)) {
-    if (layer.totalBits_ > (1ULL << 63)) return std::nullopt;
-    layer.totalBits_ = std::bit_ceil(layer.totalBits_);
-    layer.log2Bits_ = static_cast<uint8_t>(std::bit_width(layer.totalBits_) - 1);
+    if (layer.totalBits_ > (1ULL << 63)) return false;
+    uint64_t roundedBits = 1;
+    uint8_t log2Bits = 0;
+    while (roundedBits < layer.totalBits_) {
+      roundedBits <<= 1;
+      ++log2Bits;
+    }
+    layer.totalBits_ = roundedBits;
+    layer.log2Bits_ = log2Bits;
   }
 
   // Align bytes to 8-byte boundary, then set totalBits = bytes * 8.
@@ -123,17 +128,19 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
   uint64_t bytes = (layer.totalBits_ + 63) / 64 * 8;
   layer.totalBits_ = bytes * 8;
   layer.dataSize_ = bytes;
-  if (layer.dataSize_ == 0) return std::nullopt;
+  if (layer.dataSize_ == 0) return false;
 
-  if (layer.dataSize_ > kMaxLayerDataSize) return std::nullopt;
+  if (layer.dataSize_ > kMaxLayerDataSize) return false;
 
   layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
-  if (!layer.bitArray_) return std::nullopt;
+  if (!layer.bitArray_) return false;
 
-  return layer;
+  *out = std::move(layer);
+  return true;
 }
 
-std::optional<BloomLayer> BloomLayer::Clone() const {
+bool BloomLayer::Clone(BloomLayer* out) const {
+  if (!out) return false;
   BloomLayer copy;
   copy.hashCount_ = hashCount_;
   copy.log2Bits_ = log2Bits_;
@@ -145,9 +152,10 @@ std::optional<BloomLayer> BloomLayer::Clone() const {
   copy.dataSize_ = dataSize_;
 
   copy.bitArray_ = static_cast<uint8_t*>(RMAlloc(copy.dataSize_));
-  if (!copy.bitArray_) return std::nullopt;
+  if (!copy.bitArray_) return false;
   std::memcpy(copy.bitArray_, bitArray_, copy.dataSize_);
-  return copy;
+  *out = std::move(copy);
+  return true;
 }
 
 // --- Bit-level operations ---

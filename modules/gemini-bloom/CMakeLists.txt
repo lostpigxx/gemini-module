@@ -24,8 +24,6 @@ target_link_libraries(redis_bloom PRIVATE redis_module_api)
 
 target_compile_options(redis_bloom PRIVATE
   -Wall -Wextra -Wpedantic -fno-exceptions
-  $<$<CXX_COMPILER_ID:AppleClang,Clang>:-Wno-c++20-designator>
-  $<$<CXX_COMPILER_ID:GNU>:-Wno-pedantic>
 )
 
 set_target_properties(redis_bloom PROPERTIES
@@ -54,10 +52,7 @@ if(GTest_FOUND)
     GTest::gtest_main
   )
   target_compile_definitions(bloom_filter_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(bloom_filter_test PRIVATE
-    -Wall -Wextra -Wpedantic
-    $<$<CXX_COMPILER_ID:GNU>:-Wno-pedantic>
-  )
+  target_compile_options(bloom_filter_test PRIVATE -Wall -Wextra -Wpedantic)
 
   add_executable(sb_chain_test EXCLUDE_FROM_ALL
     tests/sb_chain_test.cc
@@ -78,10 +73,7 @@ if(GTest_FOUND)
     GTest::gtest_main
   )
   target_compile_definitions(sb_chain_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(sb_chain_test PRIVATE
-    -Wall -Wextra -Wpedantic
-    $<$<CXX_COMPILER_ID:GNU>:-Wno-pedantic>
-  )
+  target_compile_options(sb_chain_test PRIVATE -Wall -Wextra -Wpedantic)
 
   add_executable(bloom_rdb_test EXCLUDE_FROM_ALL
     tests/bloom_rdb_test.cc
@@ -104,11 +96,7 @@ if(GTest_FOUND)
     GTest::gtest_main
   )
   target_compile_definitions(bloom_rdb_test PRIVATE REDIS_BLOOM_TESTING)
-  target_compile_options(bloom_rdb_test PRIVATE
-    -Wall -Wextra -Wpedantic
-    $<$<CXX_COMPILER_ID:AppleClang,Clang>:-Wno-c++20-designator>
-    $<$<CXX_COMPILER_ID:GNU>:-Wno-pedantic>
-  )
+  target_compile_options(bloom_rdb_test PRIVATE -Wall -Wextra -Wpedantic)
 
   add_custom_target(bloom_test
     COMMAND bloom_filter_test --gtest_color=yes
