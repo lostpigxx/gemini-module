@@ -128,14 +128,6 @@ Docker CI 提供三组环境验证 gemini-bloom 在不同 Redis 版本下的兼�
 
 Redis 6/7 环境下 Compat 和 Soak 会跑两轮（RESP3 + RESP2），Redis 5 只跑 RESP2。
 
-GCC 7.3.0 的 Linux 构建只编译 `gemini-bloom`，并使用严格 C++14 选项运行
-全部 GTest 单元测试：
-
-```bash
-docker build -f Dockerfile.gcc73 -t gemini-bloom:gcc73 .
-docker run --rm gemini-bloom:gcc73
-```
-
 ### 运行单组环境
 
 ```bash
