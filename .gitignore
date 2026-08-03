@@ -1,6 +1,7 @@
 .claude
 .vscode
 build
+build_asan
 minikv/build
 minikv/build*/
 __pycache__/
