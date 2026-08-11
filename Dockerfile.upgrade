@@ -1,0 +1,44 @@
+FROM docker.m.daocloud.io/library/ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN if [ "$(dpkg --print-architecture)" = "arm64" ]; then \
+      sed -i 's|http://ports.ubuntu.com/ubuntu-ports|http://mirrors.aliyun.com/ubuntu-ports|g' /etc/apt/sources.list; \
+    else \
+      sed -i -e 's|http://archive.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' \
+             -e 's|http://security.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list; \
+    fi \
+    && apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    g++ \
+    libgtest-dev \
+    python3 \
+    python3-pip \
+    tcl \
+    && pip3 install --no-cache-dir redis \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY deps/ /opt/deps/
+
+RUN cd /opt/deps && tar xzf redis-5.0.14.tar.gz \
+    && cd redis-5.0.14 && make -j$(nproc) \
+    && mkdir -p /opt/redis5/bin \
+    && cp src/redis-server src/redis-cli /opt/redis5/bin/
+
+RUN cd /opt/deps && tar xzf redis-6.2.20.tar.gz \
+    && cd redis-6.2.20 && make -j$(nproc) \
+    && mkdir -p /opt/redis6/bin \
+    && cp src/redis-server src/redis-cli /opt/redis6/bin/
+
+RUN cd /opt/deps && tar xzf redis-7.2.11.tar.gz \
+    && cd redis-7.2.11 && make -j$(nproc) \
+    && mkdir -p /opt/redis7/bin \
+    && cp src/redis-server src/redis-cli /opt/redis7/bin/
+
+WORKDIR /src
+COPY . .
+
+RUN cmake -B build && cmake --build build --target redis_bloom -j$(nproc)
+
+CMD ["python3", "ci/bloom_upgrade_test.py", "./build/redis_bloom.so", "/opt/redis5/bin/redis-server", "/opt/redis6/bin/redis-server", "/opt/redis7/bin/redis-server"]
