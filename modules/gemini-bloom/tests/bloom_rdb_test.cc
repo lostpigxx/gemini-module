@@ -1345,10 +1345,12 @@ TEST(BloomWire, HeaderSizeScalesWithLayers) {
 }
 
 // ==================================================================
-// Loading flag must not leak to RDB or wire format
+// Loading must survive RDB (so a restart resumes the chunk sequence)
+// but must never leak into the SCANDUMP wire header, whose replay
+// re-enters Loading on its own.
 // ==================================================================
 
-TEST(BloomRdb, LoadingFlagStrippedOnRdbRoundTrip) {
+TEST(BloomRdb, LoadingFlagPreservedOnRdbRoundTrip) {
   auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
   filter->Put(AsBytes("x", 1));
   filter->SetLoading();
@@ -1356,8 +1358,9 @@ TEST(BloomRdb, LoadingFlagStrippedOnRdbRoundTrip) {
 
   auto* loaded = RdbRoundTrip(filter, kCurrentEncVer);
   ASSERT_NE(loaded, nullptr);
-  EXPECT_FALSE(loaded->IsLoading())
-    << "Loading flag must be stripped during RDB serialization";
+  EXPECT_TRUE(loaded->IsLoading())
+    << "an incomplete filter must not come back as a complete one";
+  EXPECT_EQ(loaded->ChunksLoaded(), 0u);
   EXPECT_TRUE(loaded->Contains(AsBytes("x", 1)));
 
   DestroyFilter(filter);
@@ -1431,6 +1434,282 @@ TEST(BloomModuleType, FreeEffortBloom2ReturnsAllocationCount) {
   EXPECT_EQ(FreeEffortBloom2(nullptr, filter), filter->NumLayers() + 1);
 
   DestroyFilter(filter);
+}
+
+TEST(BloomModuleType, AofRewriteSurvivesModuleAllocationFailure) {
+  auto* filter = CreateFilter(100, 0.01, DefaultFlags(), 2);
+  filter->Put(AsBytes("persisted", 9));
+
+  MockAofStream aof;
+  auto* key = reinterpret_cast<RedisModuleString*>(uintptr_t{1});
+  RMFailNextAllocationForTesting();
+  AofRewriteBloom(aof.IO(), key, filter);
+  RMClearAllocationFailureForTesting();
+
+  ASSERT_EQ(aof.errors.size(), 0u);
+  ASSERT_EQ(aof.calls.size(), 2u);
+  EXPECT_EQ(aof.calls[0].command, "BF.LOADCHUNK");
+  EXPECT_EQ(aof.calls[0].cursor, 1);
+  EXPECT_EQ(aof.calls[0].payload.size(), ComputeHeaderSize(*filter));
+  EXPECT_EQ(aof.calls[1].command, "BF.LOADCHUNK");
+  EXPECT_EQ(aof.calls[1].cursor, 2);
+  EXPECT_EQ(aof.calls[1].payload.size(), filter->Layers()[0].bloom.GetDataSize());
+
+  DestroyFilter(filter);
+}
+
+// ==================================================================
+// Partial BF.LOADCHUNK state must survive persistence as partial state.
+// A filter that received its header but not every layer has zero-filled
+// layers; persisting it as complete makes it report the header's item
+// count while answering membership with false negatives.
+// ==================================================================
+
+// The SCANDUMP chunk list of a fully populated source filter.
+struct SourceChunks {
+  std::vector<uint8_t> header;
+  std::vector<std::vector<uint8_t>> layers;
+};
+
+static SourceChunks ScanDumpChunks(const ScalingBloomFilter& src) {
+  SourceChunks chunks;
+  chunks.header.resize(ComputeHeaderSize(src));
+  SerializeHeader(src, chunks.header.data());
+  for (const auto& layer : src.Layers()) {
+    const auto* bits = layer.bloom.GetBitArray();
+    chunks.layers.emplace_back(bits, bits + layer.bloom.GetDataSize());
+  }
+  return chunks;
+}
+
+// Mirrors CmdLoadchunk's cursor protocol, including its rejections, so tests
+// exercise the real emit -> replay path instead of only counting commands.
+// Returns nullptr where the command would have replied with an error.
+static ScalingBloomFilter* ApplyChunk(ScalingBloomFilter* filter, long long cursor,
+                                      const uint8_t* data, size_t length) {
+  if (cursor == 1) {
+    auto* fresh = DeserializeHeader(data, length);
+    if (fresh) fresh->SetLoading();
+    return fresh;
+  }
+  if (!filter || !filter->IsLoading()) return nullptr;
+  auto index = static_cast<size_t>(cursor - 2);
+  if (index >= filter->NumLayers() || index != filter->ChunksLoaded()) return nullptr;
+  auto& layer = filter->Layers()[index];
+  if (length != layer.bloom.GetDataSize()) return nullptr;
+  std::memcpy(layer.bloom.GetBitArray(), data, length);
+  filter->IncrementChunksLoaded();
+  if (filter->ChunksLoaded() == filter->NumLayers()) filter->ClearLoading();
+  return filter;
+}
+
+// Build the state BF.LOADCHUNK actually produces: header applied, then the
+// first `loaded` layer chunks. Layers beyond that are allocated and zeroed.
+static ScalingBloomFilter* PartiallyLoaded(const SourceChunks& chunks, size_t loaded) {
+  auto* filter = ApplyChunk(nullptr, 1, chunks.header.data(), chunks.header.size());
+  for (size_t i = 0; i < loaded; i++) {
+    filter = ApplyChunk(filter, static_cast<long long>(i + 2),
+                        chunks.layers[i].data(), chunks.layers[i].size());
+  }
+  return filter;
+}
+
+// Replay the emitted AOF commands the way Redis would on restart.
+static ScalingBloomFilter* ReplayAof(const std::vector<MockAofCall>& calls, bool* rejected) {
+  ScalingBloomFilter* filter = nullptr;
+  *rejected = false;
+  for (const auto& call : calls) {
+    auto* next = ApplyChunk(filter, call.cursor, call.payload.data(), call.payload.size());
+    if (!next) { *rejected = true; return filter; }
+    filter = next;
+  }
+  return filter;
+}
+
+// The header-only case: nothing but the header may be emitted, or replay
+// completes the filter early and the post-fork chunks are rejected.
+TEST(BloomPartialLoad, AofRewriteOfHeaderOnlyFilterEmitsHeaderAlone) {
+  auto* source = CreateFilter(1000, 0.01, DefaultFlags(), 2);
+  std::vector<std::string> items;
+  for (int i = 0; i < 200; i++) {
+    items.push_back("partial:" + std::to_string(i));
+    source->Put(ToSpan(items.back()));
+  }
+  auto chunks = ScanDumpChunks(*source);
+  auto* target = PartiallyLoaded(chunks, 0);
+  ASSERT_NE(target, nullptr);
+  ASSERT_TRUE(target->IsLoading());
+  ASSERT_EQ(target->ChunksLoaded(), 0u);
+
+  MockAofStream aof;
+  auto* key = reinterpret_cast<RedisModuleString*>(uintptr_t{1});
+  AofRewriteBloom(aof.IO(), key, target);
+
+  ASSERT_EQ(aof.errors.size(), 0u);
+  ASSERT_EQ(aof.calls.size(), 1u) << "only the header may be emitted while loading";
+  EXPECT_EQ(aof.calls[0].cursor, 1);
+
+  bool rejected = false;
+  auto* restored = ReplayAof(aof.calls, &rejected);
+  ASSERT_NE(restored, nullptr);
+  EXPECT_FALSE(rejected);
+  EXPECT_TRUE(restored->IsLoading());
+  EXPECT_EQ(restored->ChunksLoaded(), 0u);
+
+  // The post-fork chunks recorded in the AOF tail must still apply.
+  for (size_t i = 0; i < chunks.layers.size(); i++) {
+    restored = ApplyChunk(restored, static_cast<long long>(i + 2),
+                          chunks.layers[i].data(), chunks.layers[i].size());
+    ASSERT_NE(restored, nullptr) << "tail chunk " << i << " was rejected";
+  }
+  EXPECT_FALSE(restored->IsLoading());
+  for (const auto& item : items) {
+    EXPECT_TRUE(restored->Contains(ToSpan(item))) << "false negative for " << item;
+  }
+
+  DestroyFilter(restored);
+  DestroyFilter(target);
+  DestroyFilter(source);
+}
+
+TEST(BloomPartialLoad, AofRewriteOfPartialPrefixResumesAtSameCursor) {
+  auto* source = CreateFilter(20, 0.01, DefaultFlags(), 2);
+  std::vector<std::string> items;
+  for (int i = 0; i < 200; i++) {
+    items.push_back("prefix:" + std::to_string(i));
+    source->Put(ToSpan(items.back()));
+  }
+  ASSERT_GT(source->NumLayers(), 2u);
+  auto chunks = ScanDumpChunks(*source);
+  auto* target = PartiallyLoaded(chunks, 2);
+  ASSERT_NE(target, nullptr);
+  ASSERT_TRUE(target->IsLoading());
+  ASSERT_EQ(target->ChunksLoaded(), 2u);
+
+  MockAofStream aof;
+  auto* key = reinterpret_cast<RedisModuleString*>(uintptr_t{1});
+  AofRewriteBloom(aof.IO(), key, target);
+
+  ASSERT_EQ(aof.calls.size(), 3u) << "header plus exactly the arrived layers";
+
+  bool rejected = false;
+  auto* restored = ReplayAof(aof.calls, &rejected);
+  ASSERT_NE(restored, nullptr);
+  EXPECT_FALSE(rejected);
+  EXPECT_TRUE(restored->IsLoading());
+  EXPECT_EQ(restored->ChunksLoaded(), 2u);
+
+  for (size_t i = 2; i < chunks.layers.size(); i++) {
+    restored = ApplyChunk(restored, static_cast<long long>(i + 2),
+                          chunks.layers[i].data(), chunks.layers[i].size());
+    ASSERT_NE(restored, nullptr) << "tail chunk " << i << " was rejected";
+  }
+  EXPECT_FALSE(restored->IsLoading());
+  for (const auto& item : items) {
+    EXPECT_TRUE(restored->Contains(ToSpan(item))) << "false negative for " << item;
+  }
+
+  DestroyFilter(restored);
+  DestroyFilter(target);
+  DestroyFilter(source);
+}
+
+TEST(BloomPartialLoad, AofRewriteOfCompleteFilterStillEmitsEveryLayer) {
+  auto* filter = CreateFilter(20, 0.01, DefaultFlags(), 2);
+  for (int i = 0; i < 200; i++) filter->Put(ToSpan("complete:" + std::to_string(i)));
+  ASSERT_GT(filter->NumLayers(), 1u);
+
+  MockAofStream aof;
+  auto* key = reinterpret_cast<RedisModuleString*>(uintptr_t{1});
+  AofRewriteBloom(aof.IO(), key, filter);
+
+  ASSERT_EQ(aof.errors.size(), 0u);
+  EXPECT_EQ(aof.calls.size(), filter->NumLayers() + 1);
+
+  DestroyFilter(filter);
+}
+
+TEST(BloomPartialLoad, RdbRoundTripPreservesLoadingProgress) {
+  auto* source = CreateFilter(20, 0.01, DefaultFlags(), 2);
+  std::vector<std::string> items;
+  for (int i = 0; i < 200; i++) {
+    items.push_back("rdb:" + std::to_string(i));
+    source->Put(ToSpan(items.back()));
+  }
+  ASSERT_GT(source->NumLayers(), 2u);
+  auto chunks = ScanDumpChunks(*source);
+  auto* target = PartiallyLoaded(chunks, 1);
+  ASSERT_NE(target, nullptr);
+
+  auto* loaded = RdbRoundTrip(target, kCurrentEncVer);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_TRUE(loaded->IsLoading()) << "an incomplete filter must not load as complete";
+  EXPECT_EQ(loaded->ChunksLoaded(), 1u);
+  EXPECT_EQ(loaded->NumLayers(), target->NumLayers());
+
+  for (size_t i = 1; i < chunks.layers.size(); i++) {
+    loaded = ApplyChunk(loaded, static_cast<long long>(i + 2),
+                        chunks.layers[i].data(), chunks.layers[i].size());
+    ASSERT_NE(loaded, nullptr) << "chunk " << i << " rejected after RDB restore";
+  }
+  EXPECT_FALSE(loaded->IsLoading());
+  for (const auto& item : items) {
+    EXPECT_TRUE(loaded->Contains(ToSpan(item))) << "false negative for " << item;
+  }
+
+  DestroyFilter(loaded);
+  DestroyFilter(target);
+  DestroyFilter(source);
+}
+
+// Guards the RedisBloom DUMP/RESTORE interop that bloom_migrate_test.py covers:
+// a complete filter must never set the Loading bit or write the extra field.
+TEST(BloomPartialLoad, CompleteFilterRdbEncodingIsUnchanged) {
+  auto* filter = CreateFilter(1000, 0.01, DefaultFlags(), 2);
+  for (int i = 0; i < 200; i++) filter->Put(ToSpan("interop:" + std::to_string(i)));
+
+  MockRdbStream withLoadingSupport;
+  RdbSaveBloom(withLoadingSupport.IO(), filter);
+
+  // Third field is the flags word; it must carry no Loading bit.
+  MockRdbStream probe;
+  RdbSaveBloom(probe.IO(), filter);
+  probe.Rewind();
+  RdbReader reader(probe.IO());
+  reader.GetUint();
+  reader.GetUint();
+  uint64_t flags = reader.GetUint();
+  EXPECT_EQ(flags & ToUnderlying(BloomFlags::Loading), 0u);
+  EXPECT_TRUE(ValidateFlags(static_cast<unsigned>(flags)))
+    << "complete filters must stay within the RedisBloom-compatible flag set";
+
+  auto* loaded = RdbRoundTrip(filter, kCurrentEncVer);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_FALSE(loaded->IsLoading());
+
+  DestroyFilter(loaded);
+  DestroyFilter(filter);
+}
+
+TEST(BloomPartialLoad, ClonePreservesLoadingProgress) {
+  auto* source = CreateFilter(20, 0.01, DefaultFlags(), 2);
+  for (int i = 0; i < 200; i++) source->Put(ToSpan("clone:" + std::to_string(i)));
+  ASSERT_GT(source->NumLayers(), 2u);
+  auto chunks = ScanDumpChunks(*source);
+  auto* target = PartiallyLoaded(chunks, 1);
+  ASSERT_NE(target, nullptr);
+
+  auto* clone = target->Clone();
+  ASSERT_NE(clone, nullptr);
+  EXPECT_TRUE(clone->IsLoading());
+  EXPECT_EQ(clone->ChunksLoaded(), 1u);
+
+  // The next chunk must be accepted rather than rejected as out-of-order.
+  ASSERT_NE(ApplyChunk(clone, 3, chunks.layers[1].data(), chunks.layers[1].size()), nullptr);
+
+  DestroyFilter(clone);
+  DestroyFilter(target);
+  DestroyFilter(source);
 }
 
 TEST(BloomModuleType, DefragBloomRelocatesBuffersAndPreservesData) {

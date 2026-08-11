@@ -22,6 +22,14 @@ for env in redis5 redis6 redis7; do
   else
     green "PASS: $env"
   fi
+
+  header "Testing cgroup OOM matrix for $env"
+  if ! bash ci/run_bloom_oom_matrix.sh "gemini-module:$env"; then
+    red "FAIL: cgroup OOM matrix $env"
+    FAIL=1
+  else
+    green "PASS: cgroup OOM matrix $env"
+  fi
 done
 
 echo

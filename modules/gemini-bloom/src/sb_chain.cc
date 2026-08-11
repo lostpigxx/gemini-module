@@ -63,7 +63,11 @@ ScalingBloomFilter& ScalingBloomFilter::operator=(ScalingBloomFilter&& other) no
 
 bool ScalingBloomFilter::AppendLayer(uint64_t cap, double rate) {
   if (numLayers_ >= layerCapacity_) {
-    size_t newCap = std::max(layerCapacity_ * 2, size_t{4});
+    size_t newCap = 1;
+    if (layerCapacity_ != 0) {
+      if (layerCapacity_ > SIZE_MAX / 2) return false;
+      newCap = std::max(layerCapacity_ * 2, size_t{4});
+    }
     if (newCap > SIZE_MAX / sizeof(FilterLayer)) return false;
     auto* expanded = static_cast<FilterLayer*>(RMAlloc(newCap * sizeof(FilterLayer)));
     if (!expanded) return false;
@@ -198,6 +202,9 @@ ScalingBloomFilter* ScalingBloomFilter::Clone() const {
     }
     clone->SetLayer(i, {std::move(*clonedLayer), layers_[i].itemCount});
   }
+  // FromRdbShell carried the Loading bit over but reset the cursor, which would
+  // make the copy reject the very next chunk as out-of-order.
+  if (IsLoading()) clone->RestoreLoadingProgress(chunksLoaded_);
   return clone;
 }
 

@@ -4,7 +4,26 @@
 
 #ifdef REDIS_BLOOM_TESTING
 
-inline void* RMAlloc(size_t n) { return malloc(n); }
+inline bool& RMFailNextAllocationFlag() {
+  static bool fail = false;
+  return fail;
+}
+
+inline void RMFailNextAllocationForTesting() {
+  RMFailNextAllocationFlag() = true;
+}
+
+inline void RMClearAllocationFailureForTesting() {
+  RMFailNextAllocationFlag() = false;
+}
+
+inline void* RMAlloc(size_t n) {
+  if (RMFailNextAllocationFlag()) {
+    RMFailNextAllocationFlag() = false;
+    return nullptr;
+  }
+  return malloc(n);
+}
 inline void* RMCalloc(size_t count, size_t size) { return calloc(count, size); }
 inline void* RMRealloc(void* p, size_t n) { return realloc(p, n); }
 inline void RMFree(void* p) { free(p); }

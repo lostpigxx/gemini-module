@@ -21,6 +21,12 @@ header "Tcl: gemini-bloom"
 tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl "./$BUILD_DIR/redis_bloom.so" || \
   { red "FAIL: bloom tcl"; FAIL=1; }
 
+# Quantify per-key/module memory across 1k..50k keys, capacities, layers,
+# and RDB restart. The per-key overhead regression gate is 64 bytes.
+header "Memory profile: key cardinality, capacity, layers, restart"
+python3 ci/bloom_memory_profile_test.py "./$BUILD_DIR/redis_bloom.so" /opt/redisbloom.so || \
+  { red "FAIL: bloom memory profile"; FAIL=1; }
+
 # ── Compat test (gemini-bloom vs RedisBloom) ─────────────────
 header "Compat: gemini-bloom vs RedisBloom (RESP auto)"
 python3 ci/bloom_compat_test.py "./$BUILD_DIR/redis_bloom.so" /opt/redisbloom.so || \
@@ -45,6 +51,12 @@ if [ "$REDIS_MAJOR" -ge 6 ]; then
     python3 ci/bloom_soak_test.py "./$BUILD_DIR/redis_bloom.so" || \
     { red "FAIL: bloom soak RESP2"; FAIL=1; }
 fi
+
+# Partial BF.LOADCHUNK state across AOF rewrite, RDB preamble, and BGSAVE.
+# Chunks are applied after the rewrite fork so they land in the AOF tail.
+header "Partial load: BF.LOADCHUNK persistence across restart"
+python3 ci/bloom_partial_load_test.py "./$BUILD_DIR/redis_bloom.so" || \
+  { red "FAIL: bloom partial load"; FAIL=1; }
 
 # ── RDB migration test (gemini-bloom ↔ RedisBloom) ───────────
 header "Migrate: RDB round-trip (RESP auto)"

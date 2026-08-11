@@ -3,12 +3,15 @@
 #include "rm_alloc.h"
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cmath>
 #include <cstring>
 #include <numbers>
 
 constexpr uint32_t kMaxLayers = 1024;
+constexpr size_t kMaxWireHeaderBytes =
+  sizeof(WireFilterHeader) + kMaxLayers * sizeof(WireLayerMeta);
 
 // --- RdbWriter / RdbReader ---
 
@@ -157,8 +160,12 @@ std::optional<BloomLayer> BloomLayer::FromWireMeta(const WireLayerMeta& meta, Bl
 void ScalingBloomFilter::WriteTo(RdbWriter& w) const {
   w.PutUint(totalItems_);
   w.PutUint(numLayers_);
-  w.PutUint(ToUnderlying(flags_) & kPersistentFlagsMask);
+  w.PutUint(ToUnderlying(flags_) & kRdbFlagsMask);
   w.PutUint(expansionFactor_);
+  // Only a Loading filter writes this extra field, so complete filters keep the
+  // exact byte layout RedisBloom DUMP/RESTORE interop expects. Without it the
+  // restored key would report the header's item count over zero-filled layers.
+  if (IsLoading()) w.PutUint(chunksLoaded_);
 
   for (const auto& layer : Layers()) {
     layer.bloom.WriteTo(w);
@@ -175,7 +182,7 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
     ? r.GetUint()
     : ToUnderlying(BloomFlags::Use64Bit | BloomFlags::NoRound);
 
-  if (rawFlags > UINT_MAX || !ValidateFlags(static_cast<unsigned>(rawFlags)))
+  if (rawFlags > UINT_MAX || !ValidateRdbFlags(static_cast<unsigned>(rawFlags)))
     return nullptr;
   shell.flags = FromUnderlying(static_cast<unsigned>(rawFlags));
 
@@ -189,6 +196,15 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
   if (shell.numLayers == 0 || shell.numLayers > kMaxLayers) return nullptr;
   if (!HasFlag(shell.flags, BloomFlags::FixedSize) && shell.expansionFactor == 0)
     return nullptr;
+
+  // Written by WriteTo immediately after the expansion factor, before the
+  // layers. A cursor at or past numLayers would mean the filter was complete,
+  // in which case Loading must not have been set.
+  uint64_t chunksLoaded = 0;
+  if (HasFlag(shell.flags, BloomFlags::Loading)) {
+    chunksLoaded = r.GetUint();
+    if (!r.Ok() || chunksLoaded >= shell.numLayers) return nullptr;
+  }
 
   auto* filter = FromRdbShell(shell);
   if (!filter) return nullptr;
@@ -233,6 +249,12 @@ ScalingBloomFilter* ScalingBloomFilter::ReadFrom(RdbReader& r, int encver) {
     filter->~ScalingBloomFilter();
     RMFree(filter);
     return nullptr;
+  }
+
+  // FromRdbShell copied the Loading bit out of the flags but reset the cursor,
+  // so restore the progress the chunk sequence had actually reached.
+  if (HasFlag(shell.flags, BloomFlags::Loading)) {
+    filter->RestoreLoadingProgress(static_cast<size_t>(chunksLoaded));
   }
 
   return filter;
@@ -342,27 +364,37 @@ void RdbSaveBloom(RedisModuleIO* rdb, void* value) {
 }
 
 void AofRewriteBloom(RedisModuleIO* aof, RedisModuleString* key, void* value) {
+  // Every key must be emitted, including a partially loaded one. RedisModule_LogIOError
+  // does not set the RedisModuleIO error flag, so an early return here would drop the
+  // key while Redis still reported the rewrite as successful.
   auto* filter = static_cast<ScalingBloomFilter*>(value);
-  if (filter->IsLoading()) {
-    RedisModule_LogIOError(aof, "warning",
-      "GeminiBloom: skipping AOF rewrite of partially loaded filter");
-    return;
-  }
-
   size_t hdrBytes = ComputeHeaderSize(*filter);
-  auto* hdrBuf = static_cast<char*>(RMAlloc(hdrBytes));
-  if (!hdrBuf) {
+
+  // Unreachable: kMaxLayers is enforced on every construction path, and scaling stops
+  // near 50 layers because the per-layer rate halves against a 1e-15 floor. Kept so a
+  // corrupted layer count cannot overflow the stack buffer below.
+  if (hdrBytes > kMaxWireHeaderBytes) {
     RedisModule_LogIOError(aof, "warning",
-      "GeminiBloom: AOF rewrite allocation failure, key omitted");
+      "GeminiBloom: AOF rewrite rejected an invalid layer count");
     return;
   }
-  SerializeHeader(*filter, hdrBuf);
+  std::array<char, kMaxWireHeaderBytes> hdrBuf;
+  SerializeHeader(*filter, hdrBuf.data());
 
-  RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, (long long)1, hdrBuf, hdrBytes);
-  RMFree(hdrBuf);
+  RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, (long long)1,
+    hdrBuf.data(), hdrBytes);
+
+  // While Loading, only the layers that have actually arrived may be emitted.
+  // Replaying the header re-enters Loading, so emitting just the loaded prefix
+  // restores the same chunk cursor and lets BF.LOADCHUNK commands recorded in
+  // the AOF tail after the rewrite fork continue from the right position.
+  // Emitting every layer instead would clear Loading during replay, making
+  // those tail commands fail and leaving a filter whose header claims items
+  // that its zero-filled layers do not contain.
+  size_t emitLayers = filter->IsLoading() ? filter->ChunksLoaded() : filter->NumLayers();
 
   long long cursor = 2;
-  for (const auto& layer : filter->Layers()) {
+  for (const auto& layer : filter->Layers().first(emitLayers)) {
     RedisModule_EmitAOF(aof, "BF.LOADCHUNK", "slb", key, cursor++,
       reinterpret_cast<const char*>(layer.bloom.GetBitArray()),
       layer.bloom.GetDataSize());

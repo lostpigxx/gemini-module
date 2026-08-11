@@ -54,6 +54,13 @@ public:
   void ClearLoading() { flags_ = FromUnderlying(ToUnderlying(flags_) & ~ToUnderlying(BloomFlags::Loading)); }
   size_t ChunksLoaded() const { return chunksLoaded_; }
   void IncrementChunksLoaded() { ++chunksLoaded_; }
+  // Re-enter Loading at an existing chunk cursor. Unlike SetLoading() this
+  // preserves progress, so a filter restored from RDB or cloned mid-load keeps
+  // accepting the remaining BF.LOADCHUNK chunks in order.
+  void RestoreLoadingProgress(size_t chunks) {
+    flags_ = flags_ | BloomFlags::Loading;
+    chunksLoaded_ = chunks;
+  }
   uint64_t TotalDataSize() const;
 
   // RDB serialization: the filter writes/reads its own structure

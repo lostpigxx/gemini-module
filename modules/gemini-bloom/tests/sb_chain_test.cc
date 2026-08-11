@@ -179,6 +179,19 @@ TEST(ScalingBloomTest, BytesUsed) {
   free(mem);
 }
 
+TEST(ScalingBloomTest, InitialLayerStorageDoesNotOverallocate) {
+  auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+  new (mem) ScalingBloomFilter(100, 0.01, DefaultFlags(), 2);
+
+  ASSERT_EQ(mem->NumLayers(), 1u);
+  const size_t expected = sizeof(ScalingBloomFilter) + sizeof(FilterLayer)
+    + mem->Layers()[0].bloom.GetDataSize();
+  EXPECT_EQ(mem->BytesUsed(), expected);
+
+  mem->~ScalingBloomFilter();
+  free(mem);
+}
+
 TEST(ScalingBloomTest, MoveAssignmentTransfersOwnership) {
   auto* leftMem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
   auto* rightMem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));

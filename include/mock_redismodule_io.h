@@ -12,8 +12,11 @@
 //   void* loaded = RdbLoadXxx(rdb, encver);  // reads back
 
 #include <cstdint>
+#include <cstdarg>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <utility>
 #include <vector>
 
 #ifdef __APPLE__
@@ -66,6 +69,23 @@ struct MockDigest {
   RedisModuleDigest* Handle() { return reinterpret_cast<RedisModuleDigest*>(this); }
 };
 
+struct MockAofCall {
+  std::string command;
+  long long cursor = 0;
+  std::vector<uint8_t> payload;
+};
+
+struct MockAofStream {
+  std::vector<MockAofCall> calls;
+  std::vector<std::string> errors;
+
+  RedisModuleIO* IO() { return reinterpret_cast<RedisModuleIO*>(this); }
+};
+
+static inline MockAofStream* AofOf(RedisModuleIO* io) {
+  return reinterpret_cast<MockAofStream*>(io);
+}
+
 static inline MockDigest* DigestOf(RedisModuleDigest* md) {
   return reinterpret_cast<MockDigest*>(md);
 }
@@ -84,6 +104,32 @@ static void Mock_DigestAddLongLong(RedisModuleDigest* md, long long ele) {
 
 static void Mock_DigestEndSequence(RedisModuleDigest* md) {
   DigestOf(md)->ended = true;
+}
+
+static void Mock_EmitAOF(RedisModuleIO* io, const char* command, const char* format, ...) {
+  MockAofCall call;
+  call.command = command;
+
+  va_list args;
+  va_start(args, format);
+  for (const char* token = format; *token; ++token) {
+    if (*token == 's') {
+      (void)va_arg(args, RedisModuleString*);
+    } else if (*token == 'l') {
+      call.cursor = va_arg(args, long long);
+    } else if (*token == 'b') {
+      const auto* data = va_arg(args, const char*);
+      size_t length = va_arg(args, size_t);
+      call.payload.assign(data, data + length);
+    }
+  }
+  va_end(args);
+
+  AofOf(io)->calls.push_back(std::move(call));
+}
+
+static void Mock_LogIOError(RedisModuleIO* io, const char*, const char* format, ...) {
+  AofOf(io)->errors.emplace_back(format);
 }
 
 // Mock RedisModule_DefragAlloc that actually relocates memory (rather than a
@@ -177,4 +223,6 @@ static inline void InstallMockRedisModuleIO() {
   RedisModule_DigestAddLongLong     = Mock_DigestAddLongLong;
   RedisModule_DigestEndSequence     = Mock_DigestEndSequence;
   RedisModule_DefragAlloc          = Mock_DefragAlloc;
+  RedisModule_EmitAOF              = Mock_EmitAOF;
+  RedisModule_LogIOError           = Mock_LogIOError;
 }

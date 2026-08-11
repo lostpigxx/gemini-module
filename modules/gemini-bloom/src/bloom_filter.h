@@ -54,6 +54,17 @@ constexpr bool ValidateFlags(unsigned raw) {
   return (raw & ~kSupportedFlags) == 0;
 }
 
+// The RDB encoding additionally persists Loading, so a filter caught mid
+// BF.LOADCHUNK resumes at the same chunk cursor instead of returning as a
+// complete filter whose un-arrived layers are silently zero-filled. Complete
+// filters never set the bit, so their encoding stays byte-identical to the
+// RedisBloom-compatible layout that DUMP/RESTORE interop depends on.
+constexpr unsigned kRdbFlagsMask = kSupportedFlags | ToUnderlying(BloomFlags::Loading);
+
+constexpr bool ValidateRdbFlags(unsigned raw) {
+  return (raw & ~kRdbFlagsMask) == 0;
+}
+
 constexpr uint64_t kMaxCapacity = 1ULL << 30;
 constexpr unsigned kMaxExpansion = 32768;
 constexpr double kMaxBitsPerEntry = 1000.0;
