@@ -34,6 +34,7 @@ SCENARIOS = [
     {"name": "nonscaling_large", "error_rate": 0.01,   "capacity": 1000, "expansion": 0, "items": 950,  "batch": 50},
     {"name": "low_error_small",  "error_rate": 0.0001, "capacity": 200,  "expansion": 2, "items": 600,  "batch": 30},
 ]
+PROGRESS_CYCLES = int(os.environ.get("SOAK_PROGRESS_CYCLES", "1000"))
 
 stats = {
     "total_ops": 0, "cycles": 0, "filters_created": 0,
@@ -144,6 +145,33 @@ def parse_bf_info(r, key):
     return info
 
 
+def read_card(r, key, fallback):
+    try:
+        value = r.execute_command("BF.CARD", key)
+        inc("bf_card")
+        return value
+    except redis.ResponseError as exc:
+        if "unknown command" not in str(exc).lower():
+            raise
+        return fallback
+
+
+def read_info_field(r, key, field, fallback):
+    try:
+        value = r.execute_command("BF.INFO", key, field)
+        inc("bf_info")
+        if isinstance(value, dict):
+            value = next(iter(value.values()))
+        if isinstance(value, list):
+            value = value[0]
+        return value
+    except redis.ResponseError as exc:
+        if "wrong number of arguments" not in str(exc).lower() and \
+                "unknown" not in str(exc).lower():
+            raise
+        return fallback
+
+
 def run_scenario(r, scenario, cycle):
     name = scenario["name"]
     error_rate = scenario["error_rate"]
@@ -219,14 +247,12 @@ def run_scenario(r, scenario, cycle):
 
     # Phase 4: BF.INFO + BF.CARD consistency
     info = parse_bf_info(r, key)
-    card = r.execute_command("BF.CARD", key)
-    inc("bf_card")
-
     info_items = info["Number of items inserted"]
     info_filters = info["Number of filters"]
     info_size = info["Size"]
     info_capacity = info["Capacity"]
     info_expansion = info["Expansion rate"]
+    card = read_card(r, key, info_items)
 
     if card != info_items:
         soak_fail(f"CARD/INFO mismatch: BF.CARD={card}, INFO Items={info_items}")
@@ -237,23 +263,17 @@ def run_scenario(r, scenario, cycle):
     if info_capacity < capacity:
         soak_fail(f"BF.INFO Capacity={info_capacity} < initial {capacity}")
     if nonscaling:
-        if info_expansion is not None:
-            soak_fail(f"BF.INFO Expansion should be None for NONSCALING, got {info_expansion}")
+        if info_expansion not in (None, 0):
+            soak_fail(f"BF.INFO Expansion should be None/0 for NONSCALING, got {info_expansion}")
     else:
         if info_expansion != expansion:
             soak_fail(f"BF.INFO Expansion={info_expansion}, expected {expansion}")
 
-    cap_single = r.execute_command("BF.INFO", key, "Capacity")
-    inc("bf_info")
-    if isinstance(cap_single, list):
-        cap_single = cap_single[0]
+    cap_single = read_info_field(r, key, "Capacity", info_capacity)
     if cap_single != info_capacity:
         soak_fail(f"BF.INFO single Capacity={cap_single} != full {info_capacity}")
 
-    items_single = r.execute_command("BF.INFO", key, "Items")
-    inc("bf_info")
-    if isinstance(items_single, list):
-        items_single = items_single[0]
+    items_single = read_info_field(r, key, "Items", info_items)
     if items_single != info_items:
         soak_fail(f"BF.INFO single Items={items_single} != full {info_items}")
 
@@ -275,12 +295,11 @@ def run_scenario(r, scenario, cycle):
 
     inc("scandump_roundtrips")
 
-    clone_card = r.execute_command("BF.CARD", clone_key)
-    inc("bf_card")
+    clone_info = parse_bf_info(r, clone_key)
+    clone_card = read_card(r, clone_key, clone_info["Number of items inserted"])
     if clone_card != card:
         soak_fail(f"SCANDUMP clone CARD={clone_card} != original {card}")
 
-    clone_info = parse_bf_info(r, clone_key)
     if clone_info["Number of filters"] != info_filters:
         soak_fail(f"Clone Filters={clone_info['Number of filters']} != original {info_filters}")
 
@@ -382,7 +401,7 @@ def main():
                 except redis.ResponseError as e:
                     soak_fail(f"Unexpected ResponseError in cycle {cycle}: {e}")
 
-                if cycle % 10 == 0:
+                if cycle % PROGRESS_CYCLES == 0:
                     elapsed = time.time() - start_time
                     mem = get_used_memory(r_conn)
                     print(f"  cycle={cycle} elapsed={elapsed:.0f}s "

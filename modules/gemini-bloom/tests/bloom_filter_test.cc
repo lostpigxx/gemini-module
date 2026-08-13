@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "bloom_filter.h"
 #include "murmur2.h"
+#include "rm_alloc.h"
 
 #include <bit>
 #include <cstring>
@@ -59,6 +60,14 @@ TEST(BloomLayerTest, CreateRAII) {
   EXPECT_GT(layer->GetDataSize(), 0u);
   EXPECT_NE(layer->GetBitArray(), nullptr);
   EXPECT_GT(layer->GetBitsPerEntry(), 0.0);
+}
+
+TEST(BloomLayerTest, AllocationFailureLeavesNoLayer) {
+  RMFailAllocationAtForTesting(1);
+  auto layer = BloomLayer::Create(1000, 0.01,
+    BloomFlags::Use64Bit | BloomFlags::NoRound);
+  RMClearAllocationFailureForTesting();
+  EXPECT_FALSE(layer.has_value());
 }
 
 TEST(BloomLayerTest, MoveSemantics) {

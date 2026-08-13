@@ -4,28 +4,46 @@
 
 #ifdef REDIS_BLOOM_TESTING
 
-inline bool& RMFailNextAllocationFlag() {
-  static bool fail = false;
-  return fail;
+struct RMAllocationFaultState {
+  size_t calls = 0;
+  size_t failAt = 0;
+};
+
+inline RMAllocationFaultState& RMAllocationFaultStateForTesting() {
+  static RMAllocationFaultState state;
+  return state;
+}
+
+inline bool RMShouldFailAllocationForTesting() {
+  auto& state = RMAllocationFaultStateForTesting();
+  state.calls++;
+  return state.failAt != 0 && state.calls == state.failAt;
+}
+
+inline void RMFailAllocationAtForTesting(size_t allocationNumber) {
+  RMAllocationFaultStateForTesting() = {.calls = 0, .failAt = allocationNumber};
 }
 
 inline void RMFailNextAllocationForTesting() {
-  RMFailNextAllocationFlag() = true;
+  RMFailAllocationAtForTesting(1);
 }
 
 inline void RMClearAllocationFailureForTesting() {
-  RMFailNextAllocationFlag() = false;
+  RMAllocationFaultStateForTesting() = {};
 }
 
 inline void* RMAlloc(size_t n) {
-  if (RMFailNextAllocationFlag()) {
-    RMFailNextAllocationFlag() = false;
-    return nullptr;
-  }
+  if (RMShouldFailAllocationForTesting()) return nullptr;
   return malloc(n);
 }
-inline void* RMCalloc(size_t count, size_t size) { return calloc(count, size); }
-inline void* RMRealloc(void* p, size_t n) { return realloc(p, n); }
+inline void* RMCalloc(size_t count, size_t size) {
+  if (RMShouldFailAllocationForTesting()) return nullptr;
+  return calloc(count, size);
+}
+inline void* RMRealloc(void* p, size_t n) {
+  if (RMShouldFailAllocationForTesting()) return nullptr;
+  return realloc(p, n);
+}
 inline void RMFree(void* p) { free(p); }
 
 #else

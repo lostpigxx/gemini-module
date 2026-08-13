@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "rm_alloc.h"
 #include "sb_chain.h"
 
 #include <cstdint>
@@ -27,6 +28,39 @@ TEST(ScalingBloomTest, ConstructAndDestruct) {
   EXPECT_GT(mem->TotalCapacity(), 0u);
   mem->~ScalingBloomFilter();
   free(mem);
+}
+
+TEST(ScalingBloomTest, FailNInitialConstructionIsInvalidButDestructible) {
+  for (size_t failAt = 1; failAt <= 2; failAt++) {
+    RMFailAllocationAtForTesting(failAt);
+    auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+    new (mem) ScalingBloomFilter(1000, 0.01, DefaultFlags(), 2);
+    RMClearAllocationFailureForTesting();
+    EXPECT_FALSE(mem->IsValid()) << "failAt=" << failAt;
+    mem->~ScalingBloomFilter();
+    free(mem);
+  }
+}
+
+TEST(ScalingBloomTest, FailNExpansionPreservesExistingItemsAndCanRetry) {
+  for (size_t failAt = 1; failAt <= 2; failAt++) {
+    auto* mem = static_cast<ScalingBloomFilter*>(malloc(sizeof(ScalingBloomFilter)));
+    new (mem) ScalingBloomFilter(2, 0.01, DefaultFlags(), 2);
+    ASSERT_TRUE(mem->Put(AsBytes("first", 5)).has_value());
+    ASSERT_TRUE(mem->Put(AsBytes("second", 6)).has_value());
+
+    RMFailAllocationAtForTesting(failAt);
+    EXPECT_FALSE(mem->Put(AsBytes("growth", 6)).has_value()) << "failAt=" << failAt;
+    RMClearAllocationFailureForTesting();
+
+    EXPECT_TRUE(mem->Contains(AsBytes("first", 5))) << "failAt=" << failAt;
+    EXPECT_TRUE(mem->Contains(AsBytes("second", 6))) << "failAt=" << failAt;
+    auto retry = mem->Put(AsBytes("growth", 6));
+    ASSERT_TRUE(retry.has_value()) << "failAt=" << failAt;
+    EXPECT_TRUE(mem->Contains(AsBytes("growth", 6))) << "failAt=" << failAt;
+    mem->~ScalingBloomFilter();
+    free(mem);
+  }
 }
 
 TEST(ScalingBloomTest, PutAndContains) {

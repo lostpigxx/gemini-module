@@ -1400,6 +1400,34 @@ TEST(BloomModuleType, CopyBloom2ProducesIndependentEqualClone) {
   DestroyFilter(clone);
 }
 
+TEST(BloomModuleType, FailNEveryCloneAllocationPreservesSource) {
+  auto* filter = CreateFilter(2, 0.01, DefaultFlags(), 2);
+  for (int i = 0; i < 20; i++) {
+    ASSERT_TRUE(filter->Put(ToSpan("clone_fail_" + std::to_string(i))).has_value());
+  }
+  ASSERT_GT(filter->NumLayers(), 1u);
+  const size_t allocationCount = 2 + filter->NumLayers();
+
+  for (size_t failAt = 1; failAt <= allocationCount; failAt++) {
+    RMFailAllocationAtForTesting(failAt);
+    auto* clone = filter->Clone();
+    RMClearAllocationFailureForTesting();
+    EXPECT_EQ(clone, nullptr) << "failAt=" << failAt;
+    EXPECT_TRUE(filter->Contains(ToSpan("clone_fail_0"))) << "failAt=" << failAt;
+    EXPECT_TRUE(filter->Contains(ToSpan("clone_fail_19"))) << "failAt=" << failAt;
+    DestroyFilter(clone);
+  }
+
+  RMFailAllocationAtForTesting(allocationCount + 1);
+  auto* clone = filter->Clone();
+  RMClearAllocationFailureForTesting();
+  ASSERT_NE(clone, nullptr);
+  EXPECT_TRUE(clone->Contains(ToSpan("clone_fail_0")));
+  EXPECT_TRUE(clone->Contains(ToSpan("clone_fail_19")));
+  DestroyFilter(clone);
+  DestroyFilter(filter);
+}
+
 TEST(BloomModuleType, DigestBloomDeterministicAndContentSensitive) {
   auto* filter = CreateFilter(200, 0.01, DefaultFlags(), 2);
   for (int i = 0; i < 50; i++) {
