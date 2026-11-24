@@ -4,6 +4,9 @@
 
 gemini-bloom 是一个 C++20 实现的 Redis Module，提供 Scalable Bloom Filter 数据结构。它实现了 RedisBloom 的 `BF.*` 命令接口，并通过复用 RedisBloom 的 RDB data type name `MBbloom--` 实现 RDB 级别的数据互通。
 
+> [!NOTE]
+> 本文档只描述 **Bloom Filter（`BF.*`）**。同一个 `redis_bloom.so` 中还注册了 Cuckoo Filter（`CF.*`，`MBcuckoo-`）、Count-Min Sketch（`CMS.*`，`MBcms----`）、Top-K（`TOPK.*`，`MBtopk---`）和 T-Digest（`TDIGEST.*`，`MBtdigest`）四种类型。它们与 RedisBloom **命令级兼容**，但使用 gemini 私有的 RDB 格式与 type name，**不支持**与 RedisBloom 之间的 RDB 迁移。它们的设计说明目前只有源码头文件注释，暂无独立设计文档。
+
 ### 1.1 产品定位
 
 gemini-bloom 是 Gemini 产品线的 Bloom Filter 组件，不是 RedisBloom 的 drop-in 替代品。
@@ -15,7 +18,7 @@ gemini-bloom 是 Gemini 产品线的 Bloom Filter 组件，不是 RedisBloom 的
 
 **不是什么：**
 - 不是 RedisBloom 的源码移植（clean-room 实现，不引用 RSALv2/SSPL 许可的 RedisBloom 源码）
-- 不是 RedisBloom 的完整协议兼容层（RESP3、BF.DEBUG 等不在范围内）
+- 不是 RedisBloom 的完整协议兼容层（BF.DEBUG 等诊断命令不在范围内）
 - 不承诺与 RedisBloom 的 SCANDUMP/LOADCHUNK 协议兼容（与 RedisBloom 的兼容通过 RDB 层实现）
 
 ### 1.2 兼容性边界
@@ -29,7 +32,7 @@ gemini-bloom 是 Gemini 产品线的 Bloom Filter 组件，不是 RedisBloom 的
 | RDB-preamble AOF | 兼容 | Redis 6/7 默认模式，AOF 文件包含 RDB 数据，双向通过 |
 | BF.SCANDUMP / BF.LOADCHUNK | 不兼容 | gemini 使用私有 layer-index cursor 协议，与 RedisBloom 不互通（详见 §5.4） |
 | command-AOF rewrite | 不兼容 | 依赖私有 LOADCHUNK 协议（详见 §5.3） |
-| RESP3 | 不支持 | 所有命令使用 RESP2 返回格式 |
+| RESP3 | 支持 | 全部通过 `RedisModule_ReplyWith*` 回复，RESP2/RESP3 由 Redis 自动编码；CI 在 Redis 6/7 上以 RESP3 + RESP2 双协议运行 compat / soak / 迁移测试。回复形状与 RedisBloom 一致（如 `BF.INFO` 在 RESP3 下仍为 array，非 map） |
 | BF.DEBUG | 不支持 | RedisBloom 诊断命令，不在实现范围 |
 
 **支持的迁移方式（对客户承诺）：**
@@ -42,7 +45,7 @@ gemini-bloom 是 Gemini 产品线的 Bloom Filter 组件，不是 RedisBloom 的
 
 兼容性已通过 Redis 6.2.17 + RedisBloom v2.4.20 的对照矩阵验证，覆盖 9 个 corpus（empty、single-layer、multi-layer、fixed、expansion 1/2/4、binary items、long item、large 16MB）在 RDB/DUMP/RESTORE/MIGRATE/RDB-preamble AOF/fullsync replication 路径上的双向数据完整性。该结论不能外推到其他 RedisBloom 版本或 Redis 8 内置 Bloom。
 
-**验证 corpus 与复现**：验证使用的 RDB fixture 文件和期望结果存储在 `tests/compat/redisbloom-2.4.20/` 目录下。目前为本地验证通过状态，尚未作为 CI 阻断项。后续计划将 corpus round-trip 纳入 CI gate，确保任何序列化变更都被自动检测。
+**验证 corpus 与复现**：上述对照矩阵为早期本地验证结果，fixture 文件未入库。目前 RDB 兼容性由 Docker CI 中的 `ci/bloom_migrate_test.py` 持续守护：在 Redis 5.0.14 + RedisBloom 2.2.18、Redis 6.2.20 + RedisBloom 2.4.20、Redis 7.2.11 + RedisBloom 2.6.25 三组环境中，执行 4 个方向的 RDB 迁移（RB→GB、GB→RB、GB→GB、RB→RB）与多跳链式迁移，覆盖 16 种 filter 配置、约 30 万 items，验证 `BF.EXISTS` 结果 100% 一致（含 false positive）。`ci/bloom_compat_test.py` 则逐条对比 gemini-bloom 与 RedisBloom 的 `BF.*` 命令返回值。
 
 ---
 
@@ -272,7 +275,7 @@ gemini-bloom 在反序列化路径上比 RedisBloom 做了更多校验：
 |---|---|---|
 | capacity | 1 .. 2^30 | `kMaxCapacity`，防止单次请求分配过大内存 |
 | error_rate | (0.0, 1.0) | 必须是有限正数 |
-| expansion | 0 .. 32768 | `kMaxExpansion`，0 表示 NONSCALING |
+| expansion | 1 .. 32768 | `kMaxExpansion`；`EXPANSION 0` 返回 `ERR expansion should be greater or equal to 1`（与 RedisBloom 2.6 一致），固定大小请用 `NONSCALING` |
 | per-layer data size | <= 2 GB | `BloomLayer::Create` 内部检查 |
 | total data size | <= 4 GB | runtime `AppendLayer()` + RDB/wire 反序列化 |
 | max layers | <= 1024 | RDB/wire 反序列化检查 |
@@ -294,9 +297,7 @@ gemini-bloom 在反序列化路径上比 RedisBloom 做了更多校验：
 
 | 差异点 | gemini | RedisBloom v2.4.20 | 影响 |
 |---|---|---|---|
-| `BF.INFO key FIELD` 返回形状 | 标量 | singleton array `[value]` | 客户端解析差异 |
 | `BF.INFO Size` 数值 | 含 struct + layer slots | 只含 chain 内部统计 | 监控数值差异 |
-| `BF.INSERT EXPANSION 0` | 映射为 NONSCALING | 返回 ERR | gemini 更宽松 |
 | `BF.INSERT NOCREATE + CAPACITY` | ERR NOCREATE cannot be used with CAPACITY or ERROR | ERR not found | 错误消息不同 |
 | `BF.RESERVE` 未知 option | ERR unrecognized option | 静默接受 | gemini 更严格 |
 | `BF.INFO` missing key | ERR key does not exist | ERR not found | 错误消息不同 |
@@ -305,6 +306,8 @@ gemini-bloom 在反序列化路径上比 RedisBloom 做了更多校验：
 | BF.INFO / BF.CARD flags | readonly | readonly fast | 性能分类标签差异 |
 | `LOADCHUNK` cursor>1 对已有 key | 拒绝（loading 状态保护） | 允许覆写 bit array | gemini 更安全 |
 | loading 中的 key 读写 | 返回 `ERR filter is being loaded` | 无此概念 | gemini 更严格 |
+
+以下历史差异已修复，现与 RedisBloom 一致：`BF.INFO key FIELD` 返回 singleton array `[value]`；`BF.RESERVE` / `BF.INSERT` 的 `EXPANSION 0` 返回 ERR（对齐 RedisBloom 2.6）。
 
 ---
 
@@ -315,20 +318,29 @@ gemini-bloom 在反序列化路径上比 RedisBloom 做了更多校验：
 ```
 modules/gemini-bloom/
   src/
-    redis_bloom_module.cc   # 模块入口：RedisModule_OnLoad
+    redis_bloom_module.cc   # 模块入口：RedisModule_OnLoad，注册全部 5 种 data type 与命令
     bloom_commands.cc/h     # BF.* 命令处理函数，Redis Module API 交互
     bloom_rdb.cc/h          # RDB/wire 序列化反序列化，Module type callbacks
-    bloom_config.cc/h       # module load args 解析
+    bloom_config.cc/h       # module load args 解析（BF 参数；CF_* 参数交给 cf_config）
     bloom_filter.cc/h       # 单层 BloomLayer：创建、insert、test、参数计算
     sb_chain.cc/h           # ScalingBloomFilter：多层管理、自动扩容
     murmur2.cc/h            # MurmurHash2 / MurmurHash64A
     rm_alloc.h              # 内存分配抽象（RedisModule_Alloc 或 malloc）
+    # 以下为其他数据类型（不在本文档范围内），每种类型同样分为 core / rdb / commands 三层
+    cuckoo_filter.cc/h  cf_chain.cc/h  cf_rdb.cc/h  cf_commands.cc/h  cf_config.cc/h   # CF.*
+    cms_sketch.cc/h     cms_rdb.cc/h   cms_commands.cc/h                                 # CMS.*
+    topk_sketch.cc/h    topk_rdb.cc/h  topk_commands.cc/h                                # TOPK.*
+    tdigest_sketch.cc/h tdigest_rdb.cc/h tdigest_commands.cc/h                           # TDIGEST.*
   tests/
     bloom_filter_test.cc    # BloomLayer 单元测试 + hash golden vectors
     sb_chain_test.cc        # ScalingBloomFilter 单元测试
     bloom_rdb_test.cc       # RDB/wire 序列化 round-trip + 恶意 metadata 测试
+    cuckoo_filter_test.cc cf_chain_test.cc cf_rdb_test.cc
+    cms_sketch_test.cc cms_rdb_test.cc topk_sketch_test.cc topk_rdb_test.cc
+    tdigest_sketch_test.cc tdigest_rdb_test.cc
     tcl/
-      bloom_test.tcl        # 集成测试（启动 redis-server，完整命令覆盖）
+      bloom_test.tcl        # BF.* 集成测试（启动 redis-server，完整命令覆盖）
+      cf_test.tcl cms_test.tcl topk_test.tcl tdigest_test.tcl
 ```
 
 ### 4.2 层次划分
@@ -388,6 +400,20 @@ modules/gemini-bloom/
 - 测试环境（`REDIS_BLOOM_TESTING` 宏）映射到标准 `malloc` / `calloc` / `free`
 - `ScalingBloomFilter` 本身通过 `RMAlloc(sizeof(...))` + placement new 创建，析构 + `RMFree` 释放
 - `BloomLayer` 的 bit array 通过 `RMCalloc` 分配（零初始化）
+
+### 4.5 Module Type Callbacks
+
+`MBbloom--` 注册的 `RedisModuleTypeMethods`：
+
+| Callback | 实现 | 作用 |
+|---|---|---|
+| `rdb_load` / `rdb_save` | `RdbLoadBloom` / `RdbSaveBloom` | RDB 持久化（§5.1） |
+| `aof_rewrite` | `AofRewriteBloom` | command-AOF rewrite（§5.3） |
+| `free` / `mem_usage` | `FreeBloom` / `BloomMemUsage` | 释放与 `MEMORY USAGE` |
+| `digest` | `DigestBloom` | 参与 `DEBUG DIGEST-VALUE` 一致性校验 |
+| `copy2` | `CopyBloom2` | 支持 `COPY` 命令（基于 `ScalingBloomFilter::Clone` / `BloomLayer::Clone` 深拷贝） |
+| `free_effort2` | `FreeEffortBloom2` | 让 Redis 判断是否 lazy free |
+| `defrag` | `DefragBloom` | 支持 active defrag（基于 `AdoptLayersArray` / `AdoptBitArray` 迁移内存） |
 
 ---
 
@@ -582,10 +608,15 @@ RDB 文件、LOADCHUNK payload 均视为非信任输入：
 
 | 测试层 | 框架 | 用例数 | 定位 |
 |---|---|---|---|
-| BloomLayer 单元测试 | GTest (`bloom_filter_test`) | 28 | 单层 Bloom Filter 核心逻辑、hash 函数、flags |
-| ScalingBloomFilter 单元测试 | GTest (`sb_chain_test`) | 21 | 多层管理、扩容、固定大小、loading 状态、极端参数 |
-| RDB/wire 序列化测试 | GTest (`bloom_rdb_test`) | 65 | 序列化 round-trip、恶意输入拒绝、encver 兼容、loading flag 剥离 |
-| 集成测试 | TCL (`bloom_test.tcl`) | 150 | 完整命令语义、Redis 持久化、loading 状态保护、模块配置 |
+| BloomLayer 单元测试 | GTest (`bloom_filter_test`) | 30 | 单层 Bloom Filter 核心逻辑、hash 函数、flags、Clone |
+| ScalingBloomFilter 单元测试 | GTest (`sb_chain_test`) | 23 | 多层管理、扩容、固定大小、loading 状态、极端参数、Clone |
+| RDB/wire 序列化测试 | GTest (`bloom_rdb_test`) | 69 | 序列化 round-trip、恶意输入拒绝、encver 兼容、loading flag 剥离、digest/copy/defrag callbacks |
+| 集成测试 | TCL (`bloom_test.tcl`) | ~185 | 完整命令语义、Redis 持久化、loading 状态保护、模块配置、通用命令（RENAME/COPY/DUMP/RESTORE/MULTI/Lua）、FP rate |
+| 对照测试 | Python (`ci/bloom_compat_test.py`) | 12 场景 | 与 RedisBloom 逐条对比 `BF.*` 返回值（RESP2 + RESP3） |
+| 长稳测试 | Python (`ci/bloom_soak_test.py`) | 默认 300s | 零 false negative、内存无泄漏 |
+| RDB 迁移测试 | Python (`ci/bloom_migrate_test.py`) | 16 配置 / ~30 万 items | gemini ↔ RedisBloom 4 方向 + 多跳 RDB 迁移 |
+
+> 用例数为本文档更新时（2026-11）按 `TEST()` / `test*` 宏统计的近似值，以源码为准。
 
 ### 7.2 测试隔离策略
 
@@ -637,7 +668,7 @@ RDB 文件、LOADCHUNK payload 均视为非信任输入：
 - **持久化**（2 tests）：BGSAVE + SHUTDOWN SAVE + restart 后数据完整；启用 AOF + BGREWRITEAOF + SHUTDOWN NOSAVE + restart 后数据完整。
 - **模块配置**（9 tests）：默认值验证；`ERROR_RATE`/`INITIAL_SIZE`/`EXPANSION` 覆盖验证；缺值/超范围/零值/未知参数均导致模块加载失败。配置测试通过启动独立 redis-server 实例来验证模块加载行为。
 - **Command metadata**（8 tests）：COMMAND INFO 验证所有命令的 write/readonly flag；COMMAND GETKEYS 验证 key 位置；ACL DRYRUN 验证鉴权。
-- **已知兼容差异**（6 expected-fail tests）：标记为 `EXPECTED GAP`，记录 RESP3（5 个）和 SCANDUMP byte-offset cursor（1 个）差异，不作为 CI 阻断项。
+- **RESP3 回复形状**：通过 `HELLO 3` 连接验证 `BF.INFO key FIELD` 返回 array 包裹的 integer，与 RedisBloom 一致。
 
 ### 7.5 构建与运行
 
@@ -667,17 +698,16 @@ tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
 | `INITIAL_SIZE` | 100 | 1 .. 2^30 | 默认初始容量 |
 | `EXPANSION` | 2 | 1 .. 32768 | 默认扩展因子 |
 
-参数名大小写不敏感。未知参数会导致模块加载失败。
+参数名大小写不敏感。未知参数会导致模块加载失败。`CF_BUCKET_SIZE`、`CF_INITIAL_SIZE`、`CF_MAX_ITERATIONS`、`CF_EXPANSION`、`CF_MAX_EXPANSIONS` 由 Cuckoo Filter 的 `cf_config.cc` 解析，BF 配置解析会跳过这些参数。
 
 ### 8.2 与 RedisBloom 配置差异
 
 | 差异 | gemini | RedisBloom v2.4.20 |
 |---|---|---|
 | `EXPANSION` 配置 | 支持（gemini 扩展） | 不支持（module load 失败） |
-| `CF_MAX_EXPANSIONS` | 不支持（非 Bloom Filter） | 支持（Cuckoo Filter 参数） |
 | 配置接口 | 仅 loadmodule args | loadmodule args（v2.4.x），后续版本有 RedisModule_RegisterConfig |
 | `EXPANSION 0` 在配置中 | 拒绝 | N/A |
-| `EXPANSION 0` 在命令中 | 映射为 NONSCALING | `BF.RESERVE` 接受，`BF.INSERT` 拒绝 |
+| `EXPANSION 0` 在命令中 | `BF.RESERVE` / `BF.INSERT` 均拒绝 | `BF.RESERVE` 接受，`BF.INSERT` 拒绝（RedisBloom 2.6 均拒绝） |
 
 ---
 
@@ -691,7 +721,7 @@ tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
 
 4. **BF.INFO Size 统计口径**：gemini 的 `Size` 包含 ScalingBloomFilter struct 和预留 layer slots，数值大于 RedisBloom 的统计。不影响 membership 正确性。
 
-5. **不支持删除**：Bloom Filter 的固有特性。需要删除功能应使用 Cuckoo Filter（gemini 目前未实现）。
+5. **不支持删除**：Bloom Filter 的固有特性。需要删除功能应使用同模块提供的 Cuckoo Filter（`CF.*`，支持 `CF.DEL`）。
 
 6. **子 filter 数量影响查询性能**：`EXPANSION 1` 会产生较多 layer，查询需要逐层检查。建议使用 `EXPANSION 2` 或更大值。
 

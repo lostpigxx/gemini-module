@@ -4,13 +4,22 @@ A collection of Redis modules, built from scratch with C++20.
 
 ## Modules
 
-### gemini-bloom — Bloom Filter / Cuckoo Filter
+### gemini-bloom — Probabilistic Data Structures
 
-Scalable Bloom Filter data structures with auto-expansion, supporting the full `BF.*` command set:
-`BF.RESERVE`, `BF.ADD`, `BF.MADD`, `BF.INSERT`, `BF.EXISTS`, `BF.MEXISTS`, `BF.INFO`, `BF.CARD`, `BF.SCANDUMP`, `BF.LOADCHUNK`.
+RedisBloom-family probabilistic data types, all served by a single `redis_bloom.so`:
 
-Also includes a scaling Cuckoo Filter data type, supporting the full `CF.*` command set:
-`CF.RESERVE`, `CF.ADD`, `CF.ADDNX`, `CF.INSERT`, `CF.INSERTNX`, `CF.EXISTS`, `CF.MEXISTS`, `CF.DEL`, `CF.COUNT`, `CF.INFO`, `CF.SCANDUMP`, `CF.LOADCHUNK`.
+| Type | RDB type name | Commands |
+|---|---|---|
+| Scalable Bloom Filter | `MBbloom--` (RedisBloom-compatible) | `BF.RESERVE`, `BF.ADD`, `BF.MADD`, `BF.INSERT`, `BF.EXISTS`, `BF.MEXISTS`, `BF.INFO`, `BF.CARD`, `BF.SCANDUMP`, `BF.LOADCHUNK` |
+| Scaling Cuckoo Filter | `MBcuckoo-` (private) | `CF.RESERVE`, `CF.ADD`, `CF.ADDNX`, `CF.INSERT`, `CF.INSERTNX`, `CF.EXISTS`, `CF.MEXISTS`, `CF.DEL`, `CF.COUNT`, `CF.INFO`, `CF.SCANDUMP`, `CF.LOADCHUNK` |
+| Count-Min Sketch | `MBcms----` (private) | `CMS.INITBYDIM`, `CMS.INITBYPROB`, `CMS.INCRBY`, `CMS.QUERY`, `CMS.MERGE`, `CMS.INFO` |
+| Top-K (HeavyKeeper) | `MBtopk---` (private) | `TOPK.RESERVE`, `TOPK.ADD`, `TOPK.INCRBY`, `TOPK.QUERY`, `TOPK.COUNT`, `TOPK.LIST`, `TOPK.INFO` |
+| T-Digest | `MBtdigest` (private) | `TDIGEST.CREATE`, `TDIGEST.ADD`, `TDIGEST.RESET`, `TDIGEST.MERGE`, `TDIGEST.QUANTILE`, `TDIGEST.CDF`, `TDIGEST.RANK`, `TDIGEST.REVRANK`, `TDIGEST.BYRANK`, `TDIGEST.BYREVRANK`, `TDIGEST.TRIMMED_MEAN`, `TDIGEST.MIN`, `TDIGEST.MAX`, `TDIGEST.INFO` |
+
+Only the Bloom Filter shares RedisBloom's RDB type name and supports RDB-level migration to/from RedisBloom.
+CF / CMS / Top-K / T-Digest are command-compatible but use private RDB formats. CMS / Top-K / T-Digest also
+register a private `*.LOADCHUNK` command used only for AOF rewrite replay. See
+[modules/gemini-bloom/DESIGN.md](modules/gemini-bloom/DESIGN.md) for details.
 
 ### gemini-json — JSON Data Type
 
@@ -19,12 +28,29 @@ JSON data type with JSONPath-based operations, compatible with the RedisJSON com
 `JSON.ARRAPPEND`, `JSON.ARRINDEX`, `JSON.ARRINSERT`, `JSON.ARRLEN`, `JSON.ARRPOP`, `JSON.ARRTRIM`,
 `JSON.STRAPPEND`, `JSON.STRLEN`, `JSON.NUMINCRBY`, `JSON.NUMMULTBY`,
 `JSON.OBJKEYS`, `JSON.OBJLEN`, `JSON.MGET`, `JSON.MSET`, `JSON.MERGE`,
-`JSON.DEBUG`, `JSON.RESP`.
+`JSON.DEBUG`, `JSON.RESP`, `JSON.FORGET`.
 
 ### gemini-search — Full-Text Search
 
-Full-text search engine with support for text, tag, numeric, vector (HNSW) and geo field types:
-`FT.CREATE`, `FT.DROPINDEX`, `FT.INFO`, `FT._LIST`, `FT.ADD`, `FT.DEL`, `FT.SEARCH`, `FT.AGGREGATE`.
+Clean-room full-text search engine, indexing Redis Hash (`ON HASH`) and JSON (`ON JSON`) documents.
+
+Field types: `TEXT` (BM25 scoring, Porter2 stemming, phonetic matching), `TAG`, `NUMERIC`, `VECTOR` (FLAT / HNSW),
+`GEO`, `GEOSHAPE`.
+
+Query features: boolean combinations, prefix / fuzzy / optional terms, exact phrase with `SLOP` / `INORDER`,
+numeric ranges, `GEOFILTER`, KNN with pre-filter, `HIGHLIGHT` / `SUMMARIZE`, `SORTBY` / `LIMIT` / `RETURN`.
+
+| Category | Commands |
+|---|---|
+| Index management | `FT.CREATE`, `FT.ALTER`, `FT.DROPINDEX`, `FT.INFO`, `FT._LIST`, `FT.ALIASADD`, `FT.ALIASUPDATE`, `FT.ALIASDEL`, `FT.TAGVALS` |
+| Documents (legacy) | `FT.ADD`, `FT.DEL` |
+| Query | `FT.SEARCH`, `FT.AGGREGATE` (multi-stage pipeline with expression engine), `FT.CURSOR`, `FT.EXPLAIN`, `FT.EXPLAINCLI`, `FT.PROFILE` |
+| Autocomplete | `FT.SUGADD`, `FT.SUGGET`, `FT.SUGDEL`, `FT.SUGLEN` |
+| Spellcheck / dictionaries / synonyms | `FT.SPELLCHECK`, `FT.DICTADD`, `FT.DICTDEL`, `FT.DICTDUMP`, `FT.SYNUPDATE`, `FT.SYNDUMP` |
+| Configuration / debug | `FT.CONFIG`, `FT._DEBUG` |
+
+Development roadmap: [doc/gemini-search/development-plan.md](doc/gemini-search/development-plan.md) (Phase 0–12) and
+[doc/gemini-search/development-plan-v2.md](doc/gemini-search/development-plan-v2.md) (Phase 13–26).
 
 ## Project Structure
 
@@ -101,8 +127,11 @@ Requires a `redis-server` binary in `$PATH`:
 # gemini-bloom
 tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
 
-# gemini-bloom Cuckoo Filter
+# gemini-bloom Cuckoo Filter / Count-Min Sketch / Top-K / T-Digest
 tclsh modules/gemini-bloom/tests/tcl/cf_test.tcl ./build/redis_bloom.so
+tclsh modules/gemini-bloom/tests/tcl/cms_test.tcl ./build/redis_bloom.so
+tclsh modules/gemini-bloom/tests/tcl/topk_test.tcl ./build/redis_bloom.so
+tclsh modules/gemini-bloom/tests/tcl/tdigest_test.tcl ./build/redis_bloom.so
 
 # gemini-json
 tclsh modules/gemini-json/tests/tcl/json_test.tcl ./build/redis_json.so
@@ -125,13 +154,15 @@ Docker CI 提供三组环境验证 gemini-bloom 在不同 Redis 版本下的兼�
 
 | 测试项 | 说明 |
 |---|---|
-| GTest 单元测试 | bloom_filter_test、bloom_rdb_test、sb_chain_test、cuckoo_filter_test、cf_chain_test、cf_rdb_test |
-| Tcl 集成测试 | 启动 redis-server 加载模块，验证 BF.\* 与 CF.\* 命令行为 |
+| GTest 单元测试 | `bloom_test` target：bloom_filter_test、sb_chain_test、bloom_rdb_test、cuckoo_filter_test、cf_chain_test、cf_rdb_test、cms_sketch_test、cms_rdb_test、topk_sketch_test、topk_rdb_test、tdigest_sketch_test、tdigest_rdb_test |
+| Tcl 集成测试 | 启动 redis-server 加载模块，验证 BF.\*、CF.\*、CMS.\*、TOPK.\*、TDIGEST.\* 命令行为 |
 | Compat 对比测试 | 同时启动 gemini-bloom 和 RedisBloom，对比所有 BF.* 命令返回值 |
 | Soak 长稳测试 | 持续运行 BF.* 命令验证零 false negative、内存无泄漏（默认 300s） |
 | RDB 迁移测试 | 4 方向 RDB 迁入迁出（RB→GB、GB→RB、GB→GB、RB→RB），验证 BF.EXISTS 100% 一致（含 false positive），覆盖 16 种 filter 配置、约 30 万 items |
 
-Redis 6/7 环境下 Compat 和 Soak 会跑两轮（RESP3 + RESP2），Redis 5 只跑 RESP2。
+Redis 6/7 环境下 Compat、Soak、RDB 迁移会跑两轮（RESP3 + RESP2），Redis 5 只跑 RESP2。
+
+> Compat / Soak / RDB 迁移测试目前只覆盖 BF.\*。gemini-json 与 gemini-search 尚未接入 Docker CI，仅有本地 GTest + Tcl 测试。
 
 ### 运行单组环境
 
