@@ -2864,6 +2864,83 @@ if {$redis_major >= 7} {
 }
 
 # ============================================================
+# Phase 29: Partial Options & Runtime Lifecycle
+# ============================================================
+puts "\n=== Phase 29: Partial Options & Lifecycle ==="
+
+test_assert "PHONETIC query matches Jon when searching John" {
+  r FT.CREATE p29ph SCHEMA name TEXT PHONETIC dm:en
+  r FT.ADD p29ph d1 FIELDS name "Jon"
+  r FT.ADD p29ph d2 FIELDS name "Alice"
+  set res [r FT.SEARCH p29ph "John"]
+  if {[lindex $res 0] != 1} { error "Expected 1 phonetic match for John, got $res" }
+  # VERBATIM disables phonetic expansion
+  set res2 [r FT.SEARCH p29ph "John" VERBATIM]
+  if {[lindex $res2 0] != 0} { error "Expected 0 matches with VERBATIM, got $res2" }
+  r FT.DROPINDEX p29ph
+}
+
+test_assert "DIALECT 1 vs DIALECT 2 negation scoping differs" {
+  r FT.CREATE p29dia SCHEMA a TAG b TAG
+  r FT.ADD p29dia d1 FIELDS a x b y
+  r FT.ADD p29dia d2 FIELDS a x b z
+  r FT.ADD p29dia d3 FIELDS a w b y
+  # DIALECT 2: -@a:{x} @b:{y} => (-a:x) AND b:y => only d3
+  set r2 [r FT.SEARCH p29dia {-@a:{x} @b:{y}} DIALECT 2]
+  if {[lindex $r2 0] != 1} { error "Expected 1 match in DIALECT 2, got $r2" }
+  # DIALECT 1: -@a:{x} @b:{y} => -(a:x AND b:y) => d2 and d3
+  set r1 [r FT.SEARCH p29dia {-@a:{x} @b:{y}} DIALECT 1]
+  if {[lindex $r1 0] != 2} { error "Expected 2 matches in DIALECT 1, got $r1" }
+  r FT.DROPINDEX p29dia
+}
+
+test_assert "FT.PROFILE supports SEARCH options and AGGREGATE pipeline" {
+  r FT.CREATE p29prof SCHEMA cat TAG price NUMERIC
+  r FT.ADD p29prof d1 FIELDS cat book price 10
+  r FT.ADD p29prof d2 FIELDS cat book price 30
+  r FT.ADD p29prof d3 FIELDS cat pen price 5
+
+  set ps [r FT.PROFILE p29prof SEARCH QUERY "*" LIMIT 0 2]
+  if {[llength [lindex $ps 0]] != 2} { error "Expected 2 limited results in SEARCH profile, got $ps" }
+
+  set pa [r FT.PROFILE p29prof AGGREGATE QUERY "*" GROUPBY 1 @cat REDUCE COUNT 0 AS cnt SORTBY 2 @cnt DESC]
+  if {[llength [lindex $pa 0]] != 2} { error "Expected 2 grouped rows in AGGREGATE profile, got $pa" }
+  set pinfo [lindex $pa 1]
+  if {[lsearch $pinfo "pipeline_time_us"] < 0} { error "Missing pipeline_time_us in AGGREGATE profile: $pinfo" }
+
+  r FT.DROPINDEX p29prof
+}
+
+test_assert "FT.CURSOR MAXIDLE expires idle cursors" {
+  r FT.CREATE p29cur SCHEMA tag TAG
+  r FT.ADD p29cur d1 FIELDS tag a
+  r FT.ADD p29cur d2 FIELDS tag a
+  r FT.ADD p29cur d3 FIELDS tag a
+  set res [r FT.AGGREGATE p29cur "*" WITHCURSOR COUNT 1 MAXIDLE 150]
+  set cid [lindex $res 1]
+  if {$cid == 0} { error "Expected non-zero cursor id" }
+  after 250
+  set got_err 0
+  if {[catch {r FT.CURSOR READ p29cur $cid} err]} {
+    set got_err 1
+  }
+  if {!$got_err} { error "Expected expired cursor to fail on READ" }
+  r FT.DROPINDEX p29cur
+}
+
+test_assert "TEMPORARY index auto-expires after idle TTL" {
+  r FT.CREATE p29tmp TEMPORARY 1 SCHEMA tag TAG
+  r FT.ADD p29tmp d1 FIELDS tag a
+  # Wait for maintenance timer (1s interval) + 1s TTL
+  after 2300
+  set got_err 0
+  if {[catch {r FT.INFO p29tmp} err]} {
+    set got_err 1
+  }
+  if {!$got_err} { error "Expected TEMPORARY index p29tmp to expire" }
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

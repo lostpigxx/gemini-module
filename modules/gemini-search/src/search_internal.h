@@ -13,13 +13,21 @@ struct AggCursor {
   std::vector<std::unordered_map<std::string, std::string>> rows;
   size_t pos = 0;
   size_t batch_size = 1000;
+  int64_t last_access_ms = 0;
+  int64_t max_idle_ms = 300000;
 };
+
+constexpr size_t kMaxCursorsPerIndex = 128;
 
 // Global state accessors (defined in search_state.cc)
 std::unordered_map<std::string, IndexEntry>& GetIndices();
 std::unordered_map<uint64_t, AggCursor>& GetCursors();
 uint64_t NextCursorId();
 std::string ResolveAlias(const std::string& name);
+int64_t NowMs();
+void TouchIndex(IndexEntry& entry);
+int GetDefaultDialect();
+void PurgeExpiredCursors(int64_t now_ms);
 
 // Shared argument & indexing helpers (defined in search_state.cc)
 bool TryParseDouble(const std::string& s, double& out);
@@ -36,8 +44,13 @@ void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry, const std::string& key
 void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry, const std::string& key_name);
 int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event, RedisModuleString* key);
 
-// Aggregation cursor helper (defined in search_agg_cmds.cc)
+// Aggregation cursor & profile helpers (defined in search_agg_cmds.cc)
 void ReplyCursorBatch(RedisModuleCtx* ctx, uint64_t cursor_id, AggCursor& cursor);
+bool RunAggregateForProfile(
+    IndexEntry& entry, const std::vector<std::string>& result_ids,
+    RedisModuleString** argv, int start_arg, int argc,
+    std::vector<std::unordered_map<std::string, std::string>>& out_rows,
+    std::string& error_msg, int64_t deadline_ms = 0);
 
 // Index management commands (search_index_cmds.cc)
 int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);

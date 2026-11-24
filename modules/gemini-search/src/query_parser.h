@@ -8,6 +8,7 @@
 #include "tag_index.h"
 #include "text_index.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,8 @@ struct QueryOptions {
   bool inorder = false;
   bool stem = true;
   std::string language = "english";
+  int dialect = 2;
+  int64_t deadline_ms = 0;
 };
 
 bool ParseQuery(const std::string& input, ParsedQuery& out,

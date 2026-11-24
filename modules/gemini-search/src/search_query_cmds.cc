@@ -526,6 +526,7 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   // Build query options
+  TouchIndex(entry);
   QueryOptions qopts;
   qopts.nostopwords = opts.nostopwords || opts.verbatim;
   qopts.infields = opts.infields;
@@ -533,6 +534,10 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   qopts.inorder = opts.inorder;
   qopts.stem = !opts.verbatim;
   qopts.language = opts.has_language ? opts.language : entry.spec.language;
+  qopts.dialect = opts.has_dialect ? opts.dialect : GetDefaultDialect();
+  if (opts.has_timeout && opts.timeout_ms > 0) {
+    qopts.deadline_ms = NowMs() + opts.timeout_ms;
+  }
 
   ParsedQuery parsed;
   std::string parse_error;
@@ -1011,7 +1016,7 @@ int FtExplainCliCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 }
 
 
-// FT.PROFILE <index> SEARCH|AGGREGATE <query> [options...]
+// FT.PROFILE <index> SEARCH|AGGREGATE [LIMITED] [QUERY] <query> [options...]
 int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                             int argc) {
   if (argc < 4) return RedisModule_WrongArity(ctx);
@@ -1023,6 +1028,7 @@ int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
   auto& entry = it->second;
+  TouchIndex(entry);
 
   auto mode = ArgView(argv[2]);
   bool is_search = MatchArg(mode, "SEARCH");
@@ -1031,15 +1037,59 @@ int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, "ERR FT.PROFILE requires SEARCH or AGGREGATE");
   }
 
-  if (argc < 4) return RedisModule_WrongArity(ctx);
-  std::string query_str(ArgView(argv[3]));
+  int qidx = 3;
+  if (qidx < argc && MatchArg(ArgView(argv[qidx]), "LIMITED")) qidx++;
+  if (qidx < argc && MatchArg(ArgView(argv[qidx]), "QUERY")) qidx++;
+  if (qidx >= argc) return RedisModule_WrongArity(ctx);
+  std::string query_str(ArgView(argv[qidx]));
+  int opt_start = qidx + 1;
 
-  struct timespec t_start, t_parse, t_eval, t_end;
+  // Parse optional SEARCH modifiers (DIALECT, LIMIT, SORTBY, VERBATIM, TIMEOUT)
+  QueryOptions qopts;
+  qopts.language = entry.spec.language;
+  qopts.dialect = GetDefaultDialect();
+  long long limit_offset = 0;
+  long long limit_count = -1;
+  std::string sortby_field;
+  bool sortby_desc = false;
+  if (is_search) {
+    for (int oi = opt_start; oi < argc; ) {
+      auto kw = ArgView(argv[oi]);
+      if (MatchArg(kw, "DIALECT") && oi + 1 < argc) {
+        qopts.dialect = static_cast<int>(std::strtol(std::string(ArgView(argv[oi + 1])).c_str(), nullptr, 10));
+        oi += 2;
+      } else if (MatchArg(kw, "VERBATIM")) {
+        qopts.stem = false;
+        oi++;
+      } else if (MatchArg(kw, "LIMIT") && oi + 2 < argc) {
+        limit_offset = std::strtoll(std::string(ArgView(argv[oi + 1])).c_str(), nullptr, 10);
+        limit_count = std::strtoll(std::string(ArgView(argv[oi + 2])).c_str(), nullptr, 10);
+        oi += 3;
+      } else if (MatchArg(kw, "SORTBY") && oi + 1 < argc) {
+        sortby_field = std::string(ArgView(argv[oi + 1]));
+        oi += 2;
+        if (oi < argc && MatchArg(ArgView(argv[oi]), "DESC")) {
+          sortby_desc = true;
+          oi++;
+        } else if (oi < argc && MatchArg(ArgView(argv[oi]), "ASC")) {
+          oi++;
+        }
+      } else if (MatchArg(kw, "TIMEOUT") && oi + 1 < argc) {
+        long long tms = std::strtoll(std::string(ArgView(argv[oi + 1])).c_str(), nullptr, 10);
+        if (tms > 0) qopts.deadline_ms = NowMs() + tms;
+        oi += 2;
+      } else {
+        oi++;
+      }
+    }
+  }
+
+  struct timespec t_start, t_parse, t_eval, t_pipe, t_end;
   clock_gettime(CLOCK_MONOTONIC, &t_start);
 
   ParsedQuery parsed;
   std::string parse_error;
-  if (!ParseQuery(query_str, parsed, parse_error)) {
+  if (!ParseQuery(query_str, parsed, parse_error, qopts)) {
     return RedisModule_ReplyWithError(ctx, parse_error.c_str());
   }
   clock_gettime(CLOCK_MONOTONIC, &t_parse);
@@ -1049,7 +1099,7 @@ int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       parsed.root, entry.spec, entry.doc_store,
       entry.tag_indices, entry.numeric_indices,
       entry.text_indices, entry.geo_indices, eval_error,
-      {}, &entry.geoshape_indices);
+      qopts, &entry.geoshape_indices);
   if (!eval_error.empty()) {
     return RedisModule_ReplyWithError(ctx, eval_error.c_str());
   }
@@ -1060,6 +1110,76 @@ int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                                (b.tv_nsec - a.tv_nsec) / 1000LL);
   };
 
+  if (is_aggregate) {
+    std::vector<std::unordered_map<std::string, std::string>> rows;
+    std::string agg_error;
+    if (!RunAggregateForProfile(entry, result_ids, argv, opt_start, argc,
+                                rows, agg_error, qopts.deadline_ms)) {
+      return RedisModule_ReplyWithError(ctx, agg_error.c_str());
+    }
+    clock_gettime(CLOCK_MONOTONIC, &t_pipe);
+    clock_gettime(CLOCK_MONOTONIC, &t_end);
+
+    double parse_us = ElapsedUs(t_start, t_parse);
+    double eval_us = ElapsedUs(t_parse, t_eval);
+    double pipe_us = ElapsedUs(t_eval, t_pipe);
+    double total_us = ElapsedUs(t_start, t_end);
+
+    RedisModule_ReplyWithArray(ctx, 2);
+    RedisModule_ReplyWithArray(ctx, static_cast<long>(rows.size()));
+    for (const auto& row : rows) {
+      std::vector<std::string> keys;
+      keys.reserve(row.size());
+      for (const auto& [k, v] : row) keys.push_back(k);
+      std::sort(keys.begin(), keys.end());
+      RedisModule_ReplyWithArray(ctx, static_cast<long>(keys.size()) * 2);
+      for (const auto& k : keys) {
+        RedisModule_ReplyWithCString(ctx, k.c_str());
+        RedisModule_ReplyWithCString(ctx, row.at(k).c_str());
+      }
+    }
+
+    RedisModule_ReplyWithArray(ctx, 12);
+    RedisModule_ReplyWithSimpleString(ctx, "parse_time_us");
+    RedisModule_ReplyWithCString(ctx, std::to_string(parse_us).c_str());
+    RedisModule_ReplyWithSimpleString(ctx, "eval_time_us");
+    RedisModule_ReplyWithCString(ctx, std::to_string(eval_us).c_str());
+    RedisModule_ReplyWithSimpleString(ctx, "pipeline_time_us");
+    RedisModule_ReplyWithCString(ctx, std::to_string(pipe_us).c_str());
+    RedisModule_ReplyWithSimpleString(ctx, "total_time_us");
+    RedisModule_ReplyWithCString(ctx, std::to_string(total_us).c_str());
+    RedisModule_ReplyWithSimpleString(ctx, "total_docs");
+    RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(entry.doc_store.Size()));
+    RedisModule_ReplyWithSimpleString(ctx, "result_count");
+    RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(rows.size()));
+    return REDISMODULE_OK;
+  }
+
+  // Optional SORTBY / LIMIT for SEARCH profile
+  if (!sortby_field.empty()) {
+    std::sort(result_ids.begin(), result_ids.end(),
+              [&](const std::string& a, const std::string& b) {
+                const auto* da = entry.doc_store.Get(a);
+                const auto* db = entry.doc_store.Get(b);
+                std::string va = (da && da->fields.count(sortby_field)) ? da->fields.at(sortby_field) : "";
+                std::string vb = (db && db->fields.count(sortby_field)) ? db->fields.at(sortby_field) : "";
+                double na = 0, nb = 0;
+                if (TryParseDouble(va, na) && TryParseDouble(vb, nb)) {
+                  return sortby_desc ? (na > nb) : (na < nb);
+                }
+                return sortby_desc ? (va > vb) : (va < vb);
+              });
+  }
+  if (limit_count >= 0) {
+    if (limit_offset >= static_cast<long long>(result_ids.size())) {
+      result_ids.clear();
+    } else {
+      size_t start = static_cast<size_t>(std::max<long long>(0, limit_offset));
+      size_t end = std::min(result_ids.size(), start + static_cast<size_t>(limit_count));
+      result_ids.assign(result_ids.begin() + static_cast<ptrdiff_t>(start),
+                        result_ids.begin() + static_cast<ptrdiff_t>(end));
+    }
+  }
   clock_gettime(CLOCK_MONOTONIC, &t_end);
 
   double parse_us = ElapsedUs(t_start, t_parse);

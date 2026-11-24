@@ -51,6 +51,9 @@ int FtCursorCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc < 4) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
+  int64_t now_ms = NowMs();
+  PurgeExpiredCursors(now_ms);
+
   auto sub = ArgView(argv[1]);
 
   if (MatchArg(sub, "READ")) {
@@ -65,6 +68,7 @@ int FtCursorCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       return RedisModule_ReplyWithError(ctx, "ERR cursor not found");
     }
 
+    it->second.last_access_ms = now_ms;
     if (argc >= 6 && MatchArg(ArgView(argv[4]), "COUNT")) {
       char* ep2 = nullptr;
       long cnt = std::strtol(std::string(ArgView(argv[5])).c_str(), &ep2, 10);
@@ -390,10 +394,27 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
   auto& entry = it->second;
+  TouchIndex(entry);
+
+  // Pre-scan for DIALECT and TIMEOUT options
+  QueryOptions qopts;
+  qopts.language = entry.spec.language;
+  qopts.dialect = GetDefaultDialect();
+  for (int ci = 3; ci < argc; ci++) {
+    auto kw = ArgView(argv[ci]);
+    if (MatchArg(kw, "DIALECT") && ci + 1 < argc) {
+      qopts.dialect = static_cast<int>(std::strtol(std::string(ArgView(argv[ci + 1])).c_str(), nullptr, 10));
+      ci++;
+    } else if (MatchArg(kw, "TIMEOUT") && ci + 1 < argc) {
+      long long tms = std::strtoll(std::string(ArgView(argv[ci + 1])).c_str(), nullptr, 10);
+      if (tms > 0) qopts.deadline_ms = NowMs() + tms;
+      ci++;
+    }
+  }
 
   ParsedQuery parsed;
   std::string parse_error;
-  if (!ParseQuery(std::string(ArgView(argv[2])), parsed, parse_error)) {
+  if (!ParseQuery(std::string(ArgView(argv[2])), parsed, parse_error, qopts)) {
     return RedisModule_ReplyWithError(ctx, parse_error.c_str());
   }
 
@@ -402,7 +423,7 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
                     entry.tag_indices, entry.numeric_indices,
                     entry.text_indices, entry.geo_indices, eval_error,
-                    {}, &entry.geoshape_indices);
+                    qopts, &entry.geoshape_indices);
   if (!eval_error.empty()) {
     return RedisModule_ReplyWithError(ctx, eval_error.c_str());
   }
@@ -646,14 +667,21 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (arg_i >= argc)
         return RedisModule_ReplyWithError(ctx, "ERR MAXIDLE requires a value");
       arg_i++;
+    } else if (MatchArg(kw, "DIALECT") || MatchArg(kw, "TIMEOUT")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc)
+        return RedisModule_ReplyWithError(ctx, "ERR option requires a value");
+      arg_i++;
     } else {
       return RedisModule_ReplyWithError(ctx, "ERR unknown AGGREGATE option");
     }
   }
 
-  // Check for WITHCURSOR — re-scan args for it
+  // Check for WITHCURSOR / COUNT / MAXIDLE
   bool with_cursor = false;
   size_t cursor_count = 1000;
+  int64_t cursor_max_idle_ms = 300000;
   for (int ci = 3; ci < argc; ci++) {
     if (MatchArg(ArgView(argv[ci]), "WITHCURSOR")) {
       with_cursor = true;
@@ -661,6 +689,13 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       char* ep = nullptr;
       long cv = std::strtol(std::string(ArgView(argv[ci + 1])).c_str(), &ep, 10);
       if (*ep == '\0' && cv > 0) cursor_count = static_cast<size_t>(cv);
+    } else if (MatchArg(ArgView(argv[ci]), "MAXIDLE") && ci + 1 < argc) {
+      char* ep = nullptr;
+      long long mv = std::strtoll(std::string(ArgView(argv[ci + 1])).c_str(), &ep, 10);
+      if (*ep != '\0' || mv < 0) {
+        return RedisModule_ReplyWithError(ctx, "ERR MAXIDLE must be a non-negative integer");
+      }
+      cursor_max_idle_ms = static_cast<int64_t>(mv);
     }
   }
 
@@ -675,6 +710,9 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   // Execute pipeline stages
   for (auto& stage : stages) {
+    if (qopts.deadline_ms > 0 && NowMs() > qopts.deadline_ms) {
+      return RedisModule_ReplyWithError(ctx, "ERR query timeout");
+    }
     switch (stage.type) {
       case PipelineStageType::kLoad:
         // LOAD adds fields from document store (for rows that still reference docs)
@@ -727,12 +765,23 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   // Reply
   if (with_cursor) {
+    int64_t now_ms = NowMs();
+    PurgeExpiredCursors(now_ms);
+    size_t idx_cursors = 0;
+    for (const auto& [id, c] : GetCursors()) {
+      if (c.index_name == idx_str) idx_cursors++;
+    }
+    if (idx_cursors >= kMaxCursorsPerIndex) {
+      return RedisModule_ReplyWithError(ctx, "ERR too many active cursors");
+    }
     uint64_t cid = NextCursorId();
     AggCursor cursor;
     cursor.index_name = idx_str;
     cursor.rows = std::move(rows);
     cursor.pos = 0;
     cursor.batch_size = cursor_count;
+    cursor.last_access_ms = now_ms;
+    cursor.max_idle_ms = cursor_max_idle_ms;
     GetCursors()[cid] = std::move(cursor);
     ReplyCursorBatch(ctx, cid, GetCursors()[cid]);
   } else {
@@ -750,4 +799,168 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   return REDISMODULE_OK;
+}
+
+bool RunAggregateForProfile(
+    IndexEntry& entry, const std::vector<std::string>& result_ids,
+    RedisModuleString** argv, int start_arg, int argc,
+    std::vector<std::unordered_map<std::string, std::string>>& out_rows,
+    std::string& error_msg, int64_t deadline_ms) {
+  std::vector<PipelineStage> stages;
+  PipelineStage* pending_groupby = nullptr;
+
+  int arg_i = start_arg;
+  while (arg_i < argc) {
+    auto kw = ArgView(argv[arg_i]);
+    if (MatchArg(kw, "LOAD")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc) { error_msg = "ERR LOAD requires nargs"; return false; }
+      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), nullptr, 10);
+      arg_i++;
+      if (arg_i + n > argc) { error_msg = "ERR LOAD field count mismatch"; return false; }
+      arg_i += static_cast<int>(n);
+    } else if (MatchArg(kw, "APPLY")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i + 2 >= argc || !MatchArg(ArgView(argv[arg_i + 1]), "AS")) {
+        error_msg = "ERR APPLY requires expr AS alias";
+        return false;
+      }
+      PipelineStage st;
+      st.type = PipelineStageType::kApply;
+      st.apply_expr = std::string(ArgView(argv[arg_i]));
+      st.apply_alias = std::string(ArgView(argv[arg_i + 2]));
+      stages.push_back(std::move(st));
+      arg_i += 3;
+    } else if (MatchArg(kw, "FILTER")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc) { error_msg = "ERR FILTER requires expr"; return false; }
+      PipelineStage st;
+      st.type = PipelineStageType::kFilter;
+      st.filter_expr = std::string(ArgView(argv[arg_i]));
+      stages.push_back(std::move(st));
+      arg_i++;
+    } else if (MatchArg(kw, "GROUPBY")) {
+      arg_i++;
+      if (arg_i >= argc) { error_msg = "ERR GROUPBY requires nargs"; return false; }
+      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), nullptr, 10);
+      arg_i++;
+      if (arg_i + n > argc) { error_msg = "ERR GROUPBY field count mismatch"; return false; }
+      PipelineStage st;
+      st.type = PipelineStageType::kGroupby;
+      for (long fi = 0; fi < n; fi++) {
+        std::string f(ArgView(argv[arg_i + fi]));
+        if (!f.empty() && f[0] == '@') f = f.substr(1);
+        st.groupby_fields.push_back(std::move(f));
+      }
+      arg_i += static_cast<int>(n);
+      stages.push_back(std::move(st));
+      pending_groupby = &stages.back();
+    } else if (MatchArg(kw, "REDUCE") && pending_groupby) {
+      arg_i++;
+      if (arg_i + 1 >= argc) { error_msg = "ERR REDUCE requires func and nargs"; return false; }
+      auto fstr = ArgView(argv[arg_i++]);
+      long nargs = std::strtol(std::string(ArgView(argv[arg_i++])).c_str(), nullptr, 10);
+      if (arg_i + nargs > argc) { error_msg = "ERR REDUCE nargs mismatch"; return false; }
+      ReduceOp rop;
+      if (MatchArg(fstr, "COUNT")) rop.func = ReduceFunc::kCount;
+      else if (MatchArg(fstr, "SUM")) rop.func = ReduceFunc::kSum;
+      else if (MatchArg(fstr, "AVG")) rop.func = ReduceFunc::kAvg;
+      else if (MatchArg(fstr, "MIN")) rop.func = ReduceFunc::kMin;
+      else if (MatchArg(fstr, "MAX")) rop.func = ReduceFunc::kMax;
+      else if (MatchArg(fstr, "COUNT_DISTINCT")) rop.func = ReduceFunc::kCountDistinct;
+      else if (MatchArg(fstr, "COUNT_DISTINCTISH")) rop.func = ReduceFunc::kCountDistinctish;
+      else if (MatchArg(fstr, "STDDEV")) rop.func = ReduceFunc::kStddev;
+      else if (MatchArg(fstr, "TOLIST")) rop.func = ReduceFunc::kTolist;
+      else { error_msg = "ERR unknown REDUCE function"; return false; }
+      if (nargs >= 1) {
+        std::string f(ArgView(argv[arg_i]));
+        if (!f.empty() && f[0] == '@') f = f.substr(1);
+        rop.field = std::move(f);
+      }
+      arg_i += static_cast<int>(nargs);
+      if (arg_i + 1 < argc && MatchArg(ArgView(argv[arg_i]), "AS")) {
+        rop.alias = std::string(ArgView(argv[arg_i + 1]));
+        arg_i += 2;
+      } else {
+        rop.alias = std::string(fstr);
+      }
+      pending_groupby->reducers.push_back(std::move(rop));
+    } else if (MatchArg(kw, "SORTBY")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc) { error_msg = "ERR SORTBY requires nargs"; return false; }
+      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), nullptr, 10);
+      arg_i++;
+      if (arg_i + n > argc || n < 1) { error_msg = "ERR SORTBY args mismatch"; return false; }
+      PipelineStage st;
+      st.type = PipelineStageType::kSortby;
+      std::string sf(ArgView(argv[arg_i]));
+      if (!sf.empty() && sf[0] == '@') sf = sf.substr(1);
+      st.sortby_field = std::move(sf);
+      if (n >= 2 && MatchArg(ArgView(argv[arg_i + 1]), "DESC")) st.sortby_desc = true;
+      stages.push_back(std::move(st));
+      arg_i += static_cast<int>(n);
+    } else if (MatchArg(kw, "LIMIT")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i + 1 >= argc) { error_msg = "ERR LIMIT requires offset count"; return false; }
+      PipelineStage st;
+      st.type = PipelineStageType::kLimit;
+      st.limit_offset = std::strtoll(std::string(ArgView(argv[arg_i])).c_str(), nullptr, 10);
+      st.limit_count = std::strtoll(std::string(ArgView(argv[arg_i + 1])).c_str(), nullptr, 10);
+      stages.push_back(std::move(st));
+      arg_i += 2;
+    } else {
+      arg_i++;
+    }
+  }
+
+  out_rows.clear();
+  out_rows.reserve(result_ids.size());
+  for (const auto& doc_id : result_ids) {
+    if (const auto* doc = entry.doc_store.Get(doc_id)) {
+      out_rows.push_back(doc->fields);
+    }
+  }
+
+  for (auto& stage : stages) {
+    if (deadline_ms > 0 && NowMs() > deadline_ms) {
+      error_msg = "ERR query timeout";
+      return false;
+    }
+    switch (stage.type) {
+      case PipelineStageType::kLoad:
+        break;
+      case PipelineStageType::kApply: {
+        ExprNode expr;
+        if (!ParseExpr(stage.apply_expr, expr, error_msg)) return false;
+        for (auto& row : out_rows) row[stage.apply_alias] = EvalExpr(expr, row).AsString();
+        break;
+      }
+      case PipelineStageType::kFilter: {
+        ExprNode expr;
+        if (!ParseExpr(stage.filter_expr, expr, error_msg)) return false;
+        out_rows.erase(
+            std::remove_if(out_rows.begin(), out_rows.end(),
+                           [&](const AggRow& row) { return !EvalExpr(expr, row).Truthy(); }),
+            out_rows.end());
+        break;
+      }
+      case PipelineStageType::kGroupby:
+        if (!stage.groupby_fields.empty() || !stage.reducers.empty()) {
+          ApplyGroupby(out_rows, stage.groupby_fields, stage.reducers);
+        }
+        break;
+      case PipelineStageType::kSortby:
+        ApplySortby(out_rows, stage.sortby_field, stage.sortby_desc);
+        break;
+      case PipelineStageType::kLimit:
+        ApplyLimit(out_rows, stage.limit_offset, stage.limit_count);
+        break;
+    }
+  }
+  return true;
 }

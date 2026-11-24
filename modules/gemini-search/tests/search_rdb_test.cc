@@ -448,7 +448,7 @@ TEST_F(SearchRdbTest, AuxRoundTripGlobalState) {
 
   GetTermDicts()["custom_dict"].Add({"alpha", "beta", "gamma"});
 
-  GetConfig()["DEFAULT_DIALECT"] = "2";
+  GetConfig()["DEFAULT_DIALECT"] = "1";
   GetConfig()["TIMEOUT"] = "1500";
 
   MockRdbStream stream;
@@ -459,7 +459,7 @@ TEST_F(SearchRdbTest, AuxRoundTripGlobalState) {
   EXPECT_TRUE(GetAliases().empty());
   EXPECT_TRUE(GetSuggestDicts().empty());
   EXPECT_TRUE(GetTermDicts().empty());
-  EXPECT_EQ(GetConfig()["DEFAULT_DIALECT"], "1");
+  EXPECT_EQ(GetConfig()["DEFAULT_DIALECT"], "2");
 
   EXPECT_EQ(AuxLoadSearch(stream.IO(), kSearchEncVer, REDISMODULE_AUX_AFTER_RDB),
             REDISMODULE_OK);
@@ -480,7 +480,7 @@ TEST_F(SearchRdbTest, AuxRoundTripGlobalState) {
   EXPECT_TRUE(GetTermDicts()["custom_dict"].Contains("beta"));
   EXPECT_EQ(GetTermDicts()["custom_dict"].Size(), 3u);
 
-  EXPECT_EQ(GetConfig()["DEFAULT_DIALECT"], "2");
+  EXPECT_EQ(GetConfig()["DEFAULT_DIALECT"], "1");
   EXPECT_EQ(GetConfig()["TIMEOUT"], "1500");
 }
 

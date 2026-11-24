@@ -1,4 +1,46 @@
 #include "search_internal.h"
+#include "search_rdb.h"
+
+#include <vector>
+
+static void MaintenanceTimerCallback(RedisModuleCtx* ctx, void* /*data*/) {
+  int64_t now_ms = NowMs();
+
+  // 1. Purge idle aggregation cursors
+  PurgeExpiredCursors(now_ms);
+
+  // 2. Drop expired TEMPORARY indices
+  std::vector<std::string> expired;
+  for (const auto& [name, entry] : GetIndices()) {
+    if (entry.spec.temporary_ttl > 0 && entry.last_access_ms > 0 &&
+        now_ms - entry.last_access_ms >=
+            static_cast<int64_t>(entry.spec.temporary_ttl) * 1000LL) {
+      expired.push_back(name);
+    }
+  }
+  for (const auto& name : expired) {
+    GetIndices().erase(name);
+    auto& aliases = GetAliases();
+    for (auto ait = aliases.begin(); ait != aliases.end(); ) {
+      if (ait->second == name) ait = aliases.erase(ait);
+      else ++ait;
+    }
+    if (SearchModuleType) {
+      RedisModuleString* kstr = RedisModule_CreateString(ctx, name.data(), name.size());
+      auto* key = static_cast<RedisModuleKey*>(
+          RedisModule_OpenKey(ctx, kstr, REDISMODULE_WRITE));
+      if (key) {
+        RedisModule_DeleteKey(key);
+        RedisModule_CloseKey(key);
+      }
+      RedisModule_FreeString(ctx, kstr);
+    }
+  }
+
+  if (RedisModule_CreateTimer) {
+    RedisModule_CreateTimer(ctx, 1000, MaintenanceTimerCallback, nullptr);
+  }
+}
 
 int RegisterSearchCommands(RedisModuleCtx* ctx) {
   struct CmdEntry {
@@ -52,6 +94,10 @@ int RegisterSearchCommands(RedisModuleCtx* ctx) {
           REDISMODULE_NOTIFY_MODULE,
           OnKeyspaceEvent) == REDISMODULE_ERR) {
     RedisModule_Log(ctx, "warning", "Failed to subscribe to keyspace events");
+  }
+
+  if (RedisModule_CreateTimer) {
+    RedisModule_CreateTimer(ctx, 1000, MaintenanceTimerCallback, nullptr);
   }
 
   return REDISMODULE_OK;

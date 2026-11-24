@@ -306,6 +306,7 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                               index_language, source_type,
                               std::move(custom_stopwords), has_custom_stopwords,
                               idx_nofreqs, idx_nooffsets, idx_nohl, idx_temporary};
+  TouchIndex(it->second);
 
   if (SearchModuleType) {
     auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(

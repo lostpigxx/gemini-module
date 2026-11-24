@@ -5,10 +5,18 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <ctime>
 #include <iterator>
 #include <limits>
 #include <set>
 #include <unordered_set>
+
+static int64_t QueryMonotonicMs() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<int64_t>(ts.tv_sec) * 1000LL +
+         static_cast<int64_t>(ts.tv_nsec) / 1000000LL;
+}
 
 // =============================================================
 // Set operations on sorted vectors
@@ -51,6 +59,10 @@ std::vector<std::string> EvaluateQuery(
     const QueryOptions& qopts,
     const GeoShapeFieldIndices* geoshape_indices,
     const std::unordered_map<std::string, std::string>* params) {
+  if (qopts.deadline_ms > 0 && QueryMonotonicMs() > qopts.deadline_ms) {
+    error_msg = "ERR query timeout";
+    return {};
+  }
   switch (node.type) {
     case QueryNode::Type::kMatchAll:
       return doc_store.AllIds();
@@ -92,13 +104,18 @@ std::vector<std::string> EvaluateQuery(
     case QueryNode::Type::kTextMatch: {
       auto LookupWithMod = [&qopts](const TextIndex* idx, const std::string& term,
                                      const TextTermModifier& mod,
-                                     bool nostem) -> std::vector<std::string> {
+                                     bool nostem, bool phonetic) -> std::vector<std::string> {
         if (mod.is_prefix) return idx->PrefixLookup(term);
         if (mod.fuzzy_dist > 0) return idx->FuzzyLookup(term, mod.fuzzy_dist);
-        if (qopts.stem && !nostem && qopts.language == "english") {
-          return idx->StemLookup(term);
+        std::vector<std::string> base =
+            (qopts.stem && !nostem && qopts.language == "english")
+                ? idx->StemLookup(term)
+                : idx->Lookup(term);
+        if (phonetic && qopts.stem) {
+          auto ph = idx->PhoneticLookup(term);
+          if (!ph.empty()) base = SetUnion(base, ph);
         }
-        return idx->Lookup(term);
+        return base;
       };
 
       TextTermModifier default_mod;
@@ -120,7 +137,8 @@ std::vector<std::string> EvaluateQuery(
         std::set<std::string> merged;
         for (size_t i = 0; i < node.text_terms.size(); i++) {
           const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
-          auto ids = LookupWithMod(idx, node.text_terms[i], mod, fspec->nostem);
+          auto ids = LookupWithMod(idx, node.text_terms[i], mod, fspec->nostem,
+                                   !fspec->phonetic.empty());
           merged.insert(ids.begin(), ids.end());
         }
         return {merged.begin(), merged.end()};
@@ -138,7 +156,8 @@ std::vector<std::string> EvaluateQuery(
         } else {
           for (size_t i = 0; i < node.text_terms.size(); i++) {
             const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
-            auto ids = LookupWithMod(idx, node.text_terms[i], mod, f.nostem);
+            auto ids = LookupWithMod(idx, node.text_terms[i], mod, f.nostem,
+                                     !f.phonetic.empty());
             merged.insert(ids.begin(), ids.end());
           }
         }
@@ -291,6 +310,10 @@ std::vector<ScoredResult> EvaluateQueryScored(
     const QueryOptions& qopts,
     const GeoShapeFieldIndices* geoshape_indices,
     const std::unordered_map<std::string, std::string>* params) {
+  if (qopts.deadline_ms > 0 && QueryMonotonicMs() > qopts.deadline_ms) {
+    error_msg = "ERR query timeout";
+    return {};
+  }
   switch (node.type) {
     case QueryNode::Type::kMatchAll: {
       auto ids = doc_store.AllIds();
@@ -325,13 +348,25 @@ std::vector<ScoredResult> EvaluateQueryScored(
     case QueryNode::Type::kTextMatch: {
       auto SearchWithMod = [&qopts](const TextIndex* idx, const std::string& term,
                                      const TextTermModifier& mod,
-                                     bool nostem) -> std::vector<TextSearchResult> {
+                                     bool nostem, bool phonetic) -> std::vector<TextSearchResult> {
         if (mod.is_prefix) return idx->PrefixSearch(term);
         if (mod.fuzzy_dist > 0) return idx->FuzzySearch(term, mod.fuzzy_dist);
-        if (qopts.stem && !nostem && qopts.language == "english") {
-          return idx->StemSearch(term);
+        std::vector<TextSearchResult> base =
+            (qopts.stem && !nostem && qopts.language == "english")
+                ? idx->StemSearch(term)
+                : idx->Search({term});
+        if (phonetic && qopts.stem) {
+          auto ph = idx->PhoneticSearch(term);
+          if (!ph.empty()) {
+            std::unordered_map<std::string, double> sc;
+            for (const auto& r : base) sc[r.doc_id] = std::max(sc[r.doc_id], r.score);
+            for (const auto& r : ph) sc[r.doc_id] = std::max(sc[r.doc_id], r.score);
+            base.clear();
+            base.reserve(sc.size());
+            for (const auto& [id, s] : sc) base.push_back({id, s});
+          }
         }
-        return idx->Search({term});
+        return base;
       };
 
       TextTermModifier default_mod;
@@ -361,7 +396,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
         std::unordered_map<std::string, double> score_map;
         for (size_t i = 0; i < node.text_terms.size(); i++) {
           const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
-          auto results = SearchWithMod(idx, node.text_terms[i], mod, fspec->nostem);
+          auto results = SearchWithMod(idx, node.text_terms[i], mod, fspec->nostem,
+                                       !fspec->phonetic.empty());
           for (auto& r : results) score_map[r.doc_id] += r.score;
         }
         std::vector<ScoredResult> out;
@@ -386,7 +422,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
         } else {
           for (size_t i = 0; i < node.text_terms.size(); i++) {
             const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
-            auto results = SearchWithMod(idx, node.text_terms[i], mod, f.nostem);
+            auto results = SearchWithMod(idx, node.text_terms[i], mod, f.nostem,
+                                         !f.phonetic.empty());
             for (auto& r : results) merged[r.doc_id] += r.score;
           }
         }
@@ -536,9 +573,11 @@ struct Parser {
   size_t pos = 0;
   std::string& error_msg;
   bool nostopwords = false;
+  int dialect = 2;
 
-  Parser(const std::string& s, std::string& err, bool nostop = false)
-      : input(s), error_msg(err), nostopwords(nostop) {}
+  Parser(const std::string& s, std::string& err, bool nostop = false,
+         int dia = 2)
+      : input(s), error_msg(err), nostopwords(nostop), dialect(dia) {}
 
   char Peek() const {
     if (pos >= input.size()) return '\0';
@@ -942,7 +981,13 @@ struct Parser {
     if (Peek() == '-') {
       pos++;
       QueryNode child;
-      if (!ParseUnary(child)) return false;
+      // Dialect 1: negation applies to the entire following AND clause (-a b => -(a AND b)).
+      // Dialect 2+: negation binds tightly to the next unary atom (-a b => (-a) AND b).
+      if (dialect == 1) {
+        if (!ParseAnd(child)) return false;
+      } else {
+        if (!ParseUnary(child)) return false;
+      }
       out.type = QueryNode::Type::kNot;
       out.children.push_back(std::move(child));
       return true;
@@ -1097,7 +1142,7 @@ bool ParseQuery(const std::string& input, ParsedQuery& out,
     size_t fe = filter_part.find_last_not_of(" \t");
     filter_part = filter_part.substr(fs, fe - fs + 1);
 
-    Parser parser(filter_part, error_msg, qopts.nostopwords);
+    Parser parser(filter_part, error_msg, qopts.nostopwords, qopts.dialect);
     if (!parser.ParseOr(out.root)) return false;
     parser.SkipSpaces();
     if (parser.pos != filter_part.size()) {
@@ -1108,7 +1153,7 @@ bool ParseQuery(const std::string& input, ParsedQuery& out,
   }
 
   // No KNN — parse as regular query tree
-  Parser parser(trimmed, error_msg, qopts.nostopwords);
+  Parser parser(trimmed, error_msg, qopts.nostopwords, qopts.dialect);
   if (!parser.ParseOr(out.root)) return false;
   parser.SkipSpaces();
   if (parser.pos != trimmed.size()) {

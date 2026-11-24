@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -16,7 +17,7 @@ static uint64_t g_next_cursor_id = 1;
 static std::unordered_map<std::string, SuggestDict> g_suggest_dicts;
 static std::unordered_map<std::string, TermDict> g_term_dicts;
 static std::unordered_map<std::string, std::string> g_config = {
-    {"DEFAULT_DIALECT", "1"},
+    {"DEFAULT_DIALECT", "2"},
     {"TIMEOUT", "500"},
     {"MAXEXPANSIONS", "200"},
     {"MINSTEMLEN", "4"},
@@ -25,6 +26,36 @@ static std::unordered_map<std::string, std::string> g_config = {
 std::unordered_map<std::string, IndexEntry>& GetIndices() { return g_indices; }
 std::unordered_map<uint64_t, AggCursor>& GetCursors() { return g_cursors; }
 uint64_t NextCursorId() { return g_next_cursor_id++; }
+
+int64_t NowMs() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<int64_t>(ts.tv_sec) * 1000LL +
+         static_cast<int64_t>(ts.tv_nsec) / 1000000LL;
+}
+
+void TouchIndex(IndexEntry& entry) { entry.last_access_ms = NowMs(); }
+
+int GetDefaultDialect() {
+  auto it = g_config.find("DEFAULT_DIALECT");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long v = std::strtol(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v >= 1) return static_cast<int>(v);
+  }
+  return 2;
+}
+
+void PurgeExpiredCursors(int64_t now_ms) {
+  for (auto it = g_cursors.begin(); it != g_cursors.end(); ) {
+    if (it->second.max_idle_ms > 0 && it->second.last_access_ms > 0 &&
+        now_ms - it->second.last_access_ms >= it->second.max_idle_ms) {
+      it = g_cursors.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
 
 std::string ResolveAlias(const std::string& name) {
   auto it = g_aliases.find(name);
@@ -59,7 +90,7 @@ void ClearAllGlobalState() {
   g_suggest_dicts.clear();
   g_term_dicts.clear();
   g_config = {
-      {"DEFAULT_DIALECT", "1"},
+      {"DEFAULT_DIALECT", "2"},
       {"TIMEOUT", "500"},
       {"MAXEXPANSIONS", "200"},
       {"MINSTEMLEN", "4"},
@@ -78,6 +109,7 @@ void CreateIndexFromRdb(
         docs) {
   IndexEntry entry;
   entry.spec = std::move(spec);
+  entry.last_access_ms = NowMs();
   for (auto& [doc_id, fields] : docs) {
     entry.doc_store.Add(doc_id, fields);
     AddDocToIndices(entry, doc_id, fields);

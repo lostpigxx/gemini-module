@@ -24,6 +24,7 @@ extern "C" {
 #include "text_index.h"
 #include "vector_index.h"
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -39,6 +40,7 @@ struct IndexEntry {
   GeoFieldIndices geo_indices;
   GeoShapeFieldIndices geoshape_indices;
   SynonymMap synonyms;
+  int64_t last_access_ms = 0;
 };
 
 int RegisterSearchCommands(RedisModuleCtx* ctx);

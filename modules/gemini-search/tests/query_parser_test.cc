@@ -407,3 +407,27 @@ TEST_F(QueryEvalTest, EmptyResult) {
   auto r = Eval("@category:{nonexistent}");
   EXPECT_TRUE(r.empty());
 }
+
+TEST_F(QueryEvalTest, Dialect1NegatesFollowingAndClause) {
+  QueryOptions q1;
+  q1.dialect = 1;
+  ParsedQuery pq;
+  std::string err;
+  ASSERT_TRUE(ParseQuery("-@status:{inactive} @price:[0 200]", pq, err, q1));
+  EXPECT_EQ(pq.root.type, QueryNode::Type::kNot);
+  ASSERT_EQ(pq.root.children.size(), 1u);
+  EXPECT_EQ(pq.root.children[0].type, QueryNode::Type::kAnd);
+}
+
+TEST_F(QueryEvalTest, CooperativeTimeoutAbortsPastDeadline) {
+  QueryOptions q;
+  q.deadline_ms = 1;  // already in the past (monotonic ms >> 1)
+  ParsedQuery pq;
+  std::string err;
+  ASSERT_TRUE(ParseQuery("@category:{shoes}", pq, err, q));
+  std::string eval_err;
+  auto r = EvaluateQuery(pq.root, spec, doc_store, tag_indices, numeric_indices,
+                         text_indices, geo_indices, eval_err, q);
+  EXPECT_TRUE(r.empty());
+  EXPECT_EQ(eval_err, "ERR query timeout");
+}
