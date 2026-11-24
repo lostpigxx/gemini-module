@@ -11,6 +11,7 @@ cmake --build build -j$(nproc)
 
 # Tcl 集成测试（需要 redis-server 可用）
 tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
+tclsh modules/gemini-search/tests/tcl/search_test.tcl ./build/redis_search.so
 ```
 
 ## 编码规范
@@ -47,3 +48,8 @@ Dockerfile 必须支持纯离线构建（面向无外网的内网环境）。所
 
 - gemini-search 相关的 commit message 必须包含 phase 编号（例如 "Phase 1"、"Phase 2"）
 - 每次 commit 后立即 `git push` 到远端
+
+### 5. 目标 Redis 版本范围
+
+- **gemini-bloom**：兼容 Redis 5 / 6 / 7（单二进制，Docker CI 覆盖三组环境）
+- **gemini-search**：仅面向 **Redis 7**（无需兼容 Redis 5/6，可直接使用 Redis 7 Module API，如 `aux_save2`/`aux_load`、`EmitAOF` `"v"` 向量参数、`SubscribeToServerEvent`、`CreateTimer`、`ReplyWithMap` 等；Docker CI 仅在 `redis7` 环境运行）

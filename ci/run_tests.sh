@@ -74,6 +74,17 @@ if [ "$REDIS_MAJOR" -ge 6 ]; then
     { red "FAIL: bloom migrate RESP2"; FAIL=1; }
 fi
 
+# ── gemini-search (Redis 7 only) ─────────────────────────────
+if [ "$REDIS_MAJOR" -ge 7 ]; then
+  header "GTest: gemini-search"
+  cmake --build "$BUILD_DIR" --target search_test -j"$(nproc)" || \
+    { red "FAIL: search gtest"; FAIL=1; }
+
+  header "Tcl: gemini-search"
+  tclsh modules/gemini-search/tests/tcl/search_test.tcl "./$BUILD_DIR/redis_search.so" || \
+    { red "FAIL: search tcl"; FAIL=1; }
+fi
+
 # ── Summary ──────────────────────────────────────────────────
 echo
 if [ "$FAIL" -ne 0 ]; then
