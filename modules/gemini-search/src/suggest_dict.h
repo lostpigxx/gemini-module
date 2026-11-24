@@ -40,6 +40,7 @@ class SuggestDict {
   bool Del(const std::string& str);
   std::vector<SuggestEntry> Get(const std::string& prefix, bool fuzzy = false,
                                 size_t max_results = 5) const;
+  std::vector<SuggestEntry> DumpAll() const;
   size_t Len() const;
 };
 

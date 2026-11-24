@@ -49,3 +49,9 @@ void EraseIndexEntry(const std::string& name);
 void CreateIndexFromRdb(const std::string& name, IndexSpec spec,
                         const std::vector<std::pair<std::string,
                             std::unordered_map<std::string, std::string>>>& docs);
+
+std::unordered_map<std::string, std::string>& GetAliases();
+std::unordered_map<std::string, SuggestDict>& GetSuggestDicts();
+std::unordered_map<std::string, TermDict>& GetTermDicts();
+std::unordered_map<std::string, std::string>& GetConfig();
+void ClearAllGlobalState();

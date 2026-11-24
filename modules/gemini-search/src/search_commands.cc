@@ -89,6 +89,26 @@ bool CreateIndexEntry(const std::string& name, IndexEntry entry) {
 
 void EraseIndexEntry(const std::string& name) { g_indices.erase(name); }
 
+std::unordered_map<std::string, std::string>& GetAliases() { return g_aliases; }
+std::unordered_map<std::string, SuggestDict>& GetSuggestDicts() { return g_suggest_dicts; }
+std::unordered_map<std::string, TermDict>& GetTermDicts() { return g_term_dicts; }
+std::unordered_map<std::string, std::string>& GetConfig() { return g_config; }
+
+void ClearAllGlobalState() {
+  g_indices.clear();
+  g_aliases.clear();
+  g_cursors.clear();
+  g_next_cursor_id = 1;
+  g_suggest_dicts.clear();
+  g_term_dicts.clear();
+  g_config = {
+      {"DEFAULT_DIALECT", "1"},
+      {"TIMEOUT", "500"},
+      {"MAXEXPANSIONS", "200"},
+      {"MINSTEMLEN", "4"},
+  };
+}
+
 // Forward declaration of static helper defined below
 static void AddDocToIndices(
     IndexEntry& entry, const std::string& doc_id,

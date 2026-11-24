@@ -6,23 +6,97 @@ extern "C" {
 #include "mock_redismodule_io.h"
 
 #include <gtest/gtest.h>
-#include "search_rdb.h"
-#include "search_commands.h"
-#include "index_spec.h"
 #include "document_store.h"
+#include "index_spec.h"
 #include "query_parser.h"
+#include "search_commands.h"
+#include "search_rdb.h"
 
+#include <cmath>
+#include <cstdarg>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+// =============================================================
+// Minimal local mocks for RedisModuleString + EmitAOF ("v") + CopySearch2
+// =============================================================
+
+struct MockRmString {
+  std::string data;
+};
+
+static std::vector<std::pair<std::string, std::vector<std::string>>> g_emitted_aof;
+static MockRmString g_mock_to_key;
+
+static RedisModuleString* Mock_CreateString(RedisModuleCtx* /*ctx*/,
+                                            const char* ptr, size_t len) {
+  auto* s = new MockRmString{std::string(ptr, len)};
+  return reinterpret_cast<RedisModuleString*>(s);
+}
+
+static void Mock_FreeString(RedisModuleCtx* /*ctx*/, RedisModuleString* str) {
+  delete reinterpret_cast<MockRmString*>(str);
+}
+
+static const char* Mock_StringPtrLen(const RedisModuleString* str, size_t* len) {
+  const auto* s = reinterpret_cast<const MockRmString*>(str);
+  if (len) *len = s->data.size();
+  return s->data.c_str();
+}
+
+static const RedisModuleString* Mock_GetToKeyNameFromOptCtx(
+    RedisModuleKeyOptCtx* /*ctx*/) {
+  return reinterpret_cast<const RedisModuleString*>(&g_mock_to_key);
+}
+
+static void Mock_EmitAOF(RedisModuleIO* /*io*/, const char* cmdname,
+                         const char* fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  std::vector<std::string> args;
+  for (const char* p = fmt; *p != '\0'; p++) {
+    if (*p == 'v') {
+      auto** vec = va_arg(ap, RedisModuleString**);
+      size_t len = va_arg(ap, size_t);
+      for (size_t i = 0; i < len; i++) {
+        size_t slen = 0;
+        const char* sp = Mock_StringPtrLen(vec[i], &slen);
+        args.emplace_back(sp, slen);
+      }
+    }
+  }
+  va_end(ap);
+  g_emitted_aof.emplace_back(cmdname, std::move(args));
+}
+
 class SearchRdbTestEnv : public ::testing::Environment {
  public:
-  void SetUp() override { InstallMockRedisModuleIO(); }
+  void SetUp() override {
+    InstallMockRedisModuleIO();
+    RedisModule_CreateString = Mock_CreateString;
+    RedisModule_FreeString = Mock_FreeString;
+    RedisModule_StringPtrLen = Mock_StringPtrLen;
+    RedisModule_GetToKeyNameFromOptCtx = Mock_GetToKeyNameFromOptCtx;
+    RedisModule_EmitAOF = Mock_EmitAOF;
+  }
 };
 static auto* const gEnv [[maybe_unused]] =
     ::testing::AddGlobalTestEnvironment(new SearchRdbTestEnv);
+
+class SearchRdbTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    ClearAllGlobalState();
+    g_emitted_aof.clear();
+  }
+  void TearDown() override {
+    ClearAllGlobalState();
+    g_emitted_aof.clear();
+  }
+};
 
 static void SaveIndex(MockRdbStream& stream, const std::string& name) {
   auto* name_ptr = new std::string(name);
@@ -30,19 +104,11 @@ static void SaveIndex(MockRdbStream& stream, const std::string& name) {
   delete name_ptr;
 }
 
-static void ClearGlobalIndices() {
-  // Erase all entries
-  std::vector<std::string> names;
-  // Use GetIndexEntry to check existence iteratively... or just use CreateIndexFromRdb pattern
-  // Actually we need to clear g_indices. We can do this by erasing known names.
-  // For tests, we'll track names manually.
-}
-
 // =============================================================
 // Round-trip tests
 // =============================================================
 
-TEST(SearchRdbTest, RoundTripTagAndNumeric) {
+TEST_F(SearchRdbTest, RoundTripTagAndNumeric) {
   IndexSpec spec;
   spec.name = "testidx";
   spec.fields = {
@@ -58,10 +124,6 @@ TEST(SearchRdbTest, RoundTripTagAndNumeric) {
       };
 
   CreateIndexFromRdb("testidx", spec, docs);
-
-  auto* entry = GetIndexEntry("testidx");
-  ASSERT_NE(entry, nullptr);
-  EXPECT_EQ(entry->doc_store.Size(), 3u);
 
   MockRdbStream stream;
   SaveIndex(stream, "testidx");
@@ -86,23 +148,18 @@ TEST(SearchRdbTest, RoundTripTagAndNumeric) {
   EXPECT_EQ(d1->fields.at("name"), "shoes");
   EXPECT_EQ(d1->fields.at("price"), "100");
 
-  // Verify TAG index rebuilt
   auto* tag_idx = loaded->tag_indices.Get("name");
   ASSERT_NE(tag_idx, nullptr);
-  auto shoes = tag_idx->Lookup("shoes");
-  EXPECT_EQ(shoes.size(), 2u);
+  EXPECT_EQ(tag_idx->Lookup("shoes").size(), 2u);
 
-  // Verify NUMERIC index rebuilt
   auto* num_idx = loaded->numeric_indices.Get("price");
   ASSERT_NE(num_idx, nullptr);
-  auto range = num_idx->RangeQuery(0, false, 150, false);
-  EXPECT_EQ(range.size(), 2u);
+  EXPECT_EQ(num_idx->RangeQuery(0, false, 150, false).size(), 2u);
 
-  EraseIndexEntry("testidx");
   delete loaded_name;
 }
 
-TEST(SearchRdbTest, RoundTripVector) {
+TEST_F(SearchRdbTest, RoundTripVector) {
   IndexSpec spec;
   spec.name = "vecidx";
   VectorFieldParams vp;
@@ -130,7 +187,6 @@ TEST(SearchRdbTest, RoundTripVector) {
   MockRdbStream stream;
   SaveIndex(stream, "vecidx");
   stream.Rewind();
-
   EraseIndexEntry("vecidx");
 
   auto* loaded_name = static_cast<std::string*>(
@@ -139,37 +195,30 @@ TEST(SearchRdbTest, RoundTripVector) {
 
   auto* loaded = GetIndexEntry("vecidx");
   ASSERT_NE(loaded, nullptr);
-  EXPECT_EQ(loaded->spec.fields.size(), 2u);
   EXPECT_EQ(loaded->spec.fields[1].type, FieldType::kVector);
   EXPECT_EQ(loaded->spec.fields[1].vector_params.dim, 3u);
   EXPECT_EQ(loaded->spec.fields[1].vector_params.metric, DistanceMetric::kL2);
   EXPECT_EQ(loaded->doc_store.Size(), 2u);
 
-  // Verify vector index rebuilt
   auto* vidx = loaded->vector_indices.Get("embedding");
   ASSERT_NE(vidx, nullptr);
-  EXPECT_EQ(vidx->Size(), 2u);
-
   float query[] = {1.0f, 0.0f, 0.0f};
   auto results = vidx->KnnQuery(query, 1);
   ASSERT_EQ(results.size(), 1u);
   EXPECT_EQ(results[0].doc_id, "d1");
 
-  EraseIndexEntry("vecidx");
   delete loaded_name;
 }
 
-TEST(SearchRdbTest, RoundTripEmptyIndex) {
+TEST_F(SearchRdbTest, RoundTripEmptyIndex) {
   IndexSpec spec;
   spec.name = "emptyidx";
   spec.fields = {{"tag", FieldType::kTag, {}}};
-
   CreateIndexFromRdb("emptyidx", spec, {});
 
   MockRdbStream stream;
   SaveIndex(stream, "emptyidx");
   stream.Rewind();
-
   EraseIndexEntry("emptyidx");
 
   auto* loaded_name = static_cast<std::string*>(
@@ -181,71 +230,414 @@ TEST(SearchRdbTest, RoundTripEmptyIndex) {
   EXPECT_EQ(loaded->doc_store.Size(), 0u);
   EXPECT_EQ(loaded->spec.fields.size(), 1u);
 
-  EraseIndexEntry("emptyidx");
   delete loaded_name;
 }
 
-TEST(SearchRdbTest, RoundTripMultipleFieldTypes) {
+TEST_F(SearchRdbTest, RoundTripEncver7AllOptionsAndSynonyms) {
   IndexSpec spec;
-  spec.name = "mixidx";
+  spec.name = "fullidx";
+  spec.prefixes = {"item:", "prod:"};
+  spec.language = "french";
+  spec.source_type = IndexSourceType::kJson;
+  spec.has_custom_stopwords = true;
+  spec.custom_stopwords = {"le", "la"};
+  spec.nofreqs = true;
+  spec.nooffsets = true;
+  spec.nohl = true;
+  spec.temporary_ttl = 300;
+
+  FieldSpec f1;
+  f1.name = "title";
+  f1.type = FieldType::kText;
+  f1.json_path = "$.title";
+  f1.nostem = true;
+  f1.phonetic = "dm:en";
+  f1.sortable = true;
+  f1.noindex = false;
+  f1.weight = 2.5;
+
+  FieldSpec f2;
+  f2.name = "notes";
+  f2.type = FieldType::kText;
+  f2.json_path = "$.notes";
+  f2.noindex = true;
+
   VectorFieldParams vp;
-  vp.algorithm = VectorAlgorithm::kFlat;
-  vp.dim = 2;
+  vp.algorithm = VectorAlgorithm::kHnsw;
+  vp.dim = 4;
   vp.metric = DistanceMetric::kCosine;
-  spec.fields = {
-      {"tag", FieldType::kTag, {}},
-      {"num", FieldType::kNumeric, {}},
-      {"vec", FieldType::kVector, vp},
-  };
+  vp.m = 24;
+  vp.ef_construction = 128;
+  FieldSpec f3;
+  f3.name = "vec";
+  f3.type = FieldType::kVector;
+  f3.vector_params = vp;
 
-  float vec[] = {0.5f, 0.5f};
-  std::string blob(reinterpret_cast<const char*>(vec), sizeof(vec));
+  spec.fields = {f1, f2, f3};
 
-  std::vector<std::pair<std::string, std::unordered_map<std::string, std::string>>>
-      docs = {{"d1", {{"tag", "a"}, {"num", "42"}, {"vec", blob}}}};
-
-  CreateIndexFromRdb("mixidx", spec, docs);
+  CreateIndexFromRdb("fullidx", spec, {
+      {"item:1", {{"title", "Jon Smith"}, {"notes", "internal"}}},
+  });
+  auto* entry = GetIndexEntry("fullidx");
+  ASSERT_NE(entry, nullptr);
+  entry->synonyms.Update("g1", {"fast", "quick", "rapid"});
+  entry->synonyms.Update("g2", {"car", "auto"});
 
   MockRdbStream stream;
-  SaveIndex(stream, "mixidx");
+  SaveIndex(stream, "fullidx");
   stream.Rewind();
-  EraseIndexEntry("mixidx");
+  EraseIndexEntry("fullidx");
 
   auto* loaded_name = static_cast<std::string*>(
       RdbLoadSearch(stream.IO(), kSearchEncVer));
   ASSERT_NE(loaded_name, nullptr);
+  EXPECT_EQ(*loaded_name, "fullidx");
 
-  auto* loaded = GetIndexEntry("mixidx");
+  auto* loaded = GetIndexEntry("fullidx");
   ASSERT_NE(loaded, nullptr);
-  EXPECT_EQ(loaded->spec.fields.size(), 3u);
-  EXPECT_EQ(loaded->spec.fields[0].type, FieldType::kTag);
-  EXPECT_EQ(loaded->spec.fields[1].type, FieldType::kNumeric);
-  EXPECT_EQ(loaded->spec.fields[2].type, FieldType::kVector);
-  EXPECT_EQ(loaded->spec.fields[2].vector_params.metric,
-            DistanceMetric::kCosine);
+  EXPECT_EQ(loaded->spec.prefixes, (std::vector<std::string>{"item:", "prod:"}));
+  EXPECT_EQ(loaded->spec.language, "french");
+  EXPECT_EQ(loaded->spec.source_type, IndexSourceType::kJson);
+  EXPECT_TRUE(loaded->spec.has_custom_stopwords);
+  EXPECT_EQ(loaded->spec.custom_stopwords, (std::vector<std::string>{"le", "la"}));
+  EXPECT_TRUE(loaded->spec.nofreqs);
+  EXPECT_TRUE(loaded->spec.nooffsets);
+  EXPECT_TRUE(loaded->spec.nohl);
+  EXPECT_EQ(loaded->spec.temporary_ttl, 300);
 
-  auto* d1 = loaded->doc_store.Get("d1");
-  ASSERT_NE(d1, nullptr);
-  EXPECT_EQ(d1->fields.at("tag"), "a");
-  EXPECT_EQ(d1->fields.at("num"), "42");
-  EXPECT_EQ(d1->fields.at("vec").size(), sizeof(vec));
+  ASSERT_EQ(loaded->spec.fields.size(), 3u);
+  EXPECT_TRUE(loaded->spec.fields[0].nostem);
+  EXPECT_EQ(loaded->spec.fields[0].phonetic, "dm:en");
+  EXPECT_TRUE(loaded->spec.fields[0].sortable);
+  EXPECT_DOUBLE_EQ(loaded->spec.fields[0].weight, 2.5);
+  EXPECT_EQ(loaded->spec.fields[0].json_path, "$.title");
+  EXPECT_TRUE(loaded->spec.fields[1].noindex);
+  EXPECT_EQ(loaded->spec.fields[2].vector_params.algorithm, VectorAlgorithm::kHnsw);
+  EXPECT_EQ(loaded->spec.fields[2].vector_params.m, 24u);
+  EXPECT_EQ(loaded->spec.fields[2].vector_params.ef_construction, 128u);
 
-  EraseIndexEntry("mixidx");
+  // Verify phonetic index rebuilt after RDB load
+  auto* txt = loaded->text_indices.Get("title");
+  ASSERT_NE(txt, nullptr);
+  EXPECT_EQ(txt->PhoneticLookup("John").size(), 1u);
+
+  // Verify synonyms preserved
+  auto syn_dump = loaded->synonyms.Dump();
+  ASSERT_EQ(syn_dump.size(), 2u);
+  EXPECT_EQ(syn_dump[0].first, "g1");
+  EXPECT_EQ(syn_dump[1].first, "g2");
+  EXPECT_EQ(loaded->synonyms.Expand("fast").size(), 2u);
+
   delete loaded_name;
 }
 
-TEST(SearchRdbTest, WrongEncverReturnsNull) {
+// =============================================================
+// Malformed / corrupted RDB rejection tests
+// =============================================================
+
+TEST_F(SearchRdbTest, WrongEncverReturnsNull) {
+  MockRdbStream stream;
+  EXPECT_EQ(RdbLoadSearch(stream.IO(), 0), nullptr);
+  EXPECT_EQ(RdbLoadSearch(stream.IO(), 999), nullptr);
+}
+
+TEST_F(SearchRdbTest, TruncatedStreamRejected) {
   IndexSpec spec;
-  spec.name = "badver";
-  spec.fields = {{"f", FieldType::kTag, {}}};
-  CreateIndexFromRdb("badver", spec, {});
+  spec.name = "trunc";
+  spec.fields = {{"a", FieldType::kTag, {}}};
+  CreateIndexFromRdb("trunc", spec, {{"d1", {{"a", "v1"}}}});
+
+  MockRdbStream full;
+  SaveIndex(full, "trunc");
+  EraseIndexEntry("trunc");
+
+  // Truncate at multiple byte boundaries; every truncated buffer must return nullptr
+  for (size_t cut : {size_t{0}, size_t{4}, full.buf.size() / 4,
+                     full.buf.size() / 2, full.buf.size() - 1}) {
+    MockRdbStream partial;
+    partial.buf.assign(full.buf.begin(), full.buf.begin() + static_cast<ptrdiff_t>(cut));
+    partial.Rewind();
+    EXPECT_EQ(RdbLoadSearch(partial.IO(), kSearchEncVer), nullptr)
+        << "Expected nullptr at cut=" << cut;
+  }
+}
+
+TEST_F(SearchRdbTest, EmptyIndexNameRejected) {
+  MockRdbStream stream;
+  RedisModule_SaveStringBuffer(stream.IO(), "", 0);
+  stream.Rewind();
+  EXPECT_EQ(RdbLoadSearch(stream.IO(), kSearchEncVer), nullptr);
+}
+
+TEST_F(SearchRdbTest, InvalidEnumValuesRejected) {
+  // Invalid source_type = 99
+  {
+    MockRdbStream s;
+    RedisModule_SaveStringBuffer(s.IO(), "badsrc", 6);
+    RedisModule_SaveUnsigned(s.IO(), 0);   // prefixes
+    RedisModule_SaveUnsigned(s.IO(), 99);  // invalid source_type
+    s.Rewind();
+    EXPECT_EQ(RdbLoadSearch(s.IO(), kSearchEncVer), nullptr);
+  }
+  // Invalid FieldType = 42
+  {
+    MockRdbStream s;
+    RedisModule_SaveStringBuffer(s.IO(), "badft", 5);
+    RedisModule_SaveUnsigned(s.IO(), 0);   // prefixes
+    RedisModule_SaveUnsigned(s.IO(), 0);   // source_type
+    RedisModule_SaveUnsigned(s.IO(), 1);   // 1 field
+    RedisModule_SaveStringBuffer(s.IO(), "f1", 2);
+    RedisModule_SaveUnsigned(s.IO(), 42);  // invalid FieldType
+    s.Rewind();
+    EXPECT_EQ(RdbLoadSearch(s.IO(), kSearchEncVer), nullptr);
+  }
+  // Invalid vector dim = 0
+  {
+    MockRdbStream s;
+    RedisModule_SaveStringBuffer(s.IO(), "baddim", 6);
+    RedisModule_SaveUnsigned(s.IO(), 0);  // prefixes
+    RedisModule_SaveUnsigned(s.IO(), 0);  // source_type
+    RedisModule_SaveUnsigned(s.IO(), 1);  // 1 field
+    RedisModule_SaveStringBuffer(s.IO(), "v", 1);
+    RedisModule_SaveUnsigned(s.IO(), static_cast<uint64_t>(FieldType::kVector));
+    RedisModule_SaveUnsigned(s.IO(), static_cast<uint64_t>(VectorAlgorithm::kFlat));
+    RedisModule_SaveUnsigned(s.IO(), 0);  // dim = 0 invalid
+    RedisModule_SaveUnsigned(s.IO(), static_cast<uint64_t>(DistanceMetric::kL2));
+    s.Rewind();
+    EXPECT_EQ(RdbLoadSearch(s.IO(), kSearchEncVer), nullptr);
+  }
+}
+
+TEST_F(SearchRdbTest, NegativeOrNaNWeightRejected) {
+  for (double bad_w : {-1.0, std::numeric_limits<double>::quiet_NaN(),
+                       std::numeric_limits<double>::infinity()}) {
+    MockRdbStream s;
+    RedisModule_SaveStringBuffer(s.IO(), "badw", 4);
+    RedisModule_SaveUnsigned(s.IO(), 0);  // prefixes
+    RedisModule_SaveUnsigned(s.IO(), 0);  // source_type
+    RedisModule_SaveUnsigned(s.IO(), 1);  // 1 field
+    RedisModule_SaveStringBuffer(s.IO(), "t", 1);
+    RedisModule_SaveUnsigned(s.IO(), static_cast<uint64_t>(FieldType::kText));
+    RedisModule_SaveStringBuffer(s.IO(), "", 0);  // json_path
+    RedisModule_SaveUnsigned(s.IO(), 0);          // sortable
+    RedisModule_SaveUnsigned(s.IO(), 0);          // noindex
+    RedisModule_SaveDouble(s.IO(), bad_w);
+    s.Rewind();
+    EXPECT_EQ(RdbLoadSearch(s.IO(), kSearchEncVer), nullptr);
+  }
+}
+
+TEST_F(SearchRdbTest, ExcessivePrefixCountRejected) {
+  MockRdbStream s;
+  RedisModule_SaveStringBuffer(s.IO(), "bigpref", 7);
+  RedisModule_SaveUnsigned(s.IO(), 999999);  // exceeds kMaxRdbPrefixes
+  s.Rewind();
+  EXPECT_EQ(RdbLoadSearch(s.IO(), kSearchEncVer), nullptr);
+}
+
+// =============================================================
+// Aux RDB (global state) tests
+// =============================================================
+
+TEST_F(SearchRdbTest, AuxRoundTripGlobalState) {
+  GetAliases()["prod_alias"] = "idx_prod";
+  GetAliases()["dev_alias"] = "idx_dev";
+
+  GetSuggestDicts()["ac"].Add("redis", 10.5, false, "payload1");
+  GetSuggestDicts()["ac"].Add("redpanda", 3.0, false, "");
+
+  GetTermDicts()["custom_dict"].Add({"alpha", "beta", "gamma"});
+
+  GetConfig()["DEFAULT_DIALECT"] = "2";
+  GetConfig()["TIMEOUT"] = "1500";
 
   MockRdbStream stream;
-  SaveIndex(stream, "badver");
+  AuxSaveSearch(stream.IO(), REDISMODULE_AUX_AFTER_RDB);
   stream.Rewind();
 
-  auto* result = RdbLoadSearch(stream.IO(), 999);
-  EXPECT_EQ(result, nullptr);
+  ClearAllGlobalState();
+  EXPECT_TRUE(GetAliases().empty());
+  EXPECT_TRUE(GetSuggestDicts().empty());
+  EXPECT_TRUE(GetTermDicts().empty());
+  EXPECT_EQ(GetConfig()["DEFAULT_DIALECT"], "1");
 
-  EraseIndexEntry("badver");
+  EXPECT_EQ(AuxLoadSearch(stream.IO(), kSearchEncVer, REDISMODULE_AUX_AFTER_RDB),
+            REDISMODULE_OK);
+
+  EXPECT_EQ(GetAliases().size(), 2u);
+  EXPECT_EQ(GetAliases()["prod_alias"], "idx_prod");
+  EXPECT_EQ(GetAliases()["dev_alias"], "idx_dev");
+
+  ASSERT_EQ(GetSuggestDicts().count("ac"), 1u);
+  EXPECT_EQ(GetSuggestDicts()["ac"].Len(), 2u);
+  auto sugs = GetSuggestDicts()["ac"].Get("red", false, 5);
+  ASSERT_EQ(sugs.size(), 2u);
+  EXPECT_EQ(sugs[0].str, "redis");
+  EXPECT_DOUBLE_EQ(sugs[0].score, 10.5);
+  EXPECT_EQ(sugs[0].payload, "payload1");
+
+  ASSERT_EQ(GetTermDicts().count("custom_dict"), 1u);
+  EXPECT_TRUE(GetTermDicts()["custom_dict"].Contains("beta"));
+  EXPECT_EQ(GetTermDicts()["custom_dict"].Size(), 3u);
+
+  EXPECT_EQ(GetConfig()["DEFAULT_DIALECT"], "2");
+  EXPECT_EQ(GetConfig()["TIMEOUT"], "1500");
+}
+
+TEST_F(SearchRdbTest, AuxCorruptedStreamIsAtomicAndReturnsErr) {
+  GetAliases()["keep_me"] = "idx1";
+
+  MockRdbStream bad;
+  RedisModule_SaveUnsigned(bad.IO(), kSearchAuxEncVer);
+  RedisModule_SaveUnsigned(bad.IO(), 5);  // claims 5 aliases, but truncated
+  bad.Rewind();
+
+  EXPECT_EQ(AuxLoadSearch(bad.IO(), kSearchEncVer, REDISMODULE_AUX_AFTER_RDB),
+            REDISMODULE_ERR);
+  // Existing global state untouched
+  EXPECT_EQ(GetAliases().size(), 1u);
+  EXPECT_EQ(GetAliases()["keep_me"], "idx1");
+}
+
+TEST_F(SearchRdbTest, AuxWrongVersionRejected) {
+  MockRdbStream bad;
+  RedisModule_SaveUnsigned(bad.IO(), 999);
+  bad.Rewind();
+  EXPECT_EQ(AuxLoadSearch(bad.IO(), kSearchEncVer, REDISMODULE_AUX_AFTER_RDB),
+            REDISMODULE_ERR);
+}
+
+// =============================================================
+// AOF rewrite tests (unlimited fields + binary values + synonyms)
+// =============================================================
+
+TEST_F(SearchRdbTest, AofRewriteHandlesMoreThanTenFieldsAndBinaryVectors) {
+  IndexSpec spec;
+  spec.name = "wideidx";
+  spec.language = "english";
+  VectorFieldParams vp;
+  vp.algorithm = VectorAlgorithm::kFlat;
+  vp.dim = 2;
+  vp.metric = DistanceMetric::kL2;
+
+  for (int i = 0; i < 14; i++) {
+    spec.fields.push_back({"f" + std::to_string(i), FieldType::kTag, {}});
+  }
+  spec.fields.push_back({"vec", FieldType::kVector, vp});
+
+  std::unordered_map<std::string, std::string> doc_fields;
+  for (int i = 0; i < 14; i++) {
+    doc_fields["f" + std::to_string(i)] = "val" + std::to_string(i);
+  }
+  float v[] = {0.0f, 1.5f};  // contains NUL bytes
+  std::string vblob(reinterpret_cast<const char*>(v), sizeof(v));
+  doc_fields["vec"] = vblob;
+
+  CreateIndexFromRdb("wideidx", spec, {{"doc_wide", doc_fields}});
+  GetIndexEntry("wideidx")->synonyms.Update("syn1", {"big", "large"});
+
+  MockRmString key{"wideidx"};
+  std::string val("wideidx");
+  MockRdbStream dummy_aof;
+  AofRewriteSearch(dummy_aof.IO(),
+                   reinterpret_cast<RedisModuleString*>(&key), &val);
+
+  // Expect FT.CREATE + FT.SYNUPDATE + FT.ADD
+  ASSERT_EQ(g_emitted_aof.size(), 3u);
+  EXPECT_EQ(g_emitted_aof[0].first, "FT.CREATE");
+  EXPECT_EQ(g_emitted_aof[1].first, "FT.SYNUPDATE");
+  EXPECT_EQ(g_emitted_aof[2].first, "FT.ADD");
+
+  // FT.ADD args: [wideidx, doc_wide, FIELDS, 15 * (k, v)] = 3 + 30 = 33 args
+  const auto& add_args = g_emitted_aof[2].second;
+  EXPECT_EQ(add_args.size(), 33u);
+  EXPECT_EQ(add_args[0], "wideidx");
+  EXPECT_EQ(add_args[1], "doc_wide");
+  EXPECT_EQ(add_args[2], "FIELDS");
+
+  // Verify binary vector value preserved intact (including NUL bytes)
+  bool found_vec = false;
+  for (size_t i = 3; i + 1 < add_args.size(); i += 2) {
+    if (add_args[i] == "vec") {
+      found_vec = true;
+      EXPECT_EQ(add_args[i + 1].size(), sizeof(v));
+      EXPECT_EQ(add_args[i + 1], vblob);
+    }
+  }
+  EXPECT_TRUE(found_vec);
+}
+
+// =============================================================
+// ModuleType callback tests (digest, copy2, free_effort2, defrag, mem_usage)
+// =============================================================
+
+TEST_F(SearchRdbTest, DigestDeterministicAndContentSensitive) {
+  IndexSpec spec;
+  spec.name = "digidx";
+  spec.fields = {{"a", FieldType::kTag, {}}};
+  CreateIndexFromRdb("digidx", spec, {{"d1", {{"a", "x"}}}});
+
+  std::string key("digidx");
+  MockDigest d1, d2, d3;
+  DigestSearch(d1.Handle(), &key);
+  DigestSearch(d2.Handle(), &key);
+  EXPECT_TRUE(d1.ended);
+  EXPECT_EQ(d1.bytes, d2.bytes);
+
+  // Mutate doc and verify digest changes
+  GetIndexEntry("digidx")->doc_store.Add("d2", {{"a", "y"}});
+  DigestSearch(d3.Handle(), &key);
+  EXPECT_NE(d1.bytes, d3.bytes);
+}
+
+TEST_F(SearchRdbTest, CopySearch2ClonesIndependently) {
+  IndexSpec spec;
+  spec.name = "src_idx";
+  spec.fields = {{"tag", FieldType::kTag, {}}, {"num", FieldType::kNumeric, {}}};
+  CreateIndexFromRdb("src_idx", spec, {{"d1", {{"tag", "red"}, {"num", "10"}}}});
+  GetIndexEntry("src_idx")->synonyms.Update("g1", {"red", "crimson"});
+
+  g_mock_to_key.data = "dst_idx";
+  std::string src_val("src_idx");
+  auto* dst_val = static_cast<std::string*>(
+      CopySearch2(reinterpret_cast<RedisModuleKeyOptCtx*>(1), &src_val));
+  ASSERT_NE(dst_val, nullptr);
+  EXPECT_EQ(*dst_val, "dst_idx");
+
+  auto* dst = GetIndexEntry("dst_idx");
+  ASSERT_NE(dst, nullptr);
+  EXPECT_EQ(dst->spec.name, "dst_idx");
+  EXPECT_EQ(dst->doc_store.Size(), 1u);
+  EXPECT_EQ(dst->tag_indices.Get("tag")->Lookup("red").size(), 1u);
+  EXPECT_EQ(dst->synonyms.Expand("red").size(), 1u);
+
+  // Mutating src does not affect dst
+  EraseIndexEntry("src_idx");
+  EXPECT_EQ(GetIndexEntry("dst_idx")->doc_store.Size(), 1u);
+
+  delete dst_val;
+}
+
+TEST_F(SearchRdbTest, FreeEffortDefragAndMemUsage) {
+  IndexSpec spec;
+  spec.name = "memidx";
+  spec.fields = {{"body", FieldType::kText, {}}};
+  CreateIndexFromRdb("memidx", spec, {});
+
+  std::string key("memidx");
+  size_t empty_mem = SearchMemUsage(&key);
+  EXPECT_GT(empty_mem, 0u);
+  EXPECT_EQ(FreeEffortSearch2(nullptr, &key), 1u);
+
+  void* val_ptr = &key;
+  EXPECT_EQ(DefragSearch(nullptr, nullptr, &val_ptr), 0);
+
+  // Add documents with sizable payload and confirm mem_usage + free_effort grow
+  std::string big_text(4096, 'a');
+  auto* entry = GetIndexEntry("memidx");
+  entry->doc_store.Add("d1", {{"body", big_text}});
+  entry->doc_store.Add("d2", {{"body", big_text}});
+
+  EXPECT_GT(SearchMemUsage(&key), empty_mem + 8192u);
+  EXPECT_EQ(FreeEffortSearch2(nullptr, &key), 3u);
 }

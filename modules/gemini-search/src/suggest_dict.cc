@@ -123,6 +123,17 @@ std::vector<SuggestEntry> SuggestDict::Get(const std::string& prefix,
   return results;
 }
 
+std::vector<SuggestEntry> SuggestDict::DumpAll() const {
+  std::vector<SuggestEntry> out;
+  out.reserve(size_);
+  Collect(&root_, "", out);
+  std::sort(out.begin(), out.end(),
+            [](const SuggestEntry& a, const SuggestEntry& b) {
+              return a.str < b.str;
+            });
+  return out;
+}
+
 size_t SuggestDict::Len() const { return size_; }
 
 // =============================================================

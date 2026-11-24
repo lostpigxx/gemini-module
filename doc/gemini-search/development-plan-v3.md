@@ -79,6 +79,8 @@ genuinely enforced.
   real `FT.AGGREGATE` pipeline execution with per-stage timing breakdown.
 - **Cooperative `TIMEOUT`**: Pass a deadline into `EvaluateQuery` / `HnswIndex` / aggregation loops so slow
   queries abort promptly instead of only checking after full evaluation.
+- **`PHONETIC` query-time wiring**: Wire `TextIndex::PhoneticLookup` / `PhoneticSearch` into `EvaluateQuery`
+  for `TEXT` fields configured with `PHONETIC` (currently indexed at write time but not queried in `FT.SEARCH`).
 
 ---
 

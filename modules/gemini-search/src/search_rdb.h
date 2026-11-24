@@ -14,12 +14,21 @@ extern "C" {
 #undef _SEARCH_RDB_API_DEFINED
 #endif
 
+#include <cstdint>
+
 extern RedisModuleType* SearchModuleType;
 
-constexpr int kSearchEncVer = 6;
+constexpr int kSearchEncVer = 7;
+constexpr uint64_t kSearchAuxEncVer = 1;
 
 void* RdbLoadSearch(RedisModuleIO* rdb, int encver);
 void RdbSaveSearch(RedisModuleIO* rdb, void* value);
 void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value);
 void FreeSearch(void* value);
 size_t SearchMemUsage(const void* value);
+void DigestSearch(RedisModuleDigest* digest, void* value);
+void* CopySearch2(RedisModuleKeyOptCtx* ctx, const void* value);
+size_t FreeEffortSearch2(RedisModuleKeyOptCtx* ctx, const void* value);
+int DefragSearch(RedisModuleDefragCtx* ctx, RedisModuleString* key, void** value);
+void AuxSaveSearch(RedisModuleIO* rdb, int when);
+int AuxLoadSearch(RedisModuleIO* rdb, int encver, int when);

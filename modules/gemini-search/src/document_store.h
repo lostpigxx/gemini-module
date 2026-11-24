@@ -20,6 +20,7 @@ class DocumentStore {
   const Document* Get(const std::string& doc_id) const;
   bool Contains(const std::string& doc_id) const;
   size_t Size() const;
+  size_t MemoryUsage() const;
   std::vector<std::string> AllIds() const;
   void Clear();
 };

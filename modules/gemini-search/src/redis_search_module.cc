@@ -11,6 +11,10 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
     return REDISMODULE_ERR;
   }
 
+  if (RedisModule_SetModuleOptions) {
+    RedisModule_SetModuleOptions(ctx, REDISMODULE_OPTIONS_HANDLE_IO_ERRORS);
+  }
+
   RedisModuleTypeMethods tm = {};
   tm.version = REDISMODULE_TYPE_METHOD_VERSION;
   tm.rdb_load = RdbLoadSearch;
@@ -18,6 +22,13 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
   tm.aof_rewrite = AofRewriteSearch;
   tm.free = FreeSearch;
   tm.mem_usage = SearchMemUsage;
+  tm.digest = DigestSearch;
+  tm.copy2 = CopySearch2;
+  tm.free_effort2 = FreeEffortSearch2;
+  tm.defrag = DefragSearch;
+  tm.aux_save2 = AuxSaveSearch;
+  tm.aux_load = AuxLoadSearch;
+  tm.aux_save_triggers = REDISMODULE_AUX_AFTER_RDB;
 
   SearchModuleType =
       RedisModule_CreateDataType(ctx, "GmSearch-", kSearchEncVer, &tm);

@@ -2740,6 +2740,130 @@ test_assert "WITHSCORES with stemming returns scores" {
 r FT.DROPINDEX p16idx
 
 # ============================================================
+# Phase 27: Persistence & Module Type Hardening
+# ============================================================
+puts "\n=== Phase 27: Persistence & ModuleType ==="
+
+test_assert "MEMORY USAGE grows after adding docs" {
+  r FT.CREATE p27mem SCHEMA body TEXT
+  set m0 [r MEMORY USAGE p27mem]
+  set big [string repeat "a" 4096]
+  r FT.ADD p27mem d1 FIELDS body $big
+  r FT.ADD p27mem d2 FIELDS body $big
+  set m1 [r MEMORY USAGE p27mem]
+  if {$m1 <= $m0} { error "Expected MEMORY USAGE to grow: before=$m0 after=$m1" }
+  r FT.DROPINDEX p27mem
+}
+
+# Detect Redis major version for Redis 7+ callbacks (copy2, aux_save2)
+set info_srv [r INFO server]
+set redis_major 0
+if {[regexp {redis_version:([0-9]+)\.} $info_srv -> rmaj]} {
+  set redis_major $rmaj
+}
+
+if {$redis_major >= 7} {
+  test_assert "COPY clones search index independently (Redis 7+)" {
+    r FT.CREATE p27src SCHEMA tag TAG num NUMERIC
+    r FT.ADD p27src d1 FIELDS tag alpha num 42
+    set ok [r COPY p27src p27dst]
+    if {$ok != 1} { error "Expected COPY to return 1, got $ok" }
+    r FT.DROPINDEX p27src
+    set res [r FT.SEARCH p27dst {@tag:{alpha}}]
+    if {[lindex $res 0] != 1} { error "Expected 1 match in copied index, got $res" }
+    r FT.DROPINDEX p27dst
+  }
+}
+
+test_assert "NOSTEM, LANGUAGE, and synonyms survive BGSAVE + restart" {
+  r FT.CREATE p27rdb LANGUAGE english SCHEMA exact TEXT NOSTEM name TEXT PHONETIC dm:en
+  r FT.ADD p27rdb d1 FIELDS exact running name Jon
+  r FT.SYNUPDATE p27rdb g1 fast quick
+
+  r BGSAVE
+  after 500
+  global redis_fd port module_path
+  catch {redis_command $redis_fd SHUTDOWN SAVE}
+  catch {close $redis_fd}
+  after 500
+
+  start_redis $module_path $port
+  set redis_fd [redis_connect localhost $port]
+
+  # Verify NOSTEM preserved (run does NOT stem-match running)
+  set res [r FT.SEARCH p27rdb "@exact:run"]
+  if {[lindex $res 0] != 0} { error "Expected NOSTEM to block stem match after restart, got $res" }
+
+  # Verify exact match still works
+  set res2 [r FT.SEARCH p27rdb "@exact:running"]
+  if {[lindex $res2 0] != 1} { error "Expected exact match after restart, got $res2" }
+
+  # Verify synonyms preserved
+  set syns [r FT.SYNDUMP p27rdb]
+  if {[llength $syns] < 2} { error "Expected synonyms after restart, got $syns" }
+
+  r FT.DROPINDEX p27rdb
+}
+
+test_assert "Wide document (>10 fields) survives command-AOF rewrite + restart" {
+  r FT.CREATE p27wide SCHEMA f1 TAG f2 TAG f3 TAG f4 TAG f5 TAG f6 TAG f7 TAG f8 TAG f9 TAG f10 TAG f11 TAG f12 TAG
+  r FT.ADD p27wide w1 FIELDS f1 v1 f2 v2 f3 v3 f4 v4 f5 v5 f6 v6 f7 v7 f8 v8 f9 v9 f10 v10 f11 v11 f12 v12
+
+  r CONFIG SET aof-use-rdb-preamble no
+  r CONFIG SET appendonly yes
+  after 1000
+  catch { r BGREWRITEAOF }
+  after 1500
+
+  global redis_fd port module_path
+  catch {redis_command $redis_fd SHUTDOWN SAVE}
+  catch {close $redis_fd}
+  after 500
+
+  start_redis $module_path $port
+  set redis_fd [redis_connect localhost $port]
+
+  set res [r FT.SEARCH p27wide {@f12:{v12}}]
+  if {[lindex $res 0] != 1} { error "Expected 1 match for f12:v12 after AOF rewrite, got $res" }
+  r FT.DROPINDEX p27wide
+}
+
+# Redis 7+ aux_save2 persistence check (aliases, suggest dicts, term dicts, config)
+if {$redis_major >= 7} {
+  test_assert "Redis 7 aux RDB persists aliases, suggest dicts, term dicts, and config" {
+    r FT.CREATE p27aux SCHEMA tag TAG
+    r FT.ALIASADD p27alias p27aux
+    r FT.SUGADD p27sug "redis" 5.0 PAYLOAD "db"
+    r FT.DICTADD p27dict alpha beta
+    r FT.CONFIG SET TIMEOUT 1234
+
+    r BGSAVE
+    after 500
+    global redis_fd port module_path
+    catch {redis_command $redis_fd SHUTDOWN SAVE}
+    catch {close $redis_fd}
+    after 500
+
+    start_redis $module_path $port
+    set redis_fd [redis_connect localhost $port]
+
+    set sug [r FT.SUGGET p27sug "red" WITHPAYLOADS]
+    if {[lindex $sug 0] ne "redis" || [lindex $sug 1] ne "db"} {
+      error "Suggest dict not persisted across restart: $sug"
+    }
+    set dict [r FT.DICTDUMP p27dict]
+    if {[llength $dict] != 2} { error "Term dict not persisted: $dict" }
+    set info_via_alias [r FT.INFO p27alias]
+    if {[llength $info_via_alias] < 2} { error "Alias not persisted: $info_via_alias" }
+    set cfg [r FT.CONFIG GET TIMEOUT]
+    if {[lindex [lindex $cfg 0] 1] ne "1234"} { error "Config not persisted: $cfg" }
+
+    r FT.ALIASDEL p27alias
+    r FT.DROPINDEX p27aux
+  }
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

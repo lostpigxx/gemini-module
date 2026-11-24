@@ -32,6 +32,20 @@ bool DocumentStore::Contains(const std::string& doc_id) const {
 
 size_t DocumentStore::Size() const { return docs_.size(); }
 
+size_t DocumentStore::MemoryUsage() const {
+  size_t bytes = sizeof(*this) + docs_.bucket_count() * sizeof(void*);
+  for (const auto& [k, doc] : docs_) {
+    bytes += sizeof(std::pair<const std::string, Document>) + sizeof(void*);
+    bytes += k.capacity() + doc.id.capacity();
+    bytes += doc.fields.bucket_count() * sizeof(void*);
+    for (const auto& [fk, fv] : doc.fields) {
+      bytes += sizeof(std::pair<const std::string, std::string>) + sizeof(void*);
+      bytes += fk.capacity() + fv.capacity();
+    }
+  }
+  return bytes;
+}
+
 std::vector<std::string> DocumentStore::AllIds() const {
   std::vector<std::string> ids;
   ids.reserve(docs_.size());
