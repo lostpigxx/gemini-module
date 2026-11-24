@@ -1,7 +1,13 @@
 set(SEARCH_SOURCES
   src/redis_search_module.cc
   src/index_spec.cc
+  src/search_state.cc
   src/search_commands.cc
+  src/search_index_cmds.cc
+  src/search_query_cmds.cc
+  src/search_agg_cmds.cc
+  src/search_aux_cmds.cc
+  src/search_keyspace.cc
   src/document_store.cc
   src/tag_index.cc
   src/text_index.cc
@@ -229,7 +235,7 @@ if(GTest_FOUND)
   add_executable(search_rdb_test EXCLUDE_FROM_ALL
     tests/search_rdb_test.cc
     src/search_rdb.cc
-    src/search_commands.cc
+    src/search_state.cc
     src/index_spec.cc
     src/document_store.cc
     src/tag_index.cc
