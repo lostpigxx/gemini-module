@@ -151,6 +151,13 @@ static bool TryCreateAtLeafKey(const JsonPath& path, JsonValue* root, JsonValue*
 }
 
 // --- JSON.SET ---
+static void NotifyJsonEvent(RedisModuleCtx* ctx, const char* event,
+                            RedisModuleString* key) {
+  if (RedisModule_NotifyKeyspaceEvent) {
+    RedisModule_NotifyKeyspaceEvent(ctx, REDISMODULE_NOTIFY_MODULE, event, key);
+  }
+}
+
 static int CmdSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (argc < 4 || argc > 5) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
@@ -196,6 +203,7 @@ static int CmdSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
         return RedisModule_ReplyWithNull(ctx);
       }
       RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_val);
+      NotifyJsonEvent(ctx, "json.set", argv[1]);
       RedisModule_ReplicateVerbatim(ctx);
       return RedisModule_ReplyWithSimpleString(ctx, "OK");
     }
@@ -223,6 +231,7 @@ static int CmdSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       }
     }
 
+    NotifyJsonEvent(ctx, "json.set", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithSimpleString(ctx, "OK");
   }
@@ -238,6 +247,7 @@ static int CmdSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   }
 
   RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_val);
+  NotifyJsonEvent(ctx, "json.set", argv[1]);
   RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
@@ -338,6 +348,7 @@ static int CmdDel(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   if (IsRootOnlyPath(path)) {
     RedisModule_DeleteKey(key);
+    NotifyJsonEvent(ctx, "json.del", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithLongLong(ctx, 1);
   }
@@ -356,7 +367,10 @@ static int CmdDel(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     if (DeleteAtMatch(m)) deleted++;
   }
 
-  if (deleted > 0) RedisModule_ReplicateVerbatim(ctx);
+  if (deleted > 0) {
+    NotifyJsonEvent(ctx, "json.del", argv[1]);
+    RedisModule_ReplicateVerbatim(ctx);
+  }
   return RedisModule_ReplyWithLongLong(ctx, deleted);
 }
 
@@ -424,6 +438,7 @@ static int CmdArrAppend(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     }
     auto* arr = matches[0].value;
     for (auto* v : values) arr->ArrayAppend(v);
+    NotifyJsonEvent(ctx, "json.arrappend", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
   }
@@ -440,7 +455,10 @@ static int CmdArrAppend(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     changed = true;
   }
   for (auto* v : values) JsonValue::Destroy(v);
-  if (changed) RedisModule_ReplicateVerbatim(ctx);
+  if (changed) {
+    NotifyJsonEvent(ctx, "json.arrappend", argv[1]);
+    RedisModule_ReplicateVerbatim(ctx);
+  }
   return REDISMODULE_OK;
 }
 
@@ -565,6 +583,7 @@ static int CmdArrInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     for (size_t i = 0; i < values.size(); i++) {
       arr->ArrayInsert(static_cast<uint32_t>(idx + static_cast<int32_t>(i)), values[i]);
     }
+    NotifyJsonEvent(ctx, "json.arrinsert", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
   }
@@ -591,7 +610,10 @@ static int CmdArrInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     changed = true;
   }
   for (auto* v : values) JsonValue::Destroy(v);
-  if (changed) RedisModule_ReplicateVerbatim(ctx);
+  if (changed) {
+    NotifyJsonEvent(ctx, "json.arrinsert", argv[1]);
+    RedisModule_ReplicateVerbatim(ctx);
+  }
   return REDISMODULE_OK;
 }
 
@@ -666,6 +688,7 @@ static int CmdArrPop(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     if (!popped) return RedisModule_ReplyWithNull(ctx);
     ReplyWithJsonValue(ctx, popped);
     JsonValue::Destroy(popped);
+    NotifyJsonEvent(ctx, "json.arrpop", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return REDISMODULE_OK;
   }
@@ -683,7 +706,10 @@ static int CmdArrPop(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     JsonValue::Destroy(popped);
     changed = true;
   }
-  if (changed) RedisModule_ReplicateVerbatim(ctx);
+  if (changed) {
+    NotifyJsonEvent(ctx, "json.arrpop", argv[1]);
+    RedisModule_ReplicateVerbatim(ctx);
+  }
   return REDISMODULE_OK;
 }
 
@@ -719,6 +745,7 @@ static int CmdArrTrim(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     if (e < 0) e += static_cast<int32_t>(arr->ArrayLen());
     arr->ArrayTrim(s < 0 ? 0 : static_cast<uint32_t>(s),
                    e < 0 ? 0 : static_cast<uint32_t>(e));
+    NotifyJsonEvent(ctx, "json.arrtrim", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
   }
@@ -737,7 +764,10 @@ static int CmdArrTrim(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
     changed = true;
   }
-  if (changed) RedisModule_ReplicateVerbatim(ctx);
+  if (changed) {
+    NotifyJsonEvent(ctx, "json.arrtrim", argv[1]);
+    RedisModule_ReplicateVerbatim(ctx);
+  }
   return REDISMODULE_OK;
 }
 
@@ -796,6 +826,7 @@ static int CmdStrAppend(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
       RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_str);
     }
     JsonValue::Destroy(append_val);
+    NotifyJsonEvent(ctx, "json.strappend", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithLongLong(ctx, new_len);
   }
@@ -818,7 +849,10 @@ static int CmdStrAppend(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     changed = true;
   }
   JsonValue::Destroy(append_val);
-  if (changed) RedisModule_ReplicateVerbatim(ctx);
+  if (changed) {
+    NotifyJsonEvent(ctx, "json.strappend", argv[1]);
+    RedisModule_ReplicateVerbatim(ctx);
+  }
   return REDISMODULE_OK;
 }
 
@@ -903,6 +937,7 @@ static int CmdNumIncrBy(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     else RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_val);
 
     auto result = JsonSerialize(new_val);
+    NotifyJsonEvent(ctx, "json.numincrby", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithStringBuffer(ctx, result.data(), result.size());
   }
@@ -923,7 +958,10 @@ static int CmdNumIncrBy(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     changed = true;
   }
   reply += "]";
-  if (changed) RedisModule_ReplicateVerbatim(ctx);
+  if (changed) {
+    NotifyJsonEvent(ctx, "json.numincrby", argv[1]);
+    RedisModule_ReplicateVerbatim(ctx);
+  }
   return RedisModule_ReplyWithStringBuffer(ctx, reply.data(), reply.size());
 }
 
@@ -962,6 +1000,7 @@ static int CmdNumMultBy(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     if (matches[0].parent) SetAtMatch(matches[0], new_val);
     else RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_val);
     auto reply = JsonSerialize(new_val);
+    NotifyJsonEvent(ctx, "json.nummultby", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithStringBuffer(ctx, reply.data(), reply.size());
   }
@@ -980,7 +1019,10 @@ static int CmdNumMultBy(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     changed = true;
   }
   reply += "]";
-  if (changed) RedisModule_ReplicateVerbatim(ctx);
+  if (changed) {
+    NotifyJsonEvent(ctx, "json.nummultby", argv[1]);
+    RedisModule_ReplicateVerbatim(ctx);
+  }
   return RedisModule_ReplyWithStringBuffer(ctx, reply.data(), reply.size());
 }
 
@@ -1088,7 +1130,10 @@ static int CmdClear(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       cleared++;
     }
   }
-  if (cleared > 0) RedisModule_ReplicateVerbatim(ctx);
+  if (cleared > 0) {
+    NotifyJsonEvent(ctx, "json.clear", argv[1]);
+    RedisModule_ReplicateVerbatim(ctx);
+  }
   return RedisModule_ReplyWithLongLong(ctx, cleared);
 }
 
@@ -1121,6 +1166,7 @@ static int CmdToggle(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     auto* new_val = JsonValue::CreateBool(!old_val);
     if (matches[0].parent) SetAtMatch(matches[0], new_val);
     else RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_val);
+    NotifyJsonEvent(ctx, "json.toggle", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithSimpleString(ctx, !old_val ? "true" : "false");
   }
@@ -1136,7 +1182,10 @@ static int CmdToggle(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     RedisModule_ReplyWithLongLong(ctx, !old_val ? 1 : 0);
     changed = true;
   }
-  if (changed) RedisModule_ReplicateVerbatim(ctx);
+  if (changed) {
+    NotifyJsonEvent(ctx, "json.toggle", argv[1]);
+    RedisModule_ReplicateVerbatim(ctx);
+  }
   return REDISMODULE_OK;
 }
 
@@ -1251,6 +1300,9 @@ static int CmdMSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   }
 
   for (auto& op : ops) JsonValue::Destroy(op.value);
+  for (int k = 1; k + 2 < argc; k += 3) {
+    NotifyJsonEvent(ctx, "json.set", argv[k]);
+  }
   RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
@@ -1322,6 +1374,7 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (key_type == REDISMODULE_KEYTYPE_EMPTY) {
     if (IsRootOnlyPath(path)) {
       RedisModule_ModuleTypeSetValue(key, JsonModuleType, patch);
+      NotifyJsonEvent(ctx, "json.merge", argv[1]);
       RedisModule_ReplicateVerbatim(ctx);
       return RedisModule_ReplyWithSimpleString(ctx, "OK");
     }
@@ -1351,6 +1404,7 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   }
 
   JsonValue::Destroy(patch);
+  NotifyJsonEvent(ctx, "json.merge", argv[1]);
   RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }

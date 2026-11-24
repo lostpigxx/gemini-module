@@ -2941,6 +2941,118 @@ test_assert "TEMPORARY index auto-expires after idle TTL" {
 }
 
 # ============================================================
+# Phase 30: Keyspace & Server Event Completeness
+# ============================================================
+puts "\n=== Phase 30: Keyspace & Server Events ==="
+
+test_assert "ON HASH handles RENAME into, within, and out of prefix" {
+  r FT.CREATE p30idx ON HASH PREFIX 1 p30: SCHEMA name TAG
+  r HSET other:1 name alpha
+  # Rename into prefix -> indexed
+  r RENAME other:1 p30:1
+  set r1 [r FT.SEARCH p30idx {@name:{alpha}}]
+  if {[lindex $r1 0] != 1} { error "Expected 1 after RENAME into prefix, got $r1" }
+  # Rename within prefix -> old removed, new indexed
+  r RENAME p30:1 p30:2
+  set r2 [r FT.SEARCH p30idx {@name:{alpha}} NOCONTENT]
+  if {[lindex $r2 0] != 1 || [lindex $r2 1] ne "p30:2"} {
+    error "Expected doc p30:2 after RENAME within prefix, got $r2"
+  }
+  # Rename out of prefix -> removed
+  r RENAME p30:2 outside:2
+  set r3 [r FT.SEARCH p30idx {@name:{alpha}}]
+  if {[lindex $r3 0] != 0} { error "Expected 0 after RENAME out of prefix, got $r3" }
+  r DEL outside:2
+  r FT.DROPINDEX p30idx
+}
+
+test_assert "ON HASH handles UNLINK and HDEL of last indexed field" {
+  r FT.CREATE p30del ON HASH PREFIX 1 p30d: SCHEMA name TAG
+  r HSET p30d:1 name beta
+  r HSET p30d:2 name gamma
+  if {[lindex [r FT.SEARCH p30del "*"] 0] != 2} { error "Expected 2 docs initially" }
+
+  # UNLINK removes doc
+  r UNLINK p30d:1
+  if {[lindex [r FT.SEARCH p30del "*"] 0] != 1} { error "Expected 1 doc after UNLINK" }
+
+  # HDEL removing the only indexed field removes stale doc from index
+  r HDEL p30d:2 name
+  if {[lindex [r FT.SEARCH p30del "*"] 0] != 0} { error "Expected 0 docs after HDEL of last indexed field" }
+
+  r DEL p30d:2
+  r FT.DROPINDEX p30del
+}
+
+test_assert "FLUSHDB clears aliases and suggest/term dicts via server event" {
+  r FT.CREATE p30f SCHEMA tag TAG
+  r FT.ALIASADD p30fa p30f
+  r FT.SUGADD p30fs "hello" 1.0
+  r FT.DICTADD p30fd word1
+  r FLUSHDB
+  if {[r FT.SUGLEN p30fs] != 0} { error "Expected suggest dict cleared on FLUSHDB" }
+  set got_err 0
+  if {[catch {r FT.INFO p30fa}]} { set got_err 1 }
+  if {!$got_err} { error "Expected alias cleared on FLUSHDB" }
+}
+
+# End-to-end ON JSON test when redis_json.so is built alongside redis_search.so
+set json_so [file join [file dirname $module_path] "redis_json.so"]
+if {[file exists $json_so]} {
+  test_assert "ON JSON end-to-end with gemini-json (SET, MERGE, RENAME, UNLINK)" {
+    set jport [find_free_port]
+    catch {
+      exec redis-server \
+        --port $jport \
+        --daemonize yes \
+        --loglevel warning \
+        --logfile /tmp/search_json_tcl.log \
+        --dbfilename "" \
+        --save "" \
+        --loadmodule $json_so \
+        --loadmodule $module_path
+    }
+    set jfd ""
+    for {set i 0} {$i < 50} {incr i} {
+      if {![catch {socket localhost $jport} fd]} {
+        close $fd
+        break
+      }
+      after 100
+    }
+    set jfd [redis_connect localhost $jport]
+    redis_command $jfd FT.CREATE jidx ON JSON PREFIX 1 jdoc: SCHEMA \$.name AS name TAG \$.price AS price NUMERIC
+    redis_command $jfd JSON.SET jdoc:1 \$ {{"name":"widget","price":25}}
+    set jr1 [redis_command $jfd FT.SEARCH jidx {@name:{widget} @price:[20 30]}]
+    if {[lindex $jr1 0] != 1} {
+      catch {redis_command $jfd SHUTDOWN NOSAVE}
+      catch {close $jfd}
+      error "Expected 1 match after JSON.SET, got $jr1"
+    }
+    redis_command $jfd JSON.MERGE jdoc:1 \$ {{"price":99}}
+    set jr2 [redis_command $jfd FT.SEARCH jidx {@price:[90 100]}]
+    if {[lindex $jr2 0] != 1} {
+      catch {redis_command $jfd SHUTDOWN NOSAVE}
+      catch {close $jfd}
+      error "Expected 1 match after JSON.MERGE, got $jr2"
+    }
+    redis_command $jfd RENAME jdoc:1 jdoc:2
+    set jr3 [redis_command $jfd FT.SEARCH jidx {@name:{widget}} NOCONTENT]
+    if {[lindex $jr3 0] != 1 || [lindex $jr3 1] ne "jdoc:2"} {
+      catch {redis_command $jfd SHUTDOWN NOSAVE}
+      catch {close $jfd}
+      error "Expected jdoc:2 after RENAME, got $jr3"
+    }
+    redis_command $jfd UNLINK jdoc:2
+    set jr4 [redis_command $jfd FT.SEARCH jidx {@name:{widget}}]
+    catch {redis_command $jfd SHUTDOWN NOSAVE}
+    catch {close $jfd}
+    file delete -force /tmp/search_json_tcl.log
+    if {[lindex $jr4 0] != 0} { error "Expected 0 matches after UNLINK, got $jr4" }
+  }
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

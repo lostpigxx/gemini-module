@@ -38,11 +38,13 @@ void RemoveDocFromIndices(IndexEntry& entry, const std::string& doc_id);
 void AddDocToIndices(IndexEntry& entry, const std::string& doc_id,
                      const std::unordered_map<std::string, std::string>& fields);
 
-// Keyspace & auto-indexing helpers (defined in search_keyspace.cc)
+// Keyspace & server event helpers (defined in search_keyspace.cc)
 void ScanExistingKeys(RedisModuleCtx* ctx, IndexEntry& entry);
 void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry, const std::string& key_name);
 void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry, const std::string& key_name);
 int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event, RedisModuleString* key);
+void OnFlushDbEvent(RedisModuleCtx* ctx, RedisModuleEvent eid, uint64_t subevent, void* data);
+void OnLoadingEvent(RedisModuleCtx* ctx, RedisModuleEvent eid, uint64_t subevent, void* data);
 
 // Aggregation cursor & profile helpers (defined in search_agg_cmds.cc)
 void ReplyCursorBatch(RedisModuleCtx* ctx, uint64_t cursor_id, AggCursor& cursor);

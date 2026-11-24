@@ -91,9 +91,15 @@ int RegisterSearchCommands(RedisModuleCtx* ctx) {
   if (RedisModule_SubscribeToKeyspaceEvents(
           ctx,
           REDISMODULE_NOTIFY_HASH | REDISMODULE_NOTIFY_GENERIC |
-          REDISMODULE_NOTIFY_MODULE,
+          REDISMODULE_NOTIFY_MODULE | REDISMODULE_NOTIFY_EXPIRED |
+          REDISMODULE_NOTIFY_EVICTED,
           OnKeyspaceEvent) == REDISMODULE_ERR) {
     RedisModule_Log(ctx, "warning", "Failed to subscribe to keyspace events");
+  }
+
+  if (RedisModule_SubscribeToServerEvent) {
+    RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_FlushDB, OnFlushDbEvent);
+    RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_Loading, OnLoadingEvent);
   }
 
   if (RedisModule_CreateTimer) {
