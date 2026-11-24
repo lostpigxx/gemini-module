@@ -114,10 +114,10 @@ genuinely enforced.
 
 ## Milestone Summary
 
-| Phase | Focus | Priority |
-|---|---|---|
-| **P27** | RDB/AOF completeness, bounds checks, ModuleType callbacks, real `SearchMemUsage` | P0 (Data safety) |
-| **P28** | Split `search_commands.cc` monolith into focused modules | P1 (Maintainability) |
-| **P29** | Enforce `TEMPORARY`, `CURSOR MAXIDLE`, `DIALECT`, `FT.PROFILE`, cooperative `TIMEOUT` | P1 (Correctness) |
-| **P30** | Keyspace (`RENAME`/`UNLINK`/`RESTORE`/JSON) + `FLUSHDB` server events + `ON JSON` integration | P1 (Consistency) |
-| **P31** | Redis 7 Soak test, ASan CI, RESP3 tests, `DESIGN.md` | P2 (Production bar) |
+| Phase | Focus | Priority | Status |
+|---|---|---|---|
+| **P27** | RDB/AOF completeness, bounds checks, ModuleType callbacks, real `SearchMemUsage` | P0 (Data safety) | Done |
+| **P28** | Split `search_commands.cc` monolith into focused modules | P1 (Maintainability) | Done |
+| **P29** | Enforce `TEMPORARY`, `CURSOR MAXIDLE`, `DIALECT`, `FT.PROFILE`, cooperative `TIMEOUT`, `PHONETIC` | P1 (Correctness) | Done |
+| **P30** | Keyspace (`RENAME`/`UNLINK`/`RESTORE`/JSON) + `FLUSHDB` server events + `ON JSON` integration | P1 (Consistency) | Done |
+| **P31** | Redis 7 Soak test, ASan CI, RESP3 tests, `DESIGN.md` | P2 (Production bar) | Done |

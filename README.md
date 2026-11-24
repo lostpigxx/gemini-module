@@ -49,9 +49,10 @@ numeric ranges, `GEOFILTER`, KNN with pre-filter, `HIGHLIGHT` / `SUMMARIZE`, `SO
 | Spellcheck / dictionaries / synonyms | `FT.SPELLCHECK`, `FT.DICTADD`, `FT.DICTDEL`, `FT.DICTDUMP`, `FT.SYNUPDATE`, `FT.SYNDUMP` |
 | Configuration / debug | `FT.CONFIG`, `FT._DEBUG` |
 
-Development roadmap: [doc/gemini-search/development-plan.md](doc/gemini-search/development-plan.md) (Phase 0–12),
+Design doc: [modules/gemini-search/DESIGN.md](modules/gemini-search/DESIGN.md). Development roadmap:
+[doc/gemini-search/development-plan.md](doc/gemini-search/development-plan.md) (Phase 0–12),
 [doc/gemini-search/development-plan-v2.md](doc/gemini-search/development-plan-v2.md) (Phase 13–26), and
-[doc/gemini-search/development-plan-v3.md](doc/gemini-search/development-plan-v3.md) (Phase 27+, Redis 7 production hardening).
+[doc/gemini-search/development-plan-v3.md](doc/gemini-search/development-plan-v3.md) (Phase 27–31, Redis 7 production hardening).
 
 ## Project Structure
 
@@ -163,7 +164,7 @@ Docker CI 提供三组环境验证 gemini-bloom 在不同 Redis 版本下的兼�
 
 Redis 6/7 环境下 Compat、Soak、RDB 迁移会跑两轮（RESP3 + RESP2），Redis 5 只跑 RESP2。
 
-> Compat / Soak / RDB 迁移测试目前只覆盖 BF.\*。`gemini-search` 仅面向 Redis 7，其 GTest（`search_test`）与 Tcl 集成测试在 `redis7` 环境中运行。`gemini-json` 尚未接入 Docker CI，仅有本地 GTest + Tcl 测试。
+> Compat / Soak / RDB 迁移测试目前只覆盖 BF.\*。`gemini-search` 仅面向 Redis 7，其 GTest（`search_test`）、ASan GTest、Tcl 集成测试与 Soak 长稳测试（`ci/search_soak_test.py`，RESP3 + RESP2）均在 `redis7` 环境中运行。`gemini-json` 尚未接入 Docker CI，仅有本地 GTest + Tcl 测试。
 
 ### 运行单组环境
 

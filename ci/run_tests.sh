@@ -80,9 +80,24 @@ if [ "$REDIS_MAJOR" -ge 7 ]; then
   cmake --build "$BUILD_DIR" --target search_test -j"$(nproc)" || \
     { red "FAIL: search gtest"; FAIL=1; }
 
+  header "ASan GTest: gemini-search"
+  cmake -B "${BUILD_DIR}_search_asan" -DENABLE_ASAN=ON >/dev/null && \
+    cmake --build "${BUILD_DIR}_search_asan" --target search_test -j"$(nproc)" || \
+    { red "FAIL: search asan gtest"; FAIL=1; }
+
   header "Tcl: gemini-search"
   tclsh modules/gemini-search/tests/tcl/search_test.tcl "./$BUILD_DIR/redis_search.so" || \
     { red "FAIL: search tcl"; FAIL=1; }
+
+  header "Soak: gemini-search (${SEARCH_SOAK_DURATION_SEC:-60}s, RESP auto)"
+  SOAK_DURATION_SEC="${SEARCH_SOAK_DURATION_SEC:-60}" \
+    python3 ci/search_soak_test.py "./$BUILD_DIR/redis_search.so" || \
+    { red "FAIL: search soak"; FAIL=1; }
+
+  header "Soak: gemini-search (${SEARCH_SOAK_DURATION_SEC:-60}s, RESP2 forced)"
+  SOAK_DURATION_SEC="${SEARCH_SOAK_DURATION_SEC:-60}" RESP_PROTOCOL=2 \
+    python3 ci/search_soak_test.py "./$BUILD_DIR/redis_search.so" || \
+    { red "FAIL: search soak RESP2"; FAIL=1; }
 fi
 
 # ── Summary ──────────────────────────────────────────────────

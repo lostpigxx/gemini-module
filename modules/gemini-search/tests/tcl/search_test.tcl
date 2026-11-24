@@ -3053,6 +3053,85 @@ if {[file exists $json_so]} {
 }
 
 # ============================================================
+# Phase 31: RESP3 Dual-Protocol Verification
+# ============================================================
+puts "\n=== Phase 31: RESP3 Verification ==="
+
+test_assert "RESP3 HELLO 3 works for FT.SEARCH, FT.AGGREGATE, FT.INFO, FT.PROFILE" {
+  r FT.CREATE p31r3 SCHEMA cat TAG price NUMERIC
+  r FT.ADD p31r3 d1 FIELDS cat book price 10
+  r FT.ADD p31r3 d2 FIELDS cat book price 20
+
+  global port
+  set r3fd [redis_connect localhost $port]
+  # Switch connection to RESP3
+  puts -nonewline $r3fd "*2\r\n\$5\r\nHELLO\r\n\$1\r\n3\r\n"
+  flush $r3fd
+  # Drain HELLO 3 map response (read lines until FT.SEARCH works cleanly on a fresh ping)
+  # Use a clean RESP3 request sequence: send PING to sync
+  after 50
+  fconfigure $r3fd -blocking 0
+  set hello_raw [read $r3fd]
+  fconfigure $r3fd -blocking 1
+  if {[string length $hello_raw] == 0} {
+    close $r3fd
+    error "Empty HELLO 3 response"
+  }
+
+  # Send FT.SEARCH, FT.AGGREGATE, FT.INFO, FT.PROFILE over RESP3 connection
+  # Valid FT.SEARCH over RESP3
+  puts -nonewline $r3fd "*4\r\n\$9\r\nFT.SEARCH\r\n\$5\r\np31r3\r\n\$1\r\n*\r\n\$9\r\nNOCONTENT\r\n"
+  flush $r3fd
+  after 50
+  fconfigure $r3fd -blocking 0
+  set s_raw [read $r3fd]
+  fconfigure $r3fd -blocking 1
+  if {[string first "d1" $s_raw] < 0 || [string first "d2" $s_raw] < 0} {
+    close $r3fd
+    error "RESP3 FT.SEARCH missing expected docs: $s_raw"
+  }
+
+  # Valid FT.AGGREGATE over RESP3
+  puts -nonewline $r3fd "*11\r\n\$12\r\nFT.AGGREGATE\r\n\$5\r\np31r3\r\n\$1\r\n*\r\n\$7\r\nGROUPBY\r\n\$1\r\n1\r\n\$4\r\n@cat\r\n\$6\r\nREDUCE\r\n\$5\r\nCOUNT\r\n\$1\r\n0\r\n\$2\r\nAS\r\n\$3\r\ncnt\r\n"
+  flush $r3fd
+  after 50
+  fconfigure $r3fd -blocking 0
+  set a_raw [read $r3fd]
+  fconfigure $r3fd -blocking 1
+  if {[string first "book" $a_raw] < 0 || [string first "cnt" $a_raw] < 0} {
+    close $r3fd
+    error "RESP3 FT.AGGREGATE missing expected group: $a_raw"
+  }
+
+  # Valid FT.INFO over RESP3
+  puts -nonewline $r3fd "*2\r\n\$7\r\nFT.INFO\r\n\$5\r\np31r3\r\n"
+  flush $r3fd
+  after 50
+  fconfigure $r3fd -blocking 0
+  set i_raw [read $r3fd]
+  fconfigure $r3fd -blocking 1
+  if {[string first "p31r3" $i_raw] < 0} {
+    close $r3fd
+    error "RESP3 FT.INFO missing index name: $i_raw"
+  }
+
+  # Valid FT.PROFILE over RESP3
+  puts -nonewline $r3fd "*5\r\n\$10\r\nFT.PROFILE\r\n\$5\r\np31r3\r\n\$6\r\nSEARCH\r\n\$5\r\nQUERY\r\n\$1\r\n*\r\n"
+  flush $r3fd
+  after 50
+  fconfigure $r3fd -blocking 0
+  set p_raw [read $r3fd]
+  fconfigure $r3fd -blocking 1
+  if {[string first "total_time_us" $p_raw] < 0} {
+    close $r3fd
+    error "RESP3 FT.PROFILE missing total_time_us: $p_raw"
+  }
+
+  close $r3fd
+  r FT.DROPINDEX p31r3
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 
