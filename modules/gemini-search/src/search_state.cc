@@ -21,7 +21,7 @@ static std::unordered_map<std::string, std::string> g_config = {
     {"DEFAULT_DIALECT", "2"},
     {"TIMEOUT", "500"},
     {"MAXEXPANSIONS", "200"},
-    {"MINSTEMLEN", "4"},
+    {"MINSTEMLEN", "3"},
 };
 
 std::unordered_map<std::string, IndexEntry>& GetIndices() { return g_indices; }
@@ -45,6 +45,26 @@ int GetDefaultDialect() {
     if (*ep == '\0' && v >= 1) return static_cast<int>(v);
   }
   return 2;
+}
+
+size_t GetMaxExpansions() {
+  auto it = g_config.find("MAXEXPANSIONS");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long v = std::strtol(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v > 0) return static_cast<size_t>(v);
+  }
+  return 200;
+}
+
+size_t GetMinStemLen() {
+  auto it = g_config.find("MINSTEMLEN");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long v = std::strtol(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v >= 1) return static_cast<size_t>(v);
+  }
+  return 3;
 }
 
 void PurgeExpiredCursors(int64_t now_ms) {
@@ -191,8 +211,16 @@ void AddDocToIndices(
         vidx.Add(doc_id, vec.data());
       }
     } else if (fspec->type == FieldType::kText) {
+      std::string doc_lang = entry.spec.language;
+      if (!entry.spec.language_field.empty()) {
+        auto lit = fields.find(entry.spec.language_field);
+        if (lit != fields.end() && !lit->second.empty()) {
+          doc_lang = lit->second;
+        }
+      }
       entry.text_indices.GetOrCreate(fname).Add(
-          doc_id, fval, !fspec->phonetic.empty(), entry.spec.language);
+          doc_id, fval, !fspec->phonetic.empty(), doc_lang,
+          entry.spec.nofreqs, entry.spec.nooffsets);
     } else if (fspec->type == FieldType::kGeo) {
       GeoCoord coord;
       if (ParseGeoCoord(fval, coord)) {

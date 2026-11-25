@@ -622,8 +622,13 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   qopts.language = opts.has_language ? opts.language : entry.spec.language;
   qopts.dialect = opts.has_dialect ? opts.dialect : GetDefaultDialect();
   qopts.scorer = opts.scorer;
+  qopts.max_expansions = GetMaxExpansions();
+  qopts.min_stem_len = GetMinStemLen();
   if (opts.has_timeout && opts.timeout_ms > 0) {
     qopts.deadline_ms = NowMs() + opts.timeout_ms;
+  }
+  if (entry.spec.nohl || entry.spec.nooffsets) {
+    opts.has_highlight = false;
   }
 
   ParsedQuery parsed;
@@ -758,7 +763,7 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         parsed.root, entry.spec, entry.doc_store,
         entry.tag_indices, entry.numeric_indices,
         entry.text_indices, entry.geo_indices, eval_error, qopts,
-        &entry.geoshape_indices, &params, &entry.vector_indices);
+        &entry.geoshape_indices, &params, &entry.vector_indices, &entry.synonyms);
     if (!eval_error.empty()) {
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
@@ -767,7 +772,7 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         parsed.root, entry.spec, entry.doc_store,
         entry.tag_indices, entry.numeric_indices,
         entry.text_indices, entry.geo_indices, eval_error, qopts,
-        &entry.geoshape_indices, &params, &entry.vector_indices);
+        &entry.geoshape_indices, &params, &entry.vector_indices, &entry.synonyms);
     if (!eval_error.empty()) {
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }

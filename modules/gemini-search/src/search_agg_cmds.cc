@@ -423,7 +423,8 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
                     entry.tag_indices, entry.numeric_indices,
                     entry.text_indices, entry.geo_indices, eval_error,
-                    qopts, &entry.geoshape_indices);
+                    qopts, &entry.geoshape_indices, nullptr,
+                    &entry.vector_indices, &entry.synonyms);
   if (!eval_error.empty()) {
     return RedisModule_ReplyWithError(ctx, eval_error.c_str());
   }

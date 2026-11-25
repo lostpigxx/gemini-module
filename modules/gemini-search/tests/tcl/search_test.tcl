@@ -3317,6 +3317,77 @@ test_assert "Suffix (*ing) and infix (*earc*) wildcards match terms" {
 }
 
 # ============================================================
+# Phase 36: Close Remaining Plan v2 Loose Ends
+# ============================================================
+puts "\n=== Phase 36: Plan v2 Gap Closure ==="
+
+test_assert "Synonyms expand automatically in FT.SEARCH" {
+  r FT.CREATE p36syn SCHEMA body TEXT
+  r FT.ADD p36syn d1 FIELDS body "automobile engine"
+  r FT.SYNUPDATE p36syn g1 car automobile vehicle
+  set res [r FT.SEARCH p36syn "car"]
+  if {[lindex $res 0] != 1} { error "Expected synonym match for car -> automobile, got $res" }
+  # VERBATIM disables synonym expansion
+  set res2 [r FT.SEARCH p36syn "car" VERBATIM]
+  if {[lindex $res2 0] != 0} { error "Expected 0 matches with VERBATIM, got $res2" }
+  r FT.DROPINDEX p36syn
+}
+
+test_assert "LANGUAGE_FIELD selects per-document stemming language" {
+  r FT.CREATE p36lf LANGUAGE_FIELD doc_lang SCHEMA doc_lang TAG body TEXT
+  r FT.ADD p36lf d1 FIELDS doc_lang french body "rapidement"
+  r FT.ADD p36lf d2 FIELDS doc_lang german body "freundlichkeit"
+  set rfr [r FT.SEARCH p36lf "rapide" LANGUAGE french]
+  if {[lindex $rfr 0] != 1} { error "Expected French doc match via LANGUAGE_FIELD, got $rfr" }
+  set rde [r FT.SEARCH p36lf "freundlich" LANGUAGE german]
+  if {[lindex $rde 0] != 1} { error "Expected German doc match via LANGUAGE_FIELD, got $rde" }
+  r FT.DROPINDEX p36lf
+}
+
+test_assert "NOHL disables highlight and NOOFFSETS disables phrase matching" {
+  r FT.CREATE p36nh NOHL SCHEMA body TEXT
+  r FT.ADD p36nh d1 FIELDS body "hello world"
+  set res [r FT.SEARCH p36nh "hello" HIGHLIGHT FIELDS 1 body]
+  set flds [lindex $res 2]
+  if {[string first "<b>" [lindex $flds 1]] >= 0} {
+    error "Expected NOHL to suppress highlight tags, got $flds"
+  }
+  r FT.DROPINDEX p36nh
+
+  r FT.CREATE p36no NOOFFSETS SCHEMA body TEXT
+  r FT.ADD p36no d1 FIELDS body "hello world"
+  set res2 [r FT.SEARCH p36no {"hello world"}]
+  if {[lindex $res2 0] != 0} { error "Expected NOOFFSETS to disable phrase match, got $res2" }
+  r FT.DROPINDEX p36no
+}
+
+test_assert "GEOSHAPE accepts FLAT and SPHERICAL coordinate system options" {
+  r FT.CREATE p36gs SCHEMA area GEOSHAPE FLAT region GEOSHAPE SPHERICAL
+  r FT.ADD p36gs d1 FIELDS area "POINT(5 5)" region "POINT(1 1)"
+  set res [r FT.SEARCH p36gs {@area:[WITHIN $poly]} PARAMS 2 poly "POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))"]
+  if {[lindex $res 0] != 1} { error "Expected 1 match for GEOSHAPE FLAT, got $res" }
+  r FT.DROPINDEX p36gs
+}
+
+test_assert "FT.CONFIG MAXEXPANSIONS and MINSTEMLEN take effect" {
+  r FT.CREATE p36cfg SCHEMA body TEXT
+  r FT.ADD p36cfg d1 FIELDS body "alpha1"
+  r FT.ADD p36cfg d2 FIELDS body "alpha2"
+  r FT.ADD p36cfg d3 FIELDS body "alpha3"
+  r FT.CONFIG SET MAXEXPANSIONS 1
+  set r1 [r FT.SEARCH p36cfg "alpha*"]
+  r FT.CONFIG SET MAXEXPANSIONS 200
+  if {[lindex $r1 0] != 1} { error "Expected MAXEXPANSIONS 1 to cap prefix matches to 1, got $r1" }
+
+  r FT.ADD p36cfg d4 FIELDS body "running"
+  r FT.CONFIG SET MINSTEMLEN 6
+  set r2 [r FT.SEARCH p36cfg "run"]
+  r FT.CONFIG SET MINSTEMLEN 3
+  if {[lindex $r2 0] != 0} { error "Expected MINSTEMLEN 6 to skip stemming 3-char 'run', got $r2" }
+  r FT.DROPINDEX p36cfg
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

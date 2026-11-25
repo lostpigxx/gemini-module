@@ -1,5 +1,7 @@
 #pragma once
 
+#include "index_spec.h"
+
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -27,8 +29,6 @@ struct GeoShape {
 };
 
 enum class GeoShapeOp { kWithin, kContains, kIntersects, kDisjoint };
-
-enum class GeoShapeCoord { kSpherical, kFlat };
 
 bool ParseWkt(const std::string& wkt, GeoShape& out);
 

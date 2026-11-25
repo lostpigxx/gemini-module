@@ -27,6 +27,8 @@ std::string ResolveAlias(const std::string& name);
 int64_t NowMs();
 void TouchIndex(IndexEntry& entry);
 int GetDefaultDialect();
+size_t GetMaxExpansions();
+size_t GetMinStemLen();
 void PurgeExpiredCursors(int64_t now_ms);
 
 // Shared argument & indexing helpers (defined in search_state.cc)

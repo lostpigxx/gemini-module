@@ -56,6 +56,8 @@ inline const char* VectorAlgorithmName(VectorAlgorithm a) {
 
 enum class IndexSourceType { kHash, kJson };
 
+enum class GeoShapeCoord { kSpherical, kFlat };
+
 struct VectorFieldParams {
   VectorAlgorithm algorithm = VectorAlgorithm::kFlat;
   size_t dim = 0;
@@ -77,6 +79,7 @@ struct FieldSpec {
   std::string phonetic;
   char tag_separator = ',';
   bool case_sensitive = false;
+  GeoShapeCoord geoshape_coord = GeoShapeCoord::kSpherical;
 };
 
 struct IndexSpec {
@@ -93,6 +96,7 @@ struct IndexSpec {
   int temporary_ttl = 0;
   std::string filter_expr;
   bool skip_initial_scan = false;
+  std::string language_field;
 
   bool HasPrefixes() const { return !prefixes.empty(); }
 

@@ -59,7 +59,8 @@ std::vector<std::string> EvaluateQuery(
     const QueryOptions& qopts,
     const GeoShapeFieldIndices* geoshape_indices,
     const std::unordered_map<std::string, std::string>* params,
-    const VectorFieldIndices* vector_indices) {
+    const VectorFieldIndices* vector_indices,
+    const SynonymMap* synonyms) {
   if (qopts.deadline_ms > 0 && QueryMonotonicMs() > qopts.deadline_ms) {
     error_msg = "ERR query timeout";
     return {};
@@ -100,17 +101,25 @@ std::vector<std::string> EvaluateQuery(
     }
 
     case QueryNode::Type::kTextMatch: {
-      auto LookupWithMod = [&qopts](const TextIndex* idx, const std::string& term,
+      auto LookupWithMod = [&qopts, synonyms](const TextIndex* idx, const std::string& term,
                                      const TextTermModifier& mod,
                                      bool nostem, bool phonetic) -> std::vector<std::string> {
-        if (mod.is_infix) return idx->InfixLookup(term);
-        if (mod.is_suffix) return idx->SuffixLookup(term);
-        if (mod.is_prefix) return idx->PrefixLookup(term);
-        if (mod.fuzzy_dist > 0) return idx->FuzzyLookup(term, mod.fuzzy_dist);
-        std::vector<std::string> base =
-            (qopts.stem && !nostem && IsSupportedStemLanguage(qopts.language))
-                ? idx->StemLookup(term, qopts.language)
-                : idx->Lookup(term);
+        if (mod.is_infix) return idx->InfixLookup(term, qopts.max_expansions);
+        if (mod.is_suffix) return idx->SuffixLookup(term, qopts.max_expansions);
+        if (mod.is_prefix) return idx->PrefixLookup(term, qopts.max_expansions);
+        if (mod.fuzzy_dist > 0) return idx->FuzzyLookup(term, mod.fuzzy_dist, qopts.max_expansions);
+        auto LookupOne = [&](const std::string& t) {
+          return (qopts.stem && !nostem && IsSupportedStemLanguage(qopts.language))
+                     ? idx->StemLookup(t, qopts.language, qopts.min_stem_len)
+                     : idx->Lookup(t);
+        };
+        std::vector<std::string> base = LookupOne(term);
+        if (synonyms && qopts.stem) {
+          for (const auto& syn : synonyms->Expand(term)) {
+            auto sids = LookupOne(syn);
+            if (!sids.empty()) base = SetUnion(base, sids);
+          }
+        }
         if (phonetic && qopts.stem) {
           auto ph = idx->PhoneticLookup(term);
           if (!ph.empty()) base = SetUnion(base, ph);
@@ -236,12 +245,12 @@ std::vector<std::string> EvaluateQuery(
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
                                  tag_indices, numeric_indices, text_indices,
                                  geo_indices, error_msg, qopts, geoshape_indices, params,
-                                 vector_indices);
+                                 vector_indices, synonyms);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
                                   geo_indices, error_msg, qopts, geoshape_indices, params,
-                                 vector_indices);
+                                 vector_indices, synonyms);
       if (!error_msg.empty()) return {};
       return SetIntersect(left, right);
     }
@@ -254,12 +263,12 @@ std::vector<std::string> EvaluateQuery(
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
                                  tag_indices, numeric_indices, text_indices,
                                  geo_indices, error_msg, qopts, geoshape_indices, params,
-                                 vector_indices);
+                                 vector_indices, synonyms);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
                                   geo_indices, error_msg, qopts, geoshape_indices, params,
-                                 vector_indices);
+                                 vector_indices, synonyms);
       if (!error_msg.empty()) return {};
       return SetUnion(left, right);
     }
@@ -273,7 +282,7 @@ std::vector<std::string> EvaluateQuery(
       auto child = EvaluateQuery(node.children[0], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
                                   geo_indices, error_msg, qopts, geoshape_indices, params,
-                                 vector_indices);
+                                 vector_indices, synonyms);
       if (!error_msg.empty()) return {};
       return SetDifference(all, child);
     }
@@ -339,7 +348,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
     const QueryOptions& qopts,
     const GeoShapeFieldIndices* geoshape_indices,
     const std::unordered_map<std::string, std::string>* params,
-    const VectorFieldIndices* vector_indices) {
+    const VectorFieldIndices* vector_indices,
+    const SynonymMap* synonyms) {
   if (qopts.deadline_ms > 0 && QueryMonotonicMs() > qopts.deadline_ms) {
     error_msg = "ERR query timeout";
     return {};
@@ -376,17 +386,32 @@ std::vector<ScoredResult> EvaluateQueryScored(
     }
 
     case QueryNode::Type::kTextMatch: {
-      auto SearchWithMod = [&qopts](const TextIndex* idx, const std::string& term,
+      auto SearchWithMod = [&qopts, synonyms](const TextIndex* idx, const std::string& term,
                                      const TextTermModifier& mod,
                                      bool nostem, bool phonetic) -> std::vector<TextSearchResult> {
-        if (mod.is_infix) return idx->InfixSearch(term);
-        if (mod.is_suffix) return idx->SuffixSearch(term);
-        if (mod.is_prefix) return idx->PrefixSearch(term);
-        if (mod.fuzzy_dist > 0) return idx->FuzzySearch(term, mod.fuzzy_dist);
-        std::vector<TextSearchResult> base =
-            (qopts.stem && !nostem && IsSupportedStemLanguage(qopts.language))
-                ? idx->StemSearch(term, qopts.language)
-                : idx->Search({term});
+        if (mod.is_infix) return idx->InfixSearch(term, qopts.max_expansions);
+        if (mod.is_suffix) return idx->SuffixSearch(term, qopts.max_expansions);
+        if (mod.is_prefix) return idx->PrefixSearch(term, qopts.max_expansions);
+        if (mod.fuzzy_dist > 0) return idx->FuzzySearch(term, mod.fuzzy_dist, qopts.max_expansions);
+        auto SearchOne = [&](const std::string& t) {
+          return (qopts.stem && !nostem && IsSupportedStemLanguage(qopts.language))
+                     ? idx->StemSearch(t, qopts.language, qopts.min_stem_len)
+                     : idx->Search({t});
+        };
+        std::vector<TextSearchResult> base = SearchOne(term);
+        if (synonyms && qopts.stem) {
+          auto syns = synonyms->Expand(term);
+          if (!syns.empty()) {
+            std::unordered_map<std::string, double> sc;
+            for (const auto& r : base) sc[r.doc_id] = std::max(sc[r.doc_id], r.score);
+            for (const auto& syn : syns) {
+              for (const auto& r : SearchOne(syn)) sc[r.doc_id] = std::max(sc[r.doc_id], r.score);
+            }
+            base.clear();
+            base.reserve(sc.size());
+            for (const auto& [id, s] : sc) base.push_back({id, s});
+          }
+        }
         if (phonetic && qopts.stem) {
           auto ph = idx->PhoneticSearch(term);
           if (!ph.empty()) {
@@ -495,7 +520,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
     case QueryNode::Type::kGeoFilter: {
       auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
                                numeric_indices, text_indices, geo_indices,
-                               error_msg, qopts, geoshape_indices, params, vector_indices);
+                               error_msg, qopts, geoshape_indices, params, vector_indices,
+                               synonyms);
       if (!error_msg.empty()) return {};
       std::vector<ScoredResult> out;
       out.reserve(ids.size());
@@ -524,7 +550,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts, geoshape_indices, params, vector_indices);
+                                        error_msg, qopts, geoshape_indices, params, vector_indices,
+                               synonyms);
       if (!error_msg.empty()) return {};
       auto all_ids = doc_store.AllIds();
       std::unordered_map<std::string, double> score_map;
@@ -550,12 +577,14 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
                                        tag_indices, numeric_indices,
                                        text_indices, geo_indices,
-                                       error_msg, qopts, geoshape_indices, params, vector_indices);
+                                       error_msg, qopts, geoshape_indices, params, vector_indices,
+                               synonyms);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts, geoshape_indices, params, vector_indices);
+                                        error_msg, qopts, geoshape_indices, params, vector_indices,
+                               synonyms);
       if (!error_msg.empty()) return {};
       return ScoredIntersect(left, right);
     }
@@ -568,12 +597,14 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
                                        tag_indices, numeric_indices,
                                        text_indices, geo_indices,
-                                       error_msg, qopts, geoshape_indices, params, vector_indices);
+                                       error_msg, qopts, geoshape_indices, params, vector_indices,
+                               synonyms);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts, geoshape_indices, params, vector_indices);
+                                        error_msg, qopts, geoshape_indices, params, vector_indices,
+                               synonyms);
       if (!error_msg.empty()) return {};
       return ScoredUnion(left, right);
     }
@@ -590,7 +621,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts, geoshape_indices, params, vector_indices);
+                                        error_msg, qopts, geoshape_indices, params, vector_indices,
+                               synonyms);
       if (!error_msg.empty()) return {};
       return ScoredDifference(all, child);
     }

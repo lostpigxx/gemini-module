@@ -5,6 +5,7 @@
 #include "geoshape_index.h"
 #include "index_spec.h"
 #include "numeric_index.h"
+#include "suggest_dict.h"
 #include "tag_index.h"
 #include "text_index.h"
 #include "vector_index.h"
@@ -86,6 +87,8 @@ struct QueryOptions {
   int dialect = 2;
   int64_t deadline_ms = 0;
   ScorerType scorer = ScorerType::kBm25;
+  size_t max_expansions = 200;
+  size_t min_stem_len = 3;
 };
 
 bool ParseQuery(const std::string& input, ParsedQuery& out,
@@ -109,7 +112,8 @@ std::vector<std::string> EvaluateQuery(
     const QueryOptions& qopts = {},
     const GeoShapeFieldIndices* geoshape_indices = nullptr,
     const std::unordered_map<std::string, std::string>* params = nullptr,
-    const VectorFieldIndices* vector_indices = nullptr);
+    const VectorFieldIndices* vector_indices = nullptr,
+    const SynonymMap* synonyms = nullptr);
 
 struct ScoredResult {
   std::string doc_id;
@@ -125,4 +129,5 @@ std::vector<ScoredResult> EvaluateQueryScored(
     const QueryOptions& qopts = {},
     const GeoShapeFieldIndices* geoshape_indices = nullptr,
     const std::unordered_map<std::string, std::string>* params = nullptr,
-    const VectorFieldIndices* vector_indices = nullptr);
+    const VectorFieldIndices* vector_indices = nullptr,
+    const SynonymMap* synonyms = nullptr);

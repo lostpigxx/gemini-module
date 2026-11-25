@@ -61,6 +61,7 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   std::string index_language = "english";
+  std::string index_language_field;
   std::vector<std::string> custom_stopwords;
   bool has_custom_stopwords = false;
   bool idx_nofreqs = false;
@@ -76,6 +77,11 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       i++;
       if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR LANGUAGE requires a value");
       index_language = std::string(ArgView(argv[i]));
+      i++;
+    } else if (MatchArg(opt, "LANGUAGE_FIELD")) {
+      i++;
+      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR LANGUAGE_FIELD requires a field name");
+      index_language_field = std::string(ArgView(argv[i]));
       i++;
     } else if (MatchArg(opt, "STOPWORDS")) {
       i++;
@@ -278,6 +284,16 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       fspec.type = FieldType::kGeo;
     } else if (MatchArg(ftype_str, "GEOSHAPE")) {
       fspec.type = FieldType::kGeoShape;
+      if (i < argc) {
+        auto cs = ArgView(argv[i]);
+        if (MatchArg(cs, "FLAT")) {
+          fspec.geoshape_coord = GeoShapeCoord::kFlat;
+          i++;
+        } else if (MatchArg(cs, "SPHERICAL")) {
+          fspec.geoshape_coord = GeoShapeCoord::kSpherical;
+          i++;
+        }
+      }
     } else {
       return RedisModule_ReplyWithError(
           ctx, "ERR unknown field type, expected TAG, NUMERIC, TEXT, VECTOR, GEO, or GEOSHAPE");
@@ -349,7 +365,8 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                               index_language, source_type,
                               std::move(custom_stopwords), has_custom_stopwords,
                               idx_nofreqs, idx_nooffsets, idx_nohl, idx_temporary,
-                              std::move(idx_filter_expr), idx_skip_initial_scan};
+                              std::move(idx_filter_expr), idx_skip_initial_scan,
+                              std::move(index_language_field)};
   TouchIndex(it->second);
 
   if (SearchModuleType) {

@@ -126,6 +126,8 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
     // encver >= 9: tag_separator, case_sensitive
     RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(static_cast<unsigned char>(f.tag_separator)));
     RedisModule_SaveUnsigned(rdb, f.case_sensitive ? 1 : 0);
+    // encver >= 10: geoshape_coord
+    RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(f.geoshape_coord));
   }
 
   // Index-level options (encver >= 6)
@@ -145,6 +147,8 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
   RedisModule_SaveStringBuffer(rdb, spec.language.c_str(), spec.language.size());
   // encver >= 9: index-time filter_expr
   RedisModule_SaveStringBuffer(rdb, spec.filter_expr.c_str(), spec.filter_expr.size());
+  // encver >= 10: language_field
+  RedisModule_SaveStringBuffer(rdb, spec.language_field.c_str(), spec.language_field.size());
   auto syn_groups = entry->synonyms.Dump();
   RedisModule_SaveUnsigned(rdb, syn_groups.size());
   for (const auto& [gid, terms] : syn_groups) {
@@ -262,6 +266,14 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
       f.tag_separator = static_cast<char>(raw_sep);
       f.case_sensitive = raw_cs != 0;
     }
+    if (encver >= 10) {
+      uint64_t raw_gc = 0;
+      if (!SafeLoadUnsigned(rdb, raw_gc) ||
+          raw_gc > static_cast<uint64_t>(GeoShapeCoord::kFlat)) {
+        return nullptr;
+      }
+      f.geoshape_coord = static_cast<GeoShapeCoord>(raw_gc);
+    }
     fields.push_back(std::move(f));
   }
 
@@ -298,12 +310,16 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
 
   std::string language = "english";
   std::string filter_expr;
+  std::string language_field;
   std::vector<std::pair<std::string, std::vector<std::string>>> syn_groups;
   if (encver >= 7) {
     if (!SafeLoadString(rdb, language)) return nullptr;
     if (language.empty()) language = "english";
     if (encver >= 9) {
       if (!SafeLoadString(rdb, filter_expr)) return nullptr;
+    }
+    if (encver >= 10) {
+      if (!SafeLoadString(rdb, language_field)) return nullptr;
     }
     uint64_t syn_count = 0;
     if (!SafeLoadUnsigned(rdb, syn_count) || syn_count > kMaxRdbSynonymGroups) return nullptr;
@@ -350,7 +366,7 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
   IndexSpec spec{index_name, std::move(fields), std::move(prefixes),
                  std::move(language), source_type, std::move(custom_stopwords),
                  has_custom_stopwords, nofreqs, nooffsets, nohl, temporary_ttl,
-                 std::move(filter_expr), false};
+                 std::move(filter_expr), false, std::move(language_field)};
   CreateIndexFromRdb(index_name, std::move(spec), docs);
 
   if (auto* entry = GetIndexEntry(index_name)) {

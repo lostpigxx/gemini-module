@@ -223,6 +223,7 @@ if(GTest_FOUND)
     src/hnsw_index.cc
     src/geo_index.cc
     src/geoshape_index.cc
+    src/suggest_dict.cc
   )
   target_include_directories(query_parser_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -278,6 +279,7 @@ if(GTest_FOUND)
     src/geoshape_index.cc
     src/stemmer.cc
     src/phonetic.cc
+    src/suggest_dict.cc
   )
   target_include_directories(search_asan_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
