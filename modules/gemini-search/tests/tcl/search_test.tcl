@@ -3283,6 +3283,40 @@ test_assert "WITHSORTKEYS returns sort key alongside each doc" {
 }
 
 # ============================================================
+# Phase 35: Multi-Language Stemming & Suffix/Infix Wildcards
+# ============================================================
+puts "\n=== Phase 35: Multi-Language Stemming & Wildcards ==="
+
+test_assert "French, German, and Spanish stemming match inflected forms" {
+  r FT.CREATE p35fr LANGUAGE french SCHEMA body TEXT
+  r FT.ADD p35fr d1 FIELDS body "rapidement developpement"
+  if {[lindex [r FT.SEARCH p35fr "rapide"] 0] != 1} { error "French stemmer failed for rapide/rapidement" }
+  r FT.DROPINDEX p35fr
+
+  r FT.CREATE p35de LANGUAGE german SCHEMA body TEXT
+  r FT.ADD p35de d1 FIELDS body "freundlichkeit entwicklungen"
+  if {[lindex [r FT.SEARCH p35de "freundlich"] 0] != 1} { error "German stemmer failed for freundlich/freundlichkeit" }
+  r FT.DROPINDEX p35de
+
+  r FT.CREATE p35es LANGUAGE spanish SCHEMA body TEXT
+  r FT.ADD p35es d1 FIELDS body "rapidamente jugadores"
+  if {[lindex [r FT.SEARCH p35es "rapida"] 0] != 1} { error "Spanish stemmer failed for rapida/rapidamente" }
+  r FT.DROPINDEX p35es
+}
+
+test_assert "Suffix (*ing) and infix (*earc*) wildcards match terms" {
+  r FT.CREATE p35wc SCHEMA body TEXT WITHSUFFIXTRIE
+  r FT.ADD p35wc d1 FIELDS body "searching running"
+  r FT.ADD p35wc d2 FIELDS body "walking talking"
+
+  set r1 [r FT.SEARCH p35wc "*ing"]
+  if {[lindex $r1 0] != 2} { error "Expected 2 suffix matches for *ing, got $r1" }
+  set r2 [r FT.SEARCH p35wc "*earc*"]
+  if {[lindex $r2 0] != 1} { error "Expected 1 infix match for *earc*, got $r2" }
+  r FT.DROPINDEX p35wc
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

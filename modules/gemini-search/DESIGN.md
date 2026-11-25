@@ -8,7 +8,7 @@ gemini-search 是一个基于 C++20 从零实现的 Redis 全文检索与向量�
 
 - **目标 Redis 版本**：仅面向 **Redis 7**（基线 Redis 7.2.11），不考虑 Redis 5/6 兼容。
 - **Clean-room 原则**：严格仅基于公开命令文档（redis.io）和学术算法（BM25、Porter2、Double Metaphone、HNSW arXiv:1603.09320、Ray Casting）独立设计与实现，禁止阅读或引用 RediSearch 源码（RSALv2/SSPL）。
-- **数据格式**：使用私有模块数据类型名 `GmSearch-`（当前 `kSearchEncVer = 7`）和私有 `aux_save2`/`aux_load` 持久化格式，不与 RediSearch 做 RDB 级别互通。
+- **数据格式**：使用私有模块数据类型名 `GmSearch-`（当前 `kSearchEncVer = 9`）和私有 `aux_save2`/`aux_load` 持久化格式，不与 RediSearch 做 RDB 级别互通。
 
 ---
 
@@ -65,16 +65,20 @@ modules/gemini-search/
   - `DIALECT 2`：`-a b` 解析为 `(-a) AND b`（否定仅绑定紧邻的单个原子）。
 - **PHONETIC 查询**：`TEXT` 字段配置 `PHONETIC dm:en` 后，写入时建立音似倒排，查询时在非 `VERBATIM` 模式下自动并集 `PhoneticLookup` / `PhoneticSearch`。
 - **协作式 `TIMEOUT`**：在 `EvaluateQuery`、`EvaluateQueryScored` 及 `FT.AGGREGATE` 管道阶段边界检查 monotonic deadline，超时立即返回 `ERR query timeout`。
+- **高级向量检索（Phase 32）**：支持 `VECTOR` `FLOAT32` / `FLOAT64`、`@vec:[VECTOR_RANGE radius $param]=>{$YIELD_DISTANCE_AS: alias}`、KNN `EF_RUNTIME` 与 `AS <alias>` 自定义距离字段名。
+- **高级 Schema 与索引选项（Phase 33）**：支持 `TAG SEPARATOR` / `CASESENSITIVE`、`SKIPINITIALSCAN`、索引期 `FILTER <expr>`、`FT.DROPINDEX DD`、`FT.SEARCH FILTER <field> <min> <max>`。
+- **评分与返回增强（Phase 34）**：支持 `SCORER`（`BM25`/`TFIDF`/`TFIDF.DOCNORM`/`DISMAX`/`DOCSCORE`）+ 字段 `WEIGHT` 权重、`EXPLAINSCORE`、`RETURN n field AS alias`、`WITHSORTKEYS`。
+- **多语言词干与通配符（Phase 35）**：支持英文/法文/德文/西班牙文词干（`LANGUAGE english|french|german|spanish`），以及后缀（`*suffix`）、中缀（`*infix*`）通配检索与 `WITHSUFFIXTRIE`。
 - **RESP2 / RESP3**：全部命令使用 `RedisModule_ReplyWith*` 回复，Redis 7 自动完成 RESP2/RESP3 编码。
 
 ---
 
 ## 4. 持久化与 ModuleType 回调（Redis 7）
 
-### 4.1 RDB 序列化（`GmSearch-`，`kSearchEncVer = 7`）
+### 4.1 RDB 序列化（`GmSearch-`，`kSearchEncVer = 9`）
 
-- 向下兼容加载 `encver 1..7`。
-- `encver 7` 完整持久化：索引名、前缀、数据源类型（`HASH`/`JSON`）、全部字段定义（含 `VECTOR` 参数、`json_path`、`sortable`/`noindex`/`weight`、`nostem`/`phonetic`）、索引选项（自定义 stopwords、`nofreqs`/`nooffsets`/`nohl`、`temporary_ttl`、`language`）、每索引同义词组、全部文档。
+- 向下兼容加载 `encver 1..9`。
+- `encver 9` 完整持久化：索引名、前缀、数据源类型（`HASH`/`JSON`）、全部字段定义（含 `VECTOR` 参数与 `FLOAT32`/`FLOAT64`、`json_path`、`sortable`/`noindex`/`weight`、`nostem`/`phonetic`、`tag_separator`/`case_sensitive`）、索引选项（自定义 stopwords、`nofreqs`/`nooffsets`/`nohl`、`temporary_ttl`、`language`、`filter_expr`）、每索引同义词组、全部文档。
 - 开启 `REDISMODULE_OPTIONS_HANDLE_IO_ERRORS`，反序列化阶段对 IO 错误、枚举值范围、向量维度、NaN/负权重及各类集合数量上限做严格校验，非法流直接返回 `nullptr`。
 
 ### 4.2 全局非 Key 状态持久化（`aux_save2` / `aux_load`）
@@ -127,6 +131,5 @@ modules/gemini-search/
 ## 7. 已知限制
 
 1. **单线程内联索引**：`FT.CREATE` 初始扫描和 `FT.ADD` 均为同步执行，暂未引入后台线程异步建索引。
-2. **向量字段仅支持 `FLOAT32`**：`FLOAT64`、`VECTOR_RANGE` 范围查询及 `INITIAL_CAP`/`BLOCK_SIZE` 调优参数暂未实现。
-3. **无 RediSearch RDB 互通**：仅提供命令级兼容，RDB 格式为 `GmSearch-` 私有格式。
-4. **仅支持英文词干与音似**：`stemmer.cc` 为英文 Porter2，`phonetic.cc` 为英文 Double Metaphone，其他语言可扩展但尚未内置。
+2. **无 RediSearch RDB 互通**：仅提供命令级兼容，RDB 格式为 `GmSearch-` 私有格式。
+3. **音似编码仅支持英文**：词干已内置英文/法文/德文/西班牙文，`phonetic.cc`（Double Metaphone）目前仅面向英文。

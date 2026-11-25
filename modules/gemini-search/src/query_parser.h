@@ -15,6 +15,8 @@
 
 struct TextTermModifier {
   bool is_prefix = false;
+  bool is_suffix = false;
+  bool is_infix = false;
   int fuzzy_dist = 0;
   bool is_optional = false;
 };

@@ -295,3 +295,73 @@ std::string StemEnglish(const std::string& word) {
 
   return w;
 }
+
+static std::string StripSuffixList(const std::string& word,
+                                   const char* const* suffixes,
+                                   size_t count, size_t min_stem_len) {
+  std::string w;
+  w.reserve(word.size());
+  for (auto c : word) {
+    w += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  if (w.size() <= min_stem_len) return w;
+  for (size_t i = 0; i < count; i++) {
+    std::string_view suf(suffixes[i]);
+    if (w.size() > suf.size() && w.size() - suf.size() >= min_stem_len &&
+        w.compare(w.size() - suf.size(), suf.size(), suf) == 0) {
+      return w.substr(0, w.size() - suf.size());
+    }
+  }
+  return w;
+}
+
+std::string StemFrench(const std::string& word) {
+  static constexpr const char* kSuffixes[] = {
+      "ements", "ations", "ismes", "ables", "iques", "euses",
+      "ement", "ation", "isme", "able", "ique", "euse",
+      "ments", "ions", "ment", "ion", "ant", "ent",
+      "ais", "ait", "er", "ir", "es", "e", "s",
+  };
+  return StripSuffixList(word, kSuffixes, sizeof(kSuffixes) / sizeof(kSuffixes[0]), 3);
+}
+
+std::string StemGerman(const std::string& word) {
+  static constexpr const char* kSuffixes[] = {
+      "lichkeiten", "lichkeit", "keiten", "heiten", "lichen", "ischen", "ungen",
+      "keit", "heit", "lich", "isch", "ung",
+      "ern", "em", "en", "er", "es", "e", "s",
+  };
+  return StripSuffixList(word, kSuffixes, sizeof(kSuffixes) / sizeof(kSuffixes[0]), 3);
+}
+
+std::string StemSpanish(const std::string& word) {
+  static constexpr const char* kSuffixes[] = {
+      "amientos", "imientos", "aciones", "adores", "idades",
+      "amiento", "imiento", "acion", "ador", "idad",
+      "mente", "iendo", "ando", "ados", "idos", "ado", "ido",
+      "es", "s",
+  };
+  return StripSuffixList(word, kSuffixes, sizeof(kSuffixes) / sizeof(kSuffixes[0]), 3);
+}
+
+static std::string LowerLang(const std::string& lang) {
+  std::string out;
+  out.reserve(lang.size());
+  for (auto c : lang) {
+    out += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return out;
+}
+
+bool IsSupportedStemLanguage(const std::string& language) {
+  std::string l = LowerLang(language);
+  return l == "english" || l == "french" || l == "german" || l == "spanish";
+}
+
+std::string StemWord(const std::string& word, const std::string& language) {
+  std::string l = LowerLang(language);
+  if (l == "french") return StemFrench(word);
+  if (l == "german") return StemGerman(word);
+  if (l == "spanish") return StemSpanish(word);
+  return StemEnglish(word);
+}

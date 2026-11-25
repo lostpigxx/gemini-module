@@ -318,6 +318,9 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       } else if (MatchArg(attr, "CASESENSITIVE") && fspec.type == FieldType::kTag) {
         fspec.case_sensitive = true;
         i++;
+      } else if (MatchArg(attr, "WITHSUFFIXTRIE") &&
+                 (fspec.type == FieldType::kText || fspec.type == FieldType::kTag)) {
+        i++;
       } else {
         break;
       }

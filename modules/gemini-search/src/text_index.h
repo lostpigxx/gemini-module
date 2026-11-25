@@ -28,20 +28,26 @@ class TextIndex {
 
  public:
   void Add(const std::string& doc_id, const std::string& text,
-           bool phonetic = false);
+           bool phonetic = false, const std::string& language = "english");
   void Remove(const std::string& doc_id);
   std::vector<TextSearchResult> Search(const std::vector<std::string>& terms) const;
   std::vector<std::string> Lookup(const std::string& term) const;
   std::vector<std::string> PrefixLookup(const std::string& prefix) const;
+  std::vector<std::string> SuffixLookup(const std::string& suffix) const;
+  std::vector<std::string> InfixLookup(const std::string& infix) const;
   std::vector<std::string> FuzzyLookup(const std::string& term, int max_dist) const;
   std::vector<TextSearchResult> PrefixSearch(const std::string& prefix) const;
+  std::vector<TextSearchResult> SuffixSearch(const std::string& suffix) const;
+  std::vector<TextSearchResult> InfixSearch(const std::string& infix) const;
   std::vector<TextSearchResult> FuzzySearch(const std::string& term, int max_dist) const;
   std::vector<std::string> PhraseLookup(const std::vector<std::string>& terms,
                                          int slop, bool inorder) const;
   std::vector<TextSearchResult> PhraseSearch(const std::vector<std::string>& terms,
                                               int slop, bool inorder) const;
-  std::vector<std::string> StemLookup(const std::string& term) const;
-  std::vector<TextSearchResult> StemSearch(const std::string& term) const;
+  std::vector<std::string> StemLookup(const std::string& term,
+                                       const std::string& language = "english") const;
+  std::vector<TextSearchResult> StemSearch(const std::string& term,
+                                            const std::string& language = "english") const;
   std::vector<std::string> PhoneticLookup(const std::string& term) const;
   std::vector<TextSearchResult> PhoneticSearch(const std::string& term) const;
   size_t NumTerms() const;

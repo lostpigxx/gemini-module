@@ -191,7 +191,8 @@ void AddDocToIndices(
         vidx.Add(doc_id, vec.data());
       }
     } else if (fspec->type == FieldType::kText) {
-      entry.text_indices.GetOrCreate(fname).Add(doc_id, fval, !fspec->phonetic.empty());
+      entry.text_indices.GetOrCreate(fname).Add(
+          doc_id, fval, !fspec->phonetic.empty(), entry.spec.language);
     } else if (fspec->type == FieldType::kGeo) {
       GeoCoord coord;
       if (ParseGeoCoord(fval, coord)) {

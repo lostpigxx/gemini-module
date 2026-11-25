@@ -77,7 +77,7 @@ void TextIndex::UpdateAvgDocLen() {
 }
 
 void TextIndex::Add(const std::string& doc_id, const std::string& text,
-                    bool phonetic) {
+                    bool phonetic, const std::string& language) {
   Remove(doc_id);
   auto tokens = TokenizeRaw(text);
   doc_lengths_[doc_id] = static_cast<int>(tokens.size());
@@ -96,7 +96,7 @@ void TextIndex::Add(const std::string& doc_id, const std::string& text,
 
   for (auto& [term, info] : tf_map) {
     postings_[term].push_back({doc_id, info.tf, std::move(info.positions)});
-    auto stemmed = StemEnglish(term);
+    auto stemmed = StemWord(term, language);
     if (stemmed != term) {
       stem_map_[stemmed].insert(term);
     }
@@ -182,6 +182,29 @@ std::vector<std::string> TextIndex::PrefixLookup(const std::string& prefix) cons
   return {result.begin(), result.end()};
 }
 
+std::vector<std::string> TextIndex::SuffixLookup(const std::string& suffix) const {
+  if (suffix.size() < 2) return {};
+  std::set<std::string> result;
+  for (const auto& [term, posts] : postings_) {
+    if (term.size() >= suffix.size() &&
+        term.compare(term.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      for (const auto& p : posts) result.insert(p.doc_id);
+    }
+  }
+  return {result.begin(), result.end()};
+}
+
+std::vector<std::string> TextIndex::InfixLookup(const std::string& infix) const {
+  if (infix.size() < 2) return {};
+  std::set<std::string> result;
+  for (const auto& [term, posts] : postings_) {
+    if (term.find(infix) != std::string::npos) {
+      for (const auto& p : posts) result.insert(p.doc_id);
+    }
+  }
+  return {result.begin(), result.end()};
+}
+
 std::vector<std::string> TextIndex::FuzzyLookup(const std::string& term, int max_dist) const {
   if (max_dist < 1 || max_dist > 3) return {};
   std::set<std::string> result;
@@ -199,6 +222,29 @@ std::vector<TextSearchResult> TextIndex::PrefixSearch(const std::string& prefix)
   for (auto& [term, posts] : postings_) {
     if (term.size() >= prefix.size() &&
         term.compare(0, prefix.size(), prefix) == 0) {
+      matching_terms.push_back(term);
+    }
+  }
+  return Search(matching_terms);
+}
+
+std::vector<TextSearchResult> TextIndex::SuffixSearch(const std::string& suffix) const {
+  if (suffix.size() < 2 || doc_lengths_.empty()) return {};
+  std::vector<std::string> matching_terms;
+  for (const auto& [term, posts] : postings_) {
+    if (term.size() >= suffix.size() &&
+        term.compare(term.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      matching_terms.push_back(term);
+    }
+  }
+  return Search(matching_terms);
+}
+
+std::vector<TextSearchResult> TextIndex::InfixSearch(const std::string& infix) const {
+  if (infix.size() < 2 || doc_lengths_.empty()) return {};
+  std::vector<std::string> matching_terms;
+  for (const auto& [term, posts] : postings_) {
+    if (term.find(infix) != std::string::npos) {
       matching_terms.push_back(term);
     }
   }
@@ -318,8 +364,9 @@ std::vector<TextSearchResult> TextIndex::PhraseSearch(
   return filtered;
 }
 
-std::vector<std::string> TextIndex::StemLookup(const std::string& term) const {
-  auto stemmed = StemEnglish(term);
+std::vector<std::string> TextIndex::StemLookup(const std::string& term,
+                                                const std::string& language) const {
+  auto stemmed = StemWord(term, language);
   std::set<std::string> result;
   auto ids = Lookup(term);
   result.insert(ids.begin(), ids.end());
@@ -337,8 +384,9 @@ std::vector<std::string> TextIndex::StemLookup(const std::string& term) const {
   return {result.begin(), result.end()};
 }
 
-std::vector<TextSearchResult> TextIndex::StemSearch(const std::string& term) const {
-  auto stemmed = StemEnglish(term);
+std::vector<TextSearchResult> TextIndex::StemSearch(const std::string& term,
+                                                     const std::string& language) const {
+  auto stemmed = StemWord(term, language);
   std::vector<std::string> search_terms = {term};
   auto it = stem_map_.find(stemmed);
   if (it != stem_map_.end()) {

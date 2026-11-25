@@ -51,8 +51,9 @@ numeric ranges, `GEOFILTER`, KNN with pre-filter, `HIGHLIGHT` / `SUMMARIZE`, `SO
 
 Design doc: [modules/gemini-search/DESIGN.md](modules/gemini-search/DESIGN.md). Development roadmap:
 [doc/gemini-search/development-plan.md](doc/gemini-search/development-plan.md) (Phase 0–12),
-[doc/gemini-search/development-plan-v2.md](doc/gemini-search/development-plan-v2.md) (Phase 13–26), and
-[doc/gemini-search/development-plan-v3.md](doc/gemini-search/development-plan-v3.md) (Phase 27–31, Redis 7 production hardening).
+[doc/gemini-search/development-plan-v2.md](doc/gemini-search/development-plan-v2.md) (Phase 13–26),
+[doc/gemini-search/development-plan-v3.md](doc/gemini-search/development-plan-v3.md) (Phase 27–31, Redis 7 hardening), and
+[doc/gemini-search/development-plan-v4.md](doc/gemini-search/development-plan-v4.md) (Phase 32–35, advanced features).
 
 ## Project Structure
 

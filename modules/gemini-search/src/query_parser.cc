@@ -103,11 +103,13 @@ std::vector<std::string> EvaluateQuery(
       auto LookupWithMod = [&qopts](const TextIndex* idx, const std::string& term,
                                      const TextTermModifier& mod,
                                      bool nostem, bool phonetic) -> std::vector<std::string> {
+        if (mod.is_infix) return idx->InfixLookup(term);
+        if (mod.is_suffix) return idx->SuffixLookup(term);
         if (mod.is_prefix) return idx->PrefixLookup(term);
         if (mod.fuzzy_dist > 0) return idx->FuzzyLookup(term, mod.fuzzy_dist);
         std::vector<std::string> base =
-            (qopts.stem && !nostem && qopts.language == "english")
-                ? idx->StemLookup(term)
+            (qopts.stem && !nostem && IsSupportedStemLanguage(qopts.language))
+                ? idx->StemLookup(term, qopts.language)
                 : idx->Lookup(term);
         if (phonetic && qopts.stem) {
           auto ph = idx->PhoneticLookup(term);
@@ -377,11 +379,13 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto SearchWithMod = [&qopts](const TextIndex* idx, const std::string& term,
                                      const TextTermModifier& mod,
                                      bool nostem, bool phonetic) -> std::vector<TextSearchResult> {
+        if (mod.is_infix) return idx->InfixSearch(term);
+        if (mod.is_suffix) return idx->SuffixSearch(term);
         if (mod.is_prefix) return idx->PrefixSearch(term);
         if (mod.fuzzy_dist > 0) return idx->FuzzySearch(term, mod.fuzzy_dist);
         std::vector<TextSearchResult> base =
-            (qopts.stem && !nostem && qopts.language == "english")
-                ? idx->StemSearch(term)
+            (qopts.stem && !nostem && IsSupportedStemLanguage(qopts.language))
+                ? idx->StemSearch(term, qopts.language)
                 : idx->Search({term});
         if (phonetic && qopts.stem) {
           auto ph = idx->PhoneticSearch(term);
@@ -676,8 +680,16 @@ struct Parser {
     }
     if (pct > 0) mod.fuzzy_dist = pct;
 
-    // Prefix: trailing *
-    if (!s.empty() && s.back() == '*') {
+    // Wildcards: *infix*, *suffix, prefix*
+    bool lead_star = (!s.empty() && s.front() == '*');
+    bool trail_star = (s.size() >= 2 && s.back() == '*');
+    if (lead_star && trail_star) {
+      mod.is_infix = true;
+      s = s.substr(1, s.size() - 2);
+    } else if (lead_star) {
+      mod.is_suffix = true;
+      s = s.substr(1);
+    } else if (!s.empty() && s.back() == '*') {
       mod.is_prefix = true;
       s.pop_back();
     }
@@ -704,7 +716,8 @@ struct Parser {
       TextTermModifier mod;
       std::string base = StripModifiers(raw, mod);
       if (base.empty()) continue;
-      if (!mod.is_prefix && !mod.fuzzy_dist && !mod.is_optional) {
+      if (!mod.is_prefix && !mod.is_suffix && !mod.is_infix &&
+          !mod.fuzzy_dist && !mod.is_optional) {
         // Plain term: apply stop word filter unless nostopwords
         auto filtered = nostopwords ? TextIndex::TokenizeRaw(base)
                                     : TextIndex::Tokenize(base);
@@ -1024,7 +1037,9 @@ struct Parser {
       pos++;
       return true;
     }
-    if (Peek() == '*') {
+    if (Peek() == '*' && (pos + 1 >= input.size() || input[pos + 1] == ' ' ||
+                          input[pos + 1] == '\t' || input[pos + 1] == ')' ||
+                          input[pos + 1] == '|' || input[pos + 1] == '=')) {
       pos++;
       out.type = QueryNode::Type::kMatchAll;
       return true;
@@ -1054,8 +1069,9 @@ struct Parser {
       out.is_phrase = true;
       return true;
     }
-    // Bare term (including prefix hel*, fuzzy %hello%): full-text search
-    if (std::isalnum(static_cast<unsigned char>(Peek())) || Peek() == '%') {
+    // Bare term (including prefix hel*, suffix *ing, infix *earc*, fuzzy %hello%)
+    if (std::isalnum(static_cast<unsigned char>(Peek())) || Peek() == '%' ||
+        Peek() == '*') {
       size_t term_start = pos;
       while (pos < input.size() && input[pos] != ' ' && input[pos] != '\t' &&
              input[pos] != ')' && input[pos] != '|' && input[pos] != '=' &&
