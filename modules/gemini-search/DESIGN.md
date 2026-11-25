@@ -2,7 +2,7 @@
 
 ## 1. 概述
 
-gemini-search 是一个基于 C++20 从零实现的 Redis 全文检索、向量检索与混合检索模块（clean-room 实现），提供 `FT.*` 命令接口（32 个命令，含 `FT.HYBRID`），覆盖全文检索（BM25/TFIDF/DISMAX/DOCSCORE、中/日/韩 CJK Bigram、英/法/德/西词干）、TAG、NUMERIC、VECTOR（FLAT / 稠密 ID HNSW、NEON/AVX2 SIMD、FP32/FP64/FP16/BF16、SQ8 量化）、GEO（0.5° 空间网格）、GEOSHAPE、聚合管道、异步非阻塞 KNN、自动补全、拼写纠错、同义词与词典。
+gemini-search 是一个基于 C++20 从零实现的 Redis 全文检索、向量检索与混合检索模块（clean-room 实现），提供 `FT.*` 命令接口（32 个命令，含 `FT.HYBRID`），覆盖全文检索（BM25/WAND Top-K 剪枝/TFIDF/DISMAX/DOCSCORE、中/日/韩 CJK Bigram + 自定义词典 FMM 分词、英/法/德/西词干）、TAG、NUMERIC、VECTOR（FLAT / 线程安全稠密 ID HNSW、NEON/AVX2 SIMD、FP32/FP64/FP16/BF16、SQ8 4× 量化 & BQ 1-bit 32× 量化）、GEO（0.5° 空间网格）、GEOSHAPE、聚合管道、Per-Index 细粒度读写锁 + 全路径异步非阻塞卸载（`FT.SEARCH` / `FT.HYBRID` / `FT.AGGREGATE`）、自动补全、拼写纠错、同义词与词典。
 
 ### 1.1 目标平台与定位
 

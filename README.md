@@ -34,9 +34,9 @@ JSON data type with JSONPath-based operations, compatible with the RedisJSON com
 
 Clean-room search engine targeting **Redis 7**, indexing Redis Hash (`ON HASH`) and JSON (`ON JSON`) documents.
 
-Field types: `TEXT` (BM25/TFIDF/DISMAX/DOCSCORE scoring, English/French/German/Spanish stemming, UTF-8 CJK bigram tokenization, phonetic matching), `TAG` (`SEPARATOR`, `CASESENSITIVE`), `NUMERIC`, `VECTOR` (`FLAT` / dense-ID `HNSW`, ARM NEON / AVX2 SIMD kernels, `FLOAT32`/`FLOAT64`/`FLOAT16`/`BFLOAT16`, `QUANTIZATION SQ8`), `GEO` (0.5° spatial grid), `GEOSHAPE` (`FLAT`/`SPHERICAL`).
+Field types: `TEXT` (BM25 + WAND Top-K pruning, TFIDF/DISMAX/DOCSCORE scoring, English/French/German/Spanish stemming, UTF-8 CJK bigram + custom dictionary FMM segmentation, phonetic matching), `TAG` (`SEPARATOR`, `CASESENSITIVE`), `NUMERIC`, `VECTOR` (`FLAT` / thread-safe dense-ID `HNSW`, ARM NEON / AVX2 SIMD kernels, `FLOAT32`/`FLOAT64`/`FLOAT16`/`BFLOAT16`, `QUANTIZATION SQ8` & 1-bit `BQ`), `GEO` (0.5° spatial grid), `GEOSHAPE` (`FLAT`/`SPHERICAL`).
 
-Query features: boolean combinations (`DIALECT 1/2`), prefix / suffix / infix / fuzzy / optional terms, synonyms, exact phrase with `SLOP` / `INORDER`, `ismissing(@f)` / `isempty(@f)`, numeric ranges, `GEOFILTER`, KNN (`EF_RUNTIME`, `AS`, non-blocking async offload via `RedisModule_BlockClient`), `VECTOR_RANGE`, **`FT.HYBRID` (BM25 + Vector RRF/LINEAR fusion)**, `HIGHLIGHT` / `SUMMARIZE`, `SORTBY` / `LIMIT 0 0` / `RETURN AS` / `WITHPAYLOADS` / `WITHSORTKEYS` / `EXPLAINSCORE`, and full Master-Replica `PSYNC` replication.
+Query features: boolean combinations (`DIALECT 1/2`), prefix / suffix / infix / fuzzy / optional terms, synonyms, exact phrase with `SLOP` / `INORDER`, `ismissing(@f)` / `isempty(@f)`, numeric ranges, `GEOFILTER`, KNN (`EF_RUNTIME`, `AS`), `VECTOR_RANGE`, **`FT.HYBRID` (BM25 + Vector RRF/LINEAR fusion)**, per-index fine-grained `shared_mutex` + full-path non-blocking async offload (`FT.SEARCH`, `FT.HYBRID`, `FT.AGGREGATE` via `RedisModule_BlockClient`), `HIGHLIGHT` / `SUMMARIZE`, `SORTBY` / `LIMIT 0 0` / `RETURN AS` / `WITHPAYLOADS` / `WITHSORTKEYS` / `EXPLAINSCORE`, and full Master-Replica `PSYNC` replication.
 
 | Category | Commands |
 |---|---|
@@ -54,7 +54,9 @@ Design doc: [modules/gemini-search/DESIGN.md](modules/gemini-search/DESIGN.md). 
 [v4](doc/gemini-search/development-plan-v4.md) (P32–35, advanced search),
 [v5](doc/gemini-search/development-plan-v5.md) (P37–41, perf, security & PSYNC),
 [v6](doc/gemini-search/development-plan-v6.md) (P42–46, Hybrid, FP16/BF16/SQ8, CJK, observability),
-[v7](doc/gemini-search/development-plan-v7.md) (P47–51, dense-ID indices, NEON/AVX2 SIMD, async executor).
+[v7](doc/gemini-search/development-plan-v7.md) (P47–51, dense-ID indices, NEON/AVX2 SIMD, async executor),
+[v8](doc/gemini-search/development-plan-v8.md) (P52–54, SQ8 SIMD, async hybrid/aggregate, CJK FMM dict),
+[v9](doc/gemini-search/development-plan-v9.md) (P55–58, 1-bit BQ, WAND BM25, per-index RWLock & full-path async).
 
 ## Project Structure
 
