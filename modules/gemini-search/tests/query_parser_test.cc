@@ -474,3 +474,51 @@ TEST(SecurityParserTest, DeepNegationNestingRejected) {
   EXPECT_FALSE(ParseQuery(q, pq, err));
   EXPECT_NE(err.find("depth"), std::string::npos);
 }
+
+TEST(QueryParserTest, IsMissingAndIsEmptyParseAndEvaluate) {
+  IndexSpec spec;
+  spec.name = "idx";
+  FieldSpec f1;
+  f1.name = "title";
+  f1.type = FieldType::kText;
+  f1.index_missing = true;
+  f1.index_empty = true;
+  FieldSpec f2;
+  f2.name = "tag";
+  f2.type = FieldType::kTag;
+  spec.fields = {f1, f2};
+
+  DocumentStore ds;
+  ds.Add("d1", {{"title", "hello"}, {"tag", "a"}});
+  ds.Add("d2", {{"tag", "b"}});               // title missing
+  ds.Add("d3", {{"title", ""}, {"tag", "c"}}); // title empty
+
+  TagFieldIndices tags;
+  NumericFieldIndices nums;
+  TextFieldIndices texts;
+  GeoFieldIndices geos;
+
+  ParsedQuery pq_miss;
+  std::string err;
+  ASSERT_TRUE(ParseQuery("ismissing(@title)", pq_miss, err));
+  EXPECT_EQ(pq_miss.root.type, QueryNode::Type::kIsMissing);
+  EXPECT_EQ(pq_miss.root.field_name, "title");
+  auto r_miss = EvaluateQuery(pq_miss.root, spec, ds, tags, nums, texts, geos, err);
+  EXPECT_TRUE(err.empty());
+  ASSERT_EQ(r_miss.size(), 1u);
+  EXPECT_EQ(r_miss[0], "d2");
+
+  ParsedQuery pq_empty;
+  ASSERT_TRUE(ParseQuery("isempty(@title)", pq_empty, err));
+  EXPECT_EQ(pq_empty.root.type, QueryNode::Type::kIsEmpty);
+  auto r_empty = EvaluateQuery(pq_empty.root, spec, ds, tags, nums, texts, geos, err);
+  EXPECT_TRUE(err.empty());
+  ASSERT_EQ(r_empty.size(), 1u);
+  EXPECT_EQ(r_empty[0], "d3");
+
+  // Field without INDEXMISSING should return an error
+  ParsedQuery pq_bad;
+  ASSERT_TRUE(ParseQuery("ismissing(@tag)", pq_bad, err));
+  auto r_bad = EvaluateQuery(pq_bad.root, spec, ds, tags, nums, texts, geos, err);
+  EXPECT_FALSE(err.empty());
+}

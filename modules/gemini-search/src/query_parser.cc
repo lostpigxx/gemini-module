@@ -234,6 +234,43 @@ std::vector<std::string> EvaluateQuery(
       return ids;
     }
 
+    case QueryNode::Type::kIsMissing: {
+      const auto* fspec = spec.FindField(node.field_name);
+      if (!fspec) { error_msg = "ERR query field not in schema"; return {}; }
+      if (!fspec->index_missing) {
+        error_msg = "ERR field is not indexed with INDEXMISSING";
+        return {};
+      }
+      std::vector<std::string> ids;
+      for (const auto& doc_id : doc_store.AllIds()) {
+        const auto* doc = doc_store.Get(doc_id);
+        if (doc && doc->fields.find(node.field_name) == doc->fields.end()) {
+          ids.push_back(doc_id);
+        }
+      }
+      return ids;
+    }
+
+    case QueryNode::Type::kIsEmpty: {
+      const auto* fspec = spec.FindField(node.field_name);
+      if (!fspec) { error_msg = "ERR query field not in schema"; return {}; }
+      if (!fspec->index_empty) {
+        error_msg = "ERR field is not indexed with INDEXEMPTY";
+        return {};
+      }
+      std::vector<std::string> ids;
+      for (const auto& doc_id : doc_store.AllIds()) {
+        const auto* doc = doc_store.Get(doc_id);
+        if (doc) {
+          auto fit = doc->fields.find(node.field_name);
+          if (fit != doc->fields.end() && fit->second.empty()) {
+            ids.push_back(doc_id);
+          }
+        }
+      }
+      return ids;
+    }
+
     case QueryNode::Type::kOptional:
       return doc_store.AllIds();
 
@@ -530,7 +567,9 @@ std::vector<ScoredResult> EvaluateQueryScored(
     }
 
     case QueryNode::Type::kGeoShapeQuery:
-    case QueryNode::Type::kVectorRange: {
+    case QueryNode::Type::kVectorRange:
+    case QueryNode::Type::kIsMissing:
+    case QueryNode::Type::kIsEmpty: {
       auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
                                numeric_indices, text_indices, geo_indices,
                                error_msg, qopts, geoshape_indices, params,
@@ -1109,6 +1148,36 @@ struct Parser {
       out.text_terms = std::move(terms);
       out.is_phrase = true;
       return true;
+    }
+    // Predicate functions: ismissing(@field), isempty(@field)
+    if (std::isalpha(static_cast<unsigned char>(Peek()))) {
+      size_t fn_start = pos;
+      size_t p = pos;
+      while (p < input.size() && std::isalpha(static_cast<unsigned char>(input[p]))) p++;
+      if (p < input.size() && input[p] == '(') {
+        std::string fn = input.substr(fn_start, p - fn_start);
+        for (auto& c : fn) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (fn == "ismissing" || fn == "isempty") {
+          size_t close = FindClosing('(', ')', p + 1);
+          if (close == std::string::npos) {
+            error_msg = "ERR syntax error: expected closing )";
+            return false;
+          }
+          std::string arg = input.substr(p + 1, close - p - 1);
+          size_t a = arg.find_first_not_of(" \t");
+          size_t b = arg.find_last_not_of(" \t");
+          if (a == std::string::npos || arg[a] != '@' || b <= a) {
+            error_msg = "ERR syntax error: " + fn + " requires @field";
+            return false;
+          }
+          std::string fname = arg.substr(a + 1, b - a);
+          pos = close + 1;
+          out.type = (fn == "ismissing") ? QueryNode::Type::kIsMissing
+                                         : QueryNode::Type::kIsEmpty;
+          out.field_name = std::move(fname);
+          return true;
+        }
+      }
     }
     // Bare term (including prefix hel*, suffix *ing, infix *earc*, fuzzy %hello%)
     if (std::isalnum(static_cast<unsigned char>(Peek())) || Peek() == '%' ||

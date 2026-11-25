@@ -337,6 +337,12 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       } else if (MatchArg(attr, "WITHSUFFIXTRIE") &&
                  (fspec.type == FieldType::kText || fspec.type == FieldType::kTag)) {
         i++;
+      } else if (MatchArg(attr, "INDEXMISSING")) {
+        fspec.index_missing = true;
+        i++;
+      } else if (MatchArg(attr, "INDEXEMPTY")) {
+        fspec.index_empty = true;
+        i++;
       } else {
         break;
       }
@@ -380,6 +386,7 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     ScanExistingKeys(ctx, it->second);
   }
 
+  RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -426,6 +433,7 @@ int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     if (dkey) RedisModule_DeleteKey(dkey);
   }
 
+  RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -496,6 +504,8 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (f.nostem) attr_count++;
       if (f.sortable) attr_count++;
       if (f.noindex) attr_count++;
+      if (f.index_missing) attr_count++;
+      if (f.index_empty) attr_count++;
       if (f.weight != 1.0) attr_count += 2;
       if (!f.json_path.empty()) attr_count += 2;
       RedisModule_ReplyWithArray(ctx, attr_count);
@@ -504,6 +514,8 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (f.nostem) RedisModule_ReplyWithSimpleString(ctx, "NOSTEM");
       if (f.sortable) RedisModule_ReplyWithSimpleString(ctx, "SORTABLE");
       if (f.noindex) RedisModule_ReplyWithSimpleString(ctx, "NOINDEX");
+      if (f.index_missing) RedisModule_ReplyWithSimpleString(ctx, "INDEXMISSING");
+      if (f.index_empty) RedisModule_ReplyWithSimpleString(ctx, "INDEXEMPTY");
       if (f.weight != 1.0) {
         RedisModule_ReplyWithSimpleString(ctx, "WEIGHT");
         RedisModule_ReplyWithCString(ctx, std::to_string(f.weight).c_str());
@@ -539,7 +551,7 @@ int FtListCommand(RedisModuleCtx* ctx, RedisModuleString** /*argv*/,
   return REDISMODULE_OK;
 }
 
-// FT.ADD <index> <doc_id> FIELDS <field1> <val1> [field2 val2 ...]
+// FT.ADD <index> <doc_id> [PAYLOAD <payload>] FIELDS <field1> <val1> [field2 val2 ...]
 int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                         int argc) {
   if (argc < 6) return RedisModule_WrongArity(ctx);
@@ -547,14 +559,23 @@ int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   std::string idx_str(ArgView(argv[1]));
   auto doc_id = ArgView(argv[2]);
-  auto fields_kw = ArgView(argv[3]);
 
-  if (!MatchArg(fields_kw, "FIELDS")) {
+  int arg_i = 3;
+  std::string payload;
+  bool has_payload = false;
+  if (arg_i + 1 < argc && MatchArg(ArgView(argv[arg_i]), "PAYLOAD")) {
+    payload = ArgStr(argv[arg_i + 1]);
+    has_payload = true;
+    arg_i += 2;
+  }
+
+  if (arg_i >= argc || !MatchArg(ArgView(argv[arg_i]), "FIELDS")) {
     return RedisModule_ReplyWithError(
         ctx, "ERR syntax error, expected FIELDS keyword");
   }
+  arg_i++;
 
-  int field_argc = argc - 4;
+  int field_argc = argc - arg_i;
   if (field_argc < 2 || field_argc % 2 != 0) {
     return RedisModule_ReplyWithError(
         ctx, "ERR syntax error, FIELDS requires pairs of <field> <value>");
@@ -567,7 +588,7 @@ int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   auto& entry = it->second;
 
   std::unordered_map<std::string, std::string> doc_fields;
-  for (int i = 4; i < argc; i += 2) {
+  for (int i = arg_i; i < argc; i += 2) {
     std::string fname_str(ArgView(argv[i]));
 
     const auto* fspec = entry.spec.FindField(fname_str);
@@ -593,9 +614,10 @@ int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::string doc_id_str(doc_id);
 
   RemoveDocFromIndices(entry, doc_id_str);
-  entry.doc_store.Add(doc_id_str, doc_fields);
+  entry.doc_store.Add(doc_id_str, doc_fields, std::move(payload), has_payload);
   AddDocToIndices(entry, doc_id_str, doc_fields);
 
+  RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -620,6 +642,7 @@ int FtDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RemoveDocFromIndices(entry, doc_id_str);
   entry.doc_store.Remove(doc_id_str);
 
+  RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -696,6 +719,7 @@ int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     ScanExistingKeys(ctx, entry);
   }
 
+  RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -715,6 +739,7 @@ int FtAliasAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, "ERR alias already exists");
   }
   GetAliases()[alias] = idx;
+  RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -728,6 +753,7 @@ int FtAliasDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (GetAliases().erase(alias) == 0) {
     return RedisModule_ReplyWithError(ctx, "ERR alias not found");
   }
+  RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -744,6 +770,7 @@ int FtAliasUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
   GetAliases()[alias] = idx;
+  RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 

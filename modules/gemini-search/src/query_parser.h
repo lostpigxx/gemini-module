@@ -31,6 +31,8 @@ struct QueryNode {
     kGeoFilter,
     kGeoShapeQuery,
     kVectorRange,
+    kIsMissing,
+    kIsEmpty,
     kAnd,
     kOr,
     kNot,

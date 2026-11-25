@@ -128,6 +128,9 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
     RedisModule_SaveUnsigned(rdb, f.case_sensitive ? 1 : 0);
     // encver >= 10: geoshape_coord
     RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(f.geoshape_coord));
+    // encver >= 11: index_missing, index_empty
+    RedisModule_SaveUnsigned(rdb, f.index_missing ? 1 : 0);
+    RedisModule_SaveUnsigned(rdb, f.index_empty ? 1 : 0);
   }
 
   // Index-level options (encver >= 6)
@@ -170,7 +173,13 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
         RedisModule_SaveStringBuffer(rdb, k.c_str(), k.size());
         RedisModule_SaveStringBuffer(rdb, v.c_str(), v.size());
       }
+      // encver >= 11: optional document payload
+      RedisModule_SaveUnsigned(rdb, doc->has_payload ? 1 : 0);
+      if (doc->has_payload) {
+        RedisModule_SaveStringBuffer(rdb, doc->payload.data(), doc->payload.size());
+      }
     } else {
+      RedisModule_SaveUnsigned(rdb, 0);
       RedisModule_SaveUnsigned(rdb, 0);
     }
   }
@@ -274,6 +283,12 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
       }
       f.geoshape_coord = static_cast<GeoShapeCoord>(raw_gc);
     }
+    if (encver >= 11) {
+      uint64_t raw_im = 0, raw_ie = 0;
+      if (!SafeLoadUnsigned(rdb, raw_im) || !SafeLoadUnsigned(rdb, raw_ie)) return nullptr;
+      f.index_missing = raw_im != 0;
+      f.index_empty = raw_ie != 0;
+    }
     fields.push_back(std::move(f));
   }
 
@@ -345,6 +360,7 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
   uint64_t doc_count = 0;
   if (!SafeLoadUnsigned(rdb, doc_count) || doc_count > kMaxRdbDocs) return nullptr;
   std::vector<std::pair<std::string, std::unordered_map<std::string, std::string>>> docs;
+  std::vector<std::pair<std::string, std::string>> doc_payloads;
   docs.reserve(static_cast<size_t>(doc_count));
   for (uint64_t i = 0; i < doc_count; i++) {
     std::string doc_id;
@@ -360,6 +376,15 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
       if (!SafeLoadString(rdb, k) || !SafeLoadString(rdb, v)) return nullptr;
       doc_fields[std::move(k)] = std::move(v);
     }
+    if (encver >= 11) {
+      uint64_t has_pl = 0;
+      if (!SafeLoadUnsigned(rdb, has_pl)) return nullptr;
+      if (has_pl != 0) {
+        std::string pl;
+        if (!SafeLoadString(rdb, pl)) return nullptr;
+        doc_payloads.emplace_back(doc_id, std::move(pl));
+      }
+    }
     docs.emplace_back(std::move(doc_id), std::move(doc_fields));
   }
 
@@ -370,6 +395,9 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
   CreateIndexFromRdb(index_name, std::move(spec), docs);
 
   if (auto* entry = GetIndexEntry(index_name)) {
+    for (auto& [did, pl] : doc_payloads) {
+      entry->doc_store.SetPayload(did, std::move(pl));
+    }
     for (const auto& [gid, terms] : syn_groups) {
       entry->synonyms.Update(gid, terms);
     }
@@ -453,6 +481,8 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value) {
     }
     if (f.sortable) create_args.push_back("SORTABLE");
     if (f.noindex) create_args.push_back("NOINDEX");
+    if (f.index_missing) create_args.push_back("INDEXMISSING");
+    if (f.index_empty) create_args.push_back("INDEXEMPTY");
     if (f.weight != 1.0) {
       create_args.push_back("WEIGHT");
       create_args.push_back(std::to_string(f.weight));
@@ -476,8 +506,12 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value) {
     if (!doc) continue;
 
     std::vector<std::string> add_args;
-    add_args.reserve(2 + doc->fields.size() * 2);
+    add_args.reserve(2 + (doc->has_payload ? 2 : 0) + doc->fields.size() * 2);
     add_args.push_back(doc_id);
+    if (doc->has_payload) {
+      add_args.push_back("PAYLOAD");
+      add_args.push_back(doc->payload);
+    }
     add_args.push_back("FIELDS");
     for (const auto& [k, v] : doc->fields) {
       add_args.push_back(k);

@@ -1,4 +1,4 @@
-# gemini-search Development Plan v5 — Performance, Security & Redis 7 Verification (Phases 37–40)
+# gemini-search Development Plan v5 — Performance, Security & Protocol Alignment (Phases 37–41)
 
 Target platform: **Redis 7** (clean-room C++20).
 
@@ -22,3 +22,4 @@ Target platform: **Redis 7** (clean-room C++20).
 | **P38** | Ordered term & reversed-term indices in `TextIndex` ($O(\log V + k)$ prefix/suffix); 0.5° spatial grid in `GeoIndex` | Done |
 | **P39** | Pre-parsed `SortableColumn` (`sort_index.h`) for `SORTABLE` fields; contiguous flat float buffer + 4-way unrolled distance kernels in `FlatVectorIndex` | Done |
 | **P40** | Security/boundary hardening (`kMaxDepth=64` recursion guards in query & expression parsers, `DIM<=65536`, finite `WEIGHT` & `GEOFILTER` bounds, checked `FT.PROFILE` counts) + real Docker Redis 7.2.11 offline CI verification (Linux GCC/GNU ld, Linux ASan, Redis 7 Tcl suite incl. `COPY` & `aux_save2`, RESP3/RESP2 soak) | Done |
+| **P41** | Protocol & ecosystem alignment: `LIMIT 0 0` total-count fast path, `FT.ADD PAYLOAD` + `FT.SEARCH WITHPAYLOADS`, `INDEXMISSING`/`INDEXEMPTY` + `ismissing(@f)`/`isempty(@f)` (`encver 11`), `RedisModule_ReplicateVerbatim` on all write commands + real Redis 7.2.11 Master-Replica `PSYNC` & live replication verification | Done |

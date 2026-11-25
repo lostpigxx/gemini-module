@@ -21,6 +21,7 @@ struct SearchOptions {
   std::unordered_map<std::string, std::string> return_aliases;
   bool has_return = false;
   bool withsortkeys = false;
+  bool withpayloads = false;
   bool explainscore = false;
   ScorerType scorer = ScorerType::kBm25;
   std::string scorer_name = "BM25";
@@ -582,6 +583,9 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     } else if (MatchArg(kw, "WITHSORTKEYS")) {
       opts.withsortkeys = true;
       arg_i++;
+    } else if (MatchArg(kw, "WITHPAYLOADS")) {
+      opts.withpayloads = true;
+      arg_i++;
     } else if (MatchArg(kw, "EXPLAINSCORE")) {
       opts.explainscore = true;
       arg_i++;
@@ -723,6 +727,11 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
     // Apply LIMIT to KNN results
     long long knn_total_before_limit = static_cast<long long>(knn_results.size());
+    if (opts.has_limit && opts.limit_offset == 0 && opts.limit_count == 0) {
+      RedisModule_ReplyWithArray(ctx, 1);
+      RedisModule_ReplyWithLongLong(ctx, knn_total_before_limit);
+      return REDISMODULE_OK;
+    }
     if (opts.has_limit) {
       if (opts.limit_offset >= knn_total_before_limit) {
         knn_results.clear();
@@ -737,7 +746,7 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
 
     long total = static_cast<long>(knn_results.size());
-    long multiplier = opts.nocontent ? 1 : 2;
+    long multiplier = 1 + (opts.withpayloads ? 1 : 0) + (opts.nocontent ? 0 : 1);
     RedisModule_ReplyWithArray(ctx, 1 + total * multiplier);
     RedisModule_ReplyWithLongLong(ctx, total);
 
@@ -746,9 +755,17 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                                   : parsed.knn_score_alias.c_str();
     for (auto& kr : knn_results) {
       RedisModule_ReplyWithCString(ctx, kr.doc_id.c_str());
+      const auto* doc = entry.doc_store.Get(kr.doc_id);
+      if (opts.withpayloads) {
+        if (doc && doc->has_payload) {
+          RedisModule_ReplyWithStringBuffer(ctx, doc->payload.data(), doc->payload.size());
+        } else {
+          RedisModule_ReplyWithNull(ctx);
+        }
+      }
       if (!opts.nocontent) {
         auto score_str = std::to_string(kr.score);
-        ReplyWithDocFields(ctx, entry.doc_store.Get(kr.doc_id), opts,
+        ReplyWithDocFields(ctx, doc, opts,
                            &score_str, query_terms, score_field);
       }
     }
@@ -875,6 +892,12 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   if (opts.withscores) {
+    // Fast-path LIMIT 0 0: total count only without sorting or field loading
+    if (opts.has_limit && opts.limit_offset == 0 && opts.limit_count == 0) {
+      RedisModule_ReplyWithArray(ctx, 1);
+      RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(scored_results.size()));
+      return REDISMODULE_OK;
+    }
     // SORTBY overrides score-based ordering; otherwise sort by score desc
     if (opts.has_sortby) {
       const auto* sort_fspec = entry.spec.FindField(opts.sortby_field);
@@ -928,19 +951,33 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
 
     long total = static_cast<long>(scored_results.size());
-    long multiplier = opts.nocontent ? 1 : 2;
+    long multiplier = 1 + (opts.withpayloads ? 1 : 0) + (opts.nocontent ? 0 : 1);
     RedisModule_ReplyWithArray(ctx, 1 + total * multiplier);
     RedisModule_ReplyWithLongLong(ctx, total);
 
     for (auto& sr : scored_results) {
       RedisModule_ReplyWithCString(ctx, sr.doc_id.c_str());
+      const auto* doc = entry.doc_store.Get(sr.doc_id);
+      if (opts.withpayloads) {
+        if (doc && doc->has_payload) {
+          RedisModule_ReplyWithStringBuffer(ctx, doc->payload.data(), doc->payload.size());
+        } else {
+          RedisModule_ReplyWithNull(ctx);
+        }
+      }
       if (!opts.nocontent) {
         auto score_str = std::to_string(sr.score);
-        ReplyWithDocFields(ctx, entry.doc_store.Get(sr.doc_id), opts,
+        ReplyWithDocFields(ctx, doc, opts,
                            &score_str, query_terms, "__search_score");
       }
     }
   } else {
+    // Fast-path LIMIT 0 0: total count only without sorting or field loading
+    if (opts.has_limit && opts.limit_offset == 0 && opts.limit_count == 0) {
+      RedisModule_ReplyWithArray(ctx, 1);
+      RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(result_ids.size()));
+      return REDISMODULE_OK;
+    }
     // SORTBY
     if (opts.has_sortby) {
       const auto* sort_fspec = entry.spec.FindField(opts.sortby_field);
@@ -1046,14 +1083,15 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
     long total = static_cast<long>(result_ids.size());
     bool emit_sortkey = opts.withsortkeys && opts.has_sortby;
-    long multiplier = 1 + (emit_sortkey ? 1 : 0) + (opts.nocontent ? 0 : 1);
+    long multiplier = 1 + (emit_sortkey ? 1 : 0) + (opts.withpayloads ? 1 : 0) +
+                      (opts.nocontent ? 0 : 1);
     RedisModule_ReplyWithArray(ctx, 1 + total * multiplier);
     RedisModule_ReplyWithLongLong(ctx, total);
 
     for (auto& rid : result_ids) {
       RedisModule_ReplyWithCString(ctx, rid.c_str());
+      const auto* doc = entry.doc_store.Get(rid);
       if (emit_sortkey) {
-        const auto* doc = entry.doc_store.Get(rid);
         std::string sk;
         if (doc) {
           auto sit = doc->fields.find(opts.sortby_field);
@@ -1061,11 +1099,18 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         }
         RedisModule_ReplyWithCString(ctx, sk.c_str());
       }
+      if (opts.withpayloads) {
+        if (doc && doc->has_payload) {
+          RedisModule_ReplyWithStringBuffer(ctx, doc->payload.data(), doc->payload.size());
+        } else {
+          RedisModule_ReplyWithNull(ctx);
+        }
+      }
       if (!opts.nocontent) {
         const std::string* dptr = nullptr;
         auto dit = yield_dists.find(rid);
         if (!yield_alias.empty() && dit != yield_dists.end()) dptr = &dit->second;
-        ReplyWithDocFields(ctx, entry.doc_store.Get(rid), opts, dptr, query_terms,
+        ReplyWithDocFields(ctx, doc, opts, dptr, query_terms,
                            yield_alias.empty() ? "__vec_score" : yield_alias.c_str());
       }
     }
@@ -1126,6 +1171,12 @@ static std::string ExplainNode(const QueryNode& node, int indent) {
     case QueryNode::Type::kVectorRange:
       result = pad + "VECTOR_RANGE @" + node.field_name + ":[" +
                std::to_string(node.vec_radius) + " $" + node.vec_param_name + "]\n";
+      break;
+    case QueryNode::Type::kIsMissing:
+      result = pad + "ISMISSING @" + node.field_name + "\n";
+      break;
+    case QueryNode::Type::kIsEmpty:
+      result = pad + "ISEMPTY @" + node.field_name + "\n";
       break;
     case QueryNode::Type::kAnd:
       result = pad + "AND\n";

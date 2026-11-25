@@ -4,16 +4,28 @@
 #include <utility>
 
 bool DocumentStore::Add(std::string doc_id,
-                        std::unordered_map<std::string, std::string> fields) {
+                        std::unordered_map<std::string, std::string> fields,
+                        std::string payload, bool has_payload) {
   auto it = docs_.find(doc_id);
   if (it != docs_.end()) {
     it->second.fields = std::move(fields);
+    it->second.payload = std::move(payload);
+    it->second.has_payload = has_payload;
     return false;
   }
   std::string key = doc_id;
   docs_.emplace(std::move(key),
-                Document{std::move(doc_id), std::move(fields)});
+                Document{std::move(doc_id), std::move(fields),
+                         std::move(payload), has_payload});
   return true;
+}
+
+void DocumentStore::SetPayload(const std::string& doc_id, std::string payload) {
+  auto it = docs_.find(doc_id);
+  if (it != docs_.end()) {
+    it->second.payload = std::move(payload);
+    it->second.has_payload = true;
+  }
 }
 
 bool DocumentStore::Remove(const std::string& doc_id) {
@@ -36,7 +48,7 @@ size_t DocumentStore::MemoryUsage() const {
   size_t bytes = sizeof(*this) + docs_.bucket_count() * sizeof(void*);
   for (const auto& [k, doc] : docs_) {
     bytes += sizeof(std::pair<const std::string, Document>) + sizeof(void*);
-    bytes += k.capacity() + doc.id.capacity();
+    bytes += k.capacity() + doc.id.capacity() + doc.payload.capacity();
     bytes += doc.fields.bucket_count() * sizeof(void*);
     for (const auto& [fk, fv] : doc.fields) {
       bytes += sizeof(std::pair<const std::string, std::string>) + sizeof(void*);

@@ -37,6 +37,7 @@ int FtSugAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   GetSuggestDicts()[dict_name].Add(str, score, incr, payload);
+  RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithLongLong(
       ctx, static_cast<long long>(GetSuggestDicts()[dict_name].Len()));
 }
@@ -99,7 +100,9 @@ int FtSugDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (it == GetSuggestDicts().end()) {
     return RedisModule_ReplyWithLongLong(ctx, 0);
   }
-  return RedisModule_ReplyWithLongLong(ctx, it->second.Del(str) ? 1 : 0);
+  bool removed = it->second.Del(str);
+  if (removed) RedisModule_ReplicateVerbatim(ctx);
+  return RedisModule_ReplyWithLongLong(ctx, removed ? 1 : 0);
 }
 
 // FT.SUGLEN <dict>
@@ -124,6 +127,7 @@ int FtDictAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::vector<std::string> terms;
   for (int i = 2; i < argc; i++) terms.emplace_back(ArgView(argv[i]));
   size_t added = GetTermDicts()[dict_name].Add(terms);
+  if (added > 0) RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(added));
 }
 
@@ -139,6 +143,7 @@ int FtDictDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::vector<std::string> terms;
   for (int i = 2; i < argc; i++) terms.emplace_back(ArgView(argv[i]));
   size_t removed = it->second.Del(terms);
+  if (removed > 0) RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(removed));
 }
 
@@ -175,6 +180,7 @@ int FtSynUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   for (int i = 3; i < argc; i++) terms.emplace_back(ArgView(argv[i]));
 
   it->second.synonyms.Update(group_id, terms);
+  RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 

@@ -80,6 +80,8 @@ struct FieldSpec {
   char tag_separator = ',';
   bool case_sensitive = false;
   GeoShapeCoord geoshape_coord = GeoShapeCoord::kSpherical;
+  bool index_missing = false;
+  bool index_empty = false;
 };
 
 struct IndexSpec {

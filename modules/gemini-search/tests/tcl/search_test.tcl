@@ -3418,6 +3418,163 @@ test_assert "Deeply nested query and expression rejected safely" {
 }
 
 # ============================================================
+# Phase 41: Protocol & Ecosystem Alignment
+# ============================================================
+puts "\n=== Phase 41: Protocol & Ecosystem Alignment ==="
+
+test_assert "LIMIT 0 0 returns total match count without docs" {
+  r FT.CREATE p41lim SCHEMA title TEXT price NUMERIC SORTABLE
+  r FT.ADD p41lim d1 FIELDS title "alpha" price 10
+  r FT.ADD p41lim d2 FIELDS title "alpha beta" price 20
+  r FT.ADD p41lim d3 FIELDS title "gamma" price 30
+
+  set res [r FT.SEARCH p41lim "*" LIMIT 0 0]
+  if {[llength $res] != 1 || [lindex $res 0] != 3} {
+    error "Expected {3}, got {$res}"
+  }
+  set res2 [r FT.SEARCH p41lim "alpha" WITHSCORES LIMIT 0 0]
+  if {[llength $res2] != 1 || [lindex $res2 0] != 2} {
+    error "Expected {2} with WITHSCORES LIMIT 0 0, got {$res2}"
+  }
+  r FT.DROPINDEX p41lim
+}
+
+test_assert "FT.ADD PAYLOAD and FT.SEARCH WITHPAYLOADS" {
+  r FT.CREATE p41pl SCHEMA title TEXT
+  r FT.ADD p41pl d1 PAYLOAD "meta:one" FIELDS title "hello"
+  r FT.ADD p41pl d2 FIELDS title "hello"
+
+  set res [r FT.SEARCH p41pl "hello" WITHPAYLOADS NOCONTENT]
+  if {[lindex $res 0] != 2} { error "Expected 2 docs, got $res" }
+  # d1 -> meta:one, d2 -> (nil)
+  if {[lindex $res 1] ne "d1" || [lindex $res 2] ne "meta:one"} {
+    error "Expected d1 with payload meta:one, got $res"
+  }
+  if {[lindex $res 3] ne "d2" || [lindex $res 4] ne "(nil)"} {
+    error "Expected d2 with (nil) payload, got $res"
+  }
+  r FT.DROPINDEX p41pl
+}
+
+test_assert "INDEXMISSING and INDEXEMPTY predicates work and validate schema" {
+  r FT.CREATE p41me SCHEMA title TEXT INDEXMISSING INDEXEMPTY tag TAG
+  r FT.ADD p41me d1 FIELDS title "present" tag "a"
+  r FT.ADD p41me d2 FIELDS tag "b"
+  r FT.ADD p41me d3 FIELDS title "" tag "c"
+
+  set r1 [r FT.SEARCH p41me "ismissing(@title)" NOCONTENT]
+  if {[lindex $r1 0] != 1 || [lindex $r1 1] ne "d2"} {
+    error "Expected d2 for ismissing(@title), got $r1"
+  }
+  set r2 [r FT.SEARCH p41me "isempty(@title)" NOCONTENT]
+  if {[lindex $r2 0] != 1 || [lindex $r2 1] ne "d3"} {
+    error "Expected d3 for isempty(@title), got $r2"
+  }
+  set err_no_flag 0
+  if {[catch {r FT.SEARCH p41me "ismissing(@tag)"}]} { set err_no_flag 1 }
+  if {!$err_no_flag} { error "Expected error when INDEXMISSING not set on field" }
+
+  r FT.DROPINDEX p41me
+}
+
+test_assert "Master-Replica PSYNC full sync and live command replication" {
+  global port module_path
+
+  # Create pre-existing state on master before replica connects (tests full PSYNC RDB + aux)
+  r FT.CREATE p41rep SCHEMA title TEXT INDEXMISSING
+  r FT.ADD p41rep d1 PAYLOAD "pl1" FIELDS title "hello"
+  r FT.ADD p41rep d2 FIELDS title "world"
+  r FT.ALIASADD p41alias p41rep
+  r FT.SUGADD p41sug "redis" 10.0 PAYLOAD "db"
+  r FT.DICTADD p41dict alpha beta
+
+  set rep_port [find_free_port]
+  set rep_rdb "search_tcl_replica_${rep_port}.rdb"
+  set rep_log "/tmp/search_tcl_replica_${rep_port}.log"
+  catch {
+    exec redis-server \
+      --port $rep_port \
+      --daemonize yes \
+      --loglevel warning \
+      --logfile $rep_log \
+      --dbfilename $rep_rdb \
+      --dir /tmp \
+      --loadmodule $module_path \
+      --replicaof 127.0.0.1 $port
+  }
+
+  set rep_fd ""
+  for {set i 0} {$i < 50} {incr i} {
+    if {![catch {set rep_fd [redis_connect localhost $rep_port]}]} {
+      break
+    }
+    after 100
+  }
+  if {$rep_fd eq ""} { error "Replica failed to start on port $rep_port" }
+
+  # Wait for replica to complete full PSYNC
+  set synced 0
+  for {set i 0} {$i < 80} {incr i} {
+    set info ""
+    if {![catch {set info [redis_command $rep_fd INFO replication]}]} {
+      if {[string match "*master_link_status:up*" $info] &&
+          [string match "*master_sync_in_progress:0*" $info]} {
+        set synced 1
+        break
+      }
+    }
+    after 100
+  }
+  if {!$synced} {
+    catch {redis_command $rep_fd SHUTDOWN NOSAVE}
+    catch {close $rep_fd}
+    file delete -force "/tmp/$rep_rdb" $rep_log
+    error "Replica did not complete PSYNC within timeout"
+  }
+
+  # Verify full PSYNC RDB + aux state on replica
+  set r_full [redis_command $rep_fd FT.SEARCH p41alias "hello" WITHPAYLOADS NOCONTENT]
+  if {[lindex $r_full 0] != 1 || [lindex $r_full 1] ne "d1" || [lindex $r_full 2] ne "pl1"} {
+    catch {redis_command $rep_fd SHUTDOWN NOSAVE}
+    catch {close $rep_fd}
+    file delete -force "/tmp/$rep_rdb" $rep_log
+    error "Full PSYNC search/payload/alias mismatch on replica: $r_full"
+  }
+  set r_sug [redis_command $rep_fd FT.SUGGET p41sug "red" WITHPAYLOADS]
+  if {[lindex $r_sug 0] ne "redis" || [lindex $r_sug 1] ne "db"} {
+    catch {redis_command $rep_fd SHUTDOWN NOSAVE}
+    catch {close $rep_fd}
+    file delete -force "/tmp/$rep_rdb" $rep_log
+    error "Full PSYNC suggest dict mismatch on replica: $r_sug"
+  }
+
+  # Live command replication after PSYNC
+  r FT.ADD p41rep d3 PAYLOAD "pl3" FIELDS title "live"
+  r FT.CREATE p41hash ON HASH PREFIX 1 p41h: SCHEMA name TEXT
+  r HSET p41h:1 name "streamed"
+  after 300
+
+  set r_live [redis_command $rep_fd FT.SEARCH p41rep "live" WITHPAYLOADS NOCONTENT]
+  set r_hash [redis_command $rep_fd FT.SEARCH p41hash "streamed" NOCONTENT]
+
+  catch {redis_command $rep_fd SHUTDOWN NOSAVE}
+  catch {close $rep_fd}
+  file delete -force "/tmp/$rep_rdb" $rep_log
+
+  r FT.ALIASDEL p41alias
+  r FT.DROPINDEX p41rep
+  r FT.DROPINDEX p41hash
+  r DEL p41h:1
+
+  if {[lindex $r_live 0] != 1 || [lindex $r_live 1] ne "d3" || [lindex $r_live 2] ne "pl3"} {
+    error "Live FT.ADD replication mismatch on replica: $r_live"
+  }
+  if {[lindex $r_hash 0] != 1 || [lindex $r_hash 1] ne "p41h:1"} {
+    error "Live ON HASH replication mismatch on replica: $r_hash"
+  }
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 
