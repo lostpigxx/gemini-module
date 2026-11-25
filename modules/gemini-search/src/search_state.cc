@@ -169,6 +169,9 @@ void RemoveDocFromIndices(IndexEntry& entry,
   for (auto& [fname, fval] : doc->fields) {
     const auto* fspec = entry.spec.FindField(fname);
     if (!fspec || fspec->noindex) continue;
+    if (fspec->sortable) {
+      entry.sort_indices.GetOrCreate(fname).Remove(doc_id);
+    }
     if (fspec->type == FieldType::kTag) {
       entry.tag_indices.GetOrCreate(fname).RemoveMulti(
           fval, doc_id, fspec->tag_separator, fspec->case_sensitive);
@@ -195,14 +198,22 @@ void AddDocToIndices(
   for (auto& [fname, fval] : fields) {
     const auto* fspec = entry.spec.FindField(fname);
     if (!fspec || fspec->noindex) continue;
+    if (fspec->type == FieldType::kNumeric) {
+      double num;
+      if (TryParseDouble(fval, num)) {
+        entry.numeric_indices.GetOrCreate(fname).Add(num, doc_id);
+        if (fspec->sortable) {
+          entry.sort_indices.GetOrCreate(fname).SetNumeric(doc_id, num);
+        }
+      }
+    } else if (fspec->sortable && fspec->type != FieldType::kVector) {
+      entry.sort_indices.GetOrCreate(fname).SetString(doc_id, fval);
+    }
     if (fspec->type == FieldType::kTag) {
       entry.tag_indices.GetOrCreate(fname).AddMulti(
           fval, doc_id, fspec->tag_separator, fspec->case_sensitive);
     } else if (fspec->type == FieldType::kNumeric) {
-      double num;
-      if (TryParseDouble(fval, num)) {
-        entry.numeric_indices.GetOrCreate(fname).Add(num, doc_id);
-      }
+      // already indexed above
     } else if (fspec->type == FieldType::kVector) {
       std::vector<float> vec;
       if (DecodeVectorBlob(fval, fspec->vector_params.dim,

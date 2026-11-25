@@ -19,6 +19,7 @@ extern "C" {
 #include "geoshape_index.h"
 #include "index_spec.h"
 #include "numeric_index.h"
+#include "sort_index.h"
 #include "suggest_dict.h"
 #include "tag_index.h"
 #include "text_index.h"
@@ -39,6 +40,7 @@ struct IndexEntry {
   TextFieldIndices text_indices;
   GeoFieldIndices geo_indices;
   GeoShapeFieldIndices geoshape_indices;
+  SortFieldIndices sort_indices;
   SynonymMap synonyms;
   int64_t last_access_ms = 0;
 };

@@ -944,27 +944,60 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
       bool numeric_sort = (sort_fspec->type == FieldType::kNumeric);
       bool desc = opts.sortby_desc;
-      std::sort(result_ids.begin(), result_ids.end(),
-                [&](const std::string& a, const std::string& b) {
-                  const auto* da = entry.doc_store.Get(a);
-                  const auto* db = entry.doc_store.Get(b);
-                  std::string va, vb;
-                  if (da) {
-                    auto fa = da->fields.find(opts.sortby_field);
-                    if (fa != da->fields.end()) va = fa->second;
-                  }
-                  if (db) {
-                    auto fb = db->fields.find(opts.sortby_field);
-                    if (fb != db->fields.end()) vb = fb->second;
-                  }
-                  if (numeric_sort) {
-                    double na = 0, nb = 0;
-                    TryParseDouble(va, na);
-                    TryParseDouble(vb, nb);
-                    return desc ? na > nb : na < nb;
-                  }
-                  return desc ? va > vb : va < vb;
-                });
+      const auto* sort_col = sort_fspec->sortable
+                                 ? entry.sort_indices.Get(opts.sortby_field)
+                                 : nullptr;
+      if (sort_col && numeric_sort) {
+        std::vector<std::pair<double, size_t>> keyed;
+        keyed.reserve(result_ids.size());
+        for (size_t i = 0; i < result_ids.size(); i++) {
+          keyed.emplace_back(sort_col->GetNumeric(result_ids[i]), i);
+        }
+        std::sort(keyed.begin(), keyed.end(),
+                  [desc](const auto& a, const auto& b) {
+                    return desc ? (a.first > b.first) : (a.first < b.first);
+                  });
+        std::vector<std::string> sorted;
+        sorted.reserve(result_ids.size());
+        for (const auto& [k, idx] : keyed) sorted.push_back(std::move(result_ids[idx]));
+        result_ids = std::move(sorted);
+      } else if (sort_col && !numeric_sort) {
+        std::vector<std::pair<std::string_view, size_t>> keyed;
+        keyed.reserve(result_ids.size());
+        for (size_t i = 0; i < result_ids.size(); i++) {
+          keyed.emplace_back(sort_col->GetString(result_ids[i]), i);
+        }
+        std::sort(keyed.begin(), keyed.end(),
+                  [desc](const auto& a, const auto& b) {
+                    return desc ? (a.first > b.first) : (a.first < b.first);
+                  });
+        std::vector<std::string> sorted;
+        sorted.reserve(result_ids.size());
+        for (const auto& [k, idx] : keyed) sorted.push_back(std::move(result_ids[idx]));
+        result_ids = std::move(sorted);
+      } else {
+        std::sort(result_ids.begin(), result_ids.end(),
+                  [&](const std::string& a, const std::string& b) {
+                    const auto* da = entry.doc_store.Get(a);
+                    const auto* db = entry.doc_store.Get(b);
+                    std::string va, vb;
+                    if (da) {
+                      auto fa = da->fields.find(opts.sortby_field);
+                      if (fa != da->fields.end()) va = fa->second;
+                    }
+                    if (db) {
+                      auto fb = db->fields.find(opts.sortby_field);
+                      if (fb != db->fields.end()) vb = fb->second;
+                    }
+                    if (numeric_sort) {
+                      double na = 0, nb = 0;
+                      TryParseDouble(va, na);
+                      TryParseDouble(vb, nb);
+                      return desc ? na > nb : na < nb;
+                    }
+                    return desc ? va > vb : va < vb;
+                  });
+      }
     }
 
     // LIMIT

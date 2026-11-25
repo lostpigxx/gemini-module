@@ -1,6 +1,7 @@
 #include "document_store.h"
 #include "geo_index.h"
 #include "hnsw_index.h"
+#include "sort_index.h"
 #include "text_index.h"
 #include "vector_index.h"
 
@@ -98,15 +99,18 @@ int main() {
     });
   }
 
-  // 4. DocumentStore string-to-double sort baseline (10,000 docs)
+  // 4. DocumentStore string-to-double sort vs SortableColumn pre-extracted sort (10,000 docs)
   {
     DocumentStore store;
+    SortableColumn col;
     std::vector<std::string> ids;
     ids.reserve(10000);
     std::uniform_real_distribution<double> pdist(1.0, 100000.0);
     for (int i = 0; i < 10000; i++) {
       std::string id = "d" + std::to_string(i);
-      store.Add(id, {{"price", std::to_string(pdist(rng))}});
+      double v = pdist(rng);
+      store.Add(id, {{"price", std::to_string(v)}});
+      col.SetNumeric(id, v);
       ids.push_back(id);
     }
     BenchUs("DocStore strtod SORTBY (10k)", 50, [&]() {
@@ -118,6 +122,16 @@ int main() {
                   return na < nb;
                 });
       sink += copy.size();
+    });
+    BenchUs("SortableColumn SORTBY (10k)", 50, [&]() {
+      std::vector<std::pair<double, size_t>> keyed;
+      keyed.reserve(ids.size());
+      for (size_t i = 0; i < ids.size(); i++) {
+        keyed.emplace_back(col.GetNumeric(ids[i]), i);
+      }
+      std::sort(keyed.begin(), keyed.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+      sink += keyed.size();
     });
   }
 

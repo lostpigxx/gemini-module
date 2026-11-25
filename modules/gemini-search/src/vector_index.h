@@ -46,7 +46,9 @@ class VectorIndexBase {
 class FlatVectorIndex : public VectorIndexBase {
   size_t dim_;
   DistanceMetric metric_;
-  std::unordered_map<std::string, std::vector<float>> vectors_;
+  std::vector<float> data_;
+  std::vector<std::string> ids_;
+  std::unordered_map<std::string, size_t> id_to_idx_;
 
  public:
   FlatVectorIndex(size_t dim, DistanceMetric metric);
