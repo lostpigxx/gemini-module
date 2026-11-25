@@ -273,33 +273,140 @@ float Sq8Distance(const float* query, const uint8_t* qvec, const Sq8Meta& meta,
                   size_t dim, DistanceMetric metric) {
   const float mn = meta.min_val;
   const float sc = meta.scale;
+  size_t i = 0;
+
   if (metric == DistanceMetric::kL2) {
-    float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-    size_t i = 0;
-    for (; i + 3 < dim; i += 4) {
-      float d0 = query[i] - (mn + static_cast<float>(qvec[i]) * sc);
-      float d1 = query[i + 1] - (mn + static_cast<float>(qvec[i + 1]) * sc);
-      float d2 = query[i + 2] - (mn + static_cast<float>(qvec[i + 2]) * sc);
-      float d3 = query[i + 3] - (mn + static_cast<float>(qvec[i + 3]) * sc);
-      s0 += d0 * d0; s1 += d1 * d1; s2 += d2 * d2; s3 += d3 * d3;
+    float sum = 0.0f;
+#if defined(GEMINI_SIMD_NEON)
+    float32x4_t vmn = vdupq_n_f32(mn);
+    float32x4_t vsc = vdupq_n_f32(sc);
+    float32x4_t acc0 = vdupq_n_f32(0.0f);
+    float32x4_t acc1 = vdupq_n_f32(0.0f);
+    for (; i + 7 < dim; i += 8) {
+      uint8x8_t u8 = vld1_u8(qvec + i);
+      uint16x8_t u16 = vmovl_u8(u8);
+      float32x4_t f0 = vfmaq_f32(vmn, vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16))), vsc);
+      float32x4_t f1 = vfmaq_f32(vmn, vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16))), vsc);
+      float32x4_t d0 = vsubq_f32(vld1q_f32(query + i), f0);
+      float32x4_t d1 = vsubq_f32(vld1q_f32(query + i + 4), f1);
+      acc0 = vfmaq_f32(acc0, d0, d0);
+      acc1 = vfmaq_f32(acc1, d1, d1);
     }
-    float sum = (s0 + s1) + (s2 + s3);
+    sum = vaddvq_f32(vaddq_f32(acc0, acc1));
+#elif defined(GEMINI_SIMD_AVX2)
+    __m256 vmn = _mm256_set1_ps(mn);
+    __m256 vsc = _mm256_set1_ps(sc);
+    __m256 acc = _mm256_setzero_ps();
+    for (; i + 7 < dim; i += 8) {
+      __m128i u8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(qvec + i));
+      __m256 f = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(u8)), vsc, vmn);
+      __m256 d = _mm256_sub_ps(_mm256_loadu_ps(query + i), f);
+      acc = _mm256_fmadd_ps(d, d, acc);
+    }
+    __m128 lo = _mm256_castps256_ps128(acc);
+    __m128 hi = _mm256_extractf128_ps(acc, 1);
+    __m128 s4 = _mm_add_ps(lo, hi);
+    __m128 shuf = _mm_movehdup_ps(s4);
+    __m128 s2 = _mm_add_ps(s4, shuf);
+    shuf = _mm_movehl_ps(shuf, s2);
+    sum = _mm_cvtss_f32(_mm_add_ss(s2, shuf));
+#endif
     for (; i < dim; i++) {
       float d = query[i] - (mn + static_cast<float>(qvec[i]) * sc);
       sum += d * d;
     }
     return sum;
   }
+
   if (metric == DistanceMetric::kIP) {
     float sum = 0.0f;
-    for (size_t i = 0; i < dim; i++) {
+#if defined(GEMINI_SIMD_NEON)
+    float32x4_t vmn = vdupq_n_f32(mn);
+    float32x4_t vsc = vdupq_n_f32(sc);
+    float32x4_t acc0 = vdupq_n_f32(0.0f);
+    float32x4_t acc1 = vdupq_n_f32(0.0f);
+    for (; i + 7 < dim; i += 8) {
+      uint8x8_t u8 = vld1_u8(qvec + i);
+      uint16x8_t u16 = vmovl_u8(u8);
+      float32x4_t f0 = vfmaq_f32(vmn, vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16))), vsc);
+      float32x4_t f1 = vfmaq_f32(vmn, vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16))), vsc);
+      acc0 = vfmaq_f32(acc0, vld1q_f32(query + i), f0);
+      acc1 = vfmaq_f32(acc1, vld1q_f32(query + i + 4), f1);
+    }
+    sum = vaddvq_f32(vaddq_f32(acc0, acc1));
+#elif defined(GEMINI_SIMD_AVX2)
+    __m256 vmn = _mm256_set1_ps(mn);
+    __m256 vsc = _mm256_set1_ps(sc);
+    __m256 acc = _mm256_setzero_ps();
+    for (; i + 7 < dim; i += 8) {
+      __m128i u8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(qvec + i));
+      __m256 f = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(u8)), vsc, vmn);
+      acc = _mm256_fmadd_ps(_mm256_loadu_ps(query + i), f, acc);
+    }
+    __m128 lo = _mm256_castps256_ps128(acc);
+    __m128 hi = _mm256_extractf128_ps(acc, 1);
+    __m128 s4 = _mm_add_ps(lo, hi);
+    __m128 shuf = _mm_movehdup_ps(s4);
+    __m128 s2 = _mm_add_ps(s4, shuf);
+    shuf = _mm_movehl_ps(shuf, s2);
+    sum = _mm_cvtss_f32(_mm_add_ss(s2, shuf));
+#endif
+    for (; i < dim; i++) {
       sum += query[i] * (mn + static_cast<float>(qvec[i]) * sc);
     }
     return -sum;
   }
+
   // Cosine
   float dot = 0.0f, na = 0.0f, nb = 0.0f;
-  for (size_t i = 0; i < dim; i++) {
+#if defined(GEMINI_SIMD_NEON)
+  float32x4_t vmn = vdupq_n_f32(mn);
+  float32x4_t vsc = vdupq_n_f32(sc);
+  float32x4_t vdot = vdupq_n_f32(0.0f);
+  float32x4_t vna = vdupq_n_f32(0.0f);
+  float32x4_t vnb = vdupq_n_f32(0.0f);
+  for (; i + 7 < dim; i += 8) {
+    uint8x8_t u8 = vld1_u8(qvec + i);
+    uint16x8_t u16 = vmovl_u8(u8);
+    float32x4_t b0 = vfmaq_f32(vmn, vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16))), vsc);
+    float32x4_t b1 = vfmaq_f32(vmn, vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16))), vsc);
+    float32x4_t a0 = vld1q_f32(query + i);
+    float32x4_t a1 = vld1q_f32(query + i + 4);
+    vdot = vfmaq_f32(vfmaq_f32(vdot, a0, b0), a1, b1);
+    vna = vfmaq_f32(vfmaq_f32(vna, a0, a0), a1, a1);
+    vnb = vfmaq_f32(vfmaq_f32(vnb, b0, b0), b1, b1);
+  }
+  dot = vaddvq_f32(vdot);
+  na = vaddvq_f32(vna);
+  nb = vaddvq_f32(vnb);
+#elif defined(GEMINI_SIMD_AVX2)
+  auto HSum = [](__m256 v) -> float {
+    __m128 lo = _mm256_castps256_ps128(v);
+    __m128 hi = _mm256_extractf128_ps(v, 1);
+    __m128 s4 = _mm_add_ps(lo, hi);
+    __m128 shuf = _mm_movehdup_ps(s4);
+    __m128 s2 = _mm_add_ps(s4, shuf);
+    shuf = _mm_movehl_ps(shuf, s2);
+    return _mm_cvtss_f32(_mm_add_ss(s2, shuf));
+  };
+  __m256 vmn = _mm256_set1_ps(mn);
+  __m256 vsc = _mm256_set1_ps(sc);
+  __m256 vdot = _mm256_setzero_ps();
+  __m256 vna = _mm256_setzero_ps();
+  __m256 vnb = _mm256_setzero_ps();
+  for (; i + 7 < dim; i += 8) {
+    __m128i u8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(qvec + i));
+    __m256 vb = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(u8)), vsc, vmn);
+    __m256 va = _mm256_loadu_ps(query + i);
+    vdot = _mm256_fmadd_ps(va, vb, vdot);
+    vna = _mm256_fmadd_ps(va, va, vna);
+    vnb = _mm256_fmadd_ps(vb, vb, vnb);
+  }
+  dot = HSum(vdot);
+  na = HSum(vna);
+  nb = HSum(vnb);
+#endif
+  for (; i < dim; i++) {
     float a = query[i];
     float b = mn + static_cast<float>(qvec[i]) * sc;
     dot += a * b;

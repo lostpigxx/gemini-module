@@ -332,3 +332,25 @@ TEST(VectorSimdParityTest, AllMetricsAcrossArbitraryDimensions) {
     EXPECT_NEAR(InnerProductDistance(a.data(), b.data(), dim), ref_ip, 1e-3) << "dim=" << dim;
   }
 }
+
+TEST(VectorSimdParityTest, Sq8DistanceAllMetricsAcrossArbitraryDimensions) {
+  const size_t dims[] = {1, 3, 7, 8, 15, 16, 31, 64, 128, 384, 768};
+  for (size_t dim : dims) {
+    std::vector<float> q(dim), v(dim), deq(dim);
+    std::vector<uint8_t> qv(dim);
+    for (size_t i = 0; i < dim; i++) {
+      q[i] = std::sin(static_cast<float>(i) * 0.29f + 0.3f);
+      v[i] = std::cos(static_cast<float>(i) * 0.41f - 0.1f);
+    }
+    Sq8Meta meta;
+    QuantizeSq8(v.data(), dim, qv.data(), meta);
+    DequantizeSq8(qv.data(), meta, dim, deq.data());
+
+    EXPECT_NEAR(Sq8Distance(q.data(), qv.data(), meta, dim, DistanceMetric::kL2),
+                L2Distance(q.data(), deq.data(), dim), 1e-3) << "dim=" << dim;
+    EXPECT_NEAR(Sq8Distance(q.data(), qv.data(), meta, dim, DistanceMetric::kCosine),
+                CosineDistance(q.data(), deq.data(), dim), 1e-5) << "dim=" << dim;
+    EXPECT_NEAR(Sq8Distance(q.data(), qv.data(), meta, dim, DistanceMetric::kIP),
+                InnerProductDistance(q.data(), deq.data(), dim), 1e-3) << "dim=" << dim;
+  }
+}

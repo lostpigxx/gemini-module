@@ -88,18 +88,23 @@ int main() {
     std::uniform_real_distribution<float> fdist(-1.0f, 1.0f);
     FlatVectorIndex flat(kDim, DistanceMetric::kL2);
     FlatVectorIndex flat_cos(kDim, DistanceMetric::kCosine);
+    FlatVectorIndex flat_sq8(kDim, DistanceMetric::kL2, VectorQuantization::kSq8);
     std::vector<float> buf(kDim);
     for (int i = 0; i < kVecs; i++) {
       for (size_t d = 0; d < kDim; d++) buf[d] = fdist(rng);
       std::string id = "v" + std::to_string(i);
       flat.Add(id, buf.data());
       flat_cos.Add(id, buf.data());
+      flat_sq8.Add(id, buf.data());
     }
     std::vector<float> q(kDim);
     for (size_t d = 0; d < kDim; d++) q[d] = fdist(rng);
 
     BenchUs("FlatVector L2 KNN-10 (5kx128)", 100, [&]() {
       sink += flat.KnnQuery(q.data(), 10).size();
+    });
+    BenchUs("FlatVector SQ8 L2 KNN-10 (5kx128)", 100, [&]() {
+      sink += flat_sq8.KnnQuery(q.data(), 10).size();
     });
     BenchUs("FlatVector Cos KNN-10 (5kx128)", 100, [&]() {
       sink += flat_cos.KnnQuery(q.data(), 10).size();
