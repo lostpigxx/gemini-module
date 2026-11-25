@@ -30,30 +30,31 @@ JSON data type with JSONPath-based operations, compatible with the RedisJSON com
 `JSON.OBJKEYS`, `JSON.OBJLEN`, `JSON.MGET`, `JSON.MSET`, `JSON.MERGE`,
 `JSON.DEBUG`, `JSON.RESP`, `JSON.FORGET`.
 
-### gemini-search — Full-Text Search
+### gemini-search — Full-Text, Vector & Hybrid Search
 
-Clean-room full-text search engine, indexing Redis Hash (`ON HASH`) and JSON (`ON JSON`) documents.
+Clean-room search engine targeting **Redis 7**, indexing Redis Hash (`ON HASH`) and JSON (`ON JSON`) documents.
 
-Field types: `TEXT` (BM25 scoring, Porter2 stemming, phonetic matching), `TAG`, `NUMERIC`, `VECTOR` (FLAT / HNSW),
-`GEO`, `GEOSHAPE`.
+Field types: `TEXT` (BM25/TFIDF/DISMAX/DOCSCORE scoring, English/French/German/Spanish stemming, UTF-8 CJK bigram tokenization, phonetic matching), `TAG` (`SEPARATOR`, `CASESENSITIVE`), `NUMERIC`, `VECTOR` (`FLAT` / dense-ID `HNSW`, ARM NEON / AVX2 SIMD kernels, `FLOAT32`/`FLOAT64`/`FLOAT16`/`BFLOAT16`, `QUANTIZATION SQ8`), `GEO` (0.5° spatial grid), `GEOSHAPE` (`FLAT`/`SPHERICAL`).
 
-Query features: boolean combinations, prefix / fuzzy / optional terms, exact phrase with `SLOP` / `INORDER`,
-numeric ranges, `GEOFILTER`, KNN with pre-filter, `HIGHLIGHT` / `SUMMARIZE`, `SORTBY` / `LIMIT` / `RETURN`.
+Query features: boolean combinations (`DIALECT 1/2`), prefix / suffix / infix / fuzzy / optional terms, synonyms, exact phrase with `SLOP` / `INORDER`, `ismissing(@f)` / `isempty(@f)`, numeric ranges, `GEOFILTER`, KNN (`EF_RUNTIME`, `AS`, non-blocking async offload via `RedisModule_BlockClient`), `VECTOR_RANGE`, **`FT.HYBRID` (BM25 + Vector RRF/LINEAR fusion)**, `HIGHLIGHT` / `SUMMARIZE`, `SORTBY` / `LIMIT 0 0` / `RETURN AS` / `WITHPAYLOADS` / `WITHSORTKEYS` / `EXPLAINSCORE`, and full Master-Replica `PSYNC` replication.
 
 | Category | Commands |
 |---|---|
-| Index management | `FT.CREATE`, `FT.ALTER`, `FT.DROPINDEX`, `FT.INFO`, `FT._LIST`, `FT.ALIASADD`, `FT.ALIASUPDATE`, `FT.ALIASDEL`, `FT.TAGVALS` |
-| Documents (legacy) | `FT.ADD`, `FT.DEL` |
-| Query | `FT.SEARCH`, `FT.AGGREGATE` (multi-stage pipeline with expression engine), `FT.CURSOR`, `FT.EXPLAIN`, `FT.EXPLAINCLI`, `FT.PROFILE` |
+| Index management | `FT.CREATE`, `FT.ALTER`, `FT.DROPINDEX` (`DD`), `FT.INFO`, `FT._LIST`, `FT.ALIASADD`, `FT.ALIASUPDATE`, `FT.ALIASDEL`, `FT.TAGVALS` |
+| Documents (legacy) | `FT.ADD` (`PAYLOAD`), `FT.DEL` |
+| Query | `FT.SEARCH`, `FT.HYBRID`, `FT.AGGREGATE` (multi-key `SORTBY MAX`, KNN, rich `APPLY` functions), `FT.CURSOR`, `FT.EXPLAIN`, `FT.EXPLAINCLI`, `FT.PROFILE` |
 | Autocomplete | `FT.SUGADD`, `FT.SUGGET`, `FT.SUGDEL`, `FT.SUGLEN` |
 | Spellcheck / dictionaries / synonyms | `FT.SPELLCHECK`, `FT.DICTADD`, `FT.DICTDEL`, `FT.DICTDUMP`, `FT.SYNUPDATE`, `FT.SYNDUMP` |
-| Configuration / debug | `FT.CONFIG`, `FT._DEBUG` |
+| Configuration / debug | `FT.CONFIG` (`ON_TIMEOUT`, `MAXSEARCHRESULTS`, `ASYNC_MIN_DOCS`, ...), `FT._DEBUG` |
 
-Design doc: [modules/gemini-search/DESIGN.md](modules/gemini-search/DESIGN.md). Development roadmap:
-[doc/gemini-search/development-plan.md](doc/gemini-search/development-plan.md) (Phase 0–12),
-[doc/gemini-search/development-plan-v2.md](doc/gemini-search/development-plan-v2.md) (Phase 13–26),
-[doc/gemini-search/development-plan-v3.md](doc/gemini-search/development-plan-v3.md) (Phase 27–31, Redis 7 hardening), and
-[doc/gemini-search/development-plan-v4.md](doc/gemini-search/development-plan-v4.md) (Phase 32–35, advanced features).
+Design doc: [modules/gemini-search/DESIGN.md](modules/gemini-search/DESIGN.md). Development roadmaps:
+[v1](doc/gemini-search/development-plan.md) (P0–12),
+[v2](doc/gemini-search/development-plan-v2.md) (P13–26),
+[v3](doc/gemini-search/development-plan-v3.md) (P27–31, Redis 7 hardening),
+[v4](doc/gemini-search/development-plan-v4.md) (P32–35, advanced search),
+[v5](doc/gemini-search/development-plan-v5.md) (P37–41, perf, security & PSYNC),
+[v6](doc/gemini-search/development-plan-v6.md) (P42–46, Hybrid, FP16/BF16/SQ8, CJK, observability),
+[v7](doc/gemini-search/development-plan-v7.md) (P47–51, dense-ID indices, NEON/AVX2 SIMD, async executor).
 
 ## Project Structure
 

@@ -2,13 +2,13 @@
 
 ## 1. 概述
 
-gemini-search 是一个基于 C++20 从零实现的 Redis 全文检索与向量检索模块（clean-room 实现），提供 `FT.*` 命令接口（31 个命令），覆盖全文检索（BM25）、TAG、NUMERIC、VECTOR（FLAT / HNSW）、GEO、GEOSHAPE、聚合管道、自动补全、拼写纠错、同义词与词典。
+gemini-search 是一个基于 C++20 从零实现的 Redis 全文检索、向量检索与混合检索模块（clean-room 实现），提供 `FT.*` 命令接口（32 个命令，含 `FT.HYBRID`），覆盖全文检索（BM25/TFIDF/DISMAX/DOCSCORE、中/日/韩 CJK Bigram、英/法/德/西词干）、TAG、NUMERIC、VECTOR（FLAT / 稠密 ID HNSW、NEON/AVX2 SIMD、FP32/FP64/FP16/BF16、SQ8 量化）、GEO（0.5° 空间网格）、GEOSHAPE、聚合管道、异步非阻塞 KNN、自动补全、拼写纠错、同义词与词典。
 
 ### 1.1 目标平台与定位
 
 - **目标 Redis 版本**：仅面向 **Redis 7**（基线 Redis 7.2.11），不考虑 Redis 5/6 兼容。
-- **Clean-room 原则**：严格仅基于公开命令文档（redis.io）和学术算法（BM25、Porter2、Double Metaphone、HNSW arXiv:1603.09320、Ray Casting）独立设计与实现，禁止阅读或引用 RediSearch 源码（RSALv2/SSPL）。
-- **数据格式**：使用私有模块数据类型名 `GmSearch-`（当前 `kSearchEncVer = 10`）和私有 `aux_save2`/`aux_load` 持久化格式，不与 RediSearch 做 RDB 级别互通。
+- **Clean-room 原则**：严格仅基于公开命令文档（redis.io）和学术算法（BM25、Porter2、Double Metaphone、HNSW arXiv:1603.09320、RRF、Ray Casting）独立设计与实现，禁止阅读或引用 RediSearch 源码（RSALv2/SSPL）。
+- **数据格式**：使用私有模块数据类型名 `GmSearch-`（当前 `kSearchEncVer = 12`，向下兼容 `1..12`）和私有 `aux_save2`/`aux_load` 持久化格式，全部写命令调用 `RedisModule_ReplicateVerbatim` 支持 Master-Replica `PSYNC` 全量与在线复制。
 
 ---
 
@@ -75,10 +75,10 @@ modules/gemini-search/
 
 ## 4. 持久化与 ModuleType 回调（Redis 7）
 
-### 4.1 RDB 序列化（`GmSearch-`，`kSearchEncVer = 10`）
+### 4.1 RDB 序列化（`GmSearch-`，`kSearchEncVer = 12`）
 
-- 向下兼容加载 `encver 1..10`。
-- `encver 9` 完整持久化：索引名、前缀、数据源类型（`HASH`/`JSON`）、全部字段定义（含 `VECTOR` 参数与 `FLOAT32`/`FLOAT64`、`json_path`、`sortable`/`noindex`/`weight`、`nostem`/`phonetic`、`tag_separator`/`case_sensitive`）、索引选项（自定义 stopwords、`nofreqs`/`nooffsets`/`nohl`、`temporary_ttl`、`language`、`filter_expr`）、每索引同义词组、全部文档。
+- 向下兼容加载 `encver 1..12`。
+- `encver 12` 完整持久化：索引名、前缀、数据源类型（`HASH`/`JSON`）、全部字段定义（含 `VECTOR` 参数与 `FLOAT32`/`FLOAT64`/`FLOAT16`/`BFLOAT16`、`QUANTIZATION SQ8`、`json_path`、`sortable`/`noindex`/`index_missing`/`index_empty`/`weight`、`nostem`/`phonetic`、`tag_separator`/`case_sensitive`、`geoshape_coord`）、索引选项（自定义 stopwords、`nofreqs`/`nooffsets`/`nohl`、`temporary_ttl`、`language`、`language_field`、`filter_expr`）、每索引同义词组、全部文档及二进制 `PAYLOAD`。
 - 开启 `REDISMODULE_OPTIONS_HANDLE_IO_ERRORS`，反序列化阶段对 IO 错误、枚举值范围、向量维度、NaN/负权重及各类集合数量上限做严格校验，非法流直接返回 `nullptr`。
 
 ### 4.2 全局非 Key 状态持久化（`aux_save2` / `aux_load`）
