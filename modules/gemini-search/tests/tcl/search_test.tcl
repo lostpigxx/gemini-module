@@ -2856,7 +2856,7 @@ if {$redis_major >= 7} {
     set info_via_alias [r FT.INFO p27alias]
     if {[llength $info_via_alias] < 2} { error "Alias not persisted: $info_via_alias" }
     set cfg [r FT.CONFIG GET TIMEOUT]
-    if {[lindex [lindex $cfg 0] 1] ne "1234"} { error "Config not persisted: $cfg" }
+    if {[lindex $cfg 1] ne "1234"} { error "Config not persisted: $cfg" }
 
     r FT.ALIASDEL p27alias
     r FT.DROPINDEX p27aux
@@ -3385,6 +3385,36 @@ test_assert "FT.CONFIG MAXEXPANSIONS and MINSTEMLEN take effect" {
   r FT.CONFIG SET MINSTEMLEN 3
   if {[lindex $r2 0] != 0} { error "Expected MINSTEMLEN 6 to skip stemming 3-char 'run', got $r2" }
   r FT.DROPINDEX p36cfg
+}
+
+# ============================================================
+# Phase 40: Security & Boundary Hardening
+# ============================================================
+puts "\n=== Phase 40: Security & Boundary Hardening ==="
+
+test_assert "Deeply nested query and expression rejected safely" {
+  r FT.CREATE p40sec SCHEMA body TEXT num NUMERIC
+  set deep_q "[string repeat "(" 100]hello[string repeat ")" 100]"
+  set err1 0
+  if {[catch {r FT.SEARCH p40sec $deep_q}]} { set err1 1 }
+  if {!$err1} { error "Expected deeply nested query to be rejected" }
+
+  set deep_e "[string repeat "(" 100]@num + 1[string repeat ")" 100]"
+  set err2 0
+  if {[catch {r FT.AGGREGATE p40sec "*" APPLY $deep_e AS x}]} { set err2 1 }
+  if {!$err2} { error "Expected deeply nested expression to be rejected" }
+
+  # Excessive vector DIM rejected
+  set err3 0
+  if {[catch {r FT.CREATE p40bad SCHEMA v VECTOR FLAT DIM 9999999 DISTANCE_METRIC L2}]} { set err3 1 }
+  if {!$err3} { error "Expected excessive vector DIM to be rejected" }
+
+  # NaN WEIGHT rejected
+  set err4 0
+  if {[catch {r FT.CREATE p40nan SCHEMA t TEXT WEIGHT nan}]} { set err4 1 }
+  if {!$err4} { error "Expected NaN WEIGHT to be rejected" }
+
+  r FT.DROPINDEX p40sec
 }
 
 # ============================================================

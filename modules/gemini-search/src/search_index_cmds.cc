@@ -216,9 +216,9 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
           char* endptr = nullptr;
           long dim_val =
               std::strtol(std::string(dim_str).c_str(), &endptr, 10);
-          if (*endptr != '\0' || dim_val <= 0) {
+          if (*endptr != '\0' || dim_val <= 0 || dim_val > 65536) {
             return RedisModule_ReplyWithError(
-                ctx, "ERR DIM must be a positive integer");
+                ctx, "ERR DIM must be a positive integer (<= 65536)");
           }
           fspec.vector_params.dim = static_cast<size_t>(dim_val);
           has_dim = true;
@@ -316,8 +316,8 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR WEIGHT requires a value");
         char* ep = nullptr;
         fspec.weight = std::strtod(std::string(ArgView(argv[i])).c_str(), &ep);
-        if (*ep != '\0' || fspec.weight < 0)
-          return RedisModule_ReplyWithError(ctx, "ERR WEIGHT must be a non-negative number");
+        if (*ep != '\0' || !std::isfinite(fspec.weight) || fspec.weight < 0)
+          return RedisModule_ReplyWithError(ctx, "ERR WEIGHT must be a non-negative finite number");
         i++;
       } else if (MatchArg(attr, "PHONETIC") && fspec.type == FieldType::kText) {
         i++;

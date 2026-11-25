@@ -657,11 +657,13 @@ static bool ParseNumericBound(const std::string& token, double& value,
 }
 
 struct Parser {
+  static constexpr int kMaxDepth = 64;
   const std::string& input;
   size_t pos = 0;
   std::string& error_msg;
   bool nostopwords = false;
   int dialect = 2;
+  int depth = 0;
 
   Parser(const std::string& s, std::string& err, bool nostop = false,
          int dia = 2)
@@ -1057,10 +1059,17 @@ struct Parser {
 
   // Primary: '(' expr ')', '*', '@field:...'
   bool ParsePrimary(QueryNode& out) {
+    if (depth >= kMaxDepth) {
+      error_msg = "ERR query exceeds maximum nesting depth";
+      return false;
+    }
     SkipSpaces();
     if (Peek() == '(') {
       pos++;
-      if (!ParseOr(out)) return false;
+      depth++;
+      bool ok = ParseOr(out);
+      depth--;
+      if (!ok) return false;
       SkipSpaces();
       if (Peek() != ')') {
         error_msg = "ERR syntax error: expected closing )";
@@ -1133,17 +1142,20 @@ struct Parser {
 
   // Unary: '-' unary | '~' unary | primary
   bool ParseUnary(QueryNode& out) {
+    if (depth >= kMaxDepth) {
+      error_msg = "ERR query exceeds maximum nesting depth";
+      return false;
+    }
     SkipSpaces();
     if (Peek() == '-') {
       pos++;
       QueryNode child;
+      depth++;
       // Dialect 1: negation applies to the entire following AND clause (-a b => -(a AND b)).
       // Dialect 2+: negation binds tightly to the next unary atom (-a b => (-a) AND b).
-      if (dialect == 1) {
-        if (!ParseAnd(child)) return false;
-      } else {
-        if (!ParseUnary(child)) return false;
-      }
+      bool ok = (dialect == 1) ? ParseAnd(child) : ParseUnary(child);
+      depth--;
+      if (!ok) return false;
       out.type = QueryNode::Type::kNot;
       out.children.push_back(std::move(child));
       return true;

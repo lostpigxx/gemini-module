@@ -539,7 +539,12 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       arg_i++;
       opts.geofilter_radius = std::strtod(std::string(ArgView(argv[arg_i])).c_str(), &ep3);
       arg_i++;
-      if (*ep1 != '\0' || *ep2 != '\0' || *ep3 != '\0' || opts.geofilter_radius < 0) {
+      if (*ep1 != '\0' || *ep2 != '\0' || *ep3 != '\0' ||
+          !std::isfinite(opts.geofilter_lon) || !std::isfinite(opts.geofilter_lat) ||
+          !std::isfinite(opts.geofilter_radius) ||
+          opts.geofilter_lon < -180.0 || opts.geofilter_lon > 180.0 ||
+          opts.geofilter_lat < -90.0 || opts.geofilter_lat > 90.0 ||
+          opts.geofilter_radius < 0) {
         return RedisModule_ReplyWithError(
             ctx, "ERR GEOFILTER invalid numeric values");
       }

@@ -455,3 +455,22 @@ TEST(VectorQueryParserTest, VectorRangeWithYieldDistanceAlias) {
   EXPECT_EQ(pq.root.vec_param_name, "q");
   EXPECT_EQ(pq.root.vec_score_alias, "vdist");
 }
+
+TEST(SecurityParserTest, DeepParenNestingRejected) {
+  std::string q(200, '(');
+  q += "hello";
+  q += std::string(200, ')');
+  ParsedQuery pq;
+  std::string err;
+  EXPECT_FALSE(ParseQuery(q, pq, err));
+  EXPECT_NE(err.find("depth"), std::string::npos);
+}
+
+TEST(SecurityParserTest, DeepNegationNestingRejected) {
+  std::string q(200, '-');
+  q += "hello";
+  ParsedQuery pq;
+  std::string err;
+  EXPECT_FALSE(ParseQuery(q, pq, err));
+  EXPECT_NE(err.find("depth"), std::string::npos);
+}

@@ -817,9 +817,13 @@ bool RunAggregateForProfile(
       pending_groupby = nullptr;
       arg_i++;
       if (arg_i >= argc) { error_msg = "ERR LOAD requires nargs"; return false; }
-      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), nullptr, 10);
+      char* ep = nullptr;
+      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &ep, 10);
       arg_i++;
-      if (arg_i + n > argc) { error_msg = "ERR LOAD field count mismatch"; return false; }
+      if (*ep != '\0' || n < 0 || arg_i + n > argc) {
+        error_msg = "ERR LOAD field count mismatch";
+        return false;
+      }
       arg_i += static_cast<int>(n);
     } else if (MatchArg(kw, "APPLY")) {
       pending_groupby = nullptr;
@@ -846,9 +850,13 @@ bool RunAggregateForProfile(
     } else if (MatchArg(kw, "GROUPBY")) {
       arg_i++;
       if (arg_i >= argc) { error_msg = "ERR GROUPBY requires nargs"; return false; }
-      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), nullptr, 10);
+      char* ep = nullptr;
+      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &ep, 10);
       arg_i++;
-      if (arg_i + n > argc) { error_msg = "ERR GROUPBY field count mismatch"; return false; }
+      if (*ep != '\0' || n < 0 || arg_i + n > argc) {
+        error_msg = "ERR GROUPBY field count mismatch";
+        return false;
+      }
       PipelineStage st;
       st.type = PipelineStageType::kGroupby;
       for (long fi = 0; fi < n; fi++) {
@@ -863,8 +871,12 @@ bool RunAggregateForProfile(
       arg_i++;
       if (arg_i + 1 >= argc) { error_msg = "ERR REDUCE requires func and nargs"; return false; }
       auto fstr = ArgView(argv[arg_i++]);
-      long nargs = std::strtol(std::string(ArgView(argv[arg_i++])).c_str(), nullptr, 10);
-      if (arg_i + nargs > argc) { error_msg = "ERR REDUCE nargs mismatch"; return false; }
+      char* ep = nullptr;
+      long nargs = std::strtol(std::string(ArgView(argv[arg_i++])).c_str(), &ep, 10);
+      if (*ep != '\0' || nargs < 0 || arg_i + nargs > argc) {
+        error_msg = "ERR REDUCE nargs mismatch";
+        return false;
+      }
       ReduceOp rop;
       if (MatchArg(fstr, "COUNT")) rop.func = ReduceFunc::kCount;
       else if (MatchArg(fstr, "SUM")) rop.func = ReduceFunc::kSum;
@@ -893,9 +905,13 @@ bool RunAggregateForProfile(
       pending_groupby = nullptr;
       arg_i++;
       if (arg_i >= argc) { error_msg = "ERR SORTBY requires nargs"; return false; }
-      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), nullptr, 10);
+      char* ep = nullptr;
+      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &ep, 10);
       arg_i++;
-      if (arg_i + n > argc || n < 1) { error_msg = "ERR SORTBY args mismatch"; return false; }
+      if (*ep != '\0' || n < 1 || arg_i + n > argc) {
+        error_msg = "ERR SORTBY args mismatch";
+        return false;
+      }
       PipelineStage st;
       st.type = PipelineStageType::kSortby;
       std::string sf(ArgView(argv[arg_i]));

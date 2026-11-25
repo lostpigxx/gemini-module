@@ -185,9 +185,11 @@ ExprValue EvalExpr(const ExprNode& node, const ExprRow& row) {
 // =============================================================
 
 struct ExprParser {
+  static constexpr int kMaxDepth = 64;
   const std::string& input;
   size_t pos = 0;
   std::string& error;
+  int depth = 0;
 
   ExprParser(const std::string& s, std::string& err) : input(s), error(err) {}
 
@@ -210,13 +212,20 @@ struct ExprParser {
 
   // primary: number | string | @field | func(...) | (expr) | !primary
   bool ParsePrimary(ExprNode& out) {
+    if (depth >= kMaxDepth) {
+      error = "ERR expr: exceeds maximum nesting depth";
+      return false;
+    }
     SkipSpaces();
     char c = Peek();
 
     if (c == '!') {
       pos++;
       ExprNode child;
-      if (!ParsePrimary(child)) return false;
+      depth++;
+      bool ok = ParsePrimary(child);
+      depth--;
+      if (!ok) return false;
       out.op = ExprNode::Op::kNot;
       out.children.push_back(std::move(child));
       return true;
@@ -224,7 +233,10 @@ struct ExprParser {
 
     if (c == '(') {
       pos++;
-      if (!ParseOr(out)) return false;
+      depth++;
+      bool ok = ParseOr(out);
+      depth--;
+      if (!ok) return false;
       SkipSpaces();
       if (Peek() != ')') {
         error = "ERR expr: expected )";
