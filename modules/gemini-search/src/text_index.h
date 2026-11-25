@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -13,18 +14,28 @@ struct TextSearchResult {
 
 class TextIndex {
   struct Posting {
-    std::string doc_id;
+    uint32_t doc_id;
     int tf;
     std::vector<int> positions;
   };
 
+  // Dense uint32_t doc ID table with slot reuse
+  std::vector<std::string> id_to_str_;
+  std::vector<int> doc_lengths_;
+  std::vector<uint8_t> alive_;
+  std::vector<std::vector<std::string>> doc_terms_;
+  std::vector<uint32_t> free_ids_;
+  std::unordered_map<std::string, uint32_t> str_to_id_;
+  size_t live_docs_ = 0;
+  uint64_t total_doc_len_ = 0;
+  double avg_doc_len_ = 0.0;
+
+  // Inverted index with postings sorted by uint32_t doc_id
   std::unordered_map<std::string, std::vector<Posting>> postings_;
   std::set<std::string> sorted_terms_;
   std::set<std::string> reversed_terms_;
   std::unordered_map<std::string, std::set<std::string>> stem_map_;
   std::unordered_map<std::string, std::set<std::string>> phonetic_map_;
-  std::unordered_map<std::string, int> doc_lengths_;
-  double avg_doc_len_ = 0;
 
   void UpdateAvgDocLen();
 

@@ -56,6 +56,11 @@ int main() {
     BenchUs("TextIndex::SuffixLookup (30k)", 200, [&]() {
       sink += tidx.SuffixLookup("99ing", 200).size();
     });
+    int churn_i = 0;
+    BenchUs("TextIndex::Update/Remove (30k)", 500, [&]() {
+      std::string id = "doc" + std::to_string(churn_i++ % 30000);
+      tidx.Add(id, "search12 updated fast node");
+    });
   }
 
   // 2. GeoIndex: 30,000 points worldwide, 10 km city radius query

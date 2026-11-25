@@ -141,13 +141,11 @@ std::vector<std::string> TextIndex::TokenizeRaw(const std::string& text) {
 }
 
 void TextIndex::UpdateAvgDocLen() {
-  if (doc_lengths_.empty()) {
-    avg_doc_len_ = 0;
+  if (live_docs_ == 0) {
+    avg_doc_len_ = 0.0;
     return;
   }
-  double total = 0;
-  for (auto& [id, len] : doc_lengths_) total += len;
-  avg_doc_len_ = total / static_cast<double>(doc_lengths_.size());
+  avg_doc_len_ = static_cast<double>(total_doc_len_) / static_cast<double>(live_docs_);
 }
 
 void TextIndex::Add(const std::string& doc_id, const std::string& text,
@@ -155,7 +153,25 @@ void TextIndex::Add(const std::string& doc_id, const std::string& text,
                     bool nofreqs, bool nooffsets) {
   Remove(doc_id);
   auto tokens = TokenizeRaw(text);
-  doc_lengths_[doc_id] = static_cast<int>(tokens.size());
+
+  uint32_t did = 0;
+  if (!free_ids_.empty()) {
+    did = free_ids_.back();
+    free_ids_.pop_back();
+    id_to_str_[did] = doc_id;
+    doc_lengths_[did] = static_cast<int>(tokens.size());
+    alive_[did] = 1;
+    doc_terms_[did].clear();
+  } else {
+    did = static_cast<uint32_t>(id_to_str_.size());
+    id_to_str_.push_back(doc_id);
+    doc_lengths_.push_back(static_cast<int>(tokens.size()));
+    alive_.push_back(1);
+    doc_terms_.emplace_back();
+  }
+  str_to_id_[doc_id] = did;
+  live_docs_++;
+  total_doc_len_ += tokens.size();
   UpdateAvgDocLen();
 
   struct TermInfo {
@@ -169,13 +185,24 @@ void TextIndex::Add(const std::string& doc_id, const std::string& text,
     if (!nooffsets) info.positions.push_back(i);
   }
 
+  auto& fwd = doc_terms_[did];
+  fwd.reserve(tf_map.size());
   for (auto& [term, info] : tf_map) {
+    fwd.push_back(term);
     auto& vec = postings_[term];
     if (vec.empty()) {
       sorted_terms_.insert(term);
       reversed_terms_.emplace(term.rbegin(), term.rend());
     }
-    vec.push_back({doc_id, info.tf, std::move(info.positions)});
+    Posting p{did, info.tf, std::move(info.positions)};
+    if (vec.empty() || vec.back().doc_id < did) {
+      vec.push_back(std::move(p));
+    } else {
+      auto pos = std::lower_bound(
+          vec.begin(), vec.end(), did,
+          [](const Posting& a, uint32_t id) { return a.doc_id < id; });
+      vec.insert(pos, std::move(p));
+    }
     auto stemmed = StemWord(term, language);
     if (stemmed != term) {
       stem_map_[stemmed].insert(term);
@@ -189,32 +216,48 @@ void TextIndex::Add(const std::string& doc_id, const std::string& text,
 }
 
 void TextIndex::Remove(const std::string& doc_id) {
-  if (doc_lengths_.erase(doc_id) == 0) return;
+  auto it = str_to_id_.find(doc_id);
+  if (it == str_to_id_.end()) return;
+  uint32_t did = it->second;
+  str_to_id_.erase(it);
+
+  total_doc_len_ -= static_cast<uint64_t>(doc_lengths_[did]);
+  live_docs_--;
   UpdateAvgDocLen();
 
-  std::vector<std::string> empty_terms;
-  for (auto& [term, posts] : postings_) {
-    posts.erase(std::remove_if(posts.begin(), posts.end(),
-                               [&](const Posting& p) { return p.doc_id == doc_id; }),
-                posts.end());
-    if (posts.empty()) empty_terms.push_back(term);
+  for (const auto& term : doc_terms_[did]) {
+    auto pit = postings_.find(term);
+    if (pit == postings_.end()) continue;
+    auto& vec = pit->second;
+    auto pos = std::lower_bound(
+        vec.begin(), vec.end(), did,
+        [](const Posting& a, uint32_t id) { return a.doc_id < id; });
+    if (pos != vec.end() && pos->doc_id == did) {
+      vec.erase(pos);
+    }
+    if (vec.empty()) {
+      postings_.erase(pit);
+      sorted_terms_.erase(term);
+      reversed_terms_.erase(std::string(term.rbegin(), term.rend()));
+    }
   }
-  for (auto& t : empty_terms) {
-    postings_.erase(t);
-    sorted_terms_.erase(t);
-    reversed_terms_.erase(std::string(t.rbegin(), t.rend()));
-  }
+
+  doc_terms_[did].clear();
+  id_to_str_[did].clear();
+  doc_lengths_[did] = 0;
+  alive_[did] = 0;
+  free_ids_.push_back(did);
 }
 
 std::vector<TextSearchResult> TextIndex::Search(
     const std::vector<std::string>& terms) const {
-  if (doc_lengths_.empty()) return {};
+  if (live_docs_ == 0) return {};
 
-  double N = static_cast<double>(doc_lengths_.size());
+  double N = static_cast<double>(live_docs_);
   double k1 = 1.2;
   double b = 0.75;
 
-  std::unordered_map<std::string, double> scores;
+  std::unordered_map<uint32_t, double> scores;
 
   for (auto& term : terms) {
     auto it = postings_.find(term);
@@ -225,8 +268,7 @@ std::vector<TextSearchResult> TextIndex::Search(
 
     for (auto& p : posts) {
       double tf = static_cast<double>(p.tf);
-      auto dl_it = doc_lengths_.find(p.doc_id);
-      double dl = (dl_it != doc_lengths_.end()) ? static_cast<double>(dl_it->second) : 0;
+      double dl = static_cast<double>(doc_lengths_[p.doc_id]);
       double tf_norm = (tf * (k1 + 1.0)) / (tf + k1 * (1.0 - b + b * dl / avg_doc_len_));
       scores[p.doc_id] += idf * tf_norm;
     }
@@ -234,8 +276,8 @@ std::vector<TextSearchResult> TextIndex::Search(
 
   std::vector<TextSearchResult> results;
   results.reserve(scores.size());
-  for (auto& [doc_id, score] : scores) {
-    results.push_back({doc_id, score});
+  for (auto& [did, score] : scores) {
+    results.push_back({id_to_str_[did], score});
   }
   std::sort(results.begin(), results.end(),
             [](const TextSearchResult& a, const TextSearchResult& b) {
@@ -249,7 +291,8 @@ std::vector<std::string> TextIndex::Lookup(const std::string& term) const {
   auto it = postings_.find(term);
   if (it == postings_.end()) return {};
   std::vector<std::string> ids;
-  for (auto& p : it->second) ids.push_back(p.doc_id);
+  ids.reserve(it->second.size());
+  for (auto& p : it->second) ids.push_back(id_to_str_[p.doc_id]);
   std::sort(ids.begin(), ids.end());
   return ids;
 }
@@ -257,68 +300,84 @@ std::vector<std::string> TextIndex::Lookup(const std::string& term) const {
 std::vector<std::string> TextIndex::PrefixLookup(const std::string& prefix,
                                                   size_t max_expansions) const {
   if (prefix.size() < 2) return {};
-  std::set<std::string> result;
+  std::unordered_set<uint32_t> seen;
   size_t matched = 0;
   for (auto it = sorted_terms_.lower_bound(prefix); it != sorted_terms_.end(); ++it) {
     if (it->size() < prefix.size() || it->compare(0, prefix.size(), prefix) != 0) break;
     auto pit = postings_.find(*it);
     if (pit != postings_.end()) {
-      for (const auto& p : pit->second) result.insert(p.doc_id);
+      for (const auto& p : pit->second) seen.insert(p.doc_id);
     }
     if (++matched >= max_expansions) break;
   }
-  return {result.begin(), result.end()};
+  std::vector<std::string> result;
+  result.reserve(seen.size());
+  for (uint32_t did : seen) result.push_back(id_to_str_[did]);
+  std::sort(result.begin(), result.end());
+  return result;
 }
 
 std::vector<std::string> TextIndex::SuffixLookup(const std::string& suffix,
                                                   size_t max_expansions) const {
   if (suffix.size() < 2) return {};
   std::string rev_suf(suffix.rbegin(), suffix.rend());
-  std::set<std::string> result;
+  std::unordered_set<uint32_t> seen;
   size_t matched = 0;
   for (auto it = reversed_terms_.lower_bound(rev_suf); it != reversed_terms_.end(); ++it) {
     if (it->size() < rev_suf.size() || it->compare(0, rev_suf.size(), rev_suf) != 0) break;
     std::string orig(it->rbegin(), it->rend());
     auto pit = postings_.find(orig);
     if (pit != postings_.end()) {
-      for (const auto& p : pit->second) result.insert(p.doc_id);
+      for (const auto& p : pit->second) seen.insert(p.doc_id);
     }
     if (++matched >= max_expansions) break;
   }
-  return {result.begin(), result.end()};
+  std::vector<std::string> result;
+  result.reserve(seen.size());
+  for (uint32_t did : seen) result.push_back(id_to_str_[did]);
+  std::sort(result.begin(), result.end());
+  return result;
 }
 
 std::vector<std::string> TextIndex::InfixLookup(const std::string& infix,
                                                  size_t max_expansions) const {
   if (infix.size() < 2) return {};
-  std::set<std::string> result;
+  std::unordered_set<uint32_t> seen;
   size_t matched = 0;
   for (const auto& [term, posts] : postings_) {
     if (term.find(infix) != std::string::npos) {
-      for (const auto& p : posts) result.insert(p.doc_id);
+      for (const auto& p : posts) seen.insert(p.doc_id);
       if (++matched >= max_expansions) break;
     }
   }
-  return {result.begin(), result.end()};
+  std::vector<std::string> result;
+  result.reserve(seen.size());
+  for (uint32_t did : seen) result.push_back(id_to_str_[did]);
+  std::sort(result.begin(), result.end());
+  return result;
 }
 
 std::vector<std::string> TextIndex::FuzzyLookup(const std::string& term, int max_dist,
                                                  size_t max_expansions) const {
   if (max_dist < 1 || max_dist > 3) return {};
-  std::set<std::string> result;
+  std::unordered_set<uint32_t> seen;
   size_t matched = 0;
   for (auto& [posting_term, posts] : postings_) {
     if (LevenshteinDistance(term, posting_term) <= max_dist) {
-      for (auto& p : posts) result.insert(p.doc_id);
+      for (auto& p : posts) seen.insert(p.doc_id);
       if (++matched >= max_expansions) break;
     }
   }
-  return {result.begin(), result.end()};
+  std::vector<std::string> result;
+  result.reserve(seen.size());
+  for (uint32_t did : seen) result.push_back(id_to_str_[did]);
+  std::sort(result.begin(), result.end());
+  return result;
 }
 
 std::vector<TextSearchResult> TextIndex::PrefixSearch(const std::string& prefix,
                                                        size_t max_expansions) const {
-  if (prefix.size() < 2 || doc_lengths_.empty()) return {};
+  if (prefix.size() < 2 || live_docs_ == 0) return {};
   std::vector<std::string> matching_terms;
   for (auto it = sorted_terms_.lower_bound(prefix); it != sorted_terms_.end(); ++it) {
     if (it->size() < prefix.size() || it->compare(0, prefix.size(), prefix) != 0) break;
@@ -330,7 +389,7 @@ std::vector<TextSearchResult> TextIndex::PrefixSearch(const std::string& prefix,
 
 std::vector<TextSearchResult> TextIndex::SuffixSearch(const std::string& suffix,
                                                        size_t max_expansions) const {
-  if (suffix.size() < 2 || doc_lengths_.empty()) return {};
+  if (suffix.size() < 2 || live_docs_ == 0) return {};
   std::string rev_suf(suffix.rbegin(), suffix.rend());
   std::vector<std::string> matching_terms;
   for (auto it = reversed_terms_.lower_bound(rev_suf); it != reversed_terms_.end(); ++it) {
@@ -343,7 +402,7 @@ std::vector<TextSearchResult> TextIndex::SuffixSearch(const std::string& suffix,
 
 std::vector<TextSearchResult> TextIndex::InfixSearch(const std::string& infix,
                                                       size_t max_expansions) const {
-  if (infix.size() < 2 || doc_lengths_.empty()) return {};
+  if (infix.size() < 2 || live_docs_ == 0) return {};
   std::vector<std::string> matching_terms;
   for (const auto& [term, posts] : postings_) {
     if (term.find(infix) != std::string::npos) {
@@ -356,7 +415,7 @@ std::vector<TextSearchResult> TextIndex::InfixSearch(const std::string& infix,
 
 std::vector<TextSearchResult> TextIndex::FuzzySearch(const std::string& term, int max_dist,
                                                       size_t max_expansions) const {
-  if (max_dist < 1 || max_dist > 3 || doc_lengths_.empty()) return {};
+  if (max_dist < 1 || max_dist > 3 || live_docs_ == 0) return {};
   std::vector<std::string> matching_terms;
   for (auto& [posting_term, posts] : postings_) {
     if (LevenshteinDistance(term, posting_term) <= max_dist) {
@@ -409,40 +468,36 @@ std::vector<std::string> TextIndex::PhraseLookup(
   if (terms.empty()) return {};
   if (terms.size() == 1) return Lookup(terms[0]);
 
-  // Get posting lists for all terms
   std::vector<const std::vector<Posting>*> all_posts;
+  all_posts.reserve(terms.size());
   for (auto& term : terms) {
     auto it = postings_.find(term);
     if (it == postings_.end()) return {};
     all_posts.push_back(&it->second);
   }
 
-  // Build doc_id → position lists mapping for the first term
-  std::unordered_map<std::string, std::vector<int>> first_positions;
-  for (auto& p : *all_posts[0]) {
-    first_positions[p.doc_id] = p.positions;
-  }
-
-  // Intersect: find docs containing ALL terms, collect positions
+  // Intersect uint32_t-sorted posting lists via binary search
   std::vector<std::string> result;
-  for (auto& [doc_id, first_pos] : first_positions) {
+  for (const auto& first_p : *all_posts[0]) {
+    uint32_t did = first_p.doc_id;
     std::vector<std::vector<int>> pos_lists;
-    pos_lists.push_back(first_pos);
+    pos_lists.reserve(all_posts.size());
+    pos_lists.push_back(first_p.positions);
     bool has_all = true;
     for (size_t t = 1; t < all_posts.size(); t++) {
-      bool found = false;
-      for (auto& p : *all_posts[t]) {
-        if (p.doc_id == doc_id) {
-          pos_lists.push_back(p.positions);
-          found = true;
-          break;
-        }
+      const auto& vec = *all_posts[t];
+      auto pos = std::lower_bound(
+          vec.begin(), vec.end(), did,
+          [](const Posting& a, uint32_t id) { return a.doc_id < id; });
+      if (pos == vec.end() || pos->doc_id != did) {
+        has_all = false;
+        break;
       }
-      if (!found) { has_all = false; break; }
+      pos_lists.push_back(pos->positions);
     }
     if (!has_all) continue;
     if (CheckPhrasePositions(pos_lists, slop, inorder)) {
-      result.push_back(doc_id);
+      result.push_back(id_to_str_[did]);
     }
   }
   std::sort(result.begin(), result.end());
@@ -451,7 +506,7 @@ std::vector<std::string> TextIndex::PhraseLookup(
 
 std::vector<TextSearchResult> TextIndex::PhraseSearch(
     const std::vector<std::string>& terms, int slop, bool inorder) const {
-  if (terms.empty() || doc_lengths_.empty()) return {};
+  if (terms.empty() || live_docs_ == 0) return {};
   if (terms.size() == 1) return Search(terms);
 
   auto phrase_docs = PhraseLookup(terms, slop, inorder);
@@ -553,16 +608,23 @@ int TextIndex::LevenshteinDistance(const std::string& a, const std::string& b) {
 
 size_t TextIndex::NumTerms() const { return postings_.size(); }
 
-size_t TextIndex::NumDocs() const { return doc_lengths_.size(); }
+size_t TextIndex::NumDocs() const { return live_docs_; }
 
 void TextIndex::Clear() {
+  id_to_str_.clear();
+  doc_lengths_.clear();
+  alive_.clear();
+  doc_terms_.clear();
+  free_ids_.clear();
+  str_to_id_.clear();
+  live_docs_ = 0;
+  total_doc_len_ = 0;
+  avg_doc_len_ = 0.0;
   postings_.clear();
   sorted_terms_.clear();
   reversed_terms_.clear();
   stem_map_.clear();
   phonetic_map_.clear();
-  doc_lengths_.clear();
-  avg_doc_len_ = 0;
 }
 
 TextIndex& TextFieldIndices::GetOrCreate(const std::string& field_name) {

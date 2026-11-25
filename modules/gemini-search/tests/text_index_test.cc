@@ -231,3 +231,30 @@ TEST(CjkTokenizeTest, ChineseBm25AndPhraseSearch) {
   ASSERT_EQ(ph.size(), 1u);
   EXPECT_EQ(ph[0].doc_id, "d1");
 }
+
+TEST(TextIndexPhase47Test, SlotReuseAndFastRemoveChurn) {
+  TextIndex idx;
+  for (int i = 0; i < 500; i++) {
+    idx.Add("doc" + std::to_string(i),
+            "common term" + std::to_string(i) + " phrase target");
+  }
+  EXPECT_EQ(idx.NumDocs(), 500u);
+
+  // Remove even docs
+  for (int i = 0; i < 500; i += 2) {
+    idx.Remove("doc" + std::to_string(i));
+  }
+  EXPECT_EQ(idx.NumDocs(), 250u);
+  EXPECT_TRUE(idx.Lookup("term0").empty());
+  EXPECT_EQ(idx.Lookup("term1").size(), 1u);
+
+  // Re-insert with new IDs exercising free_ids_ slot reuse
+  for (int i = 0; i < 250; i++) {
+    idx.Add("new" + std::to_string(i), "reused phrase target");
+  }
+  EXPECT_EQ(idx.NumDocs(), 500u);
+  auto ph = idx.PhraseLookup({"phrase", "target"}, 0, true);
+  EXPECT_EQ(ph.size(), 500u);
+  auto sr = idx.Search({"reused"});
+  EXPECT_EQ(sr.size(), 250u);
+}
