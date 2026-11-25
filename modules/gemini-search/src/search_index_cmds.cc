@@ -1,4 +1,5 @@
 #include "search_internal.h"
+#include "expr_engine.h"
 #include "search_rdb.h"
 
 #include <algorithm>
@@ -66,6 +67,8 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   bool idx_nooffsets = false;
   bool idx_nohl = false;
   int idx_temporary = 0;
+  std::string idx_filter_expr;
+  bool idx_skip_initial_scan = false;
 
   while (i < argc && !MatchArg(ArgView(argv[i]), "SCHEMA")) {
     auto opt = ArgView(argv[i]);
@@ -104,6 +107,19 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       idx_temporary = static_cast<int>(std::strtol(std::string(ArgView(argv[i])).c_str(), &ep, 10));
       if (*ep != '\0' || idx_temporary < 0)
         return RedisModule_ReplyWithError(ctx, "ERR TEMPORARY must be non-negative");
+      i++;
+    } else if (MatchArg(opt, "SKIPINITIALSCAN")) {
+      idx_skip_initial_scan = true;
+      i++;
+    } else if (MatchArg(opt, "FILTER")) {
+      i++;
+      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR FILTER requires an expression");
+      idx_filter_expr = std::string(ArgView(argv[i]));
+      ExprNode test_expr;
+      std::string expr_err;
+      if (!ParseExpr(idx_filter_expr, test_expr, expr_err)) {
+        return RedisModule_ReplyWithError(ctx, expr_err.c_str());
+      }
       i++;
     } else if (MatchArg(opt, "MAXTEXTFIELDS")) {
       i++;
@@ -292,6 +308,16 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR PHONETIC requires a matcher");
         fspec.phonetic = std::string(ArgView(argv[i]));
         i++;
+      } else if (MatchArg(attr, "SEPARATOR") && fspec.type == FieldType::kTag) {
+        i++;
+        if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SEPARATOR requires a single character");
+        auto sep = ArgView(argv[i]);
+        if (sep.size() != 1) return RedisModule_ReplyWithError(ctx, "ERR SEPARATOR must be a single character");
+        fspec.tag_separator = sep[0];
+        i++;
+      } else if (MatchArg(attr, "CASESENSITIVE") && fspec.type == FieldType::kTag) {
+        fspec.case_sensitive = true;
+        i++;
       } else {
         break;
       }
@@ -319,7 +345,8 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   it->second.spec = IndexSpec{idx_str, std::move(fields), std::move(prefixes),
                               index_language, source_type,
                               std::move(custom_stopwords), has_custom_stopwords,
-                              idx_nofreqs, idx_nooffsets, idx_nohl, idx_temporary};
+                              idx_nofreqs, idx_nooffsets, idx_nohl, idx_temporary,
+                              std::move(idx_filter_expr), idx_skip_initial_scan};
   TouchIndex(it->second);
 
   if (SearchModuleType) {
@@ -329,23 +356,37 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                                    new std::string(idx_str));
   }
 
-  if (it->second.spec.HasPrefixes()) {
+  if (it->second.spec.HasPrefixes() && !it->second.spec.skip_initial_scan) {
     ScanExistingKeys(ctx, it->second);
   }
 
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
-// FT.DROPINDEX <index_name>
+// FT.DROPINDEX <index_name> [DD]
 int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                               int argc) {
-  if (argc != 2) return RedisModule_WrongArity(ctx);
+  if (argc != 2 && argc != 3) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
+  bool delete_docs = false;
+  if (argc == 3) {
+    if (!MatchArg(ArgView(argv[2]), "DD")) {
+      return RedisModule_ReplyWithError(ctx, "ERR unknown option, expected DD");
+    }
+    delete_docs = true;
+  }
+
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
-  if (GetIndices().erase(idx_str) == 0) {
+  auto it = GetIndices().find(idx_str);
+  if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
+  std::vector<std::string> doc_ids;
+  if (delete_docs) {
+    doc_ids = it->second.doc_store.AllIds();
+  }
+  GetIndices().erase(it);
   // Remove any aliases pointing to this index
   for (auto ait = GetAliases().begin(); ait != GetAliases().end(); ) {
     if (ait->second == idx_str) ait = GetAliases().erase(ait);
@@ -356,6 +397,13 @@ int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
         ctx, argv[1], REDISMODULE_WRITE));
     RedisModule_DeleteKey(key);
+  }
+
+  for (const auto& doc_id : doc_ids) {
+    RedisModuleString* dk = RedisModule_CreateString(ctx, doc_id.data(), doc_id.size());
+    auto* dkey = static_cast<RedisModuleKey*>(
+        RedisModule_OpenKey(ctx, dk, REDISMODULE_WRITE));
+    if (dkey) RedisModule_DeleteKey(dkey);
   }
 
   return RedisModule_ReplyWithSimpleString(ctx, "OK");

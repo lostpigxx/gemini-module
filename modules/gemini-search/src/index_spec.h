@@ -75,6 +75,8 @@ struct FieldSpec {
   bool noindex = false;
   double weight = 1.0;
   std::string phonetic;
+  char tag_separator = ',';
+  bool case_sensitive = false;
 };
 
 struct IndexSpec {
@@ -89,6 +91,8 @@ struct IndexSpec {
   bool nooffsets = false;
   bool nohl = false;
   int temporary_ttl = 0;
+  std::string filter_expr;
+  bool skip_initial_scan = false;
 
   bool HasPrefixes() const { return !prefixes.empty(); }
 

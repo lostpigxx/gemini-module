@@ -37,6 +37,8 @@ bool MatchArg(std::string_view arg, const char* target);
 void RemoveDocFromIndices(IndexEntry& entry, const std::string& doc_id);
 void AddDocToIndices(IndexEntry& entry, const std::string& doc_id,
                      const std::unordered_map<std::string, std::string>& fields);
+bool PassesIndexFilter(const IndexSpec& spec,
+                       const std::unordered_map<std::string, std::string>& fields);
 
 // Keyspace & server event helpers (defined in search_keyspace.cc)
 void ScanExistingKeys(RedisModuleCtx* ctx, IndexEntry& entry);

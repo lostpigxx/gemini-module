@@ -123,6 +123,9 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
     // encver >= 7: nostem, phonetic
     RedisModule_SaveUnsigned(rdb, f.nostem ? 1 : 0);
     RedisModule_SaveStringBuffer(rdb, f.phonetic.c_str(), f.phonetic.size());
+    // encver >= 9: tag_separator, case_sensitive
+    RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(static_cast<unsigned char>(f.tag_separator)));
+    RedisModule_SaveUnsigned(rdb, f.case_sensitive ? 1 : 0);
   }
 
   // Index-level options (encver >= 6)
@@ -140,6 +143,8 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
 
   // encver >= 7: language and per-index synonyms
   RedisModule_SaveStringBuffer(rdb, spec.language.c_str(), spec.language.size());
+  // encver >= 9: index-time filter_expr
+  RedisModule_SaveStringBuffer(rdb, spec.filter_expr.c_str(), spec.filter_expr.size());
   auto syn_groups = entry->synonyms.Dump();
   RedisModule_SaveUnsigned(rdb, syn_groups.size());
   for (const auto& [gid, terms] : syn_groups) {
@@ -250,6 +255,13 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
       f.nostem = raw_nostem != 0;
       if (!SafeLoadString(rdb, f.phonetic)) return nullptr;
     }
+    if (encver >= 9) {
+      uint64_t raw_sep = ',', raw_cs = 0;
+      if (!SafeLoadUnsigned(rdb, raw_sep) || !SafeLoadUnsigned(rdb, raw_cs)) return nullptr;
+      if (raw_sep > 255) return nullptr;
+      f.tag_separator = static_cast<char>(raw_sep);
+      f.case_sensitive = raw_cs != 0;
+    }
     fields.push_back(std::move(f));
   }
 
@@ -285,10 +297,14 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
   }
 
   std::string language = "english";
+  std::string filter_expr;
   std::vector<std::pair<std::string, std::vector<std::string>>> syn_groups;
   if (encver >= 7) {
     if (!SafeLoadString(rdb, language)) return nullptr;
     if (language.empty()) language = "english";
+    if (encver >= 9) {
+      if (!SafeLoadString(rdb, filter_expr)) return nullptr;
+    }
     uint64_t syn_count = 0;
     if (!SafeLoadUnsigned(rdb, syn_count) || syn_count > kMaxRdbSynonymGroups) return nullptr;
     syn_groups.reserve(static_cast<size_t>(syn_count));
@@ -333,7 +349,8 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
 
   IndexSpec spec{index_name, std::move(fields), std::move(prefixes),
                  std::move(language), source_type, std::move(custom_stopwords),
-                 has_custom_stopwords, nofreqs, nooffsets, nohl, temporary_ttl};
+                 has_custom_stopwords, nofreqs, nooffsets, nohl, temporary_ttl,
+                 std::move(filter_expr), false};
   CreateIndexFromRdb(index_name, std::move(spec), docs);
 
   if (auto* entry = GetIndexEntry(index_name)) {
@@ -376,6 +393,10 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value) {
     create_args.push_back("TEMPORARY");
     create_args.push_back(std::to_string(spec.temporary_ttl));
   }
+  if (!spec.filter_expr.empty()) {
+    create_args.push_back("FILTER");
+    create_args.push_back(spec.filter_expr);
+  }
 
   create_args.push_back("SCHEMA");
   for (const auto& f : spec.fields) {
@@ -406,6 +427,13 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value) {
     if (!f.phonetic.empty()) {
       create_args.push_back("PHONETIC");
       create_args.push_back(f.phonetic);
+    }
+    if (f.type == FieldType::kTag && f.tag_separator != ',') {
+      create_args.push_back("SEPARATOR");
+      create_args.emplace_back(1, f.tag_separator);
+    }
+    if (f.type == FieldType::kTag && f.case_sensitive) {
+      create_args.push_back("CASESENSITIVE");
     }
     if (f.sortable) create_args.push_back("SORTABLE");
     if (f.noindex) create_args.push_back("NOINDEX");

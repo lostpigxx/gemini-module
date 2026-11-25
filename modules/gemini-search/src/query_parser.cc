@@ -80,10 +80,7 @@ std::vector<std::string> EvaluateQuery(
       }
       const auto* idx = tag_indices.Get(node.field_name);
       if (!idx) return {};
-      if (node.tag_values.size() == 1) {
-        return idx->Lookup(node.tag_values[0]);
-      }
-      return idx->LookupOr(node.tag_values);
+      return idx->LookupOr(node.tag_values, fspec->case_sensitive);
     }
 
     case QueryNode::Type::kNumericRange: {

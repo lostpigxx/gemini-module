@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <limits>
 #include <set>
 #include <string>
 #include <string_view>
@@ -56,6 +57,14 @@ struct SearchOptions {
   std::string summarize_separator = "...";
   int dialect = 0;
   bool has_dialect = false;
+  struct NumericFilterOpt {
+    std::string field;
+    double min = 0;
+    double max = 0;
+    bool min_exclusive = false;
+    bool max_exclusive = false;
+  };
+  std::vector<NumericFilterOpt> numeric_filters;
 };
 
 static void CollectQueryTerms(const QueryNode& node,
@@ -519,6 +528,30 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
       opts.has_geofilter = true;
       arg_i++;
+    } else if (MatchArg(kw, "FILTER")) {
+      arg_i++;
+      if (arg_i + 2 >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR FILTER requires field min max");
+      }
+      SearchOptions::NumericFilterOpt nf;
+      nf.field = std::string(ArgView(argv[arg_i++]));
+      auto ParseBound = [](std::string_view sv, double& val, bool& excl) -> bool {
+        std::string s(sv);
+        if (!s.empty() && s[0] == '(') {
+          excl = true;
+          s = s.substr(1);
+        }
+        if (s == "-inf") { val = -std::numeric_limits<double>::infinity(); return true; }
+        if (s == "+inf" || s == "inf") { val = std::numeric_limits<double>::infinity(); return true; }
+        char* ep = nullptr;
+        val = std::strtod(s.c_str(), &ep);
+        return ep != s.c_str() && *ep == '\0' && !std::isnan(val);
+      };
+      if (!ParseBound(ArgView(argv[arg_i++]), nf.min, nf.min_exclusive) ||
+          !ParseBound(ArgView(argv[arg_i++]), nf.max, nf.max_exclusive)) {
+        return RedisModule_ReplyWithError(ctx, "ERR FILTER invalid numeric bounds");
+      }
+      opts.numeric_filters.push_back(std::move(nf));
     } else {
       return RedisModule_ReplyWithError(ctx,
                                         "ERR unknown search option");
@@ -713,6 +746,33 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                          [&](const std::string& id) {
                            return allowed.find(id) == allowed.end();
                          }),
+          result_ids.end());
+    }
+  }
+
+  // FILTER numeric options
+  for (const auto& nf : opts.numeric_filters) {
+    const auto* nf_spec = entry.spec.FindField(nf.field);
+    if (!nf_spec || nf_spec->type != FieldType::kNumeric) {
+      return RedisModule_ReplyWithError(ctx, "ERR FILTER field is not a NUMERIC field");
+    }
+    const auto* nidx = entry.numeric_indices.Get(nf.field);
+    if (!nidx) {
+      scored_results.clear();
+      result_ids.clear();
+      break;
+    }
+    auto hits = nidx->RangeQuery(nf.min, nf.min_exclusive, nf.max, nf.max_exclusive);
+    std::unordered_set<std::string> hit_set(hits.begin(), hits.end());
+    if (opts.withscores) {
+      scored_results.erase(
+          std::remove_if(scored_results.begin(), scored_results.end(),
+                         [&](const ScoredResult& r) { return hit_set.find(r.doc_id) == hit_set.end(); }),
+          scored_results.end());
+    } else {
+      result_ids.erase(
+          std::remove_if(result_ids.begin(), result_ids.end(),
+                         [&](const std::string& id) { return hit_set.find(id) == hit_set.end(); }),
           result_ids.end());
     }
   }

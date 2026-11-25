@@ -42,7 +42,7 @@ void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry,
   RedisModule_CloseKey(rkey);
   RedisModule_FreeString(ctx, rms_key);
 
-  if (doc_fields.empty()) {
+  if (doc_fields.empty() || !PassesIndexFilter(entry.spec, doc_fields)) {
     RemoveIndexedKey(entry, key_name);
     return;
   }
@@ -150,7 +150,7 @@ void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry,
     }
   }
 
-  if (doc_fields.empty()) {
+  if (doc_fields.empty() || !PassesIndexFilter(entry.spec, doc_fields)) {
     RemoveIndexedKey(entry, key_name);
     return;
   }

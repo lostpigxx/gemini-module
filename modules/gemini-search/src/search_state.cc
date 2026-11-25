@@ -1,4 +1,5 @@
 #include "search_internal.h"
+#include "expr_engine.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -149,7 +150,8 @@ void RemoveDocFromIndices(IndexEntry& entry,
     const auto* fspec = entry.spec.FindField(fname);
     if (!fspec || fspec->noindex) continue;
     if (fspec->type == FieldType::kTag) {
-      entry.tag_indices.GetOrCreate(fname).Remove(fval, doc_id);
+      entry.tag_indices.GetOrCreate(fname).RemoveMulti(
+          fval, doc_id, fspec->tag_separator, fspec->case_sensitive);
     } else if (fspec->type == FieldType::kNumeric) {
       double num;
       if (TryParseDouble(fval, num)) {
@@ -174,7 +176,8 @@ void AddDocToIndices(
     const auto* fspec = entry.spec.FindField(fname);
     if (!fspec || fspec->noindex) continue;
     if (fspec->type == FieldType::kTag) {
-      entry.tag_indices.GetOrCreate(fname).Add(fval, doc_id);
+      entry.tag_indices.GetOrCreate(fname).AddMulti(
+          fval, doc_id, fspec->tag_separator, fspec->case_sensitive);
     } else if (fspec->type == FieldType::kNumeric) {
       double num;
       if (TryParseDouble(fval, num)) {
@@ -201,5 +204,14 @@ void AddDocToIndices(
       }
     }
   }
+}
+
+bool PassesIndexFilter(const IndexSpec& spec,
+                       const std::unordered_map<std::string, std::string>& fields) {
+  if (spec.filter_expr.empty()) return true;
+  ExprNode expr;
+  std::string err;
+  if (!ParseExpr(spec.filter_expr, expr, err)) return false;
+  return EvalExpr(expr, fields).Truthy();
 }
 

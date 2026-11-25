@@ -3180,6 +3180,66 @@ test_assert "VECTOR FLOAT64 type supports KNN and survives BGSAVE + restart" {
 }
 
 # ============================================================
+# Phase 33: Advanced Schema & Indexing Options
+# ============================================================
+puts "\n=== Phase 33: Schema & Indexing Options ==="
+
+test_assert "TAG SEPARATOR and CASESENSITIVE work properly" {
+  r FT.CREATE p33tag SCHEMA tags TAG SEPARATOR ";" code TAG CASESENSITIVE
+  r FT.ADD p33tag d1 FIELDS tags "Red;Green;Blue" code "AbC"
+  r FT.ADD p33tag d2 FIELDS tags "Yellow" code "abc"
+
+  # Default TAG is case-insensitive and split by ';'
+  set r1 [r FT.SEARCH p33tag {@tags:{green}}]
+  if {[lindex $r1 0] != 1} { error "Expected 1 match for green, got $r1" }
+  # CASESENSITIVE distinguishes AbC vs abc
+  set r2 [r FT.SEARCH p33tag {@code:{AbC}} NOCONTENT]
+  if {[lindex $r2 0] != 1 || [lindex $r2 1] ne "d1"} { error "Expected only d1 for AbC, got $r2" }
+  r FT.DROPINDEX p33tag
+}
+
+test_assert "SKIPINITIALSCAN skips pre-existing keys and FILTER filters indexed docs" {
+  r HSET p33k:1 price 10
+  r HSET p33k:2 price 200
+  r FT.CREATE p33sk ON HASH PREFIX 1 p33k: SKIPINITIALSCAN FILTER "@price > 50" SCHEMA price NUMERIC
+  # Pre-existing keys skipped
+  if {[lindex [r FT.SEARCH p33sk "*"] 0] != 0} { error "Expected 0 docs with SKIPINITIALSCAN" }
+  # New key failing filter is not indexed
+  r HSET p33k:3 price 20
+  if {[lindex [r FT.SEARCH p33sk "*"] 0] != 0} { error "Expected 0 docs when FILTER fails" }
+  # New key passing filter is indexed
+  r HSET p33k:4 price 150
+  if {[lindex [r FT.SEARCH p33sk "*"] 0] != 1} { error "Expected 1 doc when FILTER passes" }
+  # Updating key to fail filter removes it from index
+  r HSET p33k:4 price 10
+  if {[lindex [r FT.SEARCH p33sk "*"] 0] != 0} { error "Expected 0 docs after update fails FILTER" }
+  r DEL p33k:1 p33k:2 p33k:3 p33k:4
+  r FT.DROPINDEX p33sk
+}
+
+test_assert "FT.DROPINDEX DD deletes underlying indexed keys" {
+  r FT.CREATE p33dd ON HASH PREFIX 1 p33d: SCHEMA name TAG
+  r HSET p33d:1 name one
+  r HSET p33d:2 name two
+  r FT.DROPINDEX p33dd DD
+  if {[r EXISTS p33d:1] != 0 || [r EXISTS p33d:2] != 0} {
+    error "Expected FT.DROPINDEX DD to delete underlying keys"
+  }
+}
+
+test_assert "FT.SEARCH FILTER numeric option filters with inclusive/exclusive bounds" {
+  r FT.CREATE p33flt SCHEMA cat TAG price NUMERIC
+  r FT.ADD p33flt d1 FIELDS cat a price 10
+  r FT.ADD p33flt d2 FIELDS cat a price 50
+  r FT.ADD p33flt d3 FIELDS cat a price 100
+  set r1 [r FT.SEARCH p33flt "*" FILTER price 10 100]
+  if {[lindex $r1 0] != 3} { error "Expected 3 for [10, 100], got $r1" }
+  set r2 [r FT.SEARCH p33flt "*" FILTER price "(10" "(100"]
+  if {[lindex $r2 0] != 1} { error "Expected 1 for (10, 100), got $r2" }
+  r FT.DROPINDEX p33flt
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 
