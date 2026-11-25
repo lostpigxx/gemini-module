@@ -19,6 +19,8 @@ class TextIndex {
   };
 
   std::unordered_map<std::string, std::vector<Posting>> postings_;
+  std::set<std::string> sorted_terms_;
+  std::set<std::string> reversed_terms_;
   std::unordered_map<std::string, std::set<std::string>> stem_map_;
   std::unordered_map<std::string, std::set<std::string>> phonetic_map_;
   std::unordered_map<std::string, int> doc_lengths_;

@@ -96,7 +96,12 @@ void TextIndex::Add(const std::string& doc_id, const std::string& text,
   }
 
   for (auto& [term, info] : tf_map) {
-    postings_[term].push_back({doc_id, info.tf, std::move(info.positions)});
+    auto& vec = postings_[term];
+    if (vec.empty()) {
+      sorted_terms_.insert(term);
+      reversed_terms_.emplace(term.rbegin(), term.rend());
+    }
+    vec.push_back({doc_id, info.tf, std::move(info.positions)});
     auto stemmed = StemWord(term, language);
     if (stemmed != term) {
       stem_map_[stemmed].insert(term);
@@ -120,7 +125,11 @@ void TextIndex::Remove(const std::string& doc_id) {
                 posts.end());
     if (posts.empty()) empty_terms.push_back(term);
   }
-  for (auto& t : empty_terms) postings_.erase(t);
+  for (auto& t : empty_terms) {
+    postings_.erase(t);
+    sorted_terms_.erase(t);
+    reversed_terms_.erase(std::string(t.rbegin(), t.rend()));
+  }
 }
 
 std::vector<TextSearchResult> TextIndex::Search(
@@ -176,12 +185,13 @@ std::vector<std::string> TextIndex::PrefixLookup(const std::string& prefix,
   if (prefix.size() < 2) return {};
   std::set<std::string> result;
   size_t matched = 0;
-  for (auto& [term, posts] : postings_) {
-    if (term.size() >= prefix.size() &&
-        term.compare(0, prefix.size(), prefix) == 0) {
-      for (auto& p : posts) result.insert(p.doc_id);
-      if (++matched >= max_expansions) break;
+  for (auto it = sorted_terms_.lower_bound(prefix); it != sorted_terms_.end(); ++it) {
+    if (it->size() < prefix.size() || it->compare(0, prefix.size(), prefix) != 0) break;
+    auto pit = postings_.find(*it);
+    if (pit != postings_.end()) {
+      for (const auto& p : pit->second) result.insert(p.doc_id);
     }
+    if (++matched >= max_expansions) break;
   }
   return {result.begin(), result.end()};
 }
@@ -189,14 +199,17 @@ std::vector<std::string> TextIndex::PrefixLookup(const std::string& prefix,
 std::vector<std::string> TextIndex::SuffixLookup(const std::string& suffix,
                                                   size_t max_expansions) const {
   if (suffix.size() < 2) return {};
+  std::string rev_suf(suffix.rbegin(), suffix.rend());
   std::set<std::string> result;
   size_t matched = 0;
-  for (const auto& [term, posts] : postings_) {
-    if (term.size() >= suffix.size() &&
-        term.compare(term.size() - suffix.size(), suffix.size(), suffix) == 0) {
-      for (const auto& p : posts) result.insert(p.doc_id);
-      if (++matched >= max_expansions) break;
+  for (auto it = reversed_terms_.lower_bound(rev_suf); it != reversed_terms_.end(); ++it) {
+    if (it->size() < rev_suf.size() || it->compare(0, rev_suf.size(), rev_suf) != 0) break;
+    std::string orig(it->rbegin(), it->rend());
+    auto pit = postings_.find(orig);
+    if (pit != postings_.end()) {
+      for (const auto& p : pit->second) result.insert(p.doc_id);
     }
+    if (++matched >= max_expansions) break;
   }
   return {result.begin(), result.end()};
 }
@@ -233,12 +246,10 @@ std::vector<TextSearchResult> TextIndex::PrefixSearch(const std::string& prefix,
                                                        size_t max_expansions) const {
   if (prefix.size() < 2 || doc_lengths_.empty()) return {};
   std::vector<std::string> matching_terms;
-  for (auto& [term, posts] : postings_) {
-    if (term.size() >= prefix.size() &&
-        term.compare(0, prefix.size(), prefix) == 0) {
-      matching_terms.push_back(term);
-      if (matching_terms.size() >= max_expansions) break;
-    }
+  for (auto it = sorted_terms_.lower_bound(prefix); it != sorted_terms_.end(); ++it) {
+    if (it->size() < prefix.size() || it->compare(0, prefix.size(), prefix) != 0) break;
+    matching_terms.push_back(*it);
+    if (matching_terms.size() >= max_expansions) break;
   }
   return Search(matching_terms);
 }
@@ -246,13 +257,12 @@ std::vector<TextSearchResult> TextIndex::PrefixSearch(const std::string& prefix,
 std::vector<TextSearchResult> TextIndex::SuffixSearch(const std::string& suffix,
                                                        size_t max_expansions) const {
   if (suffix.size() < 2 || doc_lengths_.empty()) return {};
+  std::string rev_suf(suffix.rbegin(), suffix.rend());
   std::vector<std::string> matching_terms;
-  for (const auto& [term, posts] : postings_) {
-    if (term.size() >= suffix.size() &&
-        term.compare(term.size() - suffix.size(), suffix.size(), suffix) == 0) {
-      matching_terms.push_back(term);
-      if (matching_terms.size() >= max_expansions) break;
-    }
+  for (auto it = reversed_terms_.lower_bound(rev_suf); it != reversed_terms_.end(); ++it) {
+    if (it->size() < rev_suf.size() || it->compare(0, rev_suf.size(), rev_suf) != 0) break;
+    matching_terms.emplace_back(it->rbegin(), it->rend());
+    if (matching_terms.size() >= max_expansions) break;
   }
   return Search(matching_terms);
 }
@@ -473,7 +483,10 @@ size_t TextIndex::NumDocs() const { return doc_lengths_.size(); }
 
 void TextIndex::Clear() {
   postings_.clear();
+  sorted_terms_.clear();
+  reversed_terms_.clear();
   stem_map_.clear();
+  phonetic_map_.clear();
   doc_lengths_.clear();
   avg_doc_len_ = 0;
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -35,6 +36,12 @@ struct GeoResult {
 
 class GeoIndex {
   std::unordered_map<std::string, GeoCoord> entries_;
+  std::unordered_map<uint64_t, std::vector<std::string>> grid_;
+
+  static uint64_t CellKey(int32_t cx, int32_t cy);
+  static int32_t LonToCell(double lon);
+  static int32_t LatToCell(double lat);
+  void GridRemove(const std::string& doc_id, double lon, double lat);
 
  public:
   void Add(const std::string& doc_id, double lon, double lat);
