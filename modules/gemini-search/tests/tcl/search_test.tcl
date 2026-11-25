@@ -3240,6 +3240,49 @@ test_assert "FT.SEARCH FILTER numeric option filters with inclusive/exclusive bo
 }
 
 # ============================================================
+# Phase 34: Scoring & Result Enhancements
+# ============================================================
+puts "\n=== Phase 34: Scoring & Result Enhancements ==="
+
+test_assert "RETURN AS renames projected fields" {
+  r FT.CREATE p34ret SCHEMA title TEXT price NUMERIC
+  r FT.ADD p34ret d1 FIELDS title "hello" price 42
+  set res [r FT.SEARCH p34ret "*" RETURN 3 title AS heading]
+  set flds [lindex $res 2]
+  if {[lindex $flds 0] ne "heading" || [lindex $flds 1] ne "hello"} {
+    error "Expected heading=hello, got $flds"
+  }
+  r FT.DROPINDEX p34ret
+}
+
+test_assert "SCORER, field WEIGHT, and EXPLAINSCORE work together" {
+  r FT.CREATE p34sc SCHEMA title TEXT WEIGHT 5.0 body TEXT WEIGHT 1.0
+  r FT.ADD p34sc d1 FIELDS title "redis" body "other"
+  r FT.ADD p34sc d2 FIELDS title "other" body "redis"
+  # Higher title WEIGHT ranks d1 before d2
+  set res [r FT.SEARCH p34sc "redis" WITHSCORES EXPLAINSCORE SCORER DISMAX]
+  if {[lindex $res 1] ne "d1"} { error "Expected weighted title match d1 first, got $res" }
+  set flds [lindex $res 2]
+  if {[lsearch $flds "__score_explanation"] < 0} {
+    error "Expected __score_explanation in fields, got $flds"
+  }
+  r FT.DROPINDEX p34sc
+}
+
+test_assert "WITHSORTKEYS returns sort key alongside each doc" {
+  r FT.CREATE p34sk SCHEMA price NUMERIC SORTABLE
+  r FT.ADD p34sk d1 FIELDS price 30
+  r FT.ADD p34sk d2 FIELDS price 10
+  set res [r FT.SEARCH p34sk "*" SORTBY price ASC WITHSORTKEYS NOCONTENT]
+  # [2, d2, "10", d1, "30"]
+  if {[lindex $res 1] ne "d2" || [lindex $res 2] ne "10" ||
+      [lindex $res 3] ne "d1" || [lindex $res 4] ne "30"} {
+    error "Unexpected WITHSORTKEYS output: $res"
+  }
+  r FT.DROPINDEX p34sk
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

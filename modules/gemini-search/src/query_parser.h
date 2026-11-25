@@ -72,6 +72,8 @@ struct ParsedQuery {
   std::string knn_score_alias;
 };
 
+enum class ScorerType { kBm25, kTfIdf, kTfIdfDocNorm, kDismax, kDocScore };
+
 struct QueryOptions {
   bool nostopwords = false;
   std::vector<std::string> infields;
@@ -81,6 +83,7 @@ struct QueryOptions {
   std::string language = "english";
   int dialect = 2;
   int64_t deadline_ms = 0;
+  ScorerType scorer = ScorerType::kBm25;
 };
 
 bool ParseQuery(const std::string& input, ParsedQuery& out,

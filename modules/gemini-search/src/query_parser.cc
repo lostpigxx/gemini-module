@@ -422,11 +422,19 @@ std::vector<ScoredResult> EvaluateQueryScored(
           return out;
         }
         std::unordered_map<std::string, double> score_map;
+        double field_w = fspec->weight;
         for (size_t i = 0; i < node.text_terms.size(); i++) {
           const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
           auto results = SearchWithMod(idx, node.text_terms[i], mod, fspec->nostem,
                                        !fspec->phonetic.empty());
-          for (auto& r : results) score_map[r.doc_id] += r.score;
+          for (auto& r : results) {
+            double contrib = (qopts.scorer == ScorerType::kDocScore) ? 1.0 : (r.score * field_w);
+            if (qopts.scorer == ScorerType::kDismax) {
+              score_map[r.doc_id] = std::max(score_map[r.doc_id], contrib);
+            } else {
+              score_map[r.doc_id] += contrib;
+            }
+          }
         }
         std::vector<ScoredResult> out;
         out.reserve(score_map.size());
@@ -446,13 +454,27 @@ std::vector<ScoredResult> EvaluateQueryScored(
         if (!idx) continue;
         if (node.is_phrase) {
           auto results = idx->PhraseSearch(node.text_terms, qopts.slop, qopts.inorder);
-          for (auto& r : results) merged[r.doc_id] += r.score;
+          for (auto& r : results) {
+            double contrib = (qopts.scorer == ScorerType::kDocScore) ? 1.0 : (r.score * f.weight);
+            if (qopts.scorer == ScorerType::kDismax) {
+              merged[r.doc_id] = std::max(merged[r.doc_id], contrib);
+            } else {
+              merged[r.doc_id] += contrib;
+            }
+          }
         } else {
           for (size_t i = 0; i < node.text_terms.size(); i++) {
             const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
             auto results = SearchWithMod(idx, node.text_terms[i], mod, f.nostem,
                                          !f.phonetic.empty());
-            for (auto& r : results) merged[r.doc_id] += r.score;
+            for (auto& r : results) {
+              double contrib = (qopts.scorer == ScorerType::kDocScore) ? 1.0 : (r.score * f.weight);
+              if (qopts.scorer == ScorerType::kDismax) {
+                merged[r.doc_id] = std::max(merged[r.doc_id], contrib);
+              } else {
+                merged[r.doc_id] += contrib;
+              }
+            }
           }
         }
       }
