@@ -5,20 +5,56 @@
 #include <cmath>
 #include <cstring>
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+#include <arm_neon.h>
+#define GEMINI_SIMD_NEON 1
+#elif defined(__AVX2__)
+#include <immintrin.h>
+#define GEMINI_SIMD_AVX2 1
+#endif
+
 float L2Distance(const float* a, const float* b, size_t dim) {
-  float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
   size_t i = 0;
+  float sum = 0.0f;
+#if defined(GEMINI_SIMD_NEON)
+  float32x4_t acc0 = vdupq_n_f32(0.0f);
+  float32x4_t acc1 = vdupq_n_f32(0.0f);
+  for (; i + 7 < dim; i += 8) {
+    float32x4_t d0 = vsubq_f32(vld1q_f32(a + i), vld1q_f32(b + i));
+    float32x4_t d1 = vsubq_f32(vld1q_f32(a + i + 4), vld1q_f32(b + i + 4));
+    acc0 = vfmaq_f32(acc0, d0, d0);
+    acc1 = vfmaq_f32(acc1, d1, d1);
+  }
+  acc0 = vaddq_f32(acc0, acc1);
+  for (; i + 3 < dim; i += 4) {
+    float32x4_t d0 = vsubq_f32(vld1q_f32(a + i), vld1q_f32(b + i));
+    acc0 = vfmaq_f32(acc0, d0, d0);
+  }
+  sum = vaddvq_f32(acc0);
+#elif defined(GEMINI_SIMD_AVX2)
+  __m256 acc = _mm256_setzero_ps();
+  for (; i + 7 < dim; i += 8) {
+    __m256 d = _mm256_sub_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i));
+    acc = _mm256_fmadd_ps(d, d, acc);
+  }
+  __m128 lo = _mm256_castps256_ps128(acc);
+  __m128 hi = _mm256_extractf128_ps(acc, 1);
+  __m128 s4 = _mm_add_ps(lo, hi);
+  __m128 shuf = _mm_movehdup_ps(s4);
+  __m128 s2 = _mm_add_ps(s4, shuf);
+  shuf = _mm_movehl_ps(shuf, s2);
+  sum = _mm_cvtss_f32(_mm_add_ss(s2, shuf));
+#else
+  float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
   for (; i + 3 < dim; i += 4) {
     float d0 = a[i] - b[i];
     float d1 = a[i + 1] - b[i + 1];
     float d2 = a[i + 2] - b[i + 2];
     float d3 = a[i + 3] - b[i + 3];
-    s0 += d0 * d0;
-    s1 += d1 * d1;
-    s2 += d2 * d2;
-    s3 += d3 * d3;
+    s0 += d0 * d0; s1 += d1 * d1; s2 += d2 * d2; s3 += d3 * d3;
   }
-  float sum = (s0 + s1) + (s2 + s3);
+  sum = (s0 + s1) + (s2 + s3);
+#endif
   for (; i < dim; i++) {
     float d = a[i] - b[i];
     sum += d * d;
@@ -27,10 +63,49 @@ float L2Distance(const float* a, const float* b, size_t dim) {
 }
 
 float CosineDistance(const float* a, const float* b, size_t dim) {
+  size_t i = 0;
+  float dot = 0.0f, norm_a = 0.0f, norm_b = 0.0f;
+#if defined(GEMINI_SIMD_NEON)
+  float32x4_t vdot = vdupq_n_f32(0.0f);
+  float32x4_t vna = vdupq_n_f32(0.0f);
+  float32x4_t vnb = vdupq_n_f32(0.0f);
+  for (; i + 3 < dim; i += 4) {
+    float32x4_t va = vld1q_f32(a + i);
+    float32x4_t vb = vld1q_f32(b + i);
+    vdot = vfmaq_f32(vdot, va, vb);
+    vna = vfmaq_f32(vna, va, va);
+    vnb = vfmaq_f32(vnb, vb, vb);
+  }
+  dot = vaddvq_f32(vdot);
+  norm_a = vaddvq_f32(vna);
+  norm_b = vaddvq_f32(vnb);
+#elif defined(GEMINI_SIMD_AVX2)
+  auto HSum256 = [](__m256 v) -> float {
+    __m128 lo = _mm256_castps256_ps128(v);
+    __m128 hi = _mm256_extractf128_ps(v, 1);
+    __m128 s4 = _mm_add_ps(lo, hi);
+    __m128 shuf = _mm_movehdup_ps(s4);
+    __m128 s2 = _mm_add_ps(s4, shuf);
+    shuf = _mm_movehl_ps(shuf, s2);
+    return _mm_cvtss_f32(_mm_add_ss(s2, shuf));
+  };
+  __m256 vdot = _mm256_setzero_ps();
+  __m256 vna = _mm256_setzero_ps();
+  __m256 vnb = _mm256_setzero_ps();
+  for (; i + 7 < dim; i += 8) {
+    __m256 va = _mm256_loadu_ps(a + i);
+    __m256 vb = _mm256_loadu_ps(b + i);
+    vdot = _mm256_fmadd_ps(va, vb, vdot);
+    vna = _mm256_fmadd_ps(va, va, vna);
+    vnb = _mm256_fmadd_ps(vb, vb, vnb);
+  }
+  dot = HSum256(vdot);
+  norm_a = HSum256(vna);
+  norm_b = HSum256(vnb);
+#else
   float dot0 = 0, dot1 = 0, dot2 = 0, dot3 = 0;
   float na0 = 0, na1 = 0, na2 = 0, na3 = 0;
   float nb0 = 0, nb1 = 0, nb2 = 0, nb3 = 0;
-  size_t i = 0;
   for (; i + 3 < dim; i += 4) {
     float a0 = a[i], a1 = a[i + 1], a2 = a[i + 2], a3 = a[i + 3];
     float b0 = b[i], b1 = b[i + 1], b2 = b[i + 2], b3 = b[i + 3];
@@ -38,9 +113,10 @@ float CosineDistance(const float* a, const float* b, size_t dim) {
     na0 += a0 * a0;  na1 += a1 * a1;  na2 += a2 * a2;  na3 += a3 * a3;
     nb0 += b0 * b0;  nb1 += b1 * b1;  nb2 += b2 * b2;  nb3 += b3 * b3;
   }
-  float dot = (dot0 + dot1) + (dot2 + dot3);
-  float norm_a = (na0 + na1) + (na2 + na3);
-  float norm_b = (nb0 + nb1) + (nb2 + nb3);
+  dot = (dot0 + dot1) + (dot2 + dot3);
+  norm_a = (na0 + na1) + (na2 + na3);
+  norm_b = (nb0 + nb1) + (nb2 + nb3);
+#endif
   for (; i < dim; i++) {
     dot += a[i] * b[i];
     norm_a += a[i] * a[i];
@@ -52,15 +128,42 @@ float CosineDistance(const float* a, const float* b, size_t dim) {
 }
 
 float InnerProductDistance(const float* a, const float* b, size_t dim) {
-  float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
   size_t i = 0;
+  float dot = 0.0f;
+#if defined(GEMINI_SIMD_NEON)
+  float32x4_t acc0 = vdupq_n_f32(0.0f);
+  float32x4_t acc1 = vdupq_n_f32(0.0f);
+  for (; i + 7 < dim; i += 8) {
+    acc0 = vfmaq_f32(acc0, vld1q_f32(a + i), vld1q_f32(b + i));
+    acc1 = vfmaq_f32(acc1, vld1q_f32(a + i + 4), vld1q_f32(b + i + 4));
+  }
+  acc0 = vaddq_f32(acc0, acc1);
+  for (; i + 3 < dim; i += 4) {
+    acc0 = vfmaq_f32(acc0, vld1q_f32(a + i), vld1q_f32(b + i));
+  }
+  dot = vaddvq_f32(acc0);
+#elif defined(GEMINI_SIMD_AVX2)
+  __m256 acc = _mm256_setzero_ps();
+  for (; i + 7 < dim; i += 8) {
+    acc = _mm256_fmadd_ps(_mm256_loadu_ps(a + i), _mm256_loadu_ps(b + i), acc);
+  }
+  __m128 lo = _mm256_castps256_ps128(acc);
+  __m128 hi = _mm256_extractf128_ps(acc, 1);
+  __m128 s4 = _mm_add_ps(lo, hi);
+  __m128 shuf = _mm_movehdup_ps(s4);
+  __m128 s2 = _mm_add_ps(s4, shuf);
+  shuf = _mm_movehl_ps(shuf, s2);
+  dot = _mm_cvtss_f32(_mm_add_ss(s2, shuf));
+#else
+  float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
   for (; i + 3 < dim; i += 4) {
     s0 += a[i] * b[i];
     s1 += a[i + 1] * b[i + 1];
     s2 += a[i + 2] * b[i + 2];
     s3 += a[i + 3] * b[i + 3];
   }
-  float dot = (s0 + s1) + (s2 + s3);
+  dot = (s0 + s1) + (s2 + s3);
+#endif
   for (; i < dim; i++) {
     dot += a[i] * b[i];
   }

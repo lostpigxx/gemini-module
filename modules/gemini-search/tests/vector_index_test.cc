@@ -306,3 +306,29 @@ TEST(VectorSq8Test, FlatSq8L2CosineIpAccuracyAndRemove) {
   }
 }
 
+
+TEST(VectorSimdParityTest, AllMetricsAcrossArbitraryDimensions) {
+  const size_t dims[] = {1, 2, 3, 4, 7, 8, 15, 16, 31, 64, 128, 384, 768};
+  for (size_t dim : dims) {
+    std::vector<float> a(dim), b(dim);
+    for (size_t i = 0; i < dim; i++) {
+      a[i] = std::sin(static_cast<float>(i) * 0.37f + 0.1f);
+      b[i] = std::cos(static_cast<float>(i) * 0.53f - 0.2f);
+    }
+    // Scalar reference
+    double ref_l2 = 0.0, ref_dot = 0.0, ref_na = 0.0, ref_nb = 0.0;
+    for (size_t i = 0; i < dim; i++) {
+      double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
+      ref_l2 += d * d;
+      ref_dot += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+      ref_na += static_cast<double>(a[i]) * static_cast<double>(a[i]);
+      ref_nb += static_cast<double>(b[i]) * static_cast<double>(b[i]);
+    }
+    double ref_cos = 1.0 - ref_dot / std::sqrt(ref_na * ref_nb);
+    double ref_ip = -ref_dot;
+
+    EXPECT_NEAR(L2Distance(a.data(), b.data(), dim), ref_l2, 1e-3) << "dim=" << dim;
+    EXPECT_NEAR(CosineDistance(a.data(), b.data(), dim), ref_cos, 1e-5) << "dim=" << dim;
+    EXPECT_NEAR(InnerProductDistance(a.data(), b.data(), dim), ref_ip, 1e-3) << "dim=" << dim;
+  }
+}
