@@ -694,7 +694,8 @@ int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::string doc_id_str(doc_id);
 
   {
-    std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
+    std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
+    std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
     RemoveDocFromIndices(entry, doc_id_str);
     entry.doc_store.Add(doc_id_str, doc_fields, std::move(payload), has_payload);
     AddDocToIndices(entry, doc_id_str, doc_fields);
@@ -711,12 +712,13 @@ int FtDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
-  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
+  std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
   auto it = GetIndices().find(idx_str);
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
   auto& entry = it->second;
+  std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
 
   std::string doc_id_str(ArgView(argv[2]));
   if (!entry.doc_store.Contains(doc_id_str)) {
@@ -738,12 +740,13 @@ int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
-  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
+  std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
   auto it = GetIndices().find(idx_str);
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
   auto& entry = it->second;
+  std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
 
   if (!MatchArg(ArgView(argv[2]), "SCHEMA") || !MatchArg(ArgView(argv[3]), "ADD")) {
     return RedisModule_ReplyWithError(ctx, "ERR syntax error, expected SCHEMA ADD");

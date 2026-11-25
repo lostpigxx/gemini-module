@@ -794,6 +794,7 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                 rep->error = "ERR index not found";
               } else {
                 const auto& e = iit->second;
+                std::shared_lock<std::shared_mutex> idx_lk(e.Mutex());
                 const auto* vi = e.vector_indices.Get(parsed.knn_field);
                 std::vector<KnnResult> knn_res;
                 if (vi) {
@@ -969,6 +970,395 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
 
     return REDISMODULE_OK;
+  }
+
+  // Phase 57: Non-blocking async offload for non-KNN FT.SEARCH
+  {
+    size_t async_min = GetAsyncMinDocs();
+    if (RedisModule_BlockClient && RedisModule_UnblockClient &&
+        async_min > 0 && entry.doc_store.Size() >= async_min) {
+      struct AsyncSearchRow {
+        std::string doc_id;
+        std::string score_str;
+        std::string sort_key;
+        bool has_sort_key = false;
+        bool has_payload = false;
+        std::string payload;
+        std::vector<std::pair<std::string, std::string>> fields;
+      };
+      struct AsyncSearchReply {
+        std::string error;
+        bool count_only = false;
+        long long total_count = 0;
+        SearchOptions opts;
+        std::vector<AsyncSearchRow> rows;
+      };
+
+      auto ReplyCb = [](RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) -> int {
+        auto* r = static_cast<AsyncSearchReply*>(RedisModule_GetBlockedClientPrivateData(c));
+        if (!r) return RedisModule_ReplyWithError(c, "ERR async search internal error");
+        if (!r->error.empty()) {
+          if (IsOnTimeoutReturn() && r->error.find("timeout") != std::string::npos) {
+            RedisModule_ReplyWithArray(c, 1);
+            RedisModule_ReplyWithLongLong(c, 0);
+            return REDISMODULE_OK;
+          }
+          return RedisModule_ReplyWithError(c, r->error.c_str());
+        }
+        if (r->count_only) {
+          RedisModule_ReplyWithArray(c, 1);
+          RedisModule_ReplyWithLongLong(c, r->total_count);
+          return REDISMODULE_OK;
+        }
+        long total = static_cast<long>(r->rows.size());
+        long mult = 1 + (r->opts.withpayloads ? 1 : 0) +
+                    ((!r->opts.withscores && r->opts.withsortkeys && r->opts.has_sortby) ? 1 : 0) +
+                    (r->opts.nocontent ? 0 : 1);
+        RedisModule_ReplyWithArray(c, 1 + total * mult);
+        RedisModule_ReplyWithLongLong(c, total);
+        for (const auto& row : r->rows) {
+          RedisModule_ReplyWithCString(c, row.doc_id.c_str());
+          if (!r->opts.withscores && r->opts.withsortkeys && r->opts.has_sortby) {
+            RedisModule_ReplyWithCString(c, row.sort_key.c_str());
+          }
+          if (r->opts.withpayloads) {
+            if (row.has_payload) {
+              RedisModule_ReplyWithStringBuffer(c, row.payload.data(), row.payload.size());
+            } else {
+              RedisModule_ReplyWithNull(c);
+            }
+          }
+          if (!r->opts.nocontent) {
+            long extra = r->opts.withscores ? (r->opts.explainscore ? 4 : 2) : 0;
+            RedisModule_ReplyWithArray(c, static_cast<long>(row.fields.size()) * 2 + extra);
+            if (r->opts.withscores) {
+              RedisModule_ReplyWithCString(c, "__search_score");
+              RedisModule_ReplyWithCString(c, row.score_str.c_str());
+              if (r->opts.explainscore) {
+                RedisModule_ReplyWithCString(c, "__score_explanation");
+                std::string expl = r->opts.scorer_name + "(score=" + row.score_str + ")";
+                RedisModule_ReplyWithCString(c, expl.c_str());
+              }
+            }
+            for (const auto& [k, v] : row.fields) {
+              RedisModule_ReplyWithCString(c, k.c_str());
+              RedisModule_ReplyWithCString(c, v.c_str());
+            }
+          }
+        }
+        return REDISMODULE_OK;
+      };
+      auto TimeoutCb = [](RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) -> int {
+        if (IsOnTimeoutReturn()) {
+          RedisModule_ReplyWithArray(c, 1);
+          RedisModule_ReplyWithLongLong(c, 0);
+          return REDISMODULE_OK;
+        }
+        return RedisModule_ReplyWithError(c, "ERR query timed out");
+      };
+      auto FreeCb = [](RedisModuleCtx* /*c*/, void* priv) {
+        delete static_cast<AsyncSearchReply*>(priv);
+      };
+
+      long long block_ms = opts.has_timeout ? opts.timeout_ms : 0;
+      RedisModuleBlockedClient* bc =
+          RedisModule_BlockClient(ctx, ReplyCb, TimeoutCb, FreeCb, block_ms);
+
+      GetSearchExecutor().Submit(
+          [bc, idx_str, parsed = std::move(parsed), opts = std::move(opts),
+           params = std::move(params), qopts = std::move(qopts),
+           query_terms = std::move(query_terms)]() {
+            auto* rep = new AsyncSearchReply();
+            rep->opts = opts;
+            {
+              std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
+              auto iit = GetIndices().find(idx_str);
+              if (iit == GetIndices().end()) {
+                rep->error = "ERR index not found";
+              } else {
+                const auto& e = iit->second;
+                std::shared_lock<std::shared_mutex> idx_lk(e.Mutex());
+                std::vector<ScoredResult> scored_results;
+                std::vector<std::string> result_ids;
+                if (opts.withscores) {
+                  scored_results = EvaluateQueryScored(
+                      parsed.root, e.spec, e.doc_store, e.tag_indices,
+                      e.numeric_indices, e.text_indices, e.geo_indices,
+                      rep->error, qopts, &e.geoshape_indices, &params,
+                      &e.vector_indices, &e.synonyms);
+                } else {
+                  result_ids = EvaluateQuery(
+                      parsed.root, e.spec, e.doc_store, e.tag_indices,
+                      e.numeric_indices, e.text_indices, e.geo_indices,
+                      rep->error, qopts, &e.geoshape_indices, &params,
+                      &e.vector_indices, &e.synonyms);
+                }
+                if (rep->error.empty() && opts.has_inkeys) {
+                  std::unordered_set<std::string> allowed(opts.inkeys.begin(),
+                                                          opts.inkeys.end());
+                  if (opts.withscores) {
+                    scored_results.erase(
+                        std::remove_if(scored_results.begin(), scored_results.end(),
+                                       [&](const ScoredResult& r) {
+                                         return allowed.find(r.doc_id) == allowed.end();
+                                       }),
+                        scored_results.end());
+                  } else {
+                    result_ids.erase(
+                        std::remove_if(result_ids.begin(), result_ids.end(),
+                                       [&](const std::string& id) {
+                                         return allowed.find(id) == allowed.end();
+                                       }),
+                        result_ids.end());
+                  }
+                }
+                if (rep->error.empty()) {
+                  for (const auto& nf : opts.numeric_filters) {
+                    const auto* nf_spec = e.spec.FindField(nf.field);
+                    if (!nf_spec || nf_spec->type != FieldType::kNumeric) {
+                      rep->error = "ERR FILTER field is not a NUMERIC field";
+                      break;
+                    }
+                    const auto* nidx = e.numeric_indices.Get(nf.field);
+                    if (!nidx) {
+                      scored_results.clear();
+                      result_ids.clear();
+                      break;
+                    }
+                    auto hits = nidx->RangeQuery(nf.min, nf.min_exclusive, nf.max,
+                                                 nf.max_exclusive);
+                    std::unordered_set<std::string> hit_set(hits.begin(), hits.end());
+                    if (opts.withscores) {
+                      scored_results.erase(
+                          std::remove_if(scored_results.begin(), scored_results.end(),
+                                         [&](const ScoredResult& r) {
+                                           return hit_set.find(r.doc_id) == hit_set.end();
+                                         }),
+                          scored_results.end());
+                    } else {
+                      result_ids.erase(
+                          std::remove_if(result_ids.begin(), result_ids.end(),
+                                         [&](const std::string& id) {
+                                           return hit_set.find(id) == hit_set.end();
+                                         }),
+                          result_ids.end());
+                    }
+                  }
+                }
+                if (rep->error.empty() && opts.has_geofilter) {
+                  const auto* gf_fspec = e.spec.FindField(opts.geofilter_field);
+                  if (!gf_fspec || gf_fspec->type != FieldType::kGeo) {
+                    rep->error = "ERR GEOFILTER field is not a GEO field";
+                  } else if (const auto* gidx = e.geo_indices.Get(opts.geofilter_field)) {
+                    double radius_m =
+                        opts.geofilter_radius * GeoUnitToMeters(opts.geofilter_unit);
+                    auto geo_hits = gidx->RadiusQuery(opts.geofilter_lon,
+                                                      opts.geofilter_lat, radius_m);
+                    std::unordered_set<std::string> geo_set;
+                    for (const auto& gr : geo_hits) geo_set.insert(gr.doc_id);
+                    if (opts.withscores) {
+                      scored_results.erase(
+                          std::remove_if(scored_results.begin(), scored_results.end(),
+                                         [&](const ScoredResult& r) {
+                                           return geo_set.find(r.doc_id) == geo_set.end();
+                                         }),
+                          scored_results.end());
+                    } else {
+                      result_ids.erase(
+                          std::remove_if(result_ids.begin(), result_ids.end(),
+                                         [&](const std::string& id) {
+                                           return geo_set.find(id) == geo_set.end();
+                                         }),
+                          result_ids.end());
+                    }
+                  } else {
+                    scored_results.clear();
+                    result_ids.clear();
+                  }
+                }
+
+                auto FillRowFields = [&](const Document* doc, AsyncSearchRow& row) {
+                  if (!doc) return;
+                  row.has_payload = doc->has_payload;
+                  if (opts.withpayloads && doc->has_payload) row.payload = doc->payload;
+                  if (opts.nocontent) return;
+                  std::vector<std::string> keys;
+                  if (opts.has_return) {
+                    keys = opts.return_fields;
+                  } else {
+                    keys.reserve(doc->fields.size());
+                    for (const auto& [k, v] : doc->fields) keys.push_back(k);
+                    std::sort(keys.begin(), keys.end());
+                  }
+                  for (const auto& k : keys) {
+                    auto ait = opts.return_aliases.find(k);
+                    const std::string& out_k =
+                        (ait != opts.return_aliases.end()) ? ait->second : k;
+                    auto fit = doc->fields.find(k);
+                    std::string val = (fit != doc->fields.end()) ? fit->second : "";
+                    if (opts.has_summarize && !query_terms.empty()) {
+                      bool do_sum = opts.summarize_fields.empty() ||
+                                    std::find(opts.summarize_fields.begin(),
+                                              opts.summarize_fields.end(),
+                                              k) != opts.summarize_fields.end();
+                      if (do_sum) {
+                        val = ApplySummarize(val, query_terms, opts.summarize_frags,
+                                             opts.summarize_len, opts.summarize_separator);
+                      }
+                    }
+                    if (opts.has_highlight && !query_terms.empty()) {
+                      bool do_hl = opts.highlight_fields.empty() ||
+                                   std::find(opts.highlight_fields.begin(),
+                                             opts.highlight_fields.end(),
+                                             k) != opts.highlight_fields.end();
+                      if (do_hl) {
+                        val = ApplyHighlight(val, query_terms, opts.highlight_open,
+                                             opts.highlight_close);
+                      }
+                    }
+                    row.fields.emplace_back(out_k, std::move(val));
+                  }
+                };
+
+                if (rep->error.empty() && opts.withscores) {
+                  if (opts.has_limit && opts.limit_offset == 0 && opts.limit_count == 0) {
+                    rep->count_only = true;
+                    rep->total_count = static_cast<long long>(scored_results.size());
+                  } else {
+                    if (opts.has_sortby) {
+                      const auto* sort_fspec = e.spec.FindField(opts.sortby_field);
+                      if (!sort_fspec) {
+                        rep->error = "ERR SORTBY field not in schema";
+                      } else {
+                        bool numeric_sort = (sort_fspec->type == FieldType::kNumeric);
+                        bool desc = opts.sortby_desc;
+                        std::sort(scored_results.begin(), scored_results.end(),
+                                  [&](const ScoredResult& a, const ScoredResult& b) {
+                                    const auto* da = e.doc_store.Get(a.doc_id);
+                                    const auto* db = e.doc_store.Get(b.doc_id);
+                                    std::string va, vb;
+                                    if (da) {
+                                      auto fa = da->fields.find(opts.sortby_field);
+                                      if (fa != da->fields.end()) va = fa->second;
+                                    }
+                                    if (db) {
+                                      auto fb = db->fields.find(opts.sortby_field);
+                                      if (fb != db->fields.end()) vb = fb->second;
+                                    }
+                                    if (numeric_sort) {
+                                      double na = 0, nb = 0;
+                                      TryParseDouble(va, na);
+                                      TryParseDouble(vb, nb);
+                                      return desc ? na > nb : na < nb;
+                                    }
+                                    return desc ? va > vb : va < vb;
+                                  });
+                      }
+                    } else {
+                      std::sort(scored_results.begin(), scored_results.end(),
+                                [](const ScoredResult& a, const ScoredResult& b) {
+                                  if (a.score != b.score) return a.score > b.score;
+                                  return a.doc_id < b.doc_id;
+                                });
+                    }
+                    if (rep->error.empty()) {
+                      if (opts.has_limit) {
+                        long long tb = static_cast<long long>(scored_results.size());
+                        if (opts.limit_offset >= tb) {
+                          scored_results.clear();
+                        } else {
+                          auto beg = scored_results.begin() + opts.limit_offset;
+                          auto end = (opts.limit_count >= 0 &&
+                                      opts.limit_offset + opts.limit_count < tb)
+                                         ? scored_results.begin() + opts.limit_offset + opts.limit_count
+                                         : scored_results.end();
+                          scored_results = std::vector<ScoredResult>(beg, end);
+                        }
+                      }
+                      size_t max_sr = GetMaxSearchResults();
+                      if (scored_results.size() > max_sr) scored_results.resize(max_sr);
+                      rep->rows.reserve(scored_results.size());
+                      for (const auto& sr : scored_results) {
+                        AsyncSearchRow row;
+                        row.doc_id = sr.doc_id;
+                        row.score_str = std::to_string(sr.score);
+                        FillRowFields(e.doc_store.Get(sr.doc_id), row);
+                        rep->rows.push_back(std::move(row));
+                      }
+                    }
+                  }
+                } else if (rep->error.empty()) {
+                  if (opts.has_limit && opts.limit_offset == 0 && opts.limit_count == 0) {
+                    rep->count_only = true;
+                    rep->total_count = static_cast<long long>(result_ids.size());
+                  } else {
+                    if (opts.has_sortby) {
+                      const auto* sort_fspec = e.spec.FindField(opts.sortby_field);
+                      if (!sort_fspec) {
+                        rep->error = "ERR SORTBY field not in schema";
+                      } else {
+                        bool numeric_sort = (sort_fspec->type == FieldType::kNumeric);
+                        bool desc = opts.sortby_desc;
+                        std::sort(result_ids.begin(), result_ids.end(),
+                                  [&](const std::string& a, const std::string& b) {
+                                    const auto* da = e.doc_store.Get(a);
+                                    const auto* db = e.doc_store.Get(b);
+                                    std::string va, vb;
+                                    if (da) {
+                                      auto fa = da->fields.find(opts.sortby_field);
+                                      if (fa != da->fields.end()) va = fa->second;
+                                    }
+                                    if (db) {
+                                      auto fb = db->fields.find(opts.sortby_field);
+                                      if (fb != db->fields.end()) vb = fb->second;
+                                    }
+                                    if (numeric_sort) {
+                                      double na = 0, nb = 0;
+                                      TryParseDouble(va, na);
+                                      TryParseDouble(vb, nb);
+                                      return desc ? na > nb : na < nb;
+                                    }
+                                    return desc ? va > vb : va < vb;
+                                  });
+                      }
+                    }
+                    if (rep->error.empty()) {
+                      if (opts.has_limit) {
+                        long long tb = static_cast<long long>(result_ids.size());
+                        if (opts.limit_offset >= tb) {
+                          result_ids.clear();
+                        } else {
+                          auto beg = result_ids.begin() + opts.limit_offset;
+                          auto end = (opts.limit_count >= 0 &&
+                                      opts.limit_offset + opts.limit_count < tb)
+                                         ? result_ids.begin() + opts.limit_offset + opts.limit_count
+                                         : result_ids.end();
+                          result_ids = std::vector<std::string>(beg, end);
+                        }
+                      }
+                      size_t max_sr = GetMaxSearchResults();
+                      if (result_ids.size() > max_sr) result_ids.resize(max_sr);
+                      rep->rows.reserve(result_ids.size());
+                      for (const auto& doc_id : result_ids) {
+                        AsyncSearchRow row;
+                        row.doc_id = doc_id;
+                        const auto* doc = e.doc_store.Get(doc_id);
+                        if (opts.withsortkeys && opts.has_sortby && doc) {
+                          auto sfit = doc->fields.find(opts.sortby_field);
+                          if (sfit != doc->fields.end()) row.sort_key = sfit->second;
+                        }
+                        FillRowFields(doc, row);
+                        rep->rows.push_back(std::move(row));
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            RedisModule_UnblockClient(bc, rep);
+          });
+      return REDISMODULE_OK;
+    }
   }
 
   // Non-KNN: evaluate query tree
@@ -2109,6 +2499,7 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
               rep->error = "ERR index not found";
             } else {
               const auto& e = iit->second;
+              std::shared_lock<std::shared_mutex> idx_lk(e.Mutex());
               std::vector<KnnResult> vec_hits;
               if (const auto* vi = e.vector_indices.Get(vec_field)) {
                 if (has_vec_filter) {

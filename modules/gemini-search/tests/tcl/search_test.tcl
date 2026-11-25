@@ -4136,6 +4136,52 @@ test_assert "VECTOR QUANTIZATION BQ works on FLAT and HNSW" {
 }
 
 # ============================================================
+# Phase 57: Full-Path Async Non-KNN FT.SEARCH & Per-Index Lock
+# ============================================================
+puts "\n=== Phase 57: Async Non-KNN FT.SEARCH ==="
+
+test_assert "FT.SEARCH async non-KNN (BM25 WITHSCORES, SORTBY, HIGHLIGHT, SUMMARIZE, LIMIT 0 0)" {
+  r FT.CREATE p57idx SCHEMA title TEXT price NUMERIC tag TAG
+  r FT.ADD p57idx d1 PAYLOAD "p1" FIELDS title "redis vector search engine" price 30 tag "fast"
+  r FT.ADD p57idx d2 PAYLOAD "p2" FIELDS title "redis cache and search" price 10 tag "fast"
+  r FT.ADD p57idx d3 PAYLOAD "p3" FIELDS title "relational sql database" price 20 tag "slow"
+
+  r FT.CONFIG SET ASYNC_MIN_DOCS 1
+
+  # Async BM25 WITHSCORES + HIGHLIGHT + WITHPAYLOADS
+  set r1 [r FT.SEARCH p57idx "redis search" WITHSCORES WITHPAYLOADS HIGHLIGHT FIELDS 1 title TAGS <b> </b>]
+  if {[lindex $r1 0] != 2} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p57idx
+    error "Async non-KNN WITHSCORES expected 2 docs, got $r1"
+  }
+  if {[string first "<b>redis</b>" $r1] < 0 || [string first "__search_score" $r1] < 0} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p57idx
+    error "Async non-KNN missing highlight or score: $r1"
+  }
+
+  # Async SORTBY ASC + WITHSORTKEYS
+  set r2 [r FT.SEARCH p57idx {@tag:{fast}} SORTBY price ASC WITHSORTKEYS NOCONTENT]
+  if {[lindex $r2 0] != 2 || [lindex $r2 1] ne "d2" || [lindex $r2 2] ne "10"} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p57idx
+    error "Async non-KNN SORTBY+WITHSORTKEYS mismatch: $r2"
+  }
+
+  # Async LIMIT 0 0 count-only
+  set r3 [r FT.SEARCH p57idx "*" LIMIT 0 0]
+  if {[llength $r3] != 1 || [lindex $r3 0] != 3} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p57idx
+    error "Async non-KNN LIMIT 0 0 mismatch: $r3"
+  }
+
+  r FT.CONFIG SET ASYNC_MIN_DOCS 0
+  r FT.DROPINDEX p57idx
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

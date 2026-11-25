@@ -5,6 +5,7 @@
 #include <cmath>
 #include <random>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -384,4 +385,36 @@ TEST(HnswIndexTest, SlotReuseAndSq8QuantizationRecall) {
     recall += static_cast<double>(hits) / 10.0;
   }
   EXPECT_GT(recall / 10.0, 0.85);
+}
+
+TEST(HnswIndexTest, ConcurrentReadSafety) {
+  constexpr size_t DIM = 32;
+  constexpr size_t N = 400;
+  HnswIndex hnsw(DIM, DistanceMetric::kL2, 12, 80);
+  std::mt19937 rng(777);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  std::vector<float> buf(DIM);
+  for (size_t i = 0; i < N; i++) {
+    for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+    hnsw.Add("c" + std::to_string(i), buf.data());
+  }
+  hnsw.SetEfRuntime(32);
+
+  std::vector<std::thread> threads;
+  std::vector<int> ok_counts(4, 0);
+  for (int t = 0; t < 4; t++) {
+    threads.emplace_back([&, t]() {
+      std::mt19937 trng(1000 + t);
+      std::vector<float> q(DIM);
+      for (int iter = 0; iter < 150; iter++) {
+        for (size_t d = 0; d < DIM; d++) q[d] = dist(trng);
+        auto res = hnsw.KnnQuery(q.data(), 5);
+        if (res.size() == 5) ok_counts[t]++;
+      }
+    });
+  }
+  for (auto& th : threads) th.join();
+  for (int t = 0; t < 4; t++) {
+    EXPECT_EQ(ok_counts[t], 150);
+  }
 }

@@ -64,13 +64,8 @@ class HnswIndex : public VectorIndexBase {
   std::vector<uint32_t> free_slots_;
   std::unordered_map<std::string, uint32_t> id_to_node_;
 
-  // Zero-allocation visited-epoch array for SearchLayer
-  mutable std::vector<uint32_t> visited_epoch_;
-  mutable uint32_t current_epoch_ = 0;
-
   int RandomLevel(const std::string& doc_id) const;
   float DistanceTo(const float* query, uint32_t node_id) const;
-  uint32_t NextEpoch() const;
 
   std::vector<uint32_t> SearchLayer(const float* query, uint32_t entry,
                                     size_t ef, int layer) const;

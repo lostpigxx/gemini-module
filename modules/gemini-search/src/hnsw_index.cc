@@ -52,19 +52,6 @@ float HnswIndex::DistanceTo(const float* query, uint32_t node_id) const {
   return dist_fn_(query, vectors_.data() + static_cast<size_t>(node_id) * dim_, dim_);
 }
 
-uint32_t HnswIndex::NextEpoch() const {
-  if (visited_epoch_.size() < alive_.size()) {
-    visited_epoch_.resize(alive_.size(), 0);
-  }
-  if (current_epoch_ == std::numeric_limits<uint32_t>::max()) {
-    std::fill(visited_epoch_.begin(), visited_epoch_.end(), 0);
-    current_epoch_ = 1;
-  } else {
-    current_epoch_++;
-  }
-  return current_epoch_;
-}
-
 std::vector<uint32_t> HnswIndex::SearchLayer(const float* query, uint32_t entry,
                                              size_t ef, int layer) const {
   using Pair = std::pair<float, uint32_t>;
@@ -74,11 +61,27 @@ std::vector<uint32_t> HnswIndex::SearchLayer(const float* query, uint32_t entry,
   std::priority_queue<Pair, std::vector<Pair>, decltype(cmp_min)> candidates(cmp_min);
   std::priority_queue<Pair, std::vector<Pair>, decltype(cmp_max)> result(cmp_max);
 
-  const uint32_t epoch = NextEpoch();
+  // Thread-local zero-allocation visited-epoch buffer (safe for concurrent readers)
+  struct ThreadVisited {
+    std::vector<uint32_t> epoch;
+    uint32_t cur = 0;
+    uint32_t Next(size_t n) {
+      if (epoch.size() < n) epoch.resize(n, 0);
+      if (cur == std::numeric_limits<uint32_t>::max()) {
+        std::fill(epoch.begin(), epoch.end(), 0);
+        cur = 1;
+      } else {
+        cur++;
+      }
+      return cur;
+    }
+  };
+  thread_local ThreadVisited tv;
+  const uint32_t epoch = tv.Next(alive_.size());
   float entry_dist = DistanceTo(query, entry);
   candidates.push({entry_dist, entry});
   result.push({entry_dist, entry});
-  visited_epoch_[entry] = epoch;
+  tv.epoch[entry] = epoch;
 
   while (!candidates.empty()) {
     auto [c_dist, c_id] = candidates.top();
@@ -90,8 +93,8 @@ std::vector<uint32_t> HnswIndex::SearchLayer(const float* query, uint32_t entry,
     if (layer >= static_cast<int>(neighbors_[c_id].size())) continue;
     const auto& nb_list = neighbors_[c_id][static_cast<size_t>(layer)];
     for (uint32_t nb_id : nb_list) {
-      if (visited_epoch_[nb_id] == epoch) continue;
-      visited_epoch_[nb_id] = epoch;
+      if (tv.epoch[nb_id] == epoch) continue;
+      tv.epoch[nb_id] = epoch;
       if (!alive_[nb_id]) continue;
 
       float n_dist = DistanceTo(query, nb_id);
@@ -373,8 +376,6 @@ void HnswIndex::Clear() {
   neighbors_.clear();
   free_slots_.clear();
   id_to_node_.clear();
-  visited_epoch_.clear();
-  current_epoch_ = 0;
   entry_point_ = kInvalidNode;
   max_level_ = -1;
   live_count_ = 0;

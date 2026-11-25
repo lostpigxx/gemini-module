@@ -26,6 +26,8 @@ extern "C" {
 #include "vector_index.h"
 
 #include <cstdint>
+#include <memory>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -43,6 +45,9 @@ struct IndexEntry {
   SortFieldIndices sort_indices;
   SynonymMap synonyms;
   int64_t last_access_ms = 0;
+  std::unique_ptr<std::shared_mutex> rw_mutex = std::make_unique<std::shared_mutex>();
+
+  std::shared_mutex& Mutex() const { return *rw_mutex; }
 };
 
 int RegisterSearchCommands(RedisModuleCtx* ctx);

@@ -868,6 +868,7 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
               rep->error = "ERR index not found";
             } else {
               const auto& e = iit->second;
+              std::shared_lock<std::shared_mutex> idx_lk(e.Mutex());
               std::vector<std::string> result_ids;
               std::unordered_map<std::string, std::string> knn_scores;
               if (parsed.has_knn) {

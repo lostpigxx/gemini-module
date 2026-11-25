@@ -8,6 +8,7 @@
 static bool g_is_loading = false;
 
 static void RemoveIndexedKey(IndexEntry& entry, const std::string& key_name) {
+  std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
   if (!entry.doc_store.Contains(key_name)) return;
   RemoveDocFromIndices(entry, key_name);
   entry.doc_store.Remove(key_name);
@@ -47,9 +48,12 @@ void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry,
     return;
   }
 
-  RemoveDocFromIndices(entry, key_name);
-  entry.doc_store.Add(key_name, doc_fields);
-  AddDocToIndices(entry, key_name, doc_fields);
+  {
+    std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
+    RemoveDocFromIndices(entry, key_name);
+    entry.doc_store.Add(key_name, doc_fields);
+    AddDocToIndices(entry, key_name, doc_fields);
+  }
 }
 
 static std::string StripJsonQuotes(const std::string& s) {
@@ -155,9 +159,12 @@ void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry,
     return;
   }
 
-  RemoveDocFromIndices(entry, key_name);
-  entry.doc_store.Add(key_name, doc_fields);
-  AddDocToIndices(entry, key_name, doc_fields);
+  {
+    std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
+    RemoveDocFromIndices(entry, key_name);
+    entry.doc_store.Add(key_name, doc_fields);
+    AddDocToIndices(entry, key_name, doc_fields);
+  }
 }
 
 struct ScanPrivdata {
