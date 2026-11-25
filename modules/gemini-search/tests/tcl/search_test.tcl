@@ -3984,6 +3984,93 @@ test_assert "FT.SEARCH async KNN offload via RedisModule_BlockClient" {
 }
 
 # ============================================================
+# Phase 53: Async Non-Blocking FT.HYBRID & FT.AGGREGATE
+# ============================================================
+puts "\n=== Phase 53: Async FT.HYBRID & FT.AGGREGATE ==="
+
+test_assert "FT.HYBRID async offload (RRF, LINEAR, FILTER, LIMIT 0 0, EXPLAINSCORE, WITHPAYLOADS)" {
+  r FT.CREATE p53hyb SCHEMA cat TAG title TEXT v VECTOR FLAT DIM 2 DISTANCE_METRIC L2
+  set v1 [binary format f* {1.0 0.0}]
+  set v2 [binary format f* {0.0 1.0}]
+  set v3 [binary format f* {0.8 0.2}]
+  r FT.ADD p53hyb h1 PAYLOAD "p1" FIELDS cat "ai" title "redis vector search engine" v $v1
+  r FT.ADD p53hyb h2 PAYLOAD "p2" FIELDS cat "db" title "relational database sql" v $v2
+  r FT.ADD p53hyb h3 PAYLOAD "p3" FIELDS cat "ai" title "vector search tutorial" v $v3
+
+  r FT.CONFIG SET ASYNC_MIN_DOCS 1
+
+  # Async RRF with WITHSCORES + EXPLAINSCORE + WITHPAYLOADS
+  set r1 [r FT.HYBRID p53hyb SEARCH "vector search" VSIM @v \$q KNN 2 PARAMS 2 q $v1 COMBINE RRF CONSTANT 60 WITHSCORES EXPLAINSCORE WITHPAYLOADS]
+  if {[lindex $r1 0] < 2 || [lindex $r1 1] ne "h1" || [lindex $r1 2] ne "p1"} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p53hyb
+    error "Async FT.HYBRID RRF mismatch: $r1"
+  }
+  set f1 [lindex $r1 3]
+  if {[string first "__hybrid_score" $f1] < 0 || [string first "__score_explanation" $f1] < 0} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p53hyb
+    error "Async FT.HYBRID missing score/explanation: $f1"
+  }
+
+  # Async LINEAR with VSIM FILTER
+  set r2 [r FT.HYBRID p53hyb SEARCH "vector" VSIM @v \$q KNN 3 FILTER {@cat:{ai}} PARAMS 2 q $v1 COMBINE LINEAR ALPHA 0.5 NOCONTENT]
+  if {[lindex $r2 0] != 2} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p53hyb
+    error "Async FT.HYBRID LINEAR+FILTER mismatch: $r2"
+  }
+
+  # Async LIMIT 0 0 count-only
+  set r3 [r FT.HYBRID p53hyb SEARCH "vector" VSIM @v \$q KNN 3 PARAMS 2 q $v1 LIMIT 0 0]
+  if {[llength $r3] != 1 || [lindex $r3 0] < 2} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p53hyb
+    error "Async FT.HYBRID LIMIT 0 0 mismatch: $r3"
+  }
+
+  r FT.CONFIG SET ASYNC_MIN_DOCS 0
+  r FT.DROPINDEX p53hyb
+}
+
+test_assert "FT.AGGREGATE async offload (GROUPBY, APPLY, SORTBY MAX, KNN)" {
+  r FT.CREATE p53agg SCHEMA dept TAG salary NUMERIC v VECTOR FLAT DIM 2 DISTANCE_METRIC L2
+  set v1 [binary format f* {1.0 0.0}]
+  set v2 [binary format f* {0.9 0.1}]
+  set v3 [binary format f* {0.0 1.0}]
+  r FT.ADD p53agg e1 FIELDS dept "eng" salary 100 v $v1
+  r FT.ADD p53agg e2 FIELDS dept "eng" salary 200 v $v2
+  r FT.ADD p53agg e3 FIELDS dept "ops" salary 150 v $v3
+
+  r FT.CONFIG SET ASYNC_MIN_DOCS 1
+
+  # Async GROUPBY + REDUCE + APPLY + SORTBY MAX
+  set a1 [r FT.AGGREGATE p53agg "*" GROUPBY 1 @dept REDUCE SUM 1 @salary AS total APPLY "@total * 2" AS doubled SORTBY 2 @doubled DESC MAX 1]
+  if {[llength $a1] != 1} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p53agg
+    error "Async FT.AGGREGATE GROUPBY+SORTBY MAX expected 1 row, got $a1"
+  }
+  set row0 [lindex $a1 0]
+  if {[string first "eng" $row0] < 0 || [string first "600" $row0] < 0} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p53agg
+    error "Async FT.AGGREGATE unexpected top row: $row0"
+  }
+
+  # Async KNN + AGGREGATE
+  set a2 [r FT.AGGREGATE p53agg {*=>[KNN 2 @v $q AS dist]} PARAMS 2 q $v1 SORTBY 2 @dist ASC]
+  if {[llength $a2] != 2} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p53agg
+    error "Async FT.AGGREGATE KNN expected 2 rows, got $a2"
+  }
+
+  r FT.CONFIG SET ASYNC_MIN_DOCS 0
+  r FT.DROPINDEX p53agg
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

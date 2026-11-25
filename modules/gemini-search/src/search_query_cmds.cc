@@ -1979,7 +1979,7 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     qopts.deadline_ms = NowMs() + opts.timeout_ms;
   }
 
-  // 1. Validate and execute Vector branch
+  // 1. Validate Vector branch & parse queries upfront
   const auto* fspec = entry.spec.FindField(vec_field);
   if (!fspec) return RedisModule_ReplyWithError(ctx, "ERR VSIM field not in schema");
   if (fspec->type != FieldType::kVector) {
@@ -1995,14 +1995,223 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     return RedisModule_ReplyWithError(ctx, "ERR query vector dimension mismatch");
   }
 
+  ParsedQuery fpq;
+  bool has_vec_filter = !vec_filter_query.empty();
+  if (has_vec_filter) {
+    std::string ferr;
+    if (!ParseQuery(vec_filter_query, fpq, ferr, qopts)) {
+      return RedisModule_ReplyWithError(ctx, ferr.c_str());
+    }
+  }
+
+  ParsedQuery tpq;
+  std::string terr;
+  if (!ParseQuery(text_query, tpq, terr, qopts)) {
+    return RedisModule_ReplyWithError(ctx, terr.c_str());
+  }
+
+  // Phase 53: Non-blocking async offload for FT.HYBRID
+  size_t async_min = GetAsyncMinDocs();
+  if (RedisModule_BlockClient && RedisModule_UnblockClient &&
+      async_min > 0 && entry.doc_store.Size() >= async_min) {
+    struct AsyncHybridRow {
+      std::string doc_id;
+      std::string score_str;
+      std::string explanation;
+      bool has_payload = false;
+      std::string payload;
+      std::vector<std::pair<std::string, std::string>> fields;
+    };
+    struct AsyncHybridReply {
+      std::string error;
+      bool count_only = false;
+      long long total_count = 0;
+      SearchOptions opts;
+      std::vector<AsyncHybridRow> rows;
+    };
+
+    auto ReplyCb = [](RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) -> int {
+      auto* r = static_cast<AsyncHybridReply*>(RedisModule_GetBlockedClientPrivateData(c));
+      if (!r) return RedisModule_ReplyWithError(c, "ERR async hybrid query internal error");
+      if (!r->error.empty()) return RedisModule_ReplyWithError(c, r->error.c_str());
+      if (r->count_only) {
+        RedisModule_ReplyWithArray(c, 1);
+        RedisModule_ReplyWithLongLong(c, r->total_count);
+        return REDISMODULE_OK;
+      }
+      long total = static_cast<long>(r->rows.size());
+      long mult = 1 + (r->opts.withpayloads ? 1 : 0) + (r->opts.nocontent ? 0 : 1);
+      RedisModule_ReplyWithArray(c, 1 + total * mult);
+      RedisModule_ReplyWithLongLong(c, total);
+      for (const auto& row : r->rows) {
+        RedisModule_ReplyWithCString(c, row.doc_id.c_str());
+        if (r->opts.withpayloads) {
+          if (row.has_payload) {
+            RedisModule_ReplyWithStringBuffer(c, row.payload.data(), row.payload.size());
+          } else {
+            RedisModule_ReplyWithNull(c);
+          }
+        }
+        if (!r->opts.nocontent) {
+          long extra = r->opts.withscores ? (r->opts.explainscore ? 4 : 2) : 0;
+          RedisModule_ReplyWithArray(c, static_cast<long>(row.fields.size()) * 2 + extra);
+          if (r->opts.withscores) {
+            RedisModule_ReplyWithCString(c, "__hybrid_score");
+            RedisModule_ReplyWithCString(c, row.score_str.c_str());
+            if (r->opts.explainscore) {
+              RedisModule_ReplyWithCString(c, "__score_explanation");
+              RedisModule_ReplyWithCString(c, row.explanation.c_str());
+            }
+          }
+          for (const auto& [k, v] : row.fields) {
+            RedisModule_ReplyWithCString(c, k.c_str());
+            RedisModule_ReplyWithCString(c, v.c_str());
+          }
+        }
+      }
+      return REDISMODULE_OK;
+    };
+    auto TimeoutCb = [](RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) -> int {
+      if (IsOnTimeoutReturn()) {
+        RedisModule_ReplyWithArray(c, 1);
+        RedisModule_ReplyWithLongLong(c, 0);
+        return REDISMODULE_OK;
+      }
+      return RedisModule_ReplyWithError(c, "ERR query timed out");
+    };
+    auto FreeCb = [](RedisModuleCtx* /*c*/, void* priv) {
+      delete static_cast<AsyncHybridReply*>(priv);
+    };
+
+    long long block_ms = opts.has_timeout ? opts.timeout_ms : 0;
+    RedisModuleBlockedClient* bc =
+        RedisModule_BlockClient(ctx, ReplyCb, TimeoutCb, FreeCb, block_ms);
+
+    GetSearchExecutor().Submit(
+        [bc, idx_str, vec_field = std::move(vec_field), qvec = std::move(qvec),
+         knn_k, ef_runtime, has_vec_filter, fpq = std::move(fpq),
+         tpq = std::move(tpq), text_limit, hcfg, opts = std::move(opts),
+         params = std::move(params), qopts = std::move(qopts)]() {
+          auto* rep = new AsyncHybridReply();
+          rep->opts = opts;
+          {
+            std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+            auto iit = GetIndices().find(idx_str);
+            if (iit == GetIndices().end()) {
+              rep->error = "ERR index not found";
+            } else {
+              const auto& e = iit->second;
+              std::vector<KnnResult> vec_hits;
+              if (const auto* vi = e.vector_indices.Get(vec_field)) {
+                if (has_vec_filter) {
+                  std::string ferr;
+                  auto cands = EvaluateQuery(
+                      fpq.root, e.spec, e.doc_store, e.tag_indices,
+                      e.numeric_indices, e.text_indices, e.geo_indices,
+                      ferr, qopts, &e.geoshape_indices, &params,
+                      &e.vector_indices, &e.synonyms);
+                  if (!ferr.empty()) {
+                    rep->error = ferr;
+                  } else {
+                    vec_hits = vi->KnnQueryFiltered(qvec.data(), knn_k, cands);
+                  }
+                } else {
+                  vec_hits = vi->KnnQueryEf(qvec.data(), knn_k, ef_runtime);
+                }
+              }
+              std::vector<ScoredResult> text_hits;
+              if (rep->error.empty()) {
+                std::string err;
+                text_hits = EvaluateQueryScored(
+                    tpq.root, e.spec, e.doc_store, e.tag_indices,
+                    e.numeric_indices, e.text_indices, e.geo_indices,
+                    err, qopts, &e.geoshape_indices, &params,
+                    &e.vector_indices, &e.synonyms);
+                if (!err.empty()) rep->error = err;
+              }
+              if (rep->error.empty()) {
+                if (text_limit > 0 &&
+                    static_cast<long long>(text_hits.size()) > text_limit) {
+                  std::sort(text_hits.begin(), text_hits.end(),
+                            [](const ScoredResult& a, const ScoredResult& b) {
+                              if (a.score != b.score) return a.score > b.score;
+                              return a.doc_id < b.doc_id;
+                            });
+                  text_hits.resize(static_cast<size_t>(text_limit));
+                }
+                auto fused = FuseHybridResults(text_hits, vec_hits, hcfg);
+                if (opts.has_limit && opts.limit_offset == 0 && opts.limit_count == 0) {
+                  rep->count_only = true;
+                  rep->total_count = static_cast<long long>(fused.size());
+                } else {
+                  if (opts.has_limit) {
+                    long long total_before = static_cast<long long>(fused.size());
+                    if (opts.limit_offset >= total_before) {
+                      fused.clear();
+                    } else {
+                      auto beg = fused.begin() + opts.limit_offset;
+                      auto end = (opts.limit_count >= 0 &&
+                                  opts.limit_offset + opts.limit_count < total_before)
+                                     ? fused.begin() + opts.limit_offset + opts.limit_count
+                                     : fused.end();
+                      fused = std::vector<HybridHit>(beg, end);
+                    }
+                  }
+                  rep->rows.reserve(fused.size());
+                  for (const auto& h : fused) {
+                    AsyncHybridRow row;
+                    row.doc_id = h.doc_id;
+                    if (opts.withscores) {
+                      row.score_str = std::to_string(h.score);
+                      if (opts.explainscore) {
+                        row.explanation =
+                            (hcfg.method == FusionMethod::kRrf)
+                                ? ("RRF(k=" + std::to_string(hcfg.rrf_k) +
+                                   ",text_rank=" + std::to_string(h.text_rank) +
+                                   ",vec_rank=" + std::to_string(h.vector_rank) + ")")
+                                : ("LINEAR(alpha=" + std::to_string(hcfg.alpha) +
+                                   ",text_score=" + std::to_string(h.text_score) +
+                                   ",vec_dist=" + std::to_string(h.vector_distance) + ")");
+                      }
+                    }
+                    const auto* doc = e.doc_store.Get(h.doc_id);
+                    if (doc) {
+                      row.has_payload = doc->has_payload;
+                      if (opts.withpayloads && doc->has_payload) row.payload = doc->payload;
+                      if (!opts.nocontent) {
+                        std::vector<std::string> keys;
+                        if (opts.has_return) {
+                          keys = opts.return_fields;
+                        } else {
+                          keys.reserve(doc->fields.size());
+                          for (const auto& [k, v] : doc->fields) keys.push_back(k);
+                          std::sort(keys.begin(), keys.end());
+                        }
+                        for (const auto& k : keys) {
+                          auto ait = opts.return_aliases.find(k);
+                          const std::string& out_k =
+                              (ait != opts.return_aliases.end()) ? ait->second : k;
+                          auto fit = doc->fields.find(k);
+                          row.fields.emplace_back(
+                              out_k, (fit != doc->fields.end()) ? fit->second : "");
+                        }
+                      }
+                    }
+                    rep->rows.push_back(std::move(row));
+                  }
+                }
+              }
+            }
+          }
+          RedisModule_UnblockClient(bc, rep);
+        });
+    return REDISMODULE_OK;
+  }
+
   std::vector<KnnResult> vec_hits;
   if (const auto* vidx = entry.vector_indices.Get(vec_field)) {
-    if (!vec_filter_query.empty()) {
-      ParsedQuery fpq;
+    if (has_vec_filter) {
       std::string ferr;
-      if (!ParseQuery(vec_filter_query, fpq, ferr, qopts)) {
-        return RedisModule_ReplyWithError(ctx, ferr.c_str());
-      }
       auto candidates = EvaluateQuery(
           fpq.root, entry.spec, entry.doc_store, entry.tag_indices,
           entry.numeric_indices, entry.text_indices, entry.geo_indices,
@@ -2016,11 +2225,6 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   }
 
   // 2. Execute Text branch
-  ParsedQuery tpq;
-  std::string terr;
-  if (!ParseQuery(text_query, tpq, terr, qopts)) {
-    return RedisModule_ReplyWithError(ctx, terr.c_str());
-  }
   auto text_hits = EvaluateQueryScored(
       tpq.root, entry.spec, entry.doc_store, entry.tag_indices,
       entry.numeric_indices, entry.text_indices, entry.geo_indices,

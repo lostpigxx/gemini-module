@@ -399,6 +399,52 @@ static void ApplyGroupby(std::vector<AggRow>& rows,
   rows = std::move(result);
 }
 
+static bool ExecuteAggPipeline(std::vector<AggRow>& rows,
+                               const std::vector<PipelineStage>& stages,
+                               int64_t deadline_ms, std::string& error_out) {
+  for (const auto& stage : stages) {
+    if (deadline_ms > 0 && NowMs() > deadline_ms) {
+      error_out = "ERR query timeout";
+      return false;
+    }
+    switch (stage.type) {
+      case PipelineStageType::kLoad:
+        break;
+      case PipelineStageType::kApply: {
+        ExprNode expr;
+        if (!ParseExpr(stage.apply_expr, expr, error_out)) return false;
+        for (auto& row : rows) {
+          auto val = EvalExpr(expr, row);
+          row[stage.apply_alias] = val.AsString();
+        }
+        break;
+      }
+      case PipelineStageType::kFilter: {
+        ExprNode expr;
+        if (!ParseExpr(stage.filter_expr, expr, error_out)) return false;
+        rows.erase(
+            std::remove_if(rows.begin(), rows.end(),
+                           [&](const AggRow& row) {
+                             return !EvalExpr(expr, row).Truthy();
+                           }),
+            rows.end());
+        break;
+      }
+      case PipelineStageType::kGroupby:
+        if (stage.groupby_fields.empty() && stage.reducers.empty()) break;
+        ApplyGroupby(rows, stage.groupby_fields, stage.reducers);
+        break;
+      case PipelineStageType::kSortby:
+        ApplySortby(rows, stage.sortby_keys, stage.sortby_max);
+        break;
+      case PipelineStageType::kLimit:
+        ApplyLimit(rows, stage.limit_offset, stage.limit_count);
+        break;
+    }
+  }
+  return true;
+}
+
 int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                               int argc) {
   if (argc < 3) return RedisModule_WrongArity(ctx);
@@ -416,6 +462,7 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   QueryOptions qopts;
   qopts.language = entry.spec.language;
   qopts.dialect = GetDefaultDialect();
+  long long timeout_ms = 0;
   std::unordered_map<std::string, std::string> params;
   for (int ci = 3; ci < argc; ci++) {
     auto kw = ArgView(argv[ci]);
@@ -424,7 +471,10 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       ci++;
     } else if (MatchArg(kw, "TIMEOUT") && ci + 1 < argc) {
       long long tms = std::strtoll(std::string(ArgView(argv[ci + 1])).c_str(), nullptr, 10);
-      if (tms > 0) qopts.deadline_ms = NowMs() + tms;
+      if (tms > 0) {
+        timeout_ms = tms;
+        qopts.deadline_ms = NowMs() + tms;
+      }
       ci++;
     } else if (MatchArg(kw, "PARAMS") && ci + 1 < argc) {
       char* ep = nullptr;
@@ -447,8 +497,7 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, parse_error.c_str());
   }
 
-  std::vector<std::string> result_ids;
-  std::unordered_map<std::string, std::string> knn_scores;
+  std::vector<float> qvec;
   std::string knn_score_field = parsed.knn_score_alias.empty()
                                     ? "__vec_score"
                                     : parsed.knn_score_alias;
@@ -461,40 +510,9 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     if (pit == params.end()) {
       return RedisModule_ReplyWithError(ctx, "ERR KNN param not found in PARAMS");
     }
-    std::vector<float> qvec;
     if (!DecodeVectorBlob(pit->second, fspec->vector_params.dim,
                           fspec->vector_params.data_type, qvec)) {
       return RedisModule_ReplyWithError(ctx, "ERR query vector dimension mismatch");
-    }
-    if (const auto* vidx = entry.vector_indices.Get(parsed.knn_field)) {
-      std::vector<KnnResult> knn_hits;
-      if (parsed.root.type != QueryNode::Type::kMatchAll) {
-        std::string ferr;
-        auto cands = EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
-                                   entry.tag_indices, entry.numeric_indices,
-                                   entry.text_indices, entry.geo_indices, ferr,
-                                   qopts, &entry.geoshape_indices, &params,
-                                   &entry.vector_indices, &entry.synonyms);
-        if (!ferr.empty()) return RedisModule_ReplyWithError(ctx, ferr.c_str());
-        knn_hits = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands);
-      } else {
-        knn_hits = vidx->KnnQueryEf(qvec.data(), parsed.knn_k, parsed.knn_ef_runtime);
-      }
-      result_ids.reserve(knn_hits.size());
-      for (const auto& h : knn_hits) {
-        result_ids.push_back(h.doc_id);
-        knn_scores[h.doc_id] = std::to_string(h.score);
-      }
-    }
-  } else {
-    std::string eval_error;
-    result_ids = EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
-                               entry.tag_indices, entry.numeric_indices,
-                               entry.text_indices, entry.geo_indices, eval_error,
-                               qopts, &entry.geoshape_indices, &params,
-                               &entry.vector_indices, &entry.synonyms);
-    if (!eval_error.empty()) {
-      return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
   }
 
@@ -792,6 +810,154 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
   }
 
+  // Phase 53: Non-blocking async offload for non-cursor FT.AGGREGATE
+  size_t async_min = GetAsyncMinDocs();
+  if (!with_cursor && RedisModule_BlockClient && RedisModule_UnblockClient &&
+      async_min > 0 && entry.doc_store.Size() >= async_min) {
+    struct AsyncAggReply {
+      std::string error;
+      std::vector<AggRow> rows;
+    };
+
+    auto ReplyCb = [](RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) -> int {
+      auto* r = static_cast<AsyncAggReply*>(RedisModule_GetBlockedClientPrivateData(c));
+      if (!r) return RedisModule_ReplyWithError(c, "ERR async aggregate internal error");
+      if (!r->error.empty()) return RedisModule_ReplyWithError(c, r->error.c_str());
+      RedisModule_ReplyWithArray(c, static_cast<long>(r->rows.size()));
+      for (const auto& row : r->rows) {
+        std::vector<std::string> keys;
+        keys.reserve(row.size());
+        for (const auto& [k, v] : row) keys.push_back(k);
+        std::sort(keys.begin(), keys.end());
+        RedisModule_ReplyWithArray(c, static_cast<long>(keys.size()) * 2);
+        for (const auto& k : keys) {
+          RedisModule_ReplyWithCString(c, k.c_str());
+          RedisModule_ReplyWithCString(c, row.at(k).c_str());
+        }
+      }
+      return REDISMODULE_OK;
+    };
+    auto TimeoutCb = [](RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) -> int {
+      if (IsOnTimeoutReturn()) {
+        RedisModule_ReplyWithArray(c, 0);
+        return REDISMODULE_OK;
+      }
+      return RedisModule_ReplyWithError(c, "ERR query timeout");
+    };
+    auto FreeCb = [](RedisModuleCtx* /*c*/, void* priv) {
+      delete static_cast<AsyncAggReply*>(priv);
+    };
+
+    RedisModuleBlockedClient* bc =
+        RedisModule_BlockClient(ctx, ReplyCb, TimeoutCb, FreeCb, timeout_ms);
+
+    GetSearchExecutor().Submit(
+        [bc, idx_str, parsed = std::move(parsed), qvec = std::move(qvec),
+         knn_score_field = std::move(knn_score_field),
+         stages = std::move(stages), params = std::move(params),
+         qopts = std::move(qopts)]() {
+          auto* rep = new AsyncAggReply();
+          {
+            std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+            auto iit = GetIndices().find(idx_str);
+            if (iit == GetIndices().end()) {
+              rep->error = "ERR index not found";
+            } else {
+              const auto& e = iit->second;
+              std::vector<std::string> result_ids;
+              std::unordered_map<std::string, std::string> knn_scores;
+              if (parsed.has_knn) {
+                if (const auto* vi = e.vector_indices.Get(parsed.knn_field)) {
+                  std::vector<KnnResult> knn_hits;
+                  if (parsed.root.type != QueryNode::Type::kMatchAll) {
+                    std::string ferr;
+                    auto cands = EvaluateQuery(
+                        parsed.root, e.spec, e.doc_store, e.tag_indices,
+                        e.numeric_indices, e.text_indices, e.geo_indices, ferr,
+                        qopts, &e.geoshape_indices, &params, &e.vector_indices,
+                        &e.synonyms);
+                    if (!ferr.empty()) {
+                      rep->error = ferr;
+                    } else {
+                      knn_hits = vi->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands);
+                    }
+                  } else {
+                    knn_hits = vi->KnnQueryEf(qvec.data(), parsed.knn_k, parsed.knn_ef_runtime);
+                  }
+                  if (rep->error.empty()) {
+                    result_ids.reserve(knn_hits.size());
+                    for (const auto& h : knn_hits) {
+                      result_ids.push_back(h.doc_id);
+                      knn_scores[h.doc_id] = std::to_string(h.score);
+                    }
+                  }
+                }
+              } else {
+                std::string eval_error;
+                result_ids = EvaluateQuery(
+                    parsed.root, e.spec, e.doc_store, e.tag_indices,
+                    e.numeric_indices, e.text_indices, e.geo_indices, eval_error,
+                    qopts, &e.geoshape_indices, &params, &e.vector_indices,
+                    &e.synonyms);
+                if (!eval_error.empty()) rep->error = eval_error;
+              }
+              if (rep->error.empty()) {
+                rep->rows.reserve(result_ids.size());
+                for (const auto& doc_id : result_ids) {
+                  const auto* doc = e.doc_store.Get(doc_id);
+                  if (!doc) continue;
+                  AggRow r = doc->fields;
+                  if (parsed.has_knn) {
+                    auto sit = knn_scores.find(doc_id);
+                    if (sit != knn_scores.end()) r[knn_score_field] = sit->second;
+                  }
+                  rep->rows.push_back(std::move(r));
+                }
+                ExecuteAggPipeline(rep->rows, stages, qopts.deadline_ms, rep->error);
+              }
+            }
+          }
+          RedisModule_UnblockClient(bc, rep);
+        });
+    return REDISMODULE_OK;
+  }
+
+  // Synchronous query evaluation
+  std::vector<std::string> result_ids;
+  std::unordered_map<std::string, std::string> knn_scores;
+  if (parsed.has_knn) {
+    if (const auto* vidx = entry.vector_indices.Get(parsed.knn_field)) {
+      std::vector<KnnResult> knn_hits;
+      if (parsed.root.type != QueryNode::Type::kMatchAll) {
+        std::string ferr;
+        auto cands = EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
+                                   entry.tag_indices, entry.numeric_indices,
+                                   entry.text_indices, entry.geo_indices, ferr,
+                                   qopts, &entry.geoshape_indices, &params,
+                                   &entry.vector_indices, &entry.synonyms);
+        if (!ferr.empty()) return RedisModule_ReplyWithError(ctx, ferr.c_str());
+        knn_hits = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands);
+      } else {
+        knn_hits = vidx->KnnQueryEf(qvec.data(), parsed.knn_k, parsed.knn_ef_runtime);
+      }
+      result_ids.reserve(knn_hits.size());
+      for (const auto& h : knn_hits) {
+        result_ids.push_back(h.doc_id);
+        knn_scores[h.doc_id] = std::to_string(h.score);
+      }
+    }
+  } else {
+    std::string eval_error;
+    result_ids = EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
+                               entry.tag_indices, entry.numeric_indices,
+                               entry.text_indices, entry.geo_indices, eval_error,
+                               qopts, &entry.geoshape_indices, &params,
+                               &entry.vector_indices, &entry.synonyms);
+    if (!eval_error.empty()) {
+      return RedisModule_ReplyWithError(ctx, eval_error.c_str());
+    }
+  }
+
   // Build initial rows from query results
   std::vector<AggRow> rows;
   rows.reserve(result_ids.size());
@@ -807,58 +973,9 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   // Execute pipeline stages
-  for (auto& stage : stages) {
-    if (qopts.deadline_ms > 0 && NowMs() > qopts.deadline_ms) {
-      return RedisModule_ReplyWithError(ctx, "ERR query timeout");
-    }
-    switch (stage.type) {
-      case PipelineStageType::kLoad:
-        // LOAD adds fields from document store (for rows that still reference docs)
-        // In our model, rows already contain all doc fields from initial load
-        // LOAD is a no-op for additional fields already in the row
-        break;
-
-      case PipelineStageType::kApply: {
-        ExprNode expr;
-        std::string expr_err;
-        if (!ParseExpr(stage.apply_expr, expr, expr_err)) {
-          return RedisModule_ReplyWithError(ctx, expr_err.c_str());
-        }
-        for (auto& row : rows) {
-          auto val = EvalExpr(expr, row);
-          row[stage.apply_alias] = val.AsString();
-        }
-        break;
-      }
-
-      case PipelineStageType::kFilter: {
-        ExprNode expr;
-        std::string expr_err;
-        if (!ParseExpr(stage.filter_expr, expr, expr_err)) {
-          return RedisModule_ReplyWithError(ctx, expr_err.c_str());
-        }
-        rows.erase(
-            std::remove_if(rows.begin(), rows.end(),
-                           [&](const AggRow& row) {
-                             return !EvalExpr(expr, row).Truthy();
-                           }),
-            rows.end());
-        break;
-      }
-
-      case PipelineStageType::kGroupby:
-        if (stage.groupby_fields.empty() && stage.reducers.empty()) break;
-        ApplyGroupby(rows, stage.groupby_fields, stage.reducers);
-        break;
-
-      case PipelineStageType::kSortby:
-        ApplySortby(rows, stage.sortby_keys, stage.sortby_max);
-        break;
-
-      case PipelineStageType::kLimit:
-        ApplyLimit(rows, stage.limit_offset, stage.limit_count);
-        break;
-    }
+  std::string pipe_err;
+  if (!ExecuteAggPipeline(rows, stages, qopts.deadline_ms, pipe_err)) {
+    return RedisModule_ReplyWithError(ctx, pipe_err.c_str());
   }
 
   // Reply
