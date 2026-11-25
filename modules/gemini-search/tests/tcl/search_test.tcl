@@ -3681,6 +3681,72 @@ test_assert "FT.HYBRID error validation" {
 }
 
 # ============================================================
+# Phase 43: High-Perf HNSW, FLOAT16/BFLOAT16, SQ8 Quantization
+# ============================================================
+puts "\n=== Phase 43: HNSW, FLOAT16/BFLOAT16 & SQ8 ==="
+
+test_assert "VECTOR FLAT TYPE FLOAT16 and BFLOAT16 KNN search" {
+  # IEEE 754 float16: 1.0 = 0x3C00, 0.0 = 0x0000
+  set f16_10 [binary format s* {0x3C00 0x0000}]
+  set f16_01 [binary format s* {0x0000 0x3C00}]
+  r FT.CREATE p43f16 SCHEMA v VECTOR FLAT TYPE FLOAT16 DIM 2 DISTANCE_METRIC L2
+  r FT.ADD p43f16 a FIELDS v $f16_10
+  r FT.ADD p43f16 b FIELDS v $f16_01
+
+  set res [r FT.SEARCH p43f16 {*=>[KNN 1 @v $q]} PARAMS 2 q $f16_10 NOCONTENT]
+  if {[lindex $res 0] != 1 || [lindex $res 1] ne "a"} {
+    error "Expected a for FLOAT16 KNN, got $res"
+  }
+  r FT.DROPINDEX p43f16
+
+  # BFloat16: 1.0 = 0x3F80, 0.0 = 0x0000
+  set bf16_10 [binary format s* {0x3F80 0x0000}]
+  set bf16_01 [binary format s* {0x0000 0x3F80}]
+  r FT.CREATE p43bf16 SCHEMA v VECTOR HNSW TYPE BFLOAT16 DIM 2 DISTANCE_METRIC COSINE M 8 EF_CONSTRUCTION 64
+  r FT.ADD p43bf16 x FIELDS v $bf16_10
+  r FT.ADD p43bf16 y FIELDS v $bf16_01
+
+  set res2 [r FT.SEARCH p43bf16 {*=>[KNN 1 @v $q]} PARAMS 2 q $bf16_01 NOCONTENT]
+  if {[lindex $res2 0] != 1 || [lindex $res2 1] ne "y"} {
+    error "Expected y for BFLOAT16 HNSW KNN, got $res2"
+  }
+  r FT.DROPINDEX p43bf16
+}
+
+test_assert "VECTOR QUANTIZATION SQ8 works on FLAT and HNSW and rejects bad params" {
+  set v1 [binary format f* {1.0 0.0 0.0 0.0}]
+  set v2 [binary format f* {0.0 1.0 0.0 0.0}]
+  set v3 [binary format f* {0.9 0.1 0.0 0.0}]
+
+  r FT.CREATE p43sq8f SCHEMA v VECTOR FLAT DIM 4 DISTANCE_METRIC L2 QUANTIZATION SQ8
+  r FT.ADD p43sq8f d1 FIELDS v $v1
+  r FT.ADD p43sq8f d2 FIELDS v $v2
+  r FT.ADD p43sq8f d3 FIELDS v $v3
+  set rf [r FT.SEARCH p43sq8f {*=>[KNN 2 @v $q]} PARAMS 2 q $v1 NOCONTENT]
+  if {[lindex $rf 1] ne "d1" || [lindex $rf 2] ne "d3"} {
+    error "Expected {d1 d3} for FLAT SQ8, got $rf"
+  }
+  r FT.DROPINDEX p43sq8f
+
+  r FT.CREATE p43sq8h SCHEMA v VECTOR HNSW DIM 4 DISTANCE_METRIC L2 QUANTIZATION SQ8 M 8 EF_CONSTRUCTION 64
+  r FT.ADD p43sq8h d1 FIELDS v $v1
+  r FT.ADD p43sq8h d2 FIELDS v $v2
+  r FT.ADD p43sq8h d3 FIELDS v $v3
+  set rh [r FT.SEARCH p43sq8h {*=>[KNN 2 @v $q]} PARAMS 2 q $v1 NOCONTENT]
+  if {[lindex $rh 1] ne "d1" || [lindex $rh 2] ne "d3"} {
+    error "Expected {d1 d3} for HNSW SQ8, got $rh"
+  }
+  r FT.DROPINDEX p43sq8h
+
+  # Invalid TYPE and QUANTIZATION rejected
+  set e1 0
+  if {[catch {r FT.CREATE p43bad1 SCHEMA v VECTOR FLAT TYPE INT4 DIM 2 DISTANCE_METRIC L2}]} { set e1 1 }
+  set e2 0
+  if {[catch {r FT.CREATE p43bad2 SCHEMA v VECTOR FLAT DIM 2 DISTANCE_METRIC L2 QUANTIZATION PQ99}]} { set e2 1 }
+  if {!$e1 || !$e2} { error "Expected errors for invalid TYPE/QUANTIZATION" }
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

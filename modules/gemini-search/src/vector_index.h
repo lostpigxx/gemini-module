@@ -3,6 +3,7 @@
 #include "index_spec.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -20,9 +21,26 @@ float InnerProductDistance(const float* a, const float* b, size_t dim);
 using DistFn = float (*)(const float*, const float*, size_t);
 DistFn GetDistanceFunction(DistanceMetric metric);
 
-// Decode a binary vector blob (FLOAT32 or FLOAT64) into float32 buffer.
+// Half-precision / BFloat16 conversions
+float Float16ToFloat32(uint16_t h);
+uint16_t Float32ToFloat16(float f);
+float BFloat16ToFloat32(uint16_t bf);
+uint16_t Float32ToBFloat16(float f);
+
+// Decode a binary vector blob (FLOAT32, FLOAT64, FLOAT16, BFLOAT16) into float32 buffer.
 bool DecodeVectorBlob(const std::string& blob, size_t dim,
                       VectorDataType dtype, std::vector<float>& out);
+
+// Per-vector 8-bit scalar quantization (SQ8) helpers
+struct Sq8Meta {
+  float min_val = 0.0f;
+  float scale = 0.0f;  // (max - min) / 255.0f
+};
+
+void QuantizeSq8(const float* src, size_t dim, uint8_t* dst, Sq8Meta& meta);
+void DequantizeSq8(const uint8_t* src, const Sq8Meta& meta, size_t dim, float* dst);
+float Sq8Distance(const float* query, const uint8_t* qvec, const Sq8Meta& meta,
+                  size_t dim, DistanceMetric metric);
 
 class VectorIndexBase {
  public:
@@ -46,12 +64,18 @@ class VectorIndexBase {
 class FlatVectorIndex : public VectorIndexBase {
   size_t dim_;
   DistanceMetric metric_;
+  VectorQuantization quantization_;
   std::vector<float> data_;
+  std::vector<uint8_t> sq8_data_;
+  std::vector<Sq8Meta> sq8_meta_;
   std::vector<std::string> ids_;
   std::unordered_map<std::string, size_t> id_to_idx_;
 
+  float DistanceAt(const float* query, size_t idx, DistFn dist_fn) const;
+
  public:
-  FlatVectorIndex(size_t dim, DistanceMetric metric);
+  FlatVectorIndex(size_t dim, DistanceMetric metric,
+                  VectorQuantization quantization = VectorQuantization::kNone);
   void Add(const std::string& doc_id, const float* data) override;
   bool Remove(const std::string& doc_id) override;
   std::vector<KnnResult> KnnQuery(const float* query, size_t k) const override;

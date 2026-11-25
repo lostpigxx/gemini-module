@@ -203,9 +203,27 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
             fspec.vector_params.data_type = VectorDataType::kFloat32;
           } else if (MatchArg(dtype_str, "FLOAT64")) {
             fspec.vector_params.data_type = VectorDataType::kFloat64;
+          } else if (MatchArg(dtype_str, "FLOAT16")) {
+            fspec.vector_params.data_type = VectorDataType::kFloat16;
+          } else if (MatchArg(dtype_str, "BFLOAT16")) {
+            fspec.vector_params.data_type = VectorDataType::kBFloat16;
           } else {
             return RedisModule_ReplyWithError(
-                ctx, "ERR unknown VECTOR TYPE, expected FLOAT32 or FLOAT64");
+                ctx, "ERR unknown VECTOR TYPE, expected FLOAT32, FLOAT64, FLOAT16, or BFLOAT16");
+          }
+          i += 2;
+        } else if (MatchArg(param, "QUANTIZATION")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR QUANTIZATION requires a value");
+          }
+          auto qstr = ArgView(argv[i + 1]);
+          if (MatchArg(qstr, "NONE")) {
+            fspec.vector_params.quantization = VectorQuantization::kNone;
+          } else if (MatchArg(qstr, "SQ8")) {
+            fspec.vector_params.quantization = VectorQuantization::kSq8;
+          } else {
+            return RedisModule_ReplyWithError(
+                ctx, "ERR unknown QUANTIZATION, expected NONE or SQ8");
           }
           i += 2;
         } else if (MatchArg(param, "DIM")) {

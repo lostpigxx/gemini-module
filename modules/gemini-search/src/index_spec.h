@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -21,18 +22,36 @@ inline const char* FieldTypeName(FieldType t) {
 
 enum class VectorAlgorithm { kFlat, kHnsw };
 
-enum class VectorDataType { kFloat32, kFloat64 };
+enum class VectorDataType { kFloat32, kFloat64, kFloat16, kBFloat16 };
 
 inline const char* VectorDataTypeName(VectorDataType t) {
   switch (t) {
     case VectorDataType::kFloat32: return "FLOAT32";
     case VectorDataType::kFloat64: return "FLOAT64";
+    case VectorDataType::kFloat16: return "FLOAT16";
+    case VectorDataType::kBFloat16: return "BFLOAT16";
   }
   return "FLOAT32";
 }
 
 inline size_t VectorElementSize(VectorDataType t) {
-  return (t == VectorDataType::kFloat64) ? sizeof(double) : sizeof(float);
+  switch (t) {
+    case VectorDataType::kFloat64: return sizeof(double);
+    case VectorDataType::kFloat16:
+    case VectorDataType::kBFloat16: return sizeof(uint16_t);
+    case VectorDataType::kFloat32: return sizeof(float);
+  }
+  return sizeof(float);
+}
+
+enum class VectorQuantization { kNone, kSq8 };
+
+inline const char* VectorQuantizationName(VectorQuantization q) {
+  switch (q) {
+    case VectorQuantization::kNone: return "NONE";
+    case VectorQuantization::kSq8: return "SQ8";
+  }
+  return "NONE";
 }
 
 enum class DistanceMetric { kL2, kCosine, kIP };
@@ -65,6 +84,7 @@ struct VectorFieldParams {
   size_t m = 16;
   size_t ef_construction = 200;
   VectorDataType data_type = VectorDataType::kFloat32;
+  VectorQuantization quantization = VectorQuantization::kNone;
 };
 
 struct FieldSpec {

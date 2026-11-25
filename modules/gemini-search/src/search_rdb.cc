@@ -113,8 +113,10 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
       RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(f.vector_params.metric));
       RedisModule_SaveUnsigned(rdb, f.vector_params.m);
       RedisModule_SaveUnsigned(rdb, f.vector_params.ef_construction);
-      // encver >= 8: vector data type (FLOAT32 / FLOAT64)
+      // encver >= 8: vector data type (FLOAT32 / FLOAT64 / FLOAT16 / BFLOAT16)
       RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(f.vector_params.data_type));
+      // encver >= 12: vector quantization (NONE / SQ8)
+      RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(f.vector_params.quantization));
     }
     RedisModule_SaveStringBuffer(rdb, f.json_path.c_str(), f.json_path.size());
     RedisModule_SaveUnsigned(rdb, f.sortable ? 1 : 0);
@@ -240,10 +242,18 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
       if (encver >= 8) {
         uint64_t raw_dt = 0;
         if (!SafeLoadUnsigned(rdb, raw_dt) ||
-            raw_dt > static_cast<uint64_t>(VectorDataType::kFloat64)) {
+            raw_dt > static_cast<uint64_t>(VectorDataType::kBFloat16)) {
           return nullptr;
         }
         f.vector_params.data_type = static_cast<VectorDataType>(raw_dt);
+      }
+      if (encver >= 12) {
+        uint64_t raw_q = 0;
+        if (!SafeLoadUnsigned(rdb, raw_q) ||
+            raw_q > static_cast<uint64_t>(VectorQuantization::kSq8)) {
+          return nullptr;
+        }
+        f.vector_params.quantization = static_cast<VectorQuantization>(raw_q);
       }
     }
     if (encver >= 5) {
@@ -455,6 +465,10 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value) {
       if (f.vector_params.data_type != VectorDataType::kFloat32) {
         create_args.push_back("TYPE");
         create_args.push_back(VectorDataTypeName(f.vector_params.data_type));
+      }
+      if (f.vector_params.quantization != VectorQuantization::kNone) {
+        create_args.push_back("QUANTIZATION");
+        create_args.push_back(VectorQuantizationName(f.vector_params.quantization));
       }
       create_args.push_back("DIM");
       create_args.push_back(std::to_string(f.vector_params.dim));

@@ -97,6 +97,19 @@ int main() {
     BenchUs("FlatVector Cos KNN-10 (5kx128)", 100, [&]() {
       sink += flat_cos.KnnQuery(q.data(), 10).size();
     });
+
+    HnswIndex hnsw(kDim, DistanceMetric::kL2, 16, 100);
+    auto th0 = Clock::now();
+    for (int i = 0; i < 2000; i++) {
+      for (size_t d = 0; d < kDim; d++) buf[d] = fdist(rng);
+      hnsw.Add("h" + std::to_string(i), buf.data());
+    }
+    double hnsw_build_ms =
+        std::chrono::duration<double, std::milli>(Clock::now() - th0).count();
+    std::printf("%-34s  %9.2f ms     (2000x128)\n", "HnswIndex Build (2kx128)", hnsw_build_ms);
+    BenchUs("HnswIndex L2 KNN-10 (2kx128)", 200, [&]() {
+      sink += hnsw.KnnQueryEf(q.data(), 10, 40).size();
+    });
   }
 
   // 4. DocumentStore string-to-double sort vs SortableColumn pre-extracted sort (10,000 docs)

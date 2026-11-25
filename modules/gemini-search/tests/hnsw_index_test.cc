@@ -340,3 +340,48 @@ TEST(HnswIndexTest, DeleteAllThenAdd) {
   ASSERT_EQ(results.size(), 1u);
   EXPECT_EQ(results[0].doc_id, "c");
 }
+
+TEST(HnswIndexTest, SlotReuseAndSq8QuantizationRecall) {
+  constexpr size_t N = 200;
+  constexpr size_t DIM = 32;
+  std::mt19937 rng(777);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+  HnswIndex hnsw(DIM, DistanceMetric::kL2, 12, 100, VectorQuantization::kSq8);
+  FlatVectorIndex flat(DIM, DistanceMetric::kL2);
+
+  std::vector<float> buf(DIM);
+  for (size_t i = 0; i < N; i++) {
+    for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+    std::string id = "v" + std::to_string(i);
+    hnsw.Add(id, buf.data());
+    flat.Add(id, buf.data());
+  }
+  // Remove half and re-add new vectors to exercise free_slots_ reuse
+  for (size_t i = 0; i < N; i += 2) {
+    std::string id = "v" + std::to_string(i);
+    EXPECT_TRUE(hnsw.Remove(id));
+    flat.Remove(id);
+  }
+  for (size_t i = 0; i < N; i += 2) {
+    for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+    std::string id = "n" + std::to_string(i);
+    hnsw.Add(id, buf.data());
+    flat.Add(id, buf.data());
+  }
+  EXPECT_EQ(hnsw.Size(), N);
+
+  hnsw.SetEfRuntime(50);
+  double recall = 0.0;
+  for (int q = 0; q < 10; q++) {
+    for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+    auto hr = hnsw.KnnQuery(buf.data(), 10);
+    auto fr = flat.KnnQuery(buf.data(), 10);
+    std::unordered_set<std::string> gt;
+    for (auto& r : fr) gt.insert(r.doc_id);
+    size_t hits = 0;
+    for (auto& r : hr) if (gt.count(r.doc_id)) hits++;
+    recall += static_cast<double>(hits) / 10.0;
+  }
+  EXPECT_GT(recall / 10.0, 0.85);
+}

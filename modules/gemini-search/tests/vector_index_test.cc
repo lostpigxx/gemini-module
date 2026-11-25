@@ -244,3 +244,65 @@ TEST(VectorFieldIndicesTest, GetOrCreateHnsw) {
   EXPECT_EQ(idx.Size(), 1u);
 }
 
+TEST(VectorPrecisionTest, Float16RoundTrip) {
+  float vals[] = {0.0f, -0.0f, 1.0f, -1.0f, 0.5f, 3.140625f, -42.5f, 0.0001f};
+  for (float v : vals) {
+    uint16_t h = Float32ToFloat16(v);
+    float back = Float16ToFloat32(h);
+    EXPECT_NEAR(back, v, std::max(1e-3f, std::fabs(v) * 2e-3f));
+  }
+}
+
+TEST(VectorPrecisionTest, BFloat16RoundTrip) {
+  float vals[] = {0.0f, 1.0f, -1.0f, 3.14159f, -123.5f, 1e-6f, 1e10f};
+  for (float v : vals) {
+    uint16_t bf = Float32ToBFloat16(v);
+    float back = BFloat16ToFloat32(bf);
+    EXPECT_NEAR(back, v, std::max(1e-7f, std::fabs(v) * 1e-2f));
+  }
+}
+
+TEST(VectorPrecisionTest, DecodeVectorBlobFloat16AndBFloat16) {
+  uint16_t fp16[3] = {Float32ToFloat16(1.0f), Float32ToFloat16(-2.5f),
+                      Float32ToFloat16(0.25f)};
+  std::string blob16(reinterpret_cast<const char*>(fp16), sizeof(fp16));
+  std::vector<float> out;
+  ASSERT_TRUE(DecodeVectorBlob(blob16, 3, VectorDataType::kFloat16, out));
+  ASSERT_EQ(out.size(), 3u);
+  EXPECT_NEAR(out[0], 1.0f, 1e-3f);
+  EXPECT_NEAR(out[1], -2.5f, 1e-3f);
+  EXPECT_NEAR(out[2], 0.25f, 1e-3f);
+  // Wrong size rejected
+  EXPECT_FALSE(DecodeVectorBlob(blob16, 4, VectorDataType::kFloat16, out));
+
+  uint16_t bf16[2] = {Float32ToBFloat16(2.0f), Float32ToBFloat16(-4.0f)};
+  std::string blob_bf(reinterpret_cast<const char*>(bf16), sizeof(bf16));
+  ASSERT_TRUE(DecodeVectorBlob(blob_bf, 2, VectorDataType::kBFloat16, out));
+  EXPECT_NEAR(out[0], 2.0f, 1e-2f);
+  EXPECT_NEAR(out[1], -4.0f, 1e-2f);
+  EXPECT_FALSE(DecodeVectorBlob(blob_bf, 3, VectorDataType::kBFloat16, out));
+}
+
+TEST(VectorSq8Test, FlatSq8L2CosineIpAccuracyAndRemove) {
+  for (auto metric : {DistanceMetric::kL2, DistanceMetric::kCosine, DistanceMetric::kIP}) {
+    FlatVectorIndex idx(4, metric, VectorQuantization::kSq8);
+    float v1[] = {1.0f, 0.0f, 0.0f, 0.0f};
+    float v2[] = {0.0f, 1.0f, 0.0f, 0.0f};
+    float v3[] = {0.9f, 0.1f, 0.0f, 0.0f};
+    idx.Add("d1", v1);
+    idx.Add("d2", v2);
+    idx.Add("d3", v3);
+
+    auto res = idx.KnnQuery(v1, 2);
+    ASSERT_EQ(res.size(), 2u);
+    EXPECT_EQ(res[0].doc_id, "d1");
+    EXPECT_EQ(res[1].doc_id, "d3");
+
+    EXPECT_TRUE(idx.Remove("d1"));
+    EXPECT_EQ(idx.Size(), 2u);
+    auto res2 = idx.KnnQuery(v1, 1);
+    ASSERT_EQ(res2.size(), 1u);
+    EXPECT_EQ(res2[0].doc_id, "d3");
+  }
+}
+

@@ -3,20 +3,17 @@
 #include "vector_index.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-struct HnswNode {
-  std::vector<float> vector;
-  int max_layer;
-  std::vector<std::vector<std::string>> neighbors;
-};
-
 class HnswIndex : public VectorIndexBase {
  public:
   HnswIndex(size_t dim, DistanceMetric metric,
-            size_t m = 16, size_t ef_construction = 200);
+            size_t m = 16, size_t ef_construction = 200,
+            VectorQuantization quantization = VectorQuantization::kNone);
 
   void Add(const std::string& doc_id, const float* data) override;
   bool Remove(const std::string& doc_id) override;
@@ -38,8 +35,11 @@ class HnswIndex : public VectorIndexBase {
   void SetEfRuntime(size_t ef);
 
  private:
+  static constexpr uint32_t kInvalidNode = std::numeric_limits<uint32_t>::max();
+
   size_t dim_;
   DistanceMetric metric_;
+  VectorQuantization quantization_;
   DistFn dist_fn_;
   size_t m_;
   size_t m_max0_;
@@ -47,17 +47,32 @@ class HnswIndex : public VectorIndexBase {
   size_t ef_runtime_;
   double ml_;
 
-  std::string entry_point_;
-  int max_level_;
-  std::unordered_map<std::string, HnswNode> nodes_;
+  uint32_t entry_point_ = kInvalidNode;
+  int max_level_ = -1;
+  size_t live_count_ = 0;
+
+  // Dense node storage indexed by uint32_t node_id
+  std::vector<float> vectors_;
+  std::vector<uint8_t> sq8_vectors_;
+  std::vector<Sq8Meta> sq8_meta_;
+  std::vector<std::string> doc_ids_;
+  std::vector<uint8_t> alive_;
+  std::vector<int> max_layers_;
+  std::vector<std::vector<std::vector<uint32_t>>> neighbors_;
+  std::vector<uint32_t> free_slots_;
+  std::unordered_map<std::string, uint32_t> id_to_node_;
+
+  // Zero-allocation visited-epoch array for SearchLayer
+  mutable std::vector<uint32_t> visited_epoch_;
+  mutable uint32_t current_epoch_ = 0;
 
   int RandomLevel(const std::string& doc_id) const;
-  float DistanceTo(const float* a, const std::string& b_id) const;
+  float DistanceTo(const float* query, uint32_t node_id) const;
+  uint32_t NextEpoch() const;
 
-  std::vector<std::string> SearchLayer(const float* query,
-                                        const std::string& entry, size_t ef,
-                                        int layer) const;
-  std::vector<std::string> SelectNeighbors(const float* query,
-                                            const std::vector<std::string>& candidates,
-                                            size_t max_neighbors) const;
+  std::vector<uint32_t> SearchLayer(const float* query, uint32_t entry,
+                                    size_t ef, int layer) const;
+  std::vector<uint32_t> SelectNeighbors(const float* query,
+                                        const std::vector<uint32_t>& candidates,
+                                        size_t max_neighbors) const;
 };
