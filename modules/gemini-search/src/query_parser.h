@@ -91,6 +91,7 @@ struct QueryOptions {
   ScorerType scorer = ScorerType::kBm25;
   size_t max_expansions = 200;
   size_t min_stem_len = 3;
+  const std::unordered_set<std::string>* custom_dict = nullptr;
 };
 
 bool ParseQuery(const std::string& input, ParsedQuery& out,

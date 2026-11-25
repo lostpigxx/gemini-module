@@ -57,6 +57,7 @@ class TermDict {
   std::vector<std::string> Dump() const;
   bool Contains(const std::string& term) const;
   size_t Size() const;
+  const std::unordered_set<std::string>& Terms() const { return terms_; }
 };
 
 // =============================================================

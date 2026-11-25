@@ -258,3 +258,53 @@ TEST(TextIndexPhase47Test, SlotReuseAndFastRemoveChurn) {
   auto sr = idx.Search({"reused"});
   EXPECT_EQ(sr.size(), 250u);
 }
+
+TEST(CjkFmmDictTest, LongestMatchPreferenceAndBigramFallback) {
+  std::unordered_set<std::string> dict = {"向量数据库", "数据库", "人工智能", "机器学习"};
+  auto toks = TextIndex::TokenizeWithDict("向量数据库技术", dict);
+  ASSERT_EQ(toks.size(), 2u);
+  EXPECT_EQ(toks[0], "向量数据库");
+  EXPECT_EQ(toks[1], "技术");
+
+  // Mixed ASCII + Chinese FMM
+  auto mixed = TextIndex::TokenizeWithDict("Redis向量数据库和机器学习v8", dict);
+  EXPECT_EQ(mixed[0], "redis");
+  EXPECT_EQ(mixed[1], "向量数据库");
+  EXPECT_TRUE(std::find(mixed.begin(), mixed.end(), "机器学习") != mixed.end());
+  EXPECT_EQ(mixed.back(), "v8");
+
+  // Trailing single char after dict match
+  auto tail = TextIndex::TokenizeWithDict("向量数据库好", dict);
+  ASSERT_EQ(tail.size(), 2u);
+  EXPECT_EQ(tail[0], "向量数据库");
+  EXPECT_EQ(tail[1], "好");
+
+  // OOV CJK falls back identically to bigrams
+  auto oov = TextIndex::TokenizeWithDict("搜索引擎", dict);
+  ASSERT_EQ(oov.size(), 3u);
+  EXPECT_EQ(oov[0], "搜索");
+  EXPECT_EQ(oov[1], "索引");
+  EXPECT_EQ(oov[2], "引擎");
+
+  // Empty dict falls back cleanly
+  std::unordered_set<std::string> empty_dict;
+  auto fb = TextIndex::TokenizeWithDict("搜索引擎", empty_dict);
+  EXPECT_EQ(fb, oov);
+}
+
+TEST(CjkFmmDictTest, TextIndexAddAndExactCompoundLookup) {
+  std::unordered_set<std::string> dict = {"向量数据库", "人工智能"};
+  TextIndex idx;
+  idx.Add("d1", "我们构建了高性能向量数据库", false, "chinese", false, false, &dict);
+  idx.Add("d2", "向量和量数与数据以及据库", false, "chinese", false, false, &dict);
+
+  // Exact compound token eliminates false-positive bigram collision on d2
+  auto hits = idx.Lookup("向量数据库");
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0], "d1");
+
+  // OOV bigram in d1 still searchable
+  auto oov_hits = idx.Lookup("性能");
+  ASSERT_EQ(oov_hits.size(), 1u);
+  EXPECT_EQ(oov_hits[0], "d1");
+}

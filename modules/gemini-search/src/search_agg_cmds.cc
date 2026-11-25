@@ -462,6 +462,10 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   QueryOptions qopts;
   qopts.language = entry.spec.language;
   qopts.dialect = GetDefaultDialect();
+  if (!entry.spec.custom_dict.empty()) {
+    auto dit = GetTermDicts().find(entry.spec.custom_dict);
+    if (dit != GetTermDicts().end()) qopts.custom_dict = &dit->second.Terms();
+  }
   long long timeout_ms = 0;
   std::unordered_map<std::string, std::string> params;
   for (int ci = 3; ci < argc; ci++) {

@@ -703,10 +703,16 @@ struct Parser {
   bool nostopwords = false;
   int dialect = 2;
   int depth = 0;
+  const std::unordered_set<std::string>* custom_dict = nullptr;
 
   Parser(const std::string& s, std::string& err, bool nostop = false,
-         int dia = 2)
-      : input(s), error_msg(err), nostopwords(nostop), dialect(dia) {}
+         int dia = 2,
+         const std::unordered_set<std::string>* cdict = nullptr)
+      : input(s),
+        error_msg(err),
+        nostopwords(nostop),
+        dialect(dia),
+        custom_dict(cdict) {}
 
   char Peek() const {
     if (pos >= input.size()) return '\0';
@@ -792,8 +798,11 @@ struct Parser {
       if (!mod.is_prefix && !mod.is_suffix && !mod.is_infix &&
           !mod.fuzzy_dist && !mod.is_optional) {
         // Plain term: apply stop word filter unless nostopwords
-        auto filtered = nostopwords ? TextIndex::TokenizeRaw(base)
-                                    : TextIndex::Tokenize(base);
+        auto filtered = (custom_dict && !custom_dict->empty())
+                            ? TextIndex::TokenizeWithDict(base, *custom_dict,
+                                                          !nostopwords)
+                            : (nostopwords ? TextIndex::TokenizeRaw(base)
+                                           : TextIndex::Tokenize(base));
         for (auto& t : filtered) {
           terms.push_back(std::move(t));
           mods.push_back(mod);
@@ -1038,7 +1047,9 @@ struct Parser {
       }
       std::string body = input.substr(start, pos - start);
       pos++;
-      auto terms = TextIndex::TokenizeRaw(body);
+      auto terms = (custom_dict && !custom_dict->empty())
+                       ? TextIndex::TokenizeWithDict(body, *custom_dict, false)
+                       : TextIndex::TokenizeRaw(body);
       if (terms.empty()) {
         error_msg = "ERR syntax error: empty phrase";
         return false;
@@ -1138,7 +1149,9 @@ struct Parser {
       }
       std::string body = input.substr(start, pos - start);
       pos++;
-      auto terms = TextIndex::TokenizeRaw(body);
+      auto terms = (custom_dict && !custom_dict->empty())
+                       ? TextIndex::TokenizeWithDict(body, *custom_dict, false)
+                       : TextIndex::TokenizeRaw(body);
       if (terms.empty()) {
         error_msg = "ERR syntax error: empty phrase";
         return false;
@@ -1429,7 +1442,8 @@ bool ParseQuery(const std::string& input, ParsedQuery& out,
     size_t fe = filter_part.find_last_not_of(" \t");
     filter_part = filter_part.substr(fs, fe - fs + 1);
 
-    Parser parser(filter_part, error_msg, qopts.nostopwords, qopts.dialect);
+    Parser parser(filter_part, error_msg, qopts.nostopwords, qopts.dialect,
+                  qopts.custom_dict);
     if (!parser.ParseOr(out.root)) return false;
     parser.SkipSpaces();
     if (parser.pos != filter_part.size()) {
@@ -1440,7 +1454,8 @@ bool ParseQuery(const std::string& input, ParsedQuery& out,
   }
 
   // No KNN — parse as regular query tree
-  Parser parser(trimmed, error_msg, qopts.nostopwords, qopts.dialect);
+  Parser parser(trimmed, error_msg, qopts.nostopwords, qopts.dialect,
+                qopts.custom_dict);
   if (!parser.ParseOr(out.root)) return false;
   parser.SkipSpaces();
   if (parser.pos != trimmed.size()) {

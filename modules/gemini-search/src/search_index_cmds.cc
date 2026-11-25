@@ -62,6 +62,7 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   std::string index_language = "english";
   std::string index_language_field;
+  std::string index_custom_dict;
   std::vector<std::string> custom_stopwords;
   bool has_custom_stopwords = false;
   bool idx_nofreqs = false;
@@ -82,6 +83,11 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       i++;
       if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR LANGUAGE_FIELD requires a field name");
       index_language_field = std::string(ArgView(argv[i]));
+      i++;
+    } else if (MatchArg(opt, "DICT")) {
+      i++;
+      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR DICT requires a dictionary name");
+      index_custom_dict = std::string(ArgView(argv[i]));
       i++;
     } else if (MatchArg(opt, "STOPWORDS")) {
       i++;
@@ -391,7 +397,8 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                               std::move(custom_stopwords), has_custom_stopwords,
                               idx_nofreqs, idx_nooffsets, idx_nohl, idx_temporary,
                               std::move(idx_filter_expr), idx_skip_initial_scan,
-                              std::move(index_language_field)};
+                              std::move(index_language_field),
+                              std::move(index_custom_dict)};
   TouchIndex(it->second);
 
   if (SearchModuleType) {

@@ -277,9 +277,14 @@ void AddDocToIndices(
           doc_lang = lit->second;
         }
       }
+      const std::unordered_set<std::string>* cdict = nullptr;
+      if (!entry.spec.custom_dict.empty()) {
+        auto dit = g_term_dicts.find(entry.spec.custom_dict);
+        if (dit != g_term_dicts.end()) cdict = &dit->second.Terms();
+      }
       entry.text_indices.GetOrCreate(fname).Add(
           doc_id, fval, !fspec->phonetic.empty(), doc_lang,
-          entry.spec.nofreqs, entry.spec.nooffsets);
+          entry.spec.nofreqs, entry.spec.nooffsets, cdict);
     } else if (fspec->type == FieldType::kGeo) {
       GeoCoord coord;
       if (ParseGeoCoord(fval, coord)) {

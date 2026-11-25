@@ -653,6 +653,10 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   qopts.scorer = opts.scorer;
   qopts.max_expansions = GetMaxExpansions();
   qopts.min_stem_len = GetMinStemLen();
+  if (!entry.spec.custom_dict.empty()) {
+    auto dit = GetTermDicts().find(entry.spec.custom_dict);
+    if (dit != GetTermDicts().end()) qopts.custom_dict = &dit->second.Terms();
+  }
   if (opts.has_timeout && opts.timeout_ms > 0) {
     qopts.deadline_ms = NowMs() + opts.timeout_ms;
   }
@@ -1975,6 +1979,10 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   qopts.scorer = opts.scorer;
   qopts.max_expansions = GetMaxExpansions();
   qopts.min_stem_len = GetMinStemLen();
+  if (!entry.spec.custom_dict.empty()) {
+    auto dit = GetTermDicts().find(entry.spec.custom_dict);
+    if (dit != GetTermDicts().end()) qopts.custom_dict = &dit->second.Terms();
+  }
   if (opts.has_timeout && opts.timeout_ms > 0) {
     qopts.deadline_ms = NowMs() + opts.timeout_ms;
   }

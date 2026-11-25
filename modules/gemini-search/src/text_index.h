@@ -5,6 +5,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct TextSearchResult {
@@ -42,7 +43,8 @@ class TextIndex {
  public:
   void Add(const std::string& doc_id, const std::string& text,
            bool phonetic = false, const std::string& language = "english",
-           bool nofreqs = false, bool nooffsets = false);
+           bool nofreqs = false, bool nooffsets = false,
+           const std::unordered_set<std::string>* custom_dict = nullptr);
   void Remove(const std::string& doc_id);
   std::vector<TextSearchResult> Search(const std::vector<std::string>& terms) const;
   std::vector<std::string> Lookup(const std::string& term) const;
@@ -82,6 +84,9 @@ class TextIndex {
   static std::vector<std::string> Tokenize(const std::string& text,
                                             const std::vector<std::string>& stopwords);
   static std::vector<std::string> TokenizeRaw(const std::string& text);
+  static std::vector<std::string> TokenizeWithDict(
+      const std::string& text, const std::unordered_set<std::string>& dict,
+      bool filter_stopwords = false);
   static int LevenshteinDistance(const std::string& a, const std::string& b);
 };
 

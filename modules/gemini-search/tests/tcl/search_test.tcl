@@ -4071,6 +4071,43 @@ test_assert "FT.AGGREGATE async offload (GROUPBY, APPLY, SORTBY MAX, KNN)" {
 }
 
 # ============================================================
+# Phase 54: CJK Custom Dictionary FMM Segmentation
+# ============================================================
+puts "\n=== Phase 54: CJK Custom Dictionary FMM ==="
+
+test_assert "CJK FMM custom dictionary via FT.DICTADD + FT.CREATE DICT" {
+  r FT.DICTADD p54dict [u8 "向量数据库"] [u8 "人工智能"]
+  r FT.CREATE p54cjk LANGUAGE chinese DICT p54dict SCHEMA body TEXT
+  r FT.ADD p54cjk c1 FIELDS body [u8 "我们构建了高性能向量数据库"]
+  r FT.ADD p54cjk c2 FIELDS body [u8 "向量和量数与数据以及据库"]
+  r FT.ADD p54cjk c3 FIELDS body [u8 "人工智能搜索引擎"]
+
+  # Exact compound match hits only c1 (no false-positive bigram collision on c2)
+  set r1 [r FT.SEARCH p54cjk [u8 "向量数据库"] NOCONTENT]
+  if {[lindex $r1 0] != 1 || [lindex $r1 1] ne "c1"} {
+    r FT.DROPINDEX p54cjk
+    error "Expected only c1 for FMM compound term, got $r1"
+  }
+
+  # OOV bigram fallback still matches c3
+  set r2 [r FT.SEARCH p54cjk [u8 "搜索引擎"] NOCONTENT]
+  if {[lindex $r2 0] != 1 || [lindex $r2 1] ne "c3"} {
+    r FT.DROPINDEX p54cjk
+    error "Expected c3 for OOV CJK bigram fallback, got $r2"
+  }
+
+  # Combined FMM compound + OOV query
+  set r3 [r FT.SEARCH p54cjk [u8 "人工智能 搜索引擎"] NOCONTENT]
+  if {[lindex $r3 0] != 1 || [lindex $r3 1] ne "c3"} {
+    r FT.DROPINDEX p54cjk
+    error "Expected c3 for combined FMM+OOV query, got $r3"
+  }
+
+  r FT.DROPINDEX p54cjk
+  r FT.DICTDEL p54dict [u8 "向量数据库"] [u8 "人工智能"]
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

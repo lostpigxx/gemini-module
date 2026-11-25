@@ -119,6 +119,7 @@ struct IndexSpec {
   std::string filter_expr;
   bool skip_initial_scan = false;
   std::string language_field;
+  std::string custom_dict;
 
   bool HasPrefixes() const { return !prefixes.empty(); }
 

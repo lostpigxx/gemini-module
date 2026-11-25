@@ -66,7 +66,8 @@ static bool IsCjkCodepoint(uint32_t cp) {
 
 static std::vector<std::string> TokenizeImpl(
     const std::string& text, bool filter_stopwords,
-    const std::unordered_set<std::string>* custom_sw = nullptr) {
+    const std::unordered_set<std::string>* custom_sw = nullptr,
+    const std::unordered_set<std::string>* custom_dict = nullptr) {
   std::vector<std::string> tokens;
   const auto& sw = custom_sw ? *custom_sw : kStopWords;
   size_t i = 0;
@@ -109,7 +110,46 @@ static std::vector<std::string> TokenizeImpl(
         cjk_chars.push_back(text.substr(i, l2));
         i += l2;
       }
-      if (cjk_chars.size() == 1) {
+      if (custom_dict && !custom_dict->empty()) {
+        // Phase 54: Forward Maximum Matching (FMM) with bigram fallback
+        size_t n = cjk_chars.size();
+        size_t pos = 0;
+        bool prev_was_bigram = false;
+        while (pos < n) {
+          bool matched = false;
+          size_t max_len = std::min(n - pos, size_t{16});
+          for (size_t len = max_len; len >= 2; len--) {
+            std::string cand;
+            for (size_t k = 0; k < len; k++) cand += cjk_chars[pos + k];
+            if (custom_dict->find(cand) != custom_dict->end()) {
+              if (!filter_stopwords || sw.find(cand) == sw.end()) {
+                tokens.push_back(std::move(cand));
+              }
+              pos += len;
+              matched = true;
+              prev_was_bigram = false;
+              break;
+            }
+          }
+          if (!matched) {
+            if (pos + 1 < n) {
+              std::string bigram = cjk_chars[pos] + cjk_chars[pos + 1];
+              if (!filter_stopwords || sw.find(bigram) == sw.end()) {
+                tokens.push_back(std::move(bigram));
+              }
+              prev_was_bigram = true;
+              pos += 1;
+            } else {
+              if (!prev_was_bigram) {
+                if (!filter_stopwords || sw.find(cjk_chars[pos]) == sw.end()) {
+                  tokens.push_back(cjk_chars[pos]);
+                }
+              }
+              pos += 1;
+            }
+          }
+        }
+      } else if (cjk_chars.size() == 1) {
         if (!filter_stopwords || sw.find(cjk_chars[0]) == sw.end()) {
           tokens.push_back(std::move(cjk_chars[0]));
         }
@@ -140,6 +180,12 @@ std::vector<std::string> TextIndex::TokenizeRaw(const std::string& text) {
   return TokenizeImpl(text, false);
 }
 
+std::vector<std::string> TextIndex::TokenizeWithDict(
+    const std::string& text, const std::unordered_set<std::string>& dict,
+    bool filter_stopwords) {
+  return TokenizeImpl(text, filter_stopwords, nullptr, &dict);
+}
+
 void TextIndex::UpdateAvgDocLen() {
   if (live_docs_ == 0) {
     avg_doc_len_ = 0.0;
@@ -150,9 +196,12 @@ void TextIndex::UpdateAvgDocLen() {
 
 void TextIndex::Add(const std::string& doc_id, const std::string& text,
                     bool phonetic, const std::string& language,
-                    bool nofreqs, bool nooffsets) {
+                    bool nofreqs, bool nooffsets,
+                    const std::unordered_set<std::string>* custom_dict) {
   Remove(doc_id);
-  auto tokens = TokenizeRaw(text);
+  auto tokens = (custom_dict && !custom_dict->empty())
+                    ? TokenizeWithDict(text, *custom_dict, false)
+                    : TokenizeRaw(text);
 
   uint32_t did = 0;
   if (!free_ids_.empty()) {
