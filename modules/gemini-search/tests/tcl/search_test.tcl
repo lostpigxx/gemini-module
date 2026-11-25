@@ -3478,7 +3478,7 @@ test_assert "INDEXMISSING and INDEXEMPTY predicates work and validate schema" {
 }
 
 test_assert "Master-Replica PSYNC full sync and live command replication" {
-  global port module_path
+  global port module_path redis_major
 
   # Create pre-existing state on master before replica connects (tests full PSYNC RDB + aux)
   r FT.CREATE p41rep SCHEMA title TEXT INDEXMISSING
@@ -3532,20 +3532,23 @@ test_assert "Master-Replica PSYNC full sync and live command replication" {
     error "Replica did not complete PSYNC within timeout"
   }
 
-  # Verify full PSYNC RDB + aux state on replica
-  set r_full [redis_command $rep_fd FT.SEARCH p41alias "hello" WITHPAYLOADS NOCONTENT]
+  # Verify full PSYNC RDB (+ aux on Redis 7+) state on replica
+  set rep_idx [expr {$redis_major >= 7 ? "p41alias" : "p41rep"}]
+  set r_full [redis_command $rep_fd FT.SEARCH $rep_idx "hello" WITHPAYLOADS NOCONTENT]
   if {[lindex $r_full 0] != 1 || [lindex $r_full 1] ne "d1" || [lindex $r_full 2] ne "pl1"} {
     catch {redis_command $rep_fd SHUTDOWN NOSAVE}
     catch {close $rep_fd}
     file delete -force "/tmp/$rep_rdb" $rep_log
     error "Full PSYNC search/payload/alias mismatch on replica: $r_full"
   }
-  set r_sug [redis_command $rep_fd FT.SUGGET p41sug "red" WITHPAYLOADS]
-  if {[lindex $r_sug 0] ne "redis" || [lindex $r_sug 1] ne "db"} {
-    catch {redis_command $rep_fd SHUTDOWN NOSAVE}
-    catch {close $rep_fd}
-    file delete -force "/tmp/$rep_rdb" $rep_log
-    error "Full PSYNC suggest dict mismatch on replica: $r_sug"
+  if {$redis_major >= 7} {
+    set r_sug [redis_command $rep_fd FT.SUGGET p41sug "red" WITHPAYLOADS]
+    if {[lindex $r_sug 0] ne "redis" || [lindex $r_sug 1] ne "db"} {
+      catch {redis_command $rep_fd SHUTDOWN NOSAVE}
+      catch {close $rep_fd}
+      file delete -force "/tmp/$rep_rdb" $rep_log
+      error "Full PSYNC suggest dict mismatch on replica: $r_sug"
+    }
   }
 
   # Live command replication after PSYNC
@@ -3572,6 +3575,109 @@ test_assert "Master-Replica PSYNC full sync and live command replication" {
   if {[lindex $r_hash 0] != 1 || [lindex $r_hash 1] ne "p41h:1"} {
     error "Live ON HASH replication mismatch on replica: $r_hash"
   }
+}
+
+# ============================================================
+# Phase 42: Hybrid Search (FT.HYBRID)
+# ============================================================
+puts "\n=== Phase 42: Hybrid Search (FT.HYBRID) ==="
+
+test_assert "FT.HYBRID RRF boosts doc matching both text and vector" {
+  r FT.CREATE p42hyb SCHEMA title TEXT tag TAG vec VECTOR FLAT DIM 2 DISTANCE_METRIC L2
+  set v_close [binary format f* {1.0 0.0}]
+  set v_mid   [binary format f* {0.9 0.1}]
+  set v_far   [binary format f* {0.0 10.0}]
+
+  # d1: exact text match only (far vector)
+  r FT.ADD p42hyb d1 PAYLOAD "p1" FIELDS title "redis search engine redis" tag "db" vec $v_far
+  # d2: strong in both text and vector -> should rank #1 in RRF
+  r FT.ADD p42hyb d2 PAYLOAD "p2" FIELDS title "redis vector search" tag "ai" vec $v_mid
+  # d3: closest vector only (no text match for redis)
+  r FT.ADD p42hyb d3 PAYLOAD "p3" FIELDS title "unrelated document" tag "ai" vec $v_close
+
+  # KNN 2 returns {d3, d2}, text returns {d1, d2} -> d2 is in BOTH branches and ranks #1
+  set res [r FT.HYBRID p42hyb SEARCH "redis" VSIM @vec {$qv} KNN 2 COMBINE RRF PARAMS 2 qv $v_close WITHSCORES NOCONTENT]
+  if {[lindex $res 0] != 3} { error "Expected 3 fused docs, got $res" }
+  if {[lindex $res 1] ne "d2"} { error "Expected d2 ranked #1 by RRF overlap, got $res" }
+
+  # LIMIT 0 0 returns total count only
+  set cnt [r FT.HYBRID p42hyb SEARCH "redis" VSIM @vec {$qv} KNN 3 PARAMS 2 qv $v_close LIMIT 0 0]
+  if {[llength $cnt] != 1 || [lindex $cnt 0] != 3} { error "Expected {3} for LIMIT 0 0, got $cnt" }
+
+  # LIMIT 1 1 pagination
+  set page [r FT.HYBRID p42hyb SEARCH "redis" VSIM @vec {$qv} KNN 3 PARAMS 2 qv $v_close LIMIT 1 1 NOCONTENT]
+  if {[lindex $page 0] != 1} { error "Expected 1 doc on page, got $page" }
+}
+
+test_assert "FT.HYBRID LINEAR alpha switches ranking between text and vector" {
+  set v_close [binary format f* {1.0 0.0}]
+
+  # High alpha favors text (d1 has highest BM25 for 'redis')
+  set rt [r FT.HYBRID p42hyb SEARCH "redis" VSIM @vec {$qv} KNN 3 COMBINE LINEAR ALPHA 0.95 PARAMS 2 qv $v_close NOCONTENT]
+  if {[lindex $rt 1] ne "d1"} { error "Expected d1 #1 with ALPHA 0.95, got $rt" }
+
+  # Low alpha favors vector (d3 has closest vector distance 0)
+  set rv [r FT.HYBRID p42hyb SEARCH "redis" VSIM @vec {$qv} KNN 3 COMBINE LINEAR ALPHA 0.05 PARAMS 2 qv $v_close NOCONTENT]
+  if {[lindex $rv 1] ne "d3"} { error "Expected d3 #1 with ALPHA 0.05, got $rv" }
+}
+
+test_assert "FT.HYBRID supports RRF weights, VSIM FILTER, RETURN AS, WITHPAYLOADS, EXPLAINSCORE, alias" {
+  set v_close [binary format f* {1.0 0.0}]
+  r FT.ALIASADD p42alias p42hyb
+
+  # VSIM FILTER restricts vector branch to tag:db (only d1), while SEARCH matches d1 & d2
+  set rf [r FT.HYBRID p42alias SEARCH "redis" VSIM @vec {$qv} KNN 3 FILTER "@tag:{db}" COMBINE RRF CONSTANT 10 TEXT_WEIGHT 1.0 VECTOR_WEIGHT 2.0 PARAMS 2 qv $v_close RETURN 3 title AS t WITHSCORES EXPLAINSCORE WITHPAYLOADS LIMIT 0 1]
+  if {[lindex $rf 0] != 1} { error "Expected 1 doc, got $rf" }
+  if {[lindex $rf 1] ne "d1"} { error "Expected d1 #1 with filtered VSIM, got $rf" }
+  if {[lindex $rf 2] ne "p1"} { error "Expected payload p1, got $rf" }
+  set fields [lindex $rf 3]
+  if {[lsearch -exact $fields "__hybrid_score"] < 0} { error "Missing __hybrid_score: $fields" }
+  if {[lsearch -exact $fields "__score_explanation"] < 0} { error "Missing __score_explanation: $fields" }
+  if {[lsearch -exact $fields "t"] < 0} { error "Missing RETURN AS alias t: $fields" }
+
+  r FT.ALIASDEL p42alias
+  r FT.DROPINDEX p42hyb
+}
+
+test_assert "FT.HYBRID works with HNSW EF_RUNTIME and FLOAT64 vectors" {
+  r FT.CREATE p42hnsw SCHEMA body TEXT v VECTOR HNSW TYPE FLOAT64 DIM 2 DISTANCE_METRIC COSINE M 8 EF_CONSTRUCTION 64
+  set d1v [binary format q* {1.0 0.0}]
+  set d2v [binary format q* {0.0 1.0}]
+  r FT.ADD p42hnsw h1 FIELDS body "neural network" v $d1v
+  r FT.ADD p42hnsw h2 FIELDS body "graph database" v $d2v
+
+  set res [r FT.HYBRID p42hnsw SEARCH "neural" VSIM @v {$q} KNN 2 EF_RUNTIME 32 PARAMS 2 q $d1v NOCONTENT]
+  if {[lindex $res 0] != 2 || [lindex $res 1] ne "h1"} {
+    error "Expected h1 #1 for HNSW FLOAT64 hybrid, got $res"
+  }
+  r FT.DROPINDEX p42hnsw
+}
+
+test_assert "FT.HYBRID error validation" {
+  r FT.CREATE p42err SCHEMA title TEXT v VECTOR FLAT DIM 2 DISTANCE_METRIC L2
+  set good_v [binary format f* {1.0 0.0}]
+  set bad_v  [binary format f* {1.0 0.0 0.0}]
+
+  foreach bad_cmd [list \
+    {FT.HYBRID no_such_idx SEARCH "a" VSIM @v $q PARAMS 2 q x} \
+    {FT.HYBRID p42err SEARCH "a" PARAMS 2 q x} \
+    {FT.HYBRID p42err VSIM @v $q PARAMS 2 q x} \
+    {FT.HYBRID p42err SEARCH "a" VSIM @title $q PARAMS 2 q x} \
+    {FT.HYBRID p42err SEARCH "a" VSIM @v $missing PARAMS 2 q x} \
+    {FT.HYBRID p42err SEARCH "a" VSIM @v $q COMBINE LINEAR ALPHA 1.5 PARAMS 2 q x} \
+    {FT.HYBRID p42err SEARCH "a" VSIM @v $q COMBINE RRF CONSTANT 0 PARAMS 2 q x} \
+    {FT.HYBRID p42err SEARCH "a" VSIM @v $q COMBINE BADMETHOD PARAMS 2 q x} \
+  ] {
+    set failed 0
+    if {[catch {r {*}$bad_cmd}]} { set failed 1 }
+    if {!$failed} { error "Expected error for: $bad_cmd" }
+  }
+  # Dimension mismatch
+  set dm_err 0
+  if {[catch {r FT.HYBRID p42err SEARCH "a" VSIM @v {$q} PARAMS 2 q $bad_v}]} { set dm_err 1 }
+  if {!$dm_err} { error "Expected dimension mismatch error" }
+
+  r FT.DROPINDEX p42err
 }
 
 # ============================================================

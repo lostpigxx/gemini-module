@@ -73,6 +73,7 @@ int FtTagvalsCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
 
 // Query commands (search_query_cmds.cc)
 int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
+int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
 int FtExplainCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
 int FtExplainCliCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
 int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);

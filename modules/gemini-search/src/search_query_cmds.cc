@@ -1,4 +1,5 @@
 #include "search_internal.h"
+#include "hybrid_fusion.h"
 #include "query_parser.h"
 
 #include <algorithm>
@@ -1462,6 +1463,454 @@ int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_ReplyWithSimpleString(ctx, "result_count");
   RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(result_ids.size()));
 
+  return REDISMODULE_OK;
+}
+
+// FT.HYBRID <index>
+//   SEARCH <text_query> [SCORER <scorer>] [TEXT_LIMIT <n>]
+//   VSIM @<vec_field> $<param> [KNN <k>] [EF_RUNTIME <ef>] [FILTER <vec_filter_query>]
+//   [COMBINE RRF [CONSTANT <k>] [TEXT_WEIGHT <w>] [VECTOR_WEIGHT <w>]
+//          | LINEAR [ALPHA <alpha>]]
+//   [PARAMS <count> <name> <val> ...]
+//   [RETURN <count> <field> [AS <alias>] ...]
+//   [LIMIT <offset> <num>]
+//   [WITHSCORES] [EXPLAINSCORE] [NOCONTENT] [WITHPAYLOADS]
+//   [TIMEOUT <ms>] [DIALECT <d>]
+int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
+  if (argc < 5) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  auto it = GetIndices().find(idx_str);
+  if (it == GetIndices().end()) {
+    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+  auto& entry = it->second;
+
+  bool has_search = false;
+  std::string text_query;
+  long long text_limit = -1;
+
+  bool has_vsim = false;
+  std::string vec_field;
+  std::string vec_param;
+  size_t knn_k = 10;
+  size_t ef_runtime = 0;
+  std::string vec_filter_query;
+
+  HybridConfig hcfg;
+  SearchOptions opts;
+  std::unordered_map<std::string, std::string> params;
+
+  int i = 2;
+  while (i < argc) {
+    auto kw = ArgView(argv[i]);
+    if (MatchArg(kw, "SEARCH")) {
+      if (i + 1 >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR SEARCH requires a query");
+      }
+      has_search = true;
+      text_query = std::string(ArgView(argv[i + 1]));
+      i += 2;
+      while (i < argc) {
+        auto sub = ArgView(argv[i]);
+        if (MatchArg(sub, "SCORER")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR SCORER requires a name");
+          }
+          auto sname = ArgView(argv[i + 1]);
+          if (MatchArg(sname, "BM25") || MatchArg(sname, "BM25STD")) {
+            opts.scorer = ScorerType::kBm25;
+            opts.scorer_name = "BM25";
+          } else if (MatchArg(sname, "TFIDF")) {
+            opts.scorer = ScorerType::kTfIdf;
+            opts.scorer_name = "TFIDF";
+          } else if (MatchArg(sname, "TFIDF.DOCNORM")) {
+            opts.scorer = ScorerType::kTfIdfDocNorm;
+            opts.scorer_name = "TFIDF.DOCNORM";
+          } else if (MatchArg(sname, "DISMAX")) {
+            opts.scorer = ScorerType::kDismax;
+            opts.scorer_name = "DISMAX";
+          } else if (MatchArg(sname, "DOCSCORE")) {
+            opts.scorer = ScorerType::kDocScore;
+            opts.scorer_name = "DOCSCORE";
+          } else {
+            return RedisModule_ReplyWithError(ctx, "ERR unknown SCORER");
+          }
+          i += 2;
+        } else if (MatchArg(sub, "TEXT_LIMIT")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR TEXT_LIMIT requires a value");
+          }
+          char* ep = nullptr;
+          long long tl = std::strtoll(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10);
+          if (*ep != '\0' || tl <= 0) {
+            return RedisModule_ReplyWithError(ctx, "ERR TEXT_LIMIT must be a positive integer");
+          }
+          text_limit = tl;
+          i += 2;
+        } else {
+          break;
+        }
+      }
+    } else if (MatchArg(kw, "VSIM")) {
+      if (i + 2 >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR VSIM requires @field $param");
+      }
+      std::string f(ArgView(argv[i + 1]));
+      std::string p(ArgView(argv[i + 2]));
+      if (!f.empty() && f[0] == '@') f = f.substr(1);
+      if (f.empty() || p.size() < 2 || p[0] != '$') {
+        return RedisModule_ReplyWithError(ctx, "ERR VSIM requires @field and $param");
+      }
+      has_vsim = true;
+      vec_field = std::move(f);
+      vec_param = p.substr(1);
+      i += 3;
+      while (i < argc) {
+        auto sub = ArgView(argv[i]);
+        if (MatchArg(sub, "KNN")) {
+          if (i + 1 >= argc) return RedisModule_ReplyWithError(ctx, "ERR KNN requires k");
+          char* ep = nullptr;
+          long k = std::strtol(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10);
+          if (*ep != '\0' || k <= 0) {
+            return RedisModule_ReplyWithError(ctx, "ERR KNN k must be a positive integer");
+          }
+          knn_k = static_cast<size_t>(k);
+          i += 2;
+        } else if (MatchArg(sub, "EF_RUNTIME")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR EF_RUNTIME requires a value");
+          }
+          char* ep = nullptr;
+          long ef = std::strtol(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10);
+          if (*ep != '\0' || ef <= 0) {
+            return RedisModule_ReplyWithError(ctx, "ERR EF_RUNTIME must be a positive integer");
+          }
+          ef_runtime = static_cast<size_t>(ef);
+          i += 2;
+        } else if (MatchArg(sub, "FILTER")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR VSIM FILTER requires a query");
+          }
+          vec_filter_query = std::string(ArgView(argv[i + 1]));
+          i += 2;
+        } else {
+          break;
+        }
+      }
+    } else if (MatchArg(kw, "COMBINE")) {
+      if (i + 1 >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR COMBINE requires RRF or LINEAR");
+      }
+      auto method_s = ArgView(argv[i + 1]);
+      i += 2;
+      if (MatchArg(method_s, "RRF")) {
+        hcfg.method = FusionMethod::kRrf;
+        while (i < argc) {
+          auto sub = ArgView(argv[i]);
+          if (MatchArg(sub, "CONSTANT")) {
+            if (i + 1 >= argc) {
+              return RedisModule_ReplyWithError(ctx, "ERR CONSTANT requires a value");
+            }
+            char* ep = nullptr;
+            double v = std::strtod(std::string(ArgView(argv[i + 1])).c_str(), &ep);
+            if (*ep != '\0' || !std::isfinite(v) || v <= 0.0) {
+              return RedisModule_ReplyWithError(ctx, "ERR CONSTANT must be a positive number");
+            }
+            hcfg.rrf_k = v;
+            i += 2;
+          } else if (MatchArg(sub, "TEXT_WEIGHT")) {
+            if (i + 1 >= argc) {
+              return RedisModule_ReplyWithError(ctx, "ERR TEXT_WEIGHT requires a value");
+            }
+            char* ep = nullptr;
+            double v = std::strtod(std::string(ArgView(argv[i + 1])).c_str(), &ep);
+            if (*ep != '\0' || !std::isfinite(v) || v < 0.0) {
+              return RedisModule_ReplyWithError(ctx, "ERR TEXT_WEIGHT must be non-negative");
+            }
+            hcfg.text_weight = v;
+            i += 2;
+          } else if (MatchArg(sub, "VECTOR_WEIGHT")) {
+            if (i + 1 >= argc) {
+              return RedisModule_ReplyWithError(ctx, "ERR VECTOR_WEIGHT requires a value");
+            }
+            char* ep = nullptr;
+            double v = std::strtod(std::string(ArgView(argv[i + 1])).c_str(), &ep);
+            if (*ep != '\0' || !std::isfinite(v) || v < 0.0) {
+              return RedisModule_ReplyWithError(ctx, "ERR VECTOR_WEIGHT must be non-negative");
+            }
+            hcfg.vector_weight = v;
+            i += 2;
+          } else {
+            break;
+          }
+        }
+      } else if (MatchArg(method_s, "LINEAR")) {
+        hcfg.method = FusionMethod::kLinear;
+        if (i < argc && MatchArg(ArgView(argv[i]), "ALPHA")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR ALPHA requires a value");
+          }
+          char* ep = nullptr;
+          double a = std::strtod(std::string(ArgView(argv[i + 1])).c_str(), &ep);
+          if (*ep != '\0' || !std::isfinite(a) || a < 0.0 || a > 1.0) {
+            return RedisModule_ReplyWithError(ctx, "ERR ALPHA must be in [0, 1]");
+          }
+          hcfg.alpha = a;
+          i += 2;
+        }
+      } else {
+        return RedisModule_ReplyWithError(ctx, "ERR COMBINE expects RRF or LINEAR");
+      }
+    } else if (MatchArg(kw, "PARAMS")) {
+      i++;
+      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR PARAMS requires count");
+      char* ep = nullptr;
+      long pcount = std::strtol(std::string(ArgView(argv[i++])).c_str(), &ep, 10);
+      if (*ep != '\0' || pcount < 0 || pcount % 2 != 0) {
+        return RedisModule_ReplyWithError(ctx, "ERR PARAMS count must be a non-negative even integer");
+      }
+      for (long p = 0; p < pcount / 2; p++) {
+        if (i + 1 >= argc) {
+          return RedisModule_ReplyWithError(ctx, "ERR not enough PARAMS values");
+        }
+        std::string pname(ArgView(argv[i]));
+        std::string pval = ArgStr(argv[i + 1]);
+        params[std::move(pname)] = std::move(pval);
+        i += 2;
+      }
+    } else if (MatchArg(kw, "RETURN")) {
+      i++;
+      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR RETURN requires count");
+      char* ep = nullptr;
+      long rcount = std::strtol(std::string(ArgView(argv[i++])).c_str(), &ep, 10);
+      if (*ep != '\0' || rcount < 0) {
+        return RedisModule_ReplyWithError(ctx, "ERR RETURN count must be a non-negative integer");
+      }
+      opts.has_return = true;
+      for (long r = 0; r < rcount; ) {
+        if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough RETURN fields");
+        std::string fname(ArgView(argv[i++]));
+        r++;
+        if (r + 2 <= rcount && i + 1 < argc && MatchArg(ArgView(argv[i]), "AS")) {
+          opts.return_aliases[fname] = std::string(ArgView(argv[i + 1]));
+          i += 2;
+          r += 2;
+        }
+        opts.return_fields.push_back(std::move(fname));
+      }
+    } else if (MatchArg(kw, "LIMIT")) {
+      if (i + 2 >= argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR LIMIT requires offset and count");
+      }
+      char* ep1 = nullptr;
+      char* ep2 = nullptr;
+      long long off = std::strtoll(std::string(ArgView(argv[i + 1])).c_str(), &ep1, 10);
+      long long cnt = std::strtoll(std::string(ArgView(argv[i + 2])).c_str(), &ep2, 10);
+      if (*ep1 != '\0' || *ep2 != '\0' || off < 0 || cnt < 0) {
+        return RedisModule_ReplyWithError(ctx, "ERR LIMIT offset and count must be non-negative integers");
+      }
+      opts.limit_offset = off;
+      opts.limit_count = cnt;
+      opts.has_limit = true;
+      i += 3;
+    } else if (MatchArg(kw, "WITHSCORES")) {
+      opts.withscores = true;
+      i++;
+    } else if (MatchArg(kw, "EXPLAINSCORE")) {
+      opts.explainscore = true;
+      i++;
+    } else if (MatchArg(kw, "NOCONTENT")) {
+      opts.nocontent = true;
+      i++;
+    } else if (MatchArg(kw, "WITHPAYLOADS")) {
+      opts.withpayloads = true;
+      i++;
+    } else if (MatchArg(kw, "TIMEOUT")) {
+      if (i + 1 >= argc) return RedisModule_ReplyWithError(ctx, "ERR TIMEOUT requires value");
+      char* ep = nullptr;
+      long long tms = std::strtoll(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10);
+      if (*ep != '\0' || tms < 0) {
+        return RedisModule_ReplyWithError(ctx, "ERR TIMEOUT must be a non-negative integer");
+      }
+      opts.timeout_ms = tms;
+      opts.has_timeout = true;
+      i += 2;
+    } else if (MatchArg(kw, "DIALECT")) {
+      if (i + 1 >= argc) return RedisModule_ReplyWithError(ctx, "ERR DIALECT requires value");
+      char* ep = nullptr;
+      opts.dialect = static_cast<int>(std::strtol(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10));
+      opts.has_dialect = true;
+      i += 2;
+    } else {
+      return RedisModule_ReplyWithError(ctx, "ERR unknown FT.HYBRID option");
+    }
+  }
+
+  if (!has_search || !has_vsim) {
+    return RedisModule_ReplyWithError(ctx, "ERR FT.HYBRID requires both SEARCH and VSIM clauses");
+  }
+
+  TouchIndex(entry);
+  QueryOptions qopts;
+  qopts.language = entry.spec.language;
+  qopts.dialect = opts.has_dialect ? opts.dialect : GetDefaultDialect();
+  qopts.scorer = opts.scorer;
+  qopts.max_expansions = GetMaxExpansions();
+  qopts.min_stem_len = GetMinStemLen();
+  if (opts.has_timeout && opts.timeout_ms > 0) {
+    qopts.deadline_ms = NowMs() + opts.timeout_ms;
+  }
+
+  // 1. Validate and execute Vector branch
+  const auto* fspec = entry.spec.FindField(vec_field);
+  if (!fspec) return RedisModule_ReplyWithError(ctx, "ERR VSIM field not in schema");
+  if (fspec->type != FieldType::kVector) {
+    return RedisModule_ReplyWithError(ctx, "ERR VSIM field is not a VECTOR field");
+  }
+  auto pit = params.find(vec_param);
+  if (pit == params.end()) {
+    return RedisModule_ReplyWithError(ctx, "ERR VSIM param not found in PARAMS");
+  }
+  std::vector<float> qvec;
+  if (!DecodeVectorBlob(pit->second, fspec->vector_params.dim,
+                        fspec->vector_params.data_type, qvec)) {
+    return RedisModule_ReplyWithError(ctx, "ERR query vector dimension mismatch");
+  }
+
+  std::vector<KnnResult> vec_hits;
+  if (const auto* vidx = entry.vector_indices.Get(vec_field)) {
+    if (!vec_filter_query.empty()) {
+      ParsedQuery fpq;
+      std::string ferr;
+      if (!ParseQuery(vec_filter_query, fpq, ferr, qopts)) {
+        return RedisModule_ReplyWithError(ctx, ferr.c_str());
+      }
+      auto candidates = EvaluateQuery(
+          fpq.root, entry.spec, entry.doc_store, entry.tag_indices,
+          entry.numeric_indices, entry.text_indices, entry.geo_indices,
+          ferr, qopts, &entry.geoshape_indices, &params, &entry.vector_indices,
+          &entry.synonyms);
+      if (!ferr.empty()) return RedisModule_ReplyWithError(ctx, ferr.c_str());
+      vec_hits = vidx->KnnQueryFiltered(qvec.data(), knn_k, candidates);
+    } else {
+      vec_hits = vidx->KnnQueryEf(qvec.data(), knn_k, ef_runtime);
+    }
+  }
+
+  // 2. Execute Text branch
+  ParsedQuery tpq;
+  std::string terr;
+  if (!ParseQuery(text_query, tpq, terr, qopts)) {
+    return RedisModule_ReplyWithError(ctx, terr.c_str());
+  }
+  auto text_hits = EvaluateQueryScored(
+      tpq.root, entry.spec, entry.doc_store, entry.tag_indices,
+      entry.numeric_indices, entry.text_indices, entry.geo_indices,
+      terr, qopts, &entry.geoshape_indices, &params, &entry.vector_indices,
+      &entry.synonyms);
+  if (!terr.empty()) return RedisModule_ReplyWithError(ctx, terr.c_str());
+
+  if (text_limit > 0 && static_cast<long long>(text_hits.size()) > text_limit) {
+    std::sort(text_hits.begin(), text_hits.end(),
+              [](const ScoredResult& a, const ScoredResult& b) {
+                if (a.score != b.score) return a.score > b.score;
+                return a.doc_id < b.doc_id;
+              });
+    text_hits.resize(static_cast<size_t>(text_limit));
+  }
+
+  // 3. Fuse results
+  auto fused = FuseHybridResults(text_hits, vec_hits, hcfg);
+
+  // LIMIT 0 0 fast path
+  if (opts.has_limit && opts.limit_offset == 0 && opts.limit_count == 0) {
+    RedisModule_ReplyWithArray(ctx, 1);
+    RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(fused.size()));
+    return REDISMODULE_OK;
+  }
+
+  if (opts.has_limit) {
+    long long total_before = static_cast<long long>(fused.size());
+    if (opts.limit_offset >= total_before) {
+      fused.clear();
+    } else {
+      auto begin = fused.begin() + opts.limit_offset;
+      auto end = (opts.limit_count >= 0 &&
+                  opts.limit_offset + opts.limit_count < total_before)
+                     ? fused.begin() + opts.limit_offset + opts.limit_count
+                     : fused.end();
+      fused = std::vector<HybridHit>(begin, end);
+    }
+  }
+
+  // 4. Reply
+  std::unordered_set<std::string> empty_terms;
+  long total = static_cast<long>(fused.size());
+  long multiplier = 1 + (opts.withpayloads ? 1 : 0) + (opts.nocontent ? 0 : 1);
+  RedisModule_ReplyWithArray(ctx, 1 + total * multiplier);
+  RedisModule_ReplyWithLongLong(ctx, total);
+
+  for (const auto& h : fused) {
+    RedisModule_ReplyWithCString(ctx, h.doc_id.c_str());
+    const auto* doc = entry.doc_store.Get(h.doc_id);
+    if (opts.withpayloads) {
+      if (doc && doc->has_payload) {
+        RedisModule_ReplyWithStringBuffer(ctx, doc->payload.data(), doc->payload.size());
+      } else {
+        RedisModule_ReplyWithNull(ctx);
+      }
+    }
+    if (!opts.nocontent) {
+      if (opts.withscores) {
+        std::string score_str = std::to_string(h.score);
+        if (opts.explainscore) {
+          SearchOptions tmp_opts = opts;
+          tmp_opts.explainscore = false;
+          // Emit custom hybrid score + explanation + fields
+          std::vector<std::string> keys;
+          if (opts.has_return) {
+            keys = opts.return_fields;
+          } else if (doc) {
+            keys.reserve(doc->fields.size());
+            for (const auto& [k, v] : doc->fields) keys.push_back(k);
+            std::sort(keys.begin(), keys.end());
+          }
+          std::string expl =
+              (hcfg.method == FusionMethod::kRrf)
+                  ? ("RRF(k=" + std::to_string(hcfg.rrf_k) +
+                     ",text_rank=" + std::to_string(h.text_rank) +
+                     ",vec_rank=" + std::to_string(h.vector_rank) + ")")
+                  : ("LINEAR(alpha=" + std::to_string(hcfg.alpha) +
+                     ",text_score=" + std::to_string(h.text_score) +
+                     ",vec_dist=" + std::to_string(h.vector_distance) + ")");
+          RedisModule_ReplyWithArray(ctx, static_cast<long>(keys.size()) * 2 + 4);
+          RedisModule_ReplyWithCString(ctx, "__hybrid_score");
+          RedisModule_ReplyWithCString(ctx, score_str.c_str());
+          RedisModule_ReplyWithCString(ctx, "__score_explanation");
+          RedisModule_ReplyWithCString(ctx, expl.c_str());
+          for (const auto& k : keys) {
+            auto ait = opts.return_aliases.find(k);
+            const std::string& out_key =
+                (ait != opts.return_aliases.end()) ? ait->second : k;
+            RedisModule_ReplyWithCString(ctx, out_key.c_str());
+            if (doc) {
+              auto fit = doc->fields.find(k);
+              RedisModule_ReplyWithCString(
+                  ctx, (fit != doc->fields.end()) ? fit->second.c_str() : "");
+            } else {
+              RedisModule_ReplyWithCString(ctx, "");
+            }
+          }
+        } else {
+          ReplyWithDocFields(ctx, doc, opts, &score_str, empty_terms, "__hybrid_score");
+        }
+      } else {
+        ReplyWithDocFields(ctx, doc, opts, nullptr, empty_terms);
+      }
+    }
+  }
   return REDISMODULE_OK;
 }
 

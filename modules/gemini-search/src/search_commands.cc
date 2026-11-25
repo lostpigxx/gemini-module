@@ -57,6 +57,7 @@ int RegisterSearchCommands(RedisModuleCtx* ctx) {
       {"FT.ADD", FtAddCommand, "write deny-oom"},
       {"FT.DEL", FtDelCommand, "write"},
       {"FT.SEARCH", FtSearchCommand, "readonly"},
+      {"FT.HYBRID", FtHybridCommand, "readonly"},
       {"FT.AGGREGATE", FtAggregateCommand, "readonly"},
       {"FT.ALTER", FtAlterCommand, "write"},
       {"FT.ALIASADD", FtAliasAddCommand, "write"},

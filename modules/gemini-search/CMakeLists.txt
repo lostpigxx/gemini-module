@@ -22,6 +22,7 @@ set(SEARCH_SOURCES
   src/search_rdb.cc
   src/stemmer.cc
   src/phonetic.cc
+  src/hybrid_fusion.cc
 )
 
 add_library(redis_search SHARED ${SEARCH_SOURCES})
@@ -306,6 +307,19 @@ if(GTest_FOUND)
   target_compile_definitions(search_asan_test PRIVATE GEMINI_SEARCH_TESTING)
   target_compile_options(search_asan_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(hybrid_search_test EXCLUDE_FROM_ALL
+    tests/hybrid_search_test.cc
+    src/hybrid_fusion.cc
+  )
+  target_include_directories(hybrid_search_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(hybrid_search_test PRIVATE
+    GTest::gtest_main
+  )
+  target_compile_definitions(hybrid_search_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(hybrid_search_test PRIVATE -Wall -Wextra -Wpedantic)
+
   add_custom_target(search_test
     COMMAND index_spec_test --gtest_color=yes
     COMMAND document_store_test --gtest_color=yes
@@ -320,8 +334,9 @@ if(GTest_FOUND)
     COMMAND suggest_dict_test --gtest_color=yes
     COMMAND expr_engine_test --gtest_color=yes
     COMMAND query_parser_test --gtest_color=yes
+    COMMAND hybrid_search_test --gtest_color=yes
     COMMAND search_rdb_test --gtest_color=yes
     COMMAND search_asan_test --gtest_color=yes
-    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test phonetic_test geoshape_index_test suggest_dict_test expr_engine_test query_parser_test search_rdb_test search_asan_test
+    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test phonetic_test geoshape_index_test suggest_dict_test expr_engine_test query_parser_test hybrid_search_test search_rdb_test search_asan_test
   )
 endif()
