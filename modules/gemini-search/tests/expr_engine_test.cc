@@ -274,3 +274,48 @@ TEST(ExprParseTest, WrongArgCount) {
 TEST(ExprParseTest, TrailingInput) {
   EXPECT_TRUE(ParseFails("1 + 2 3"));
 }
+
+// =============================================================
+// Phase 44: String, Date/Time, Geo, Exists functions
+// =============================================================
+
+TEST(ExprPhase44Test, StringPredicatesAndTransforms) {
+  Row row = {{"s", "  Hello Redis Search  "}, {"csv", "a,b,c"}};
+  EXPECT_DOUBLE_EQ(Eval("startswith(\"redis-search\", \"redis\")").AsNumber(), 1.0);
+  EXPECT_DOUBLE_EQ(Eval("startswith(\"redis-search\", \"search\")").AsNumber(), 0.0);
+  EXPECT_DOUBLE_EQ(Eval("endswith(\"redis-search\", \"search\")").AsNumber(), 1.0);
+  EXPECT_DOUBLE_EQ(Eval("endswith(\"redis-search\", \"redis\")").AsNumber(), 0.0);
+  EXPECT_DOUBLE_EQ(Eval("contains(\"redis-search\", \"is-se\")").AsNumber(), 1.0);
+  EXPECT_DOUBLE_EQ(Eval("contains(\"redis-search\", \"xyz\")").AsNumber(), 0.0);
+  EXPECT_EQ(Eval("trim(@s)", row).AsString(), "Hello Redis Search");
+  EXPECT_EQ(Eval("replace(\"foo bar foo\", \"foo\", \"baz\")").AsString(), "baz bar baz");
+  EXPECT_EQ(Eval("split(@csv, \",\", 0)", row).AsString(), "a");
+  EXPECT_EQ(Eval("split(@csv, \",\", 1)", row).AsString(), "b");
+  EXPECT_EQ(Eval("split(@csv, \",\", 2)", row).AsString(), "c");
+  EXPECT_EQ(Eval("split(@csv, \",\", 9)", row).AsString(), "");
+}
+
+TEST(ExprPhase44Test, DateTimeUtcFunctions) {
+  // 2026-06-15 14:30:00 UTC = 1781533800 (Monday, dayofweek=1, monthofyear=5)
+  Row row = {{"ts", "1781533800"}};
+  EXPECT_DOUBLE_EQ(Eval("year(@ts)", row).AsNumber(), 2026.0);
+  EXPECT_DOUBLE_EQ(Eval("monthofyear(@ts)", row).AsNumber(), 5.0);
+  EXPECT_DOUBLE_EQ(Eval("day(@ts)", row).AsNumber(), 15.0);
+  EXPECT_DOUBLE_EQ(Eval("dayofweek(@ts)", row).AsNumber(), 1.0);
+  EXPECT_DOUBLE_EQ(Eval("hour(@ts)", row).AsNumber(), 14.0);
+  EXPECT_EQ(Eval("timefmt(@ts, \"%Y-%m-%d\")", row).AsString(), "2026-06-15");
+  EXPECT_EQ(Eval("timefmt(@ts)", row).AsString(), "2026-06-15T14:30:00Z");
+}
+
+TEST(ExprPhase44Test, GeoDistanceAndExists) {
+  Row row = {{"loc", "-122.4194,37.7749"}, {"present", ""}};
+  // Distance to itself is ~0
+  EXPECT_NEAR(Eval("geodistance(@loc, -122.4194, 37.7749)", row).AsNumber(), 0.0, 1.0);
+  // SF to LA (~559 km)
+  double sf_to_la = Eval("geodistance(@loc, -118.2437, 34.0522)", row).AsNumber();
+  EXPECT_GT(sf_to_la, 550000.0);
+  EXPECT_LT(sf_to_la, 570000.0);
+
+  EXPECT_DOUBLE_EQ(Eval("exists(@present)", row).AsNumber(), 1.0);
+  EXPECT_DOUBLE_EQ(Eval("exists(@missing)", row).AsNumber(), 0.0);
+}

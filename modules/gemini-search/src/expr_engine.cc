@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 double ExprValue::AsNumber() const {
   if (type == Type::kNumber) return num;
@@ -170,6 +171,126 @@ ExprValue EvalExpr(const ExprNode& node, const ExprRow& row) {
         }
       }
       return ExprValue::Str(std::move(result));
+    }
+    case ExprNode::Op::kFnStartsWith: {
+      auto s = EvalExpr(node.children[0], row).AsString();
+      auto pre = EvalExpr(node.children[1], row).AsString();
+      return ExprValue::Num(s.size() >= pre.size() &&
+                                    s.compare(0, pre.size(), pre) == 0
+                                ? 1.0
+                                : 0.0);
+    }
+    case ExprNode::Op::kFnEndsWith: {
+      auto s = EvalExpr(node.children[0], row).AsString();
+      auto suf = EvalExpr(node.children[1], row).AsString();
+      return ExprValue::Num(
+          s.size() >= suf.size() &&
+                  s.compare(s.size() - suf.size(), suf.size(), suf) == 0
+              ? 1.0
+              : 0.0);
+    }
+    case ExprNode::Op::kFnContains: {
+      auto s = EvalExpr(node.children[0], row).AsString();
+      auto sub = EvalExpr(node.children[1], row).AsString();
+      return ExprValue::Num(s.find(sub) != std::string::npos ? 1.0 : 0.0);
+    }
+    case ExprNode::Op::kFnTrim: {
+      auto s = EvalExpr(node.children[0], row).AsString();
+      size_t a = s.find_first_not_of(" \t\r\n");
+      if (a == std::string::npos) return ExprValue::Str("");
+      size_t b = s.find_last_not_of(" \t\r\n");
+      return ExprValue::Str(s.substr(a, b - a + 1));
+    }
+    case ExprNode::Op::kFnReplace: {
+      auto s = EvalExpr(node.children[0], row).AsString();
+      auto from = EvalExpr(node.children[1], row).AsString();
+      auto to = EvalExpr(node.children[2], row).AsString();
+      if (from.empty()) return ExprValue::Str(std::move(s));
+      size_t p = 0;
+      while ((p = s.find(from, p)) != std::string::npos) {
+        s.replace(p, from.size(), to);
+        p += to.size();
+      }
+      return ExprValue::Str(std::move(s));
+    }
+    case ExprNode::Op::kFnSplit: {
+      auto s = EvalExpr(node.children[0], row).AsString();
+      auto sep = EvalExpr(node.children[1], row).AsString();
+      int target_idx = (node.children.size() >= 3)
+                           ? static_cast<int>(EvalExpr(node.children[2], row).AsNumber())
+                           : 0;
+      if (sep.empty() || target_idx < 0) return ExprValue::Str("");
+      int cur = 0;
+      size_t start = 0;
+      while (true) {
+        size_t pos = s.find(sep, start);
+        if (cur == target_idx) {
+          return ExprValue::Str(pos == std::string::npos ? s.substr(start)
+                                                         : s.substr(start, pos - start));
+        }
+        if (pos == std::string::npos) break;
+        start = pos + sep.size();
+        cur++;
+      }
+      return ExprValue::Str("");
+    }
+    case ExprNode::Op::kFnYear:
+    case ExprNode::Op::kFnMonthOfYear:
+    case ExprNode::Op::kFnDay:
+    case ExprNode::Op::kFnDayOfWeek:
+    case ExprNode::Op::kFnHour:
+    case ExprNode::Op::kFnTimeFmt: {
+      time_t ts = static_cast<time_t>(EvalExpr(node.children[0], row).AsNumber());
+      struct tm utc {};
+      gmtime_r(&ts, &utc);
+      if (node.op == ExprNode::Op::kFnYear) {
+        return ExprValue::Num(static_cast<double>(utc.tm_year + 1900));
+      }
+      if (node.op == ExprNode::Op::kFnMonthOfYear) {
+        return ExprValue::Num(static_cast<double>(utc.tm_mon));
+      }
+      if (node.op == ExprNode::Op::kFnDay) {
+        return ExprValue::Num(static_cast<double>(utc.tm_mday));
+      }
+      if (node.op == ExprNode::Op::kFnDayOfWeek) {
+        return ExprValue::Num(static_cast<double>(utc.tm_wday));
+      }
+      if (node.op == ExprNode::Op::kFnHour) {
+        return ExprValue::Num(static_cast<double>(utc.tm_hour));
+      }
+      std::string fmt = (node.children.size() >= 2)
+                            ? EvalExpr(node.children[1], row).AsString()
+                            : "%Y-%m-%dT%H:%M:%SZ";
+      char buf[128];
+      size_t n = std::strftime(buf, sizeof(buf), fmt.c_str(), &utc);
+      return ExprValue::Str(std::string(buf, n));
+    }
+    case ExprNode::Op::kFnGeoDistance: {
+      auto loc = EvalExpr(node.children[0], row).AsString();
+      double lon2 = EvalExpr(node.children[1], row).AsNumber();
+      double lat2 = EvalExpr(node.children[2], row).AsNumber();
+      size_t comma = loc.find(',');
+      if (comma == std::string::npos) return ExprValue::Num(0.0);
+      char* ep1 = nullptr;
+      char* ep2 = nullptr;
+      double lon1 = std::strtod(loc.substr(0, comma).c_str(), &ep1);
+      double lat1 = std::strtod(loc.substr(comma + 1).c_str(), &ep2);
+      if (ep1 == loc.c_str() || ep2 == nullptr) return ExprValue::Num(0.0);
+      constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+      constexpr double kEarthRadiusM = 6372797.560856;
+      double dlat = (lat2 - lat1) * kDegToRad;
+      double dlon = (lon2 - lon1) * kDegToRad;
+      double a = std::sin(dlat / 2.0) * std::sin(dlat / 2.0) +
+                 std::cos(lat1 * kDegToRad) * std::cos(lat2 * kDegToRad) *
+                     std::sin(dlon / 2.0) * std::sin(dlon / 2.0);
+      double c = 2.0 * std::atan2(std::sqrt(a), std::sqrt(std::max(0.0, 1.0 - a)));
+      return ExprValue::Num(kEarthRadiusM * c);
+    }
+    case ExprNode::Op::kFnExists: {
+      if (node.children[0].op == ExprNode::Op::kFieldRef) {
+        return ExprValue::Num(row.count(node.children[0].str_val) > 0 ? 1.0 : 0.0);
+      }
+      return ExprValue::Num(EvalExpr(node.children[0], row).AsString().empty() ? 0.0 : 1.0);
     }
     case ExprNode::Op::kFnIf: {
       if (EvalExpr(node.children[0], row).Truthy())
@@ -366,6 +487,20 @@ struct ExprParser {
         {"strlen", ExprNode::Op::kFnStrlen, 1, 1},
         {"substr", ExprNode::Op::kFnSubstr, 3, 3},
         {"format", ExprNode::Op::kFnFormat, 1, 16},
+        {"startswith", ExprNode::Op::kFnStartsWith, 2, 2},
+        {"endswith", ExprNode::Op::kFnEndsWith, 2, 2},
+        {"contains", ExprNode::Op::kFnContains, 2, 2},
+        {"trim", ExprNode::Op::kFnTrim, 1, 1},
+        {"replace", ExprNode::Op::kFnReplace, 3, 3},
+        {"split", ExprNode::Op::kFnSplit, 2, 3},
+        {"year", ExprNode::Op::kFnYear, 1, 1},
+        {"monthofyear", ExprNode::Op::kFnMonthOfYear, 1, 1},
+        {"day", ExprNode::Op::kFnDay, 1, 1},
+        {"dayofweek", ExprNode::Op::kFnDayOfWeek, 1, 1},
+        {"hour", ExprNode::Op::kFnHour, 1, 1},
+        {"timefmt", ExprNode::Op::kFnTimeFmt, 1, 2},
+        {"geodistance", ExprNode::Op::kFnGeoDistance, 3, 3},
+        {"exists", ExprNode::Op::kFnExists, 1, 1},
         {"if", ExprNode::Op::kFnIf, 3, 3},
       };
 

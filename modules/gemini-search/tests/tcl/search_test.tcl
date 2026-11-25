@@ -3747,6 +3747,69 @@ test_assert "VECTOR QUANTIZATION SQ8 works on FLAT and HNSW and rejects bad para
 }
 
 # ============================================================
+# Phase 44: FT.AGGREGATE Analytics Enhancements
+# ============================================================
+puts "\n=== Phase 44: FT.AGGREGATE Analytics Enhancements ==="
+
+test_assert "FT.AGGREGATE multi-key SORTBY and MAX" {
+  r FT.CREATE p44agg SCHEMA cat TAG price NUMERIC name TEXT
+  r FT.ADD p44agg d1 FIELDS cat "b" price 10 name "b10"
+  r FT.ADD p44agg d2 FIELDS cat "a" price 30 name "a30"
+  r FT.ADD p44agg d3 FIELDS cat "a" price 10 name "a10"
+  r FT.ADD p44agg d4 FIELDS cat "b" price 20 name "b20"
+
+  # Sort by cat ASC, then price DESC, MAX 3 -> a30, a10, b20
+  set res [r FT.AGGREGATE p44agg "*" LOAD * SORTBY 4 @cat ASC @price DESC MAX 3]
+  if {[llength $res] != 3} { error "Expected 3 rows with MAX 3, got [llength $res]: $res" }
+  set names {}
+  foreach row $res {
+    array unset kv
+    array set kv $row
+    lappend names $kv(name)
+  }
+  if {$names ne {a30 a10 b20}} { error "Expected {a30 a10 b20}, got {$names}" }
+  r FT.DROPINDEX p44agg
+}
+
+test_assert "FT.AGGREGATE Phase 44 APPLY/FILTER string, time, geo, exists functions" {
+  r FT.CREATE p44fn SCHEMA path TEXT ts NUMERIC loc GEO opt TEXT
+  r FT.ADD p44fn f1 FIELDS path "  /api/v1/users  " ts 1781533800 loc "-122.4194,37.7749" opt "yes"
+  r FT.ADD p44fn f2 FIELDS path "/static/img.png" ts 1781533800 loc "-118.2437,34.0522"
+
+  set res [r FT.AGGREGATE p44fn "*" \
+    APPLY "trim(@path)" AS clean \
+    APPLY "year(@ts)" AS yr \
+    APPLY "timefmt(@ts, '%Y-%m-%d')" AS dt \
+    APPLY "geodistance(@loc, -122.4194, 37.7749)" AS dist \
+    APPLY "exists(@opt)" AS has_opt \
+    FILTER "startswith(@clean, '/api') && @has_opt == 1"]
+  if {[llength $res] != 1} { error "Expected 1 matching row, got $res" }
+  array set kv [lindex $res 0]
+  if {$kv(clean) ne "/api/v1/users" || $kv(yr) ne "2026" || $kv(dt) ne "2026-06-15"} {
+    error "Unexpected APPLY values: [lindex $res 0]"
+  }
+  r FT.DROPINDEX p44fn
+}
+
+test_assert "FT.AGGREGATE supports KNN with PARAMS and GROUPBY" {
+  r FT.CREATE p44knn SCHEMA cat TAG v VECTOR FLAT DIM 2 DISTANCE_METRIC L2
+  set v1 [binary format f* {1.0 0.0}]
+  set v2 [binary format f* {0.9 0.1}]
+  set v3 [binary format f* {0.0 10.0}]
+  r FT.ADD p44knn k1 FIELDS cat "ai" v $v1
+  r FT.ADD p44knn k2 FIELDS cat "ai" v $v2
+  r FT.ADD p44knn k3 FIELDS cat "db" v $v3
+
+  set res [r FT.AGGREGATE p44knn {*=>[KNN 2 @v $q AS vdist]} PARAMS 2 q $v1 GROUPBY 1 @cat REDUCE COUNT 0 AS cnt]
+  if {[llength $res] != 1} { error "Expected 1 group for top-2 KNN, got $res" }
+  array set kv [lindex $res 0]
+  if {$kv(cat) ne "ai" || $kv(cnt) ne "2"} {
+    error "Expected cat=ai cnt=2, got [lindex $res 0]"
+  }
+  r FT.DROPINDEX p44knn
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

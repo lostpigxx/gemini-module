@@ -27,6 +27,9 @@ struct ExprNode {
     kAnd, kOr, kNot,
     kFnSqrt, kFnLog, kFnLog2, kFnAbs, kFnCeil, kFnFloor, kFnRound,
     kFnLower, kFnUpper, kFnStrlen, kFnSubstr, kFnFormat,
+    kFnStartsWith, kFnEndsWith, kFnContains, kFnTrim, kFnReplace, kFnSplit,
+    kFnYear, kFnMonthOfYear, kFnDay, kFnDayOfWeek, kFnHour, kFnTimeFmt,
+    kFnGeoDistance, kFnExists,
     kFnIf,
   };
 

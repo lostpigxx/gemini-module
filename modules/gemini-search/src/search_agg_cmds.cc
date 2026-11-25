@@ -132,9 +132,9 @@ struct PipelineStage {
   // GROUPBY + REDUCE
   std::vector<std::string> groupby_fields;
   std::vector<ReduceOp> reducers;
-  // SORTBY
-  std::string sortby_field;
-  bool sortby_desc = false;
+  // SORTBY (multi-key + optional MAX)
+  std::vector<std::pair<std::string, bool>> sortby_keys;
+  long long sortby_max = -1;
   // LIMIT
   long long limit_offset = 0;
   long long limit_count = 0;
@@ -152,18 +152,34 @@ static void ApplyLimit(std::vector<AggRow>& rows, long long offset, long long co
 }
 
 static void ApplySortby(std::vector<AggRow>& rows,
-                        const std::string& field, bool desc) {
-  std::sort(rows.begin(), rows.end(),
-            [&](const AggRow& a, const AggRow& b) {
-              auto ait = a.find(field);
-              auto bit = b.find(field);
-              std::string va = (ait != a.end()) ? ait->second : "";
-              std::string vb = (bit != b.end()) ? bit->second : "";
-              double na = 0, nb = 0;
-              bool num = TryParseDouble(va, na) && TryParseDouble(vb, nb);
-              if (num) return desc ? na > nb : na < nb;
-              return desc ? va > vb : va < vb;
-            });
+                        const std::vector<std::pair<std::string, bool>>& keys,
+                        long long max_rows = -1) {
+  if (keys.empty()) return;
+  auto cmp = [&](const AggRow& a, const AggRow& b) {
+    for (const auto& [field, desc] : keys) {
+      auto ait = a.find(field);
+      auto bit = b.find(field);
+      std::string va = (ait != a.end()) ? ait->second : "";
+      std::string vb = (bit != b.end()) ? bit->second : "";
+      if (va == vb) continue;
+      double na = 0, nb = 0;
+      bool num = TryParseDouble(va, na) && TryParseDouble(vb, nb);
+      if (num) {
+        if (na == nb) continue;
+        return desc ? na > nb : na < nb;
+      }
+      return desc ? va > vb : va < vb;
+    }
+    return false;
+  };
+  if (max_rows > 0 && static_cast<size_t>(max_rows) < rows.size()) {
+    std::partial_sort(rows.begin(),
+                      rows.begin() + static_cast<ptrdiff_t>(max_rows),
+                      rows.end(), cmp);
+    rows.resize(static_cast<size_t>(max_rows));
+  } else {
+    std::sort(rows.begin(), rows.end(), cmp);
+  }
 }
 
 static void ApplyGroupby(std::vector<AggRow>& rows,
@@ -396,10 +412,11 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   auto& entry = it->second;
   TouchIndex(entry);
 
-  // Pre-scan for DIALECT and TIMEOUT options
+  // Pre-scan for DIALECT, TIMEOUT, and PARAMS options
   QueryOptions qopts;
   qopts.language = entry.spec.language;
   qopts.dialect = GetDefaultDialect();
+  std::unordered_map<std::string, std::string> params;
   for (int ci = 3; ci < argc; ci++) {
     auto kw = ArgView(argv[ci]);
     if (MatchArg(kw, "DIALECT") && ci + 1 < argc) {
@@ -409,6 +426,18 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       long long tms = std::strtoll(std::string(ArgView(argv[ci + 1])).c_str(), nullptr, 10);
       if (tms > 0) qopts.deadline_ms = NowMs() + tms;
       ci++;
+    } else if (MatchArg(kw, "PARAMS") && ci + 1 < argc) {
+      char* ep = nullptr;
+      long pcount = std::strtol(std::string(ArgView(argv[ci + 1])).c_str(), &ep, 10);
+      if (*ep != '\0' || pcount < 0 || pcount % 2 != 0 || ci + 2 + pcount > argc) {
+        return RedisModule_ReplyWithError(ctx, "ERR invalid PARAMS specification");
+      }
+      for (long p = 0; p < pcount; p += 2) {
+        std::string pname(ArgView(argv[ci + 2 + p]));
+        std::string pval = ArgStr(argv[ci + 3 + p]);
+        params[std::move(pname)] = std::move(pval);
+      }
+      ci += 1 + static_cast<int>(pcount);
     }
   }
 
@@ -418,15 +447,55 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, parse_error.c_str());
   }
 
-  std::string eval_error;
-  auto result_ids =
-      EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
-                    entry.tag_indices, entry.numeric_indices,
-                    entry.text_indices, entry.geo_indices, eval_error,
-                    qopts, &entry.geoshape_indices, nullptr,
-                    &entry.vector_indices, &entry.synonyms);
-  if (!eval_error.empty()) {
-    return RedisModule_ReplyWithError(ctx, eval_error.c_str());
+  std::vector<std::string> result_ids;
+  std::unordered_map<std::string, std::string> knn_scores;
+  std::string knn_score_field = parsed.knn_score_alias.empty()
+                                    ? "__vec_score"
+                                    : parsed.knn_score_alias;
+  if (parsed.has_knn) {
+    const auto* fspec = entry.spec.FindField(parsed.knn_field);
+    if (!fspec || fspec->type != FieldType::kVector) {
+      return RedisModule_ReplyWithError(ctx, "ERR KNN field is not a VECTOR field");
+    }
+    auto pit = params.find(parsed.knn_param_name);
+    if (pit == params.end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR KNN param not found in PARAMS");
+    }
+    std::vector<float> qvec;
+    if (!DecodeVectorBlob(pit->second, fspec->vector_params.dim,
+                          fspec->vector_params.data_type, qvec)) {
+      return RedisModule_ReplyWithError(ctx, "ERR query vector dimension mismatch");
+    }
+    if (const auto* vidx = entry.vector_indices.Get(parsed.knn_field)) {
+      std::vector<KnnResult> knn_hits;
+      if (parsed.root.type != QueryNode::Type::kMatchAll) {
+        std::string ferr;
+        auto cands = EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
+                                   entry.tag_indices, entry.numeric_indices,
+                                   entry.text_indices, entry.geo_indices, ferr,
+                                   qopts, &entry.geoshape_indices, &params,
+                                   &entry.vector_indices, &entry.synonyms);
+        if (!ferr.empty()) return RedisModule_ReplyWithError(ctx, ferr.c_str());
+        knn_hits = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands);
+      } else {
+        knn_hits = vidx->KnnQueryEf(qvec.data(), parsed.knn_k, parsed.knn_ef_runtime);
+      }
+      result_ids.reserve(knn_hits.size());
+      for (const auto& h : knn_hits) {
+        result_ids.push_back(h.doc_id);
+        knn_scores[h.doc_id] = std::to_string(h.score);
+      }
+    }
+  } else {
+    std::string eval_error;
+    result_ids = EvaluateQuery(parsed.root, entry.spec, entry.doc_store,
+                               entry.tag_indices, entry.numeric_indices,
+                               entry.text_indices, entry.geo_indices, eval_error,
+                               qopts, &entry.geoshape_indices, &params,
+                               &entry.vector_indices, &entry.synonyms);
+    if (!eval_error.empty()) {
+      return RedisModule_ReplyWithError(ctx, eval_error.c_str());
+    }
   }
 
   // Parse pipeline stages
@@ -440,7 +509,14 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     if (MatchArg(kw, "LOAD")) {
       pending_groupby = nullptr;
       arg_i++;
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR LOAD requires count");
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR LOAD requires count or *");
+      if (ArgView(argv[arg_i]) == "*") {
+        arg_i++;
+        PipelineStage st;
+        st.type = PipelineStageType::kLoad;
+        stages.push_back(std::move(st));
+        continue;
+      }
       char* endptr = nullptr;
       long ld_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
       arg_i++;
@@ -615,25 +691,41 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       char* endptr = nullptr;
       long sb_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
       arg_i++;
-      if (*endptr != '\0' || sb_count < 2)
-        return RedisModule_ReplyWithError(ctx, "ERR SORTBY count must be >= 2");
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SORTBY requires field");
-      auto sf = ArgView(argv[arg_i]);
-      arg_i++;
-      if (sf.empty() || sf[0] != '@')
-        return RedisModule_ReplyWithError(ctx, "ERR SORTBY field must start with @");
+      if (*endptr != '\0' || sb_count < 1 || arg_i + sb_count > argc)
+        return RedisModule_ReplyWithError(ctx, "ERR SORTBY count invalid");
       PipelineStage st;
       st.type = PipelineStageType::kSortby;
-      st.sortby_field = std::string(sf.substr(1));
-      if (arg_i < argc) {
-        auto dir = ArgView(argv[arg_i]);
-        if (MatchArg(dir, "ASC")) { st.sortby_desc = false; arg_i++; }
-        else if (MatchArg(dir, "DESC")) { st.sortby_desc = true; arg_i++; }
+      int sb_end = arg_i + static_cast<int>(sb_count);
+      while (arg_i < sb_end) {
+        auto sf = ArgView(argv[arg_i++]);
+        if (sf.empty() || sf[0] != '@')
+          return RedisModule_ReplyWithError(ctx, "ERR SORTBY field must start with @");
+        bool desc = false;
+        if (arg_i < sb_end) {
+          auto dir = ArgView(argv[arg_i]);
+          if (MatchArg(dir, "ASC")) { desc = false; arg_i++; }
+          else if (MatchArg(dir, "DESC")) { desc = true; arg_i++; }
+        }
+        st.sortby_keys.emplace_back(std::string(sf.substr(1)), desc);
       }
-      for (long skip = 2; skip < sb_count; skip++) {
-        if (arg_i < argc) arg_i++;
+      if (arg_i + 1 < argc && MatchArg(ArgView(argv[arg_i]), "MAX")) {
+        char* mep = nullptr;
+        long long m = std::strtoll(std::string(ArgView(argv[arg_i + 1])).c_str(), &mep, 10);
+        if (*mep != '\0' || m < 0)
+          return RedisModule_ReplyWithError(ctx, "ERR SORTBY MAX must be a non-negative integer");
+        st.sortby_max = m;
+        arg_i += 2;
       }
       stages.push_back(std::move(st));
+    } else if (MatchArg(kw, "PARAMS")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR PARAMS requires count");
+      char* ep = nullptr;
+      long pcount = std::strtol(std::string(ArgView(argv[arg_i++])).c_str(), &ep, 10);
+      if (*ep != '\0' || pcount < 0 || arg_i + pcount > argc)
+        return RedisModule_ReplyWithError(ctx, "ERR invalid PARAMS count");
+      arg_i += static_cast<int>(pcount);
     } else if (MatchArg(kw, "LIMIT")) {
       pending_groupby = nullptr;
       arg_i++;
@@ -706,7 +798,12 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   for (auto& doc_id : result_ids) {
     const auto* doc = entry.doc_store.Get(doc_id);
     if (!doc) continue;
-    rows.push_back(doc->fields);
+    AggRow r = doc->fields;
+    if (parsed.has_knn) {
+      auto sit = knn_scores.find(doc_id);
+      if (sit != knn_scores.end()) r[knn_score_field] = sit->second;
+    }
+    rows.push_back(std::move(r));
   }
 
   // Execute pipeline stages
@@ -755,7 +852,7 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         break;
 
       case PipelineStageType::kSortby:
-        ApplySortby(rows, stage.sortby_field, stage.sortby_desc);
+        ApplySortby(rows, stage.sortby_keys, stage.sortby_max);
         break;
 
       case PipelineStageType::kLimit:
@@ -914,12 +1011,19 @@ bool RunAggregateForProfile(
       }
       PipelineStage st;
       st.type = PipelineStageType::kSortby;
-      std::string sf(ArgView(argv[arg_i]));
-      if (!sf.empty() && sf[0] == '@') sf = sf.substr(1);
-      st.sortby_field = std::move(sf);
-      if (n >= 2 && MatchArg(ArgView(argv[arg_i + 1]), "DESC")) st.sortby_desc = true;
+      int sb_end = arg_i + static_cast<int>(n);
+      while (arg_i < sb_end) {
+        std::string sf(ArgView(argv[arg_i++]));
+        if (!sf.empty() && sf[0] == '@') sf = sf.substr(1);
+        bool desc = false;
+        if (arg_i < sb_end) {
+          auto dir = ArgView(argv[arg_i]);
+          if (MatchArg(dir, "DESC")) { desc = true; arg_i++; }
+          else if (MatchArg(dir, "ASC")) { desc = false; arg_i++; }
+        }
+        st.sortby_keys.emplace_back(std::move(sf), desc);
+      }
       stages.push_back(std::move(st));
-      arg_i += static_cast<int>(n);
     } else if (MatchArg(kw, "LIMIT")) {
       pending_groupby = nullptr;
       arg_i++;
@@ -972,7 +1076,7 @@ bool RunAggregateForProfile(
         }
         break;
       case PipelineStageType::kSortby:
-        ApplySortby(out_rows, stage.sortby_field, stage.sortby_desc);
+        ApplySortby(out_rows, stage.sortby_keys, stage.sortby_max);
         break;
       case PipelineStageType::kLimit:
         ApplyLimit(out_rows, stage.limit_offset, stage.limit_count);
