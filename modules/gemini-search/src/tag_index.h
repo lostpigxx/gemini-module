@@ -1,13 +1,20 @@
 #pragma once
 
 #include <cstddef>
-#include <set>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 class TagIndex {
-  std::unordered_map<std::string, std::set<std::string>> postings_;
+  std::vector<std::string> id_to_str_;
+  std::vector<uint32_t> ref_count_;
+  std::vector<uint32_t> free_ids_;
+  std::unordered_map<std::string, uint32_t> str_to_id_;
+  std::unordered_map<std::string, std::vector<uint32_t>> postings_;
+
+  uint32_t InternDoc(const std::string& doc_id);
+  void ReleaseDocRef(uint32_t did);
 
  public:
   static std::string NormalizeTag(const std::string& tag, bool case_sensitive);

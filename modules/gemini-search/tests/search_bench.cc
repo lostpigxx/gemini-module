@@ -1,7 +1,9 @@
 #include "document_store.h"
 #include "geo_index.h"
 #include "hnsw_index.h"
+#include "numeric_index.h"
 #include "sort_index.h"
+#include "tag_index.h"
 #include "text_index.h"
 #include "vector_index.h"
 
@@ -150,6 +152,23 @@ int main() {
       std::sort(keyed.begin(), keyed.end(),
                 [](const auto& a, const auto& b) { return a.first < b.first; });
       sink += keyed.size();
+    });
+  }
+
+  // 5. TagIndex & NumericIndex (30,000 docs)
+  {
+    TagIndex tidx;
+    NumericIndex nidx;
+    for (int i = 0; i < 30000; i++) {
+      std::string id = "d" + std::to_string(i);
+      tidx.Add("cat" + std::to_string(i % 50), id);
+      nidx.Add(static_cast<double>(i % 10000), id);
+    }
+    BenchUs("TagIndex::LookupOr 3 tags (30k)", 200, [&]() {
+      sink += tidx.LookupOr({"cat1", "cat2", "cat3"}).size();
+    });
+    BenchUs("NumericIndex::Range 5% (30k)", 200, [&]() {
+      sink += nidx.RangeQuery(1000.0, false, 1500.0, false).size();
     });
   }
 

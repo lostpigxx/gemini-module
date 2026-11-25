@@ -227,3 +227,18 @@ TEST(NumericFieldIndicesTest, Clear) {
   EXPECT_EQ(indices.Get("b"), nullptr);
 }
 
+
+TEST(NumericIndexPhase48Test, SlotReuseAndRangeChurn) {
+  NumericIndex idx;
+  for (int i = 0; i < 300; i++) {
+    idx.Add(static_cast<double>(i % 50), "d" + std::to_string(i));
+  }
+  for (int i = 0; i < 300; i += 2) {
+    EXPECT_TRUE(idx.Remove(static_cast<double>(i % 50), "d" + std::to_string(i)));
+  }
+  for (int i = 0; i < 150; i++) {
+    idx.Add(1000.0 + static_cast<double>(i), "n" + std::to_string(i));
+  }
+  EXPECT_EQ(idx.RangeQuery(1000.0, false, 1149.0, false).size(), 150u);
+  EXPECT_EQ(idx.RangeQuery(0.0, false, 49.0, false).size(), 150u);
+}

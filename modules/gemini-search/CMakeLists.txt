@@ -50,6 +50,8 @@ add_executable(search_bench EXCLUDE_FROM_ALL
   src/stemmer.cc
   src/phonetic.cc
   src/geo_index.cc
+  src/tag_index.cc
+  src/numeric_index.cc
   src/vector_index.cc
   src/hnsw_index.cc
 )

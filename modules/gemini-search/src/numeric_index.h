@@ -1,14 +1,21 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
-#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 class NumericIndex {
-  std::map<double, std::set<std::string>> entries_;
+  std::vector<std::string> id_to_str_;
+  std::vector<uint32_t> ref_count_;
+  std::vector<uint32_t> free_ids_;
+  std::unordered_map<std::string, uint32_t> str_to_id_;
+  std::map<double, std::vector<uint32_t>> entries_;
+
+  uint32_t InternDoc(const std::string& doc_id);
+  void ReleaseDocRef(uint32_t did);
 
  public:
   void Add(double value, const std::string& doc_id);

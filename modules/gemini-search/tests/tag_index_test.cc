@@ -151,3 +151,20 @@ TEST(TagFieldIndicesTest, Clear) {
   EXPECT_EQ(indices.Get("b"), nullptr);
 }
 
+
+TEST(TagIndexPhase48Test, SlotReuseAndRefCountChurn) {
+  TagIndex idx;
+  for (int i = 0; i < 300; i++) {
+    idx.AddMulti("a,b,c" + std::to_string(i % 10), "d" + std::to_string(i));
+  }
+  for (int i = 0; i < 300; i += 2) {
+    EXPECT_TRUE(idx.RemoveMulti("a,b,c" + std::to_string(i % 10), "d" + std::to_string(i)));
+  }
+  EXPECT_EQ(idx.Lookup("a").size(), 150u);
+  // Re-add new docs to exercise free_ids_ reuse
+  for (int i = 0; i < 150; i++) {
+    idx.Add("reused", "n" + std::to_string(i));
+  }
+  EXPECT_EQ(idx.Lookup("reused").size(), 150u);
+  EXPECT_EQ(idx.LookupOr({"a", "reused"}).size(), 300u);
+}
