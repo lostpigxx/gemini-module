@@ -3810,6 +3810,57 @@ test_assert "FT.AGGREGATE supports KNN with PARAMS and GROUPBY" {
 }
 
 # ============================================================
+# Phase 45: CJK / Unicode Tokenization
+# ============================================================
+puts "\n=== Phase 45: CJK / Unicode Tokenization ==="
+
+test_assert "CJK Chinese, Japanese, Korean search, phrase, and HIGHLIGHT" {
+  proc u8 {s} { return [encoding convertto utf-8 $s] }
+  r FT.CREATE p45cjk LANGUAGE chinese SCHEMA title TEXT body TEXT
+  r FT.ADD p45cjk c1 FIELDS title [u8 "Redis向量搜索引擎"] body [u8 "支持高性能中文全文检索与混合搜索"]
+  r FT.ADD p45cjk c2 FIELDS title [u8 "数据库管理系统"] body [u8 "传统关系型存储引擎"]
+  r FT.ADD p45cjk c3 FIELDS title [u8 "検索エンジン"] body [u8 "한국어 검색엔진 테스트"]
+
+  # Chinese multi-char search
+  set r1 [r FT.SEARCH p45cjk [u8 "搜索引擎"] NOCONTENT]
+  if {[lindex $r1 0] != 1 || [lindex $r1 1] ne "c1"} {
+    error "Expected c1 for Chinese search, got $r1"
+  }
+
+  # Mixed ASCII + Chinese
+  set r2 [r FT.SEARCH p45cjk [u8 "redis 向量"] NOCONTENT]
+  if {[lindex $r2 0] != 1 || [lindex $r2 1] ne "c1"} {
+    error "Expected c1 for mixed ASCII+Chinese search, got $r2"
+  }
+
+  # Chinese exact phrase
+  set r3 [r FT.SEARCH p45cjk [u8 "\"全文检索\""] NOCONTENT]
+  if {[lindex $r3 0] != 1 || [lindex $r3 1] ne "c1"} {
+    error "Expected c1 for Chinese phrase search, got $r3"
+  }
+
+  # Chinese HIGHLIGHT
+  set r4 [r FT.SEARCH p45cjk [u8 "搜索"] HIGHLIGHT FIELDS 1 title TAGS "<mark>" "</mark>"]
+  set flds [lindex $r4 2]
+  array set kv $flds
+  if {![string match "*[u8 "<mark>搜索</mark>"]*" $kv(title)]} {
+    error "Expected highlighted Chinese term in title, got $kv(title)"
+  }
+
+  # Japanese & Korean
+  set r5 [r FT.SEARCH p45cjk [u8 "検索"] NOCONTENT]
+  if {[lindex $r5 0] != 1 || [lindex $r5 1] ne "c3"} {
+    error "Expected c3 for Japanese search, got $r5"
+  }
+  set r6 [r FT.SEARCH p45cjk [u8 "검색엔진"] NOCONTENT]
+  if {[lindex $r6 0] != 1 || [lindex $r6 1] ne "c3"} {
+    error "Expected c3 for Korean search, got $r6"
+  }
+
+  r FT.DROPINDEX p45cjk
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

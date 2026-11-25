@@ -1179,9 +1179,9 @@ struct Parser {
         }
       }
     }
-    // Bare term (including prefix hel*, suffix *ing, infix *earc*, fuzzy %hello%)
+    // Bare term (including prefix hel*, suffix *ing, infix *earc*, fuzzy %hello%, UTF-8 CJK)
     if (std::isalnum(static_cast<unsigned char>(Peek())) || Peek() == '%' ||
-        Peek() == '*') {
+        Peek() == '*' || static_cast<unsigned char>(Peek()) >= 0x80) {
       size_t term_start = pos;
       while (pos < input.size() && input[pos] != ' ' && input[pos] != '\t' &&
              input[pos] != ')' && input[pos] != '|' && input[pos] != '=' &&
@@ -1192,17 +1192,32 @@ struct Parser {
       std::vector<std::string> terms;
       std::vector<TextTermModifier> mods;
       ParseTextTermsWithModifiers(raw, terms, mods);
-      if (terms.empty()) {
+      if (terms.size() <= 1) {
         out.type = QueryNode::Type::kTextMatch;
         out.field_name = "";
-        out.text_terms = {};
-        out.text_term_mods = {};
+        out.text_terms = std::move(terms);
+        out.text_term_mods = std::move(mods);
         return true;
       }
-      out.type = QueryNode::Type::kTextMatch;
-      out.field_name = "";
-      out.text_terms = std::move(terms);
-      out.text_term_mods = std::move(mods);
+      // Multiple tokens produced from a single bare token (e.g. CJK bigrams): AND them
+      QueryNode acc;
+      acc.type = QueryNode::Type::kTextMatch;
+      acc.field_name = "";
+      acc.text_terms = {std::move(terms[0])};
+      acc.text_term_mods = {mods[0]};
+      for (size_t ti = 1; ti < terms.size(); ti++) {
+        QueryNode rhs;
+        rhs.type = QueryNode::Type::kTextMatch;
+        rhs.field_name = "";
+        rhs.text_terms = {std::move(terms[ti])};
+        rhs.text_term_mods = {mods[ti]};
+        QueryNode combined;
+        combined.type = QueryNode::Type::kAnd;
+        combined.children.push_back(std::move(acc));
+        combined.children.push_back(std::move(rhs));
+        acc = std::move(combined);
+      }
+      out = std::move(acc);
       return true;
     }
     error_msg = "ERR syntax error: expected @, *, (, or term";

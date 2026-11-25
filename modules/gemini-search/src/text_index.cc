@@ -16,23 +16,111 @@ static const std::unordered_set<std::string> kStopWords = {
     "with",
 };
 
-static std::vector<std::string> TokenizeImpl(const std::string& text,
-                                              bool filter_stopwords) {
+static bool DecodeUtf8(const std::string& s, size_t pos, uint32_t& cp,
+                       size_t& byte_len) {
+  if (pos >= s.size()) return false;
+  unsigned char c0 = static_cast<unsigned char>(s[pos]);
+  if (c0 < 0x80) {
+    cp = c0;
+    byte_len = 1;
+    return true;
+  }
+  if ((c0 & 0xE0) == 0xC0 && pos + 1 < s.size()) {
+    unsigned char c1 = static_cast<unsigned char>(s[pos + 1]);
+    if ((c1 & 0xC0) == 0x80) {
+      cp = ((c0 & 0x1Fu) << 6) | (c1 & 0x3Fu);
+      byte_len = 2;
+      return true;
+    }
+  } else if ((c0 & 0xF0) == 0xE0 && pos + 2 < s.size()) {
+    unsigned char c1 = static_cast<unsigned char>(s[pos + 1]);
+    unsigned char c2 = static_cast<unsigned char>(s[pos + 2]);
+    if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80) {
+      cp = ((c0 & 0x0Fu) << 12) | ((c1 & 0x3Fu) << 6) | (c2 & 0x3Fu);
+      byte_len = 3;
+      return true;
+    }
+  } else if ((c0 & 0xF8) == 0xF0 && pos + 3 < s.size()) {
+    unsigned char c1 = static_cast<unsigned char>(s[pos + 1]);
+    unsigned char c2 = static_cast<unsigned char>(s[pos + 2]);
+    unsigned char c3 = static_cast<unsigned char>(s[pos + 3]);
+    if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80 && (c3 & 0xC0) == 0x80) {
+      cp = ((c0 & 0x07u) << 18) | ((c1 & 0x3Fu) << 12) |
+           ((c2 & 0x3Fu) << 6) | (c3 & 0x3Fu);
+      byte_len = 4;
+      return true;
+    }
+  }
+  cp = c0;
+  byte_len = 1;
+  return true;
+}
+
+static bool IsCjkCodepoint(uint32_t cp) {
+  return (cp >= 0x4E00 && cp <= 0x9FFF) ||  // CJK Unified Ideographs
+         (cp >= 0x3400 && cp <= 0x4DBF) ||  // CJK Extension A
+         (cp >= 0xF900 && cp <= 0xFAFF) ||  // CJK Compatibility Ideographs
+         (cp >= 0x3040 && cp <= 0x30FF) ||  // Hiragana & Katakana
+         (cp >= 0xAC00 && cp <= 0xD7AF);    // Hangul Syllables
+}
+
+static std::vector<std::string> TokenizeImpl(
+    const std::string& text, bool filter_stopwords,
+    const std::unordered_set<std::string>* custom_sw = nullptr) {
   std::vector<std::string> tokens;
+  const auto& sw = custom_sw ? *custom_sw : kStopWords;
   size_t i = 0;
   while (i < text.size()) {
-    while (i < text.size() && !std::isalnum(static_cast<unsigned char>(text[i]))) i++;
-    if (i >= text.size()) break;
-    size_t start = i;
-    while (i < text.size() && std::isalnum(static_cast<unsigned char>(text[i]))) i++;
-    std::string token;
-    token.reserve(i - start);
-    for (size_t j = start; j < i; j++) {
-      token += static_cast<char>(std::tolower(static_cast<unsigned char>(text[j])));
-    }
-    if (!token.empty() &&
-        (!filter_stopwords || kStopWords.find(token) == kStopWords.end())) {
-      tokens.push_back(std::move(token));
+    unsigned char ch = static_cast<unsigned char>(text[i]);
+    if (ch < 0x80) {
+      if (!std::isalnum(ch)) {
+        i++;
+        continue;
+      }
+      size_t start = i;
+      while (i < text.size() &&
+             static_cast<unsigned char>(text[i]) < 0x80 &&
+             std::isalnum(static_cast<unsigned char>(text[i]))) {
+        i++;
+      }
+      std::string token;
+      token.reserve(i - start);
+      for (size_t j = start; j < i; j++) {
+        token += static_cast<char>(std::tolower(static_cast<unsigned char>(text[j])));
+      }
+      if (!token.empty() && (!filter_stopwords || sw.find(token) == sw.end())) {
+        tokens.push_back(std::move(token));
+      }
+    } else {
+      uint32_t cp = 0;
+      size_t blen = 0;
+      DecodeUtf8(text, i, cp, blen);
+      if (!IsCjkCodepoint(cp)) {
+        i += blen;
+        continue;
+      }
+      // Collect contiguous CJK run
+      std::vector<std::string> cjk_chars;
+      while (i < text.size()) {
+        uint32_t c2 = 0;
+        size_t l2 = 0;
+        DecodeUtf8(text, i, c2, l2);
+        if (!IsCjkCodepoint(c2)) break;
+        cjk_chars.push_back(text.substr(i, l2));
+        i += l2;
+      }
+      if (cjk_chars.size() == 1) {
+        if (!filter_stopwords || sw.find(cjk_chars[0]) == sw.end()) {
+          tokens.push_back(std::move(cjk_chars[0]));
+        }
+      } else {
+        for (size_t ci = 0; ci + 1 < cjk_chars.size(); ci++) {
+          std::string bigram = cjk_chars[ci] + cjk_chars[ci + 1];
+          if (!filter_stopwords || sw.find(bigram) == sw.end()) {
+            tokens.push_back(std::move(bigram));
+          }
+        }
+      }
     }
   }
   return tokens;
@@ -45,21 +133,7 @@ std::vector<std::string> TextIndex::Tokenize(const std::string& text) {
 std::vector<std::string> TextIndex::Tokenize(const std::string& text,
                                               const std::vector<std::string>& stopwords) {
   std::unordered_set<std::string> sw_set(stopwords.begin(), stopwords.end());
-  std::vector<std::string> tokens;
-  size_t i = 0;
-  while (i < text.size()) {
-    while (i < text.size() && !std::isalnum(static_cast<unsigned char>(text[i]))) i++;
-    if (i >= text.size()) break;
-    size_t start = i;
-    while (i < text.size() && std::isalnum(static_cast<unsigned char>(text[i]))) i++;
-    std::string token;
-    token.reserve(i - start);
-    for (size_t j = start; j < i; j++)
-      token += static_cast<char>(std::tolower(static_cast<unsigned char>(text[j])));
-    if (!token.empty() && sw_set.find(token) == sw_set.end())
-      tokens.push_back(std::move(token));
-  }
-  return tokens;
+  return TokenizeImpl(text, true, &sw_set);
 }
 
 std::vector<std::string> TextIndex::TokenizeRaw(const std::string& text) {

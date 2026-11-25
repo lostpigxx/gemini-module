@@ -88,9 +88,12 @@ static std::string ApplyHighlight(const std::string& text,
                                   const std::string& close_tag) {
   std::string result;
   for (size_t i = 0; i < text.size(); ) {
-    if (std::isalnum(static_cast<unsigned char>(text[i]))) {
+    unsigned char ch = static_cast<unsigned char>(text[i]);
+    if (ch < 0x80 && std::isalnum(ch)) {
       size_t start = i;
-      while (i < text.size() && std::isalnum(static_cast<unsigned char>(text[i]))) i++;
+      while (i < text.size() &&
+             static_cast<unsigned char>(text[i]) < 0x80 &&
+             std::isalnum(static_cast<unsigned char>(text[i]))) i++;
       std::string word = text.substr(start, i - start);
       std::string lower = word;
       for (auto& c : lower)
@@ -99,6 +102,22 @@ static std::string ApplyHighlight(const std::string& text,
         result += open_tag + word + close_tag;
       } else {
         result += word;
+      }
+    } else if (ch >= 0x80) {
+      // Try matching any UTF-8 query term starting at i (longest match first)
+      size_t best_len = 0;
+      for (const auto& t : terms) {
+        if (t.size() > best_len && i + t.size() <= text.size() &&
+            text.compare(i, t.size(), t) == 0) {
+          best_len = t.size();
+        }
+      }
+      if (best_len > 0) {
+        result += open_tag + text.substr(i, best_len) + close_tag;
+        i += best_len;
+      } else {
+        result += text[i];
+        i++;
       }
     } else {
       result += text[i];

@@ -172,3 +172,62 @@ TEST(TextFieldIndicesTest, GetMissing) {
   TextFieldIndices indices;
   EXPECT_EQ(indices.Get("nonexistent"), nullptr);
 }
+
+// =============================================================
+// Phase 45: CJK / Unicode Tokenization Tests
+// =============================================================
+
+TEST(CjkTokenizeTest, ChineseBigramAndUnigram) {
+  auto bigrams = TextIndex::Tokenize("搜索引擎");
+  ASSERT_EQ(bigrams.size(), 3u);
+  EXPECT_EQ(bigrams[0], "搜索");
+  EXPECT_EQ(bigrams[1], "索引");
+  EXPECT_EQ(bigrams[2], "引擎");
+
+  auto unigram = TextIndex::Tokenize("龙");
+  ASSERT_EQ(unigram.size(), 1u);
+  EXPECT_EQ(unigram[0], "龙");
+}
+
+TEST(CjkTokenizeTest, MixedAsciiAndCjk) {
+  auto toks = TextIndex::Tokenize("Redis向量数据库v7");
+  ASSERT_EQ(toks.size(), 6u);
+  EXPECT_EQ(toks[0], "redis");
+  EXPECT_EQ(toks[1], "向量");
+  EXPECT_EQ(toks[2], "量数");
+  EXPECT_EQ(toks[3], "数据");
+  EXPECT_EQ(toks[4], "据库");
+  EXPECT_EQ(toks[5], "v7");
+}
+
+TEST(CjkTokenizeTest, JapaneseAndKorean) {
+  auto jp = TextIndex::Tokenize("データベース検索");
+  EXPECT_GE(jp.size(), 6u);
+  auto kr = TextIndex::Tokenize("검색엔진");
+  ASSERT_EQ(kr.size(), 3u);
+  EXPECT_EQ(kr[0], "검색");
+  EXPECT_EQ(kr[1], "색엔");
+  EXPECT_EQ(kr[2], "엔진");
+}
+
+TEST(CjkTokenizeTest, MalformedUtf8DoesNotCrash) {
+  std::string bad = "\xFF\xFE\xC0hello\xE0\x80";
+  auto toks = TextIndex::Tokenize(bad);
+  ASSERT_EQ(toks.size(), 1u);
+  EXPECT_EQ(toks[0], "hello");
+}
+
+TEST(CjkTokenizeTest, ChineseBm25AndPhraseSearch) {
+  TextIndex idx;
+  idx.Add("d1", "Redis向量搜索引擎支持高速检索", false, "chinese");
+  idx.Add("d2", "传统关系型数据库", false, "chinese");
+
+  auto hits = idx.Lookup("搜索");
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0], "d1");
+
+  auto phrase_tokens = TextIndex::TokenizeRaw("搜索引擎");
+  auto ph = idx.PhraseSearch(phrase_tokens, 0, true);
+  ASSERT_EQ(ph.size(), 1u);
+  EXPECT_EQ(ph[0].doc_id, "d1");
+}
