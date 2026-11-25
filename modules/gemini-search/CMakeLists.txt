@@ -42,6 +42,21 @@ set_target_properties(redis_search PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
+add_executable(search_bench EXCLUDE_FROM_ALL
+  tests/search_bench.cc
+  src/document_store.cc
+  src/text_index.cc
+  src/stemmer.cc
+  src/phonetic.cc
+  src/geo_index.cc
+  src/vector_index.cc
+  src/hnsw_index.cc
+)
+target_include_directories(search_bench PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_options(search_bench PRIVATE -O3 -Wall -Wextra -Wpedantic)
+
 find_package(GTest QUIET)
 if(GTest_FOUND)
   add_executable(index_spec_test EXCLUDE_FROM_ALL
