@@ -42,6 +42,12 @@ void DequantizeSq8(const uint8_t* src, const Sq8Meta& meta, size_t dim, float* d
 float Sq8Distance(const float* query, const uint8_t* qvec, const Sq8Meta& meta,
                   size_t dim, DistanceMetric metric);
 
+// 1-bit Binary Quantization (BQ) helpers (32x compression vs FP32)
+inline size_t BqWords(size_t dim) { return (dim + 63) / 64; }
+void QuantizeBq(const float* src, size_t dim, uint64_t* dst);
+void DequantizeBq(const uint64_t* src, size_t dim, float* dst);
+float BqHammingDistance(const uint64_t* a, const uint64_t* b, size_t dim);
+
 class VectorIndexBase {
  public:
   virtual ~VectorIndexBase() = default;
@@ -68,6 +74,8 @@ class FlatVectorIndex : public VectorIndexBase {
   std::vector<float> data_;
   std::vector<uint8_t> sq8_data_;
   std::vector<Sq8Meta> sq8_meta_;
+  size_t bq_words_ = 0;
+  std::vector<uint64_t> bq_data_;
   std::vector<std::string> ids_;
   std::unordered_map<std::string, size_t> id_to_idx_;
 

@@ -354,3 +354,58 @@ TEST(VectorSimdParityTest, Sq8DistanceAllMetricsAcrossArbitraryDimensions) {
                 InnerProductDistance(q.data(), deq.data(), dim), 1e-3) << "dim=" << dim;
   }
 }
+
+TEST(VectorSimdParityTest, BqHammingDistanceAcrossArbitraryDimensions) {
+  const size_t dims[] = {1, 7, 63, 64, 65, 127, 128, 129, 384, 768, 1536};
+  for (size_t dim : dims) {
+    std::vector<float> a(dim), b(dim);
+    size_t expected_diff = 0;
+    for (size_t i = 0; i < dim; i++) {
+      a[i] = std::sin(static_cast<float>(i) * 0.37f + 0.1f);
+      b[i] = std::cos(static_cast<float>(i) * 0.53f - 0.2f);
+      if ((a[i] >= 0.0f) != (b[i] >= 0.0f)) expected_diff++;
+    }
+    std::vector<uint64_t> ba(BqWords(dim)), bb(BqWords(dim));
+    QuantizeBq(a.data(), dim, ba.data());
+    QuantizeBq(b.data(), dim, bb.data());
+    float expected = static_cast<float>(expected_diff) / static_cast<float>(dim);
+    EXPECT_NEAR(BqHammingDistance(ba.data(), bb.data(), dim), expected, 1e-6f)
+        << "dim=" << dim;
+    EXPECT_FLOAT_EQ(BqHammingDistance(ba.data(), ba.data(), dim), 0.0f);
+  }
+}
+
+TEST(FlatVectorIndexTest, BinaryQuantizationKnnFilteredAndRemove) {
+  FlatVectorIndex idx(128, DistanceMetric::kCosine, VectorQuantization::kBq);
+  std::vector<float> v1(128, 1.0f);
+  std::vector<float> v2(128, -1.0f);
+  std::vector<float> v3(128, 1.0f);
+  for (size_t i = 0; i < 16; i++) v3[i] = -1.0f;
+
+  idx.Add("d1", v1.data());
+  idx.Add("d2", v2.data());
+  idx.Add("d3", v3.data());
+  EXPECT_EQ(idx.Size(), 3u);
+
+  auto res = idx.KnnQuery(v1.data(), 3);
+  ASSERT_EQ(res.size(), 3u);
+  EXPECT_EQ(res[0].doc_id, "d1");
+  EXPECT_FLOAT_EQ(res[0].score, 0.0f);
+  EXPECT_EQ(res[1].doc_id, "d3");
+  EXPECT_NEAR(res[1].score, 16.0f / 128.0f, 1e-6f);
+  EXPECT_EQ(res[2].doc_id, "d2");
+  EXPECT_FLOAT_EQ(res[2].score, 1.0f);
+
+  auto filt = idx.KnnQueryFiltered(v1.data(), 2, {"d2", "d3"});
+  ASSERT_EQ(filt.size(), 2u);
+  EXPECT_EQ(filt[0].doc_id, "d3");
+
+  auto rng = idx.RangeQuery(v1.data(), 0.2f);
+  ASSERT_EQ(rng.size(), 2u);
+
+  EXPECT_TRUE(idx.Remove("d1"));
+  EXPECT_EQ(idx.Size(), 2u);
+  auto after = idx.KnnQuery(v1.data(), 1);
+  ASSERT_EQ(after.size(), 1u);
+  EXPECT_EQ(after[0].doc_id, "d3");
+}

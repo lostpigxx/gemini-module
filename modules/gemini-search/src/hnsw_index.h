@@ -55,6 +55,8 @@ class HnswIndex : public VectorIndexBase {
   std::vector<float> vectors_;
   std::vector<uint8_t> sq8_vectors_;
   std::vector<Sq8Meta> sq8_meta_;
+  size_t bq_words_ = 0;
+  std::vector<uint64_t> bq_vectors_;
   std::vector<std::string> doc_ids_;
   std::vector<uint8_t> alive_;
   std::vector<int> max_layers_;

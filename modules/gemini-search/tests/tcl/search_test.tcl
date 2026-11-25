@@ -4108,6 +4108,34 @@ test_assert "CJK FMM custom dictionary via FT.DICTADD + FT.CREATE DICT" {
 }
 
 # ============================================================
+# Phase 55: 1-bit Binary Quantization (BQ)
+# ============================================================
+puts "\n=== Phase 55: 1-bit Binary Quantization (BQ) ==="
+
+test_assert "VECTOR QUANTIZATION BQ works on FLAT and HNSW" {
+  r FT.CREATE p55bq SCHEMA v VECTOR FLAT DIM 4 DISTANCE_METRIC COSINE QUANTIZATION BQ
+  r FT.CREATE p55bqh SCHEMA v VECTOR HNSW DIM 4 DISTANCE_METRIC COSINE QUANTIZATION BQ M 8 EF_CONSTRUCTION 32
+
+  set v1 [binary format f* {1.0 1.0 1.0 1.0}]
+  set v2 [binary format f* {1.0 1.0 -1.0 -1.0}]
+  set v3 [binary format f* {-1.0 -1.0 -1.0 -1.0}]
+
+  foreach idx {p55bq p55bqh} {
+    r FT.ADD $idx d1 FIELDS v $v1
+    r FT.ADD $idx d2 FIELDS v $v2
+    r FT.ADD $idx d3 FIELDS v $v3
+    set res [r FT.SEARCH $idx {*=>[KNN 2 @v $q]} PARAMS 2 q $v1 NOCONTENT]
+    if {[lindex $res 0] != 2 || [lindex $res 1] ne "d1" || [lindex $res 2] ne "d2"} {
+      r FT.DROPINDEX p55bq
+      r FT.DROPINDEX p55bqh
+      error "BQ KNN mismatch on $idx: $res"
+    }
+  }
+  r FT.DROPINDEX p55bq
+  r FT.DROPINDEX p55bqh
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

@@ -44,12 +44,13 @@ inline size_t VectorElementSize(VectorDataType t) {
   return sizeof(float);
 }
 
-enum class VectorQuantization { kNone, kSq8 };
+enum class VectorQuantization { kNone, kSq8, kBq };
 
 inline const char* VectorQuantizationName(VectorQuantization q) {
   switch (q) {
     case VectorQuantization::kNone: return "NONE";
     case VectorQuantization::kSq8: return "SQ8";
+    case VectorQuantization::kBq: return "BQ";
   }
   return "NONE";
 }

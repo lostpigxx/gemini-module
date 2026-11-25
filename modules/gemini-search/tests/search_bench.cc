@@ -177,6 +177,34 @@ int main() {
     });
   }
 
+  // 6. Binary Quantization (BQ) vs FP32 vs SQ8 (5k x 768d)
+  {
+    const size_t dim = 768;
+    FlatVectorIndex fp32(dim, DistanceMetric::kCosine, VectorQuantization::kNone);
+    FlatVectorIndex sq8(dim, DistanceMetric::kCosine, VectorQuantization::kSq8);
+    FlatVectorIndex bq(dim, DistanceMetric::kCosine, VectorQuantization::kBq);
+    std::vector<float> vec(dim), q(dim);
+    std::mt19937 rng(99);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    for (size_t i = 0; i < 5000; i++) {
+      for (size_t d = 0; d < dim; d++) vec[d] = dist(rng);
+      std::string id = "b" + std::to_string(i);
+      fp32.Add(id, vec.data());
+      sq8.Add(id, vec.data());
+      bq.Add(id, vec.data());
+    }
+    for (size_t d = 0; d < dim; d++) q[d] = dist(rng);
+    BenchUs("FlatVector FP32 Cosine KNN-10 (5kx768)", 100, [&]() {
+      sink += fp32.KnnQuery(q.data(), 10).size();
+    });
+    BenchUs("FlatVector SQ8 Cosine KNN-10 (5kx768)", 100, [&]() {
+      sink += sq8.KnnQuery(q.data(), 10).size();
+    });
+    BenchUs("FlatVector BQ Hamming KNN-10 (5kx768)", 500, [&]() {
+      sink += bq.KnnQuery(q.data(), 10).size();
+    });
+  }
+
   (void)sink;
   return 0;
 }

@@ -227,9 +227,11 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
             fspec.vector_params.quantization = VectorQuantization::kNone;
           } else if (MatchArg(qstr, "SQ8")) {
             fspec.vector_params.quantization = VectorQuantization::kSq8;
+          } else if (MatchArg(qstr, "BQ")) {
+            fspec.vector_params.quantization = VectorQuantization::kBq;
           } else {
             return RedisModule_ReplyWithError(
-                ctx, "ERR unknown QUANTIZATION, expected NONE or SQ8");
+                ctx, "ERR unknown QUANTIZATION, expected NONE, SQ8, or BQ");
           }
           i += 2;
         } else if (MatchArg(param, "DIM")) {
@@ -567,10 +569,14 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
     } else if (f.type == FieldType::kVector) {
       if (const auto* vidx = entry.vector_indices.Get(f.name)) {
-        size_t elem_b = (f.vector_params.quantization == VectorQuantization::kSq8)
-                            ? 1
-                            : sizeof(float);
-        vector_bytes += vidx->Size() * vidx->Dim() * elem_b;
+        if (f.vector_params.quantization == VectorQuantization::kBq) {
+          vector_bytes += vidx->Size() * BqWords(vidx->Dim()) * sizeof(uint64_t);
+        } else {
+          size_t elem_b = (f.vector_params.quantization == VectorQuantization::kSq8)
+                              ? 1
+                              : sizeof(float);
+          vector_bytes += vidx->Size() * vidx->Dim() * elem_b;
+        }
       }
     }
   }

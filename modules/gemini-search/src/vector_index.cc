@@ -418,14 +418,59 @@ float Sq8Distance(const float* query, const uint8_t* qvec, const Sq8Meta& meta,
   return 1.0f - dot / denom;
 }
 
+void QuantizeBq(const float* src, size_t dim, uint64_t* dst) {
+  size_t words = BqWords(dim);
+  std::memset(dst, 0, words * sizeof(uint64_t));
+  for (size_t i = 0; i < dim; i++) {
+    if (src[i] >= 0.0f) {
+      dst[i >> 6] |= (uint64_t{1} << (i & 63));
+    }
+  }
+}
+
+void DequantizeBq(const uint64_t* src, size_t dim, float* dst) {
+  for (size_t i = 0; i < dim; i++) {
+    dst[i] = ((src[i >> 6] >> (i & 63)) & 1u) ? 1.0f : -1.0f;
+  }
+}
+
+float BqHammingDistance(const uint64_t* a, const uint64_t* b, size_t dim) {
+  if (dim == 0) return 0.0f;
+  const size_t words = BqWords(dim);
+  uint64_t diff = 0;
+  size_t i = 0;
+#if defined(GEMINI_SIMD_NEON)
+  uint64x2_t acc = vdupq_n_u64(0);
+  for (; i + 1 < words; i += 2) {
+    uint8x16_t va = vld1q_u8(reinterpret_cast<const uint8_t*>(a + i));
+    uint8x16_t vb = vld1q_u8(reinterpret_cast<const uint8_t*>(b + i));
+    uint8x16_t cnt = vcntq_u8(veorq_u8(va, vb));
+    acc = vaddq_u64(acc, vpaddlq_u32(vpaddlq_u16(vpaddlq_u8(cnt))));
+  }
+  diff = vaddvq_u64(acc);
+#endif
+  for (; i < words; i++) {
+    diff += static_cast<uint64_t>(__builtin_popcountll(a[i] ^ b[i]));
+  }
+  return static_cast<float>(diff) / static_cast<float>(dim);
+}
+
 FlatVectorIndex::FlatVectorIndex(size_t dim, DistanceMetric metric,
                                  VectorQuantization quantization)
-    : dim_(dim), metric_(metric), quantization_(quantization) {}
+    : dim_(dim),
+      metric_(metric),
+      quantization_(quantization),
+      bq_words_(BqWords(dim)) {}
 
 float FlatVectorIndex::DistanceAt(const float* query, size_t idx, DistFn dist_fn) const {
   if (quantization_ == VectorQuantization::kSq8) {
     return Sq8Distance(query, sq8_data_.data() + idx * dim_, sq8_meta_[idx],
                        dim_, metric_);
+  }
+  if (quantization_ == VectorQuantization::kBq) {
+    std::vector<uint64_t> qbq(bq_words_);
+    QuantizeBq(query, dim_, qbq.data());
+    return BqHammingDistance(qbq.data(), bq_data_.data() + idx * bq_words_, dim_);
   }
   return dist_fn(query, data_.data() + idx * dim_, dim_);
 }
@@ -436,6 +481,8 @@ void FlatVectorIndex::Add(const std::string& doc_id, const float* data) {
     size_t idx = it->second;
     if (quantization_ == VectorQuantization::kSq8) {
       QuantizeSq8(data, dim_, sq8_data_.data() + idx * dim_, sq8_meta_[idx]);
+    } else if (quantization_ == VectorQuantization::kBq) {
+      QuantizeBq(data, dim_, bq_data_.data() + idx * bq_words_);
     } else {
       std::memcpy(data_.data() + idx * dim_, data, dim_ * sizeof(float));
     }
@@ -448,6 +495,9 @@ void FlatVectorIndex::Add(const std::string& doc_id, const float* data) {
     sq8_data_.resize((idx + 1) * dim_);
     sq8_meta_.emplace_back();
     QuantizeSq8(data, dim_, sq8_data_.data() + idx * dim_, sq8_meta_[idx]);
+  } else if (quantization_ == VectorQuantization::kBq) {
+    bq_data_.resize((idx + 1) * bq_words_);
+    QuantizeBq(data, dim_, bq_data_.data() + idx * bq_words_);
   } else {
     data_.insert(data_.end(), data, data + dim_);
   }
@@ -462,6 +512,10 @@ bool FlatVectorIndex::Remove(const std::string& doc_id) {
     if (quantization_ == VectorQuantization::kSq8) {
       std::memcpy(sq8_data_.data() + idx * dim_, sq8_data_.data() + last * dim_, dim_);
       sq8_meta_[idx] = sq8_meta_[last];
+    } else if (quantization_ == VectorQuantization::kBq) {
+      std::memcpy(bq_data_.data() + idx * bq_words_,
+                  bq_data_.data() + last * bq_words_,
+                  bq_words_ * sizeof(uint64_t));
     } else {
       std::memcpy(data_.data() + idx * dim_, data_.data() + last * dim_,
                   dim_ * sizeof(float));
@@ -473,6 +527,8 @@ bool FlatVectorIndex::Remove(const std::string& doc_id) {
   if (quantization_ == VectorQuantization::kSq8) {
     sq8_data_.resize(ids_.size() * dim_);
     sq8_meta_.pop_back();
+  } else if (quantization_ == VectorQuantization::kBq) {
+    bq_data_.resize(ids_.size() * bq_words_);
   } else {
     data_.resize(ids_.size() * dim_);
   }
@@ -486,8 +542,18 @@ std::vector<KnnResult> FlatVectorIndex::KnnQuery(const float* query,
   const size_t total = ids_.size();
   std::vector<KnnResult> results;
   results.reserve(total);
-  for (size_t idx = 0; idx < total; idx++) {
-    results.push_back({ids_[idx], DistanceAt(query, idx, dist_fn)});
+  if (quantization_ == VectorQuantization::kBq) {
+    std::vector<uint64_t> qbq(bq_words_);
+    QuantizeBq(query, dim_, qbq.data());
+    for (size_t idx = 0; idx < total; idx++) {
+      results.push_back(
+          {ids_[idx],
+           BqHammingDistance(qbq.data(), bq_data_.data() + idx * bq_words_, dim_)});
+    }
+  } else {
+    for (size_t idx = 0; idx < total; idx++) {
+      results.push_back({ids_[idx], DistanceAt(query, idx, dist_fn)});
+    }
   }
 
   size_t n = std::min(k, results.size());
@@ -505,10 +571,22 @@ std::vector<KnnResult> FlatVectorIndex::KnnQueryFiltered(
     const std::vector<std::string>& candidates) const {
   DistFn dist_fn = GetDistanceFunction(metric_);
   std::vector<KnnResult> results;
-  for (const auto& doc_id : candidates) {
-    auto it = id_to_idx_.find(doc_id);
-    if (it == id_to_idx_.end()) continue;
-    results.push_back({doc_id, DistanceAt(query, it->second, dist_fn)});
+  if (quantization_ == VectorQuantization::kBq) {
+    std::vector<uint64_t> qbq(bq_words_);
+    QuantizeBq(query, dim_, qbq.data());
+    for (const auto& doc_id : candidates) {
+      auto it = id_to_idx_.find(doc_id);
+      if (it == id_to_idx_.end()) continue;
+      results.push_back(
+          {doc_id,
+           BqHammingDistance(qbq.data(), bq_data_.data() + it->second * bq_words_, dim_)});
+    }
+  } else {
+    for (const auto& doc_id : candidates) {
+      auto it = id_to_idx_.find(doc_id);
+      if (it == id_to_idx_.end()) continue;
+      results.push_back({doc_id, DistanceAt(query, it->second, dist_fn)});
+    }
   }
 
   size_t n = std::min(k, results.size());
@@ -526,10 +604,20 @@ std::vector<KnnResult> FlatVectorIndex::RangeQuery(const float* query,
   DistFn dist_fn = GetDistanceFunction(metric_);
   const size_t total = ids_.size();
   std::vector<KnnResult> results;
-  for (size_t idx = 0; idx < total; idx++) {
-    float score = DistanceAt(query, idx, dist_fn);
-    if (score <= radius) {
-      results.push_back({ids_[idx], score});
+  if (quantization_ == VectorQuantization::kBq) {
+    std::vector<uint64_t> qbq(bq_words_);
+    QuantizeBq(query, dim_, qbq.data());
+    for (size_t idx = 0; idx < total; idx++) {
+      float score =
+          BqHammingDistance(qbq.data(), bq_data_.data() + idx * bq_words_, dim_);
+      if (score <= radius) results.push_back({ids_[idx], score});
+    }
+  } else {
+    for (size_t idx = 0; idx < total; idx++) {
+      float score = DistanceAt(query, idx, dist_fn);
+      if (score <= radius) {
+        results.push_back({ids_[idx], score});
+      }
     }
   }
   std::sort(results.begin(), results.end(),
@@ -547,6 +635,7 @@ void FlatVectorIndex::Clear() {
   data_.clear();
   sq8_data_.clear();
   sq8_meta_.clear();
+  bq_data_.clear();
   ids_.clear();
   id_to_idx_.clear();
 }

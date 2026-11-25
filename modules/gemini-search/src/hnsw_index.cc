@@ -16,7 +16,8 @@ HnswIndex::HnswIndex(size_t dim, DistanceMetric metric, size_t m,
       m_max0_(m * 2),
       ef_construction_(ef_construction),
       ef_runtime_(10),
-      ml_(1.0 / std::log(static_cast<double>(m > 1 ? m : 2))) {}
+      ml_(1.0 / std::log(static_cast<double>(m > 1 ? m : 2))),
+      bq_words_(BqWords(dim)) {}
 
 int HnswIndex::RandomLevel(const std::string& doc_id) const {
   auto seed = static_cast<unsigned>(std::hash<std::string>{}(doc_id));
@@ -35,6 +36,18 @@ float HnswIndex::DistanceTo(const float* query, uint32_t node_id) const {
   if (quantization_ == VectorQuantization::kSq8) {
     return Sq8Distance(query, sq8_vectors_.data() + static_cast<size_t>(node_id) * dim_,
                        sq8_meta_[node_id], dim_, metric_);
+  }
+  if (quantization_ == VectorQuantization::kBq) {
+    uint64_t stack_buf[32];
+    std::vector<uint64_t> heap_buf;
+    uint64_t* qbq = stack_buf;
+    if (bq_words_ > 32) {
+      heap_buf.resize(bq_words_);
+      qbq = heap_buf.data();
+    }
+    QuantizeBq(query, dim_, qbq);
+    return BqHammingDistance(
+        qbq, bq_vectors_.data() + static_cast<size_t>(node_id) * bq_words_, dim_);
   }
   return dist_fn_(query, vectors_.data() + static_cast<size_t>(node_id) * dim_, dim_);
 }
@@ -145,6 +158,8 @@ void HnswIndex::Add(const std::string& doc_id, const float* data) {
     if (quantization_ == VectorQuantization::kSq8) {
       QuantizeSq8(data, dim_, sq8_vectors_.data() + static_cast<size_t>(nid) * dim_,
                   sq8_meta_[nid]);
+    } else if (quantization_ == VectorQuantization::kBq) {
+      QuantizeBq(data, dim_, bq_vectors_.data() + static_cast<size_t>(nid) * bq_words_);
     } else {
       std::memcpy(vectors_.data() + static_cast<size_t>(nid) * dim_, data,
                   dim_ * sizeof(float));
@@ -160,6 +175,9 @@ void HnswIndex::Add(const std::string& doc_id, const float* data) {
       sq8_meta_.emplace_back();
       QuantizeSq8(data, dim_, sq8_vectors_.data() + static_cast<size_t>(nid) * dim_,
                   sq8_meta_[nid]);
+    } else if (quantization_ == VectorQuantization::kBq) {
+      bq_vectors_.resize(static_cast<size_t>(nid + 1) * bq_words_);
+      QuantizeBq(data, dim_, bq_vectors_.data() + static_cast<size_t>(nid) * bq_words_);
     } else {
       vectors_.insert(vectors_.end(), data, data + dim_);
     }
@@ -199,6 +217,11 @@ void HnswIndex::Add(const std::string& doc_id, const float* data) {
           tmp_nb_vec.resize(dim_);
           DequantizeSq8(sq8_vectors_.data() + static_cast<size_t>(nb_id) * dim_,
                         sq8_meta_[nb_id], dim_, tmp_nb_vec.data());
+          nb_vec_ptr = tmp_nb_vec.data();
+        } else if (quantization_ == VectorQuantization::kBq) {
+          tmp_nb_vec.resize(dim_);
+          DequantizeBq(bq_vectors_.data() + static_cast<size_t>(nb_id) * bq_words_,
+                       dim_, tmp_nb_vec.data());
           nb_vec_ptr = tmp_nb_vec.data();
         } else {
           nb_vec_ptr = vectors_.data() + static_cast<size_t>(nb_id) * dim_;
@@ -343,6 +366,7 @@ void HnswIndex::Clear() {
   vectors_.clear();
   sq8_vectors_.clear();
   sq8_meta_.clear();
+  bq_vectors_.clear();
   doc_ids_.clear();
   alive_.clear();
   max_layers_.clear();
