@@ -308,3 +308,46 @@ TEST(CjkFmmDictTest, TextIndexAddAndExactCompoundLookup) {
   ASSERT_EQ(oov_hits.size(), 1u);
   EXPECT_EQ(oov_hits[0], "d1");
 }
+
+TEST(TextIndexWandTest, SearchTopKExactEquivalenceWithFullSearch) {
+  TextIndex idx;
+  std::vector<std::string> vocab = {
+      "redis", "search", "vector", "engine", "fast",
+      "memory", "cache", "index", "query", "hybrid"};
+  for (int i = 0; i < 1000; i++) {
+    std::string text;
+    int len = 3 + (i % 12);
+    for (int j = 0; j < len; j++) {
+      if (j > 0) text += " ";
+      text += vocab[(i * 7 + j * 3) % vocab.size()];
+    }
+    if (i % 50 == 0) text += " redis redis vector";
+    idx.Add("doc_" + std::to_string(i), text);
+  }
+  // Exercise Remove + dirty TermStats recomputation
+  for (int i = 0; i < 200; i += 3) {
+    idx.Remove("doc_" + std::to_string(i));
+  }
+
+  std::vector<std::vector<std::string>> queries = {
+      {"redis", "vector", "engine"},
+      {"search", "fast", "cache", "hybrid"},
+      {"redis", "redis", "index"},
+      {"nonexistent", "redis"},
+      {"nonexistent"},
+  };
+  const size_t ks[] = {1, 5, 10, 50, 2000};
+  for (const auto& q : queries) {
+    auto full = idx.Search(q);
+    for (size_t k : ks) {
+      auto topk = idx.SearchTopK(q, k);
+      size_t expected_n = std::min(k, full.size());
+      ASSERT_EQ(topk.size(), expected_n);
+      for (size_t i = 0; i < expected_n; i++) {
+        EXPECT_EQ(topk[i].doc_id, full[i].doc_id) << "rank=" << i << " k=" << k;
+        EXPECT_NEAR(topk[i].score, full[i].score, 1e-9) << "rank=" << i << " k=" << k;
+      }
+    }
+  }
+  EXPECT_TRUE(idx.SearchTopK({"redis"}, 0).empty());
+}

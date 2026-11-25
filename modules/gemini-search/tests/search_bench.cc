@@ -205,6 +205,27 @@ int main() {
     });
   }
 
+  // 7. TextIndex WAND Top-10 vs Full BM25 Search (20k docs)
+  {
+    TextIndex widx;
+    std::vector<std::string> common = {"the", "common", "data", "system", "node"};
+    for (int i = 0; i < 20000; i++) {
+      std::string text = common[i % 5] + " " + common[(i + 1) % 5];
+      if (i % 10 == 0) text += " alpha";
+      if (i % 15 == 0) text += " beta";
+      if (i % 20 == 0) text += " gamma";
+      if (i % 500 == 0) text += " alpha alpha beta gamma";
+      widx.Add("w" + std::to_string(i), text);
+    }
+    std::vector<std::string> q = {"common", "alpha", "beta", "gamma"};
+    BenchUs("TextIndex::Search Full BM25 (20k)", 50, [&]() {
+      sink += widx.Search(q).size();
+    });
+    BenchUs("TextIndex::SearchTopK WAND-10 (20k)", 200, [&]() {
+      sink += widx.SearchTopK(q, 10).size();
+    });
+  }
+
   (void)sink;
   return 0;
 }

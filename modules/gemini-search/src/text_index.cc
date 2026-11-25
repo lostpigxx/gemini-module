@@ -252,6 +252,15 @@ void TextIndex::Add(const std::string& doc_id, const std::string& text,
           [](const Posting& a, uint32_t id) { return a.doc_id < id; });
       vec.insert(pos, std::move(p));
     }
+    auto& st = term_stats_[term];
+    int dl = doc_lengths_[did];
+    if (st.max_tf == 0 && st.min_dl == 0) {
+      st.max_tf = info.tf;
+      st.min_dl = dl;
+    } else {
+      if (info.tf > st.max_tf) st.max_tf = info.tf;
+      if (dl < st.min_dl) st.min_dl = dl;
+    }
     auto stemmed = StemWord(term, language);
     if (stemmed != term) {
       stem_map_[stemmed].insert(term);
@@ -282,10 +291,20 @@ void TextIndex::Remove(const std::string& doc_id) {
         vec.begin(), vec.end(), did,
         [](const Posting& a, uint32_t id) { return a.doc_id < id; });
     if (pos != vec.end() && pos->doc_id == did) {
+      int removed_tf = pos->tf;
       vec.erase(pos);
+      if (!vec.empty()) {
+        auto sit = term_stats_.find(term);
+        if (sit != term_stats_.end() &&
+            (removed_tf >= sit->second.max_tf ||
+             doc_lengths_[did] <= sit->second.min_dl)) {
+          sit->second.dirty = true;
+        }
+      }
     }
     if (vec.empty()) {
       postings_.erase(pit);
+      term_stats_.erase(term);
       sorted_terms_.erase(term);
       reversed_terms_.erase(std::string(term.rbegin(), term.rend()));
     }
@@ -327,6 +346,167 @@ std::vector<TextSearchResult> TextIndex::Search(
   results.reserve(scores.size());
   for (auto& [did, score] : scores) {
     results.push_back({id_to_str_[did], score});
+  }
+  std::sort(results.begin(), results.end(),
+            [](const TextSearchResult& a, const TextSearchResult& b) {
+              if (a.score != b.score) return a.score > b.score;
+              return a.doc_id < b.doc_id;
+            });
+  return results;
+}
+
+std::vector<TextSearchResult> TextIndex::SearchTopK(
+    const std::vector<std::string>& terms, size_t k) const {
+  if (live_docs_ == 0 || k == 0 || terms.empty()) return {};
+
+  constexpr double k1 = 1.2;
+  constexpr double b = 0.75;
+  const double N = static_cast<double>(live_docs_);
+
+  // Combine duplicate query terms into weights preserving query order
+  std::vector<std::pair<std::string, int>> ordered_terms;
+  std::unordered_map<std::string, size_t> term_pos;
+  for (const auto& t : terms) {
+    auto [it, inserted] = term_pos.emplace(t, ordered_terms.size());
+    if (inserted) {
+      ordered_terms.emplace_back(t, 1);
+    } else {
+      ordered_terms[it->second].second++;
+    }
+  }
+
+  struct WandCursor {
+    const std::vector<Posting>* posts = nullptr;
+    size_t idx = 0;
+    double idf = 0.0;
+    double ub = 0.0;
+    int weight = 1;
+    size_t q_order = 0;
+    uint32_t CurDoc() const { return (*posts)[idx].doc_id; }
+  };
+
+  std::vector<WandCursor> cursors;
+  cursors.reserve(ordered_terms.size());
+  for (size_t qi = 0; qi < ordered_terms.size(); qi++) {
+    const auto& [term, weight] = ordered_terms[qi];
+    auto pit = postings_.find(term);
+    if (pit == postings_.end() || pit->second.empty()) continue;
+    const auto& posts = pit->second;
+
+    auto& st = term_stats_[term];
+    if (st.dirty || (st.max_tf == 0 && st.min_dl == 0)) {
+      int mtf = 0;
+      int mdl = doc_lengths_[posts[0].doc_id];
+      for (const auto& p : posts) {
+        if (p.tf > mtf) mtf = p.tf;
+        int dl = doc_lengths_[p.doc_id];
+        if (dl < mdl) mdl = dl;
+      }
+      st.max_tf = mtf;
+      st.min_dl = mdl;
+      st.dirty = false;
+    }
+
+    double df = static_cast<double>(posts.size());
+    double idf = std::log((N - df + 0.5) / (df + 0.5) + 1.0);
+    double max_tf = static_cast<double>(st.max_tf);
+    double min_dl = static_cast<double>(st.min_dl);
+    double max_tf_norm =
+        (max_tf * (k1 + 1.0)) /
+        (max_tf + k1 * (1.0 - b + b * min_dl / avg_doc_len_));
+    double ub = static_cast<double>(weight) * idf * max_tf_norm + 1e-9;
+    cursors.push_back({&posts, 0, idf, ub, weight, qi});
+  }
+  if (cursors.empty()) return {};
+
+  struct HeapEntry {
+    double score;
+    uint32_t doc_id;
+  };
+  // Min-heap: worst candidate (lowest score, or tie with larger doc_id string) on top
+  auto heap_cmp = [this](const HeapEntry& a, const HeapEntry& b) {
+    if (a.score != b.score) return a.score > b.score;
+    return id_to_str_[a.doc_id] < id_to_str_[b.doc_id];
+  };
+  std::vector<HeapEntry> heap;
+  heap.reserve(k + 1);
+  double theta = 0.0;
+
+  while (!cursors.empty()) {
+    std::sort(cursors.begin(), cursors.end(),
+              [](const WandCursor& a, const WandCursor& b) {
+                if (a.CurDoc() != b.CurDoc()) return a.CurDoc() < b.CurDoc();
+                return a.q_order < b.q_order;
+              });
+
+    double acc_ub = 0.0;
+    size_t pivot_idx = cursors.size();
+    for (size_t i = 0; i < cursors.size(); i++) {
+      acc_ub += cursors[i].ub;
+      if (heap.size() < k || acc_ub >= theta - 1e-9) {
+        pivot_idx = i;
+        break;
+      }
+    }
+    if (pivot_idx == cursors.size()) break;
+
+    uint32_t pivot_doc = cursors[pivot_idx].CurDoc();
+    if (cursors[0].CurDoc() == pivot_doc) {
+      double score = 0.0;
+      double dl = static_cast<double>(doc_lengths_[pivot_doc]);
+      double dl_factor = k1 * (1.0 - b + b * dl / avg_doc_len_);
+      size_t out_n = 0;
+      for (size_t i = 0; i < cursors.size(); i++) {
+        auto& c = cursors[i];
+        if (c.CurDoc() == pivot_doc) {
+          double tf = static_cast<double>((*c.posts)[c.idx].tf);
+          double tf_norm = (tf * (k1 + 1.0)) / (tf + dl_factor);
+          for (int w = 0; w < c.weight; w++) score += c.idf * tf_norm;
+          c.idx++;
+        }
+        if (c.idx < c.posts->size()) {
+          if (out_n != i) cursors[out_n] = c;
+          out_n++;
+        }
+      }
+      cursors.resize(out_n);
+
+      HeapEntry cand{score, pivot_doc};
+      if (heap.size() < k) {
+        heap.push_back(cand);
+        std::push_heap(heap.begin(), heap.end(), heap_cmp);
+        if (heap.size() == k) theta = heap.front().score;
+      } else if (heap_cmp(cand, heap.front())) {
+        std::pop_heap(heap.begin(), heap.end(), heap_cmp);
+        heap.back() = cand;
+        std::push_heap(heap.begin(), heap.end(), heap_cmp);
+        theta = heap.front().score;
+      }
+    } else {
+      // Advance cursors before pivot_idx to >= pivot_doc via binary search
+      size_t out_n = 0;
+      for (size_t i = 0; i < cursors.size(); i++) {
+        auto& c = cursors[i];
+        if (i < pivot_idx && c.CurDoc() < pivot_doc) {
+          auto it = std::lower_bound(
+              c.posts->begin() + static_cast<ptrdiff_t>(c.idx),
+              c.posts->end(), pivot_doc,
+              [](const Posting& p, uint32_t target) { return p.doc_id < target; });
+          c.idx = static_cast<size_t>(it - c.posts->begin());
+        }
+        if (c.idx < c.posts->size()) {
+          if (out_n != i) cursors[out_n] = c;
+          out_n++;
+        }
+      }
+      cursors.resize(out_n);
+    }
+  }
+
+  std::vector<TextSearchResult> results;
+  results.reserve(heap.size());
+  for (const auto& h : heap) {
+    results.push_back({id_to_str_[h.doc_id], h.score});
   }
   std::sort(results.begin(), results.end(),
             [](const TextSearchResult& a, const TextSearchResult& b) {
@@ -670,6 +850,7 @@ void TextIndex::Clear() {
   total_doc_len_ = 0;
   avg_doc_len_ = 0.0;
   postings_.clear();
+  term_stats_.clear();
   sorted_terms_.clear();
   reversed_terms_.clear();
   stem_map_.clear();

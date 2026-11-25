@@ -32,7 +32,13 @@ class TextIndex {
   double avg_doc_len_ = 0.0;
 
   // Inverted index with postings sorted by uint32_t doc_id
+  struct TermStats {
+    int max_tf = 0;
+    int min_dl = 0;
+    bool dirty = false;
+  };
   std::unordered_map<std::string, std::vector<Posting>> postings_;
+  mutable std::unordered_map<std::string, TermStats> term_stats_;
   std::set<std::string> sorted_terms_;
   std::set<std::string> reversed_terms_;
   std::unordered_map<std::string, std::set<std::string>> stem_map_;
@@ -47,6 +53,8 @@ class TextIndex {
            const std::unordered_set<std::string>* custom_dict = nullptr);
   void Remove(const std::string& doc_id);
   std::vector<TextSearchResult> Search(const std::vector<std::string>& terms) const;
+  std::vector<TextSearchResult> SearchTopK(const std::vector<std::string>& terms,
+                                           size_t k) const;
   std::vector<std::string> Lookup(const std::string& term) const;
   std::vector<std::string> PrefixLookup(const std::string& prefix,
                                          size_t max_expansions = 200) const;
