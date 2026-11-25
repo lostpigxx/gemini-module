@@ -268,9 +268,9 @@ puts "\n=== FT.INFO ==="
 
 test_assert "FT.INFO returns correct schema" {
   set info [r FT.INFO myidx]
-  # info: index_name <name> num_docs <n> language <lang> fields <field_array>
-  if {[llength $info] != 8} {
-    error "Expected 8 elements, got [llength $info]: $info"
+  # info: index_name <name> num_docs <n> language <lang> fields <field_array> ...
+  if {[llength $info] < 8} {
+    error "Expected at least 8 elements, got [llength $info]: $info"
   }
   if {[lindex $info 0] ne "index_name"} {
     error "Expected 'index_name' label, got '[lindex $info 0]'"
@@ -3815,7 +3815,10 @@ test_assert "FT.AGGREGATE supports KNN with PARAMS and GROUPBY" {
 puts "\n=== Phase 45: CJK / Unicode Tokenization ==="
 
 test_assert "CJK Chinese, Japanese, Korean search, phrase, and HIGHLIGHT" {
-  proc u8 {s} { return [encoding convertto utf-8 $s] }
+  proc u8 {s} {
+    if {[encoding system] eq "utf-8"} { return [encoding convertto utf-8 $s] }
+    return $s
+  }
   r FT.CREATE p45cjk LANGUAGE chinese SCHEMA title TEXT body TEXT
   r FT.ADD p45cjk c1 FIELDS title [u8 "Redis向量搜索引擎"] body [u8 "支持高性能中文全文检索与混合搜索"]
   r FT.ADD p45cjk c2 FIELDS title [u8 "数据库管理系统"] body [u8 "传统关系型存储引擎"]
@@ -3858,6 +3861,75 @@ test_assert "CJK Chinese, Japanese, Korean search, phrase, and HIGHLIGHT" {
   }
 
   r FT.DROPINDEX p45cjk
+}
+
+# ============================================================
+# Phase 46: Observability & Runtime Governance
+# ============================================================
+puts "\n=== Phase 46: Observability & Runtime Governance ==="
+
+test_assert "FT.INFO exposes num_terms, inverted_sz_mb, vector_index_sz_mb, cursor_stats" {
+  r FT.CREATE p46obs SCHEMA title TEXT v VECTOR FLAT DIM 4 DISTANCE_METRIC L2
+  set vec [binary format f* {1.0 0.0 0.0 0.0}]
+  r FT.ADD p46obs d1 FIELDS title "alpha beta gamma" v $vec
+  r FT.ADD p46obs d2 FIELDS title "beta delta" v $vec
+
+  # Open a cursor so global_idle > 0
+  set cur_res [r FT.AGGREGATE p46obs "*" WITHCURSOR COUNT 1]
+  set cid [lindex $cur_res 1]
+
+  set info [r FT.INFO p46obs]
+  array set kv $info
+  if {$kv(num_terms) != 4} { error "Expected num_terms=4, got $kv(num_terms)" }
+  if {![info exists kv(inverted_sz_mb)] || ![info exists kv(vector_index_sz_mb)]} {
+    error "Missing size metrics in FT.INFO: $info"
+  }
+  array set cstats $kv(cursor_stats)
+  if {$cstats(global_idle) < 1 || $cstats(total_created) < 1} {
+    error "Expected active cursor in cursor_stats, got $kv(cursor_stats)"
+  }
+
+  r FT.CURSOR DEL p46obs $cid
+  r FT.DROPINDEX p46obs
+}
+
+test_assert "FT.CONFIG MAXSEARCHRESULTS and ON_TIMEOUT governance" {
+  r FT.CREATE p46gov SCHEMA title TEXT
+  for {set i 1} {$i <= 5} {incr i} {
+    r FT.ADD p46gov "d$i" FIELDS title "common"
+  }
+
+  # Cap results to 2
+  r FT.CONFIG SET MAXSEARCHRESULTS 2
+  set res [r FT.SEARCH p46gov "common" NOCONTENT]
+  if {[lindex $res 0] != 2} {
+    r FT.CONFIG SET MAXSEARCHRESULTS 1000000
+    r FT.DROPINDEX p46gov
+    error "Expected MAXSEARCHRESULTS=2 to cap results, got $res"
+  }
+  # LIMIT 0 0 still returns full match count
+  set cnt [r FT.SEARCH p46gov "common" LIMIT 0 0]
+  if {[lindex $cnt 0] != 5} {
+    r FT.CONFIG SET MAXSEARCHRESULTS 1000000
+    r FT.DROPINDEX p46gov
+    error "Expected LIMIT 0 0 to report total 5, got $cnt"
+  }
+  r FT.CONFIG SET MAXSEARCHRESULTS 1000000
+
+  # ON_TIMEOUT validation
+  r FT.CONFIG SET ON_TIMEOUT RETURN
+  set ot [r FT.CONFIG GET ON_TIMEOUT]
+  if {[lindex $ot 1] ne "RETURN"} { error "Expected ON_TIMEOUT=RETURN, got $ot" }
+  set bad_ot 0
+  if {[catch {r FT.CONFIG SET ON_TIMEOUT INVALID}]} { set bad_ot 1 }
+  if {!$bad_ot} { error "Expected invalid ON_TIMEOUT to fail" }
+  r FT.CONFIG SET ON_TIMEOUT FAIL
+
+  set bad_msr 0
+  if {[catch {r FT.CONFIG SET MAXSEARCHRESULTS -5}]} { set bad_msr 1 }
+  if {!$bad_msr} { error "Expected negative MAXSEARCHRESULTS to fail" }
+
+  r FT.DROPINDEX p46gov
 }
 
 # ============================================================

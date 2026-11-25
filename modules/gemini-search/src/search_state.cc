@@ -15,6 +15,8 @@ static std::unordered_map<std::string, IndexEntry> g_indices;
 static std::unordered_map<std::string, std::string> g_aliases;
 static std::unordered_map<uint64_t, AggCursor> g_cursors;
 static uint64_t g_next_cursor_id = 1;
+static uint64_t g_cursors_created = 0;
+static uint64_t g_cursors_expired = 0;
 static std::unordered_map<std::string, SuggestDict> g_suggest_dicts;
 static std::unordered_map<std::string, TermDict> g_term_dicts;
 static std::unordered_map<std::string, std::string> g_config = {
@@ -22,11 +24,18 @@ static std::unordered_map<std::string, std::string> g_config = {
     {"TIMEOUT", "500"},
     {"MAXEXPANSIONS", "200"},
     {"MINSTEMLEN", "3"},
+    {"ON_TIMEOUT", "FAIL"},
+    {"MAXSEARCHRESULTS", "1000000"},
 };
 
 std::unordered_map<std::string, IndexEntry>& GetIndices() { return g_indices; }
 std::unordered_map<uint64_t, AggCursor>& GetCursors() { return g_cursors; }
-uint64_t NextCursorId() { return g_next_cursor_id++; }
+uint64_t NextCursorId() {
+  g_cursors_created++;
+  return g_next_cursor_id++;
+}
+uint64_t GetTotalCursorsCreated() { return g_cursors_created; }
+uint64_t GetTotalCursorsExpired() { return g_cursors_expired; }
 
 int64_t NowMs() {
   struct timespec ts;
@@ -67,11 +76,30 @@ size_t GetMinStemLen() {
   return 3;
 }
 
+size_t GetMaxSearchResults() {
+  auto it = g_config.find("MAXSEARCHRESULTS");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long long v = std::strtoll(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v >= 0) return static_cast<size_t>(v);
+  }
+  return 1000000;
+}
+
+bool IsOnTimeoutReturn() {
+  auto it = g_config.find("ON_TIMEOUT");
+  if (it != g_config.end()) {
+    return MatchArg(it->second, "RETURN");
+  }
+  return false;
+}
+
 void PurgeExpiredCursors(int64_t now_ms) {
   for (auto it = g_cursors.begin(); it != g_cursors.end(); ) {
     if (it->second.max_idle_ms > 0 && it->second.last_access_ms > 0 &&
         now_ms - it->second.last_access_ms >= it->second.max_idle_ms) {
       it = g_cursors.erase(it);
+      g_cursors_expired++;
     } else {
       ++it;
     }
@@ -108,13 +136,17 @@ void ClearAllGlobalState() {
   g_aliases.clear();
   g_cursors.clear();
   g_next_cursor_id = 1;
+  g_cursors_created = 0;
+  g_cursors_expired = 0;
   g_suggest_dicts.clear();
   g_term_dicts.clear();
   g_config = {
       {"DEFAULT_DIALECT", "2"},
       {"TIMEOUT", "500"},
       {"MAXEXPANSIONS", "200"},
-      {"MINSTEMLEN", "4"},
+      {"MINSTEMLEN", "3"},
+      {"ON_TIMEOUT", "FAIL"},
+      {"MAXSEARCHRESULTS", "1000000"},
   };
 }
 

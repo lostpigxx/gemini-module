@@ -468,7 +468,7 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   auto& entry = it->second;
 
-  long info_len = entry.spec.HasPrefixes() ? 10 : 8;
+  long info_len = (entry.spec.HasPrefixes() ? 10 : 8) + 8;
   RedisModule_ReplyWithArray(ctx, info_len);
 
   RedisModule_ReplyWithSimpleString(ctx, "index_name");
@@ -544,6 +544,52 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
     }
   }
+
+  // Phase 46: Observability metrics
+  size_t num_terms = 0;
+  size_t inverted_bytes = entry.doc_store.MemoryUsage();
+  size_t vector_bytes = 0;
+  for (const auto& f : entry.spec.fields) {
+    if (f.type == FieldType::kText) {
+      if (const auto* tidx = entry.text_indices.Get(f.name)) {
+        num_terms += tidx->NumTerms();
+        inverted_bytes += tidx->NumTerms() * 64 + tidx->NumDocs() * 32;
+      }
+    } else if (f.type == FieldType::kVector) {
+      if (const auto* vidx = entry.vector_indices.Get(f.name)) {
+        size_t elem_b = (f.vector_params.quantization == VectorQuantization::kSq8)
+                            ? 1
+                            : sizeof(float);
+        vector_bytes += vidx->Size() * vidx->Dim() * elem_b;
+      }
+    }
+  }
+  auto FormatMb = [](size_t bytes) -> std::string {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.4f",
+                  static_cast<double>(bytes) / (1024.0 * 1024.0));
+    return std::string(buf);
+  };
+
+  RedisModule_ReplyWithSimpleString(ctx, "num_terms");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(num_terms));
+
+  RedisModule_ReplyWithSimpleString(ctx, "inverted_sz_mb");
+  RedisModule_ReplyWithCString(ctx, FormatMb(inverted_bytes).c_str());
+
+  RedisModule_ReplyWithSimpleString(ctx, "vector_index_sz_mb");
+  RedisModule_ReplyWithCString(ctx, FormatMb(vector_bytes).c_str());
+
+  RedisModule_ReplyWithSimpleString(ctx, "cursor_stats");
+  RedisModule_ReplyWithArray(ctx, 8);
+  RedisModule_ReplyWithSimpleString(ctx, "global_idle");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(GetCursors().size()));
+  RedisModule_ReplyWithSimpleString(ctx, "index_capacity");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(kMaxCursorsPerIndex));
+  RedisModule_ReplyWithSimpleString(ctx, "total_created");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(GetTotalCursorsCreated()));
+  RedisModule_ReplyWithSimpleString(ctx, "total_expired");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(GetTotalCursorsExpired()));
 
   return REDISMODULE_OK;
 }

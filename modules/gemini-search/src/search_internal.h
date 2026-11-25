@@ -29,6 +29,10 @@ void TouchIndex(IndexEntry& entry);
 int GetDefaultDialect();
 size_t GetMaxExpansions();
 size_t GetMinStemLen();
+size_t GetMaxSearchResults();
+bool IsOnTimeoutReturn();
+uint64_t GetTotalCursorsCreated();
+uint64_t GetTotalCursorsExpired();
 void PurgeExpiredCursors(int64_t now_ms);
 
 // Shared argument & indexing helpers (defined in search_state.cc)

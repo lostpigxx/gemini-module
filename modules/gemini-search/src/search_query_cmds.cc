@@ -807,6 +807,11 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         entry.text_indices, entry.geo_indices, eval_error, qopts,
         &entry.geoshape_indices, &params, &entry.vector_indices, &entry.synonyms);
     if (!eval_error.empty()) {
+      if (IsOnTimeoutReturn() && eval_error.find("timeout") != std::string::npos) {
+        RedisModule_ReplyWithArray(ctx, 1);
+        RedisModule_ReplyWithLongLong(ctx, 0);
+        return REDISMODULE_OK;
+      }
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
   } else {
@@ -816,6 +821,11 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         entry.text_indices, entry.geo_indices, eval_error, qopts,
         &entry.geoshape_indices, &params, &entry.vector_indices, &entry.synonyms);
     if (!eval_error.empty()) {
+      if (IsOnTimeoutReturn() && eval_error.find("timeout") != std::string::npos) {
+        RedisModule_ReplyWithArray(ctx, 1);
+        RedisModule_ReplyWithLongLong(ctx, 0);
+        return REDISMODULE_OK;
+      }
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
   }
@@ -827,6 +837,11 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     long long elapsed_ms = (now.tv_sec - start_time.tv_sec) * 1000LL +
                            (now.tv_nsec - start_time.tv_nsec) / 1000000LL;
     if (elapsed_ms > opts.timeout_ms) {
+      if (IsOnTimeoutReturn()) {
+        RedisModule_ReplyWithArray(ctx, 1);
+        RedisModule_ReplyWithLongLong(ctx, 0);
+        return REDISMODULE_OK;
+      }
       return RedisModule_ReplyWithError(ctx, "ERR query timed out");
     }
   }
@@ -970,6 +985,10 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
     }
 
+    // Enforce MAXSEARCHRESULTS cap
+    size_t max_sr = GetMaxSearchResults();
+    if (scored_results.size() > max_sr) scored_results.resize(max_sr);
+
     long total = static_cast<long>(scored_results.size());
     long multiplier = 1 + (opts.withpayloads ? 1 : 0) + (opts.nocontent ? 0 : 1);
     RedisModule_ReplyWithArray(ctx, 1 + total * multiplier);
@@ -1100,6 +1119,10 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       for (const auto& ch : n.children) self(self, ch);
     };
     FindVecRange(FindVecRange, parsed.root);
+
+    // Enforce MAXSEARCHRESULTS cap
+    size_t max_sr = GetMaxSearchResults();
+    if (result_ids.size() > max_sr) result_ids.resize(max_sr);
 
     long total = static_cast<long>(result_ids.size());
     bool emit_sortkey = opts.withsortkeys && opts.has_sortby;

@@ -388,7 +388,19 @@ int FtConfigCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     if (it == GetConfig().end()) {
       return RedisModule_ReplyWithError(ctx, "ERR unknown config parameter");
     }
-    it->second = std::string(ArgView(argv[3]));
+    std::string val(ArgView(argv[3]));
+    if (param == "ON_TIMEOUT") {
+      if (MatchArg(val, "FAIL")) val = "FAIL";
+      else if (MatchArg(val, "RETURN")) val = "RETURN";
+      else return RedisModule_ReplyWithError(ctx, "ERR ON_TIMEOUT must be FAIL or RETURN");
+    } else if (param == "MAXSEARCHRESULTS") {
+      char* ep = nullptr;
+      long long v = std::strtoll(val.c_str(), &ep, 10);
+      if (*ep != '\0' || v < 0) {
+        return RedisModule_ReplyWithError(ctx, "ERR MAXSEARCHRESULTS must be a non-negative integer");
+      }
+    }
+    it->second = std::move(val);
     return RedisModule_ReplyWithSimpleString(ctx, "OK");
   }
 
