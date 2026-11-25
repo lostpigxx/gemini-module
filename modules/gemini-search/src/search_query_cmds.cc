@@ -574,8 +574,9 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
           ctx, "ERR KNN param not found in PARAMS");
     }
     auto& blob = pit->second;
-    size_t expected_bytes = fspec->vector_params.dim * sizeof(float);
-    if (blob.size() != expected_bytes) {
+    std::vector<float> qvec;
+    if (!DecodeVectorBlob(blob, fspec->vector_params.dim,
+                          fspec->vector_params.data_type, qvec)) {
       return RedisModule_ReplyWithError(
           ctx, "ERR query vector dimension mismatch");
     }
@@ -589,15 +590,15 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                                         entry.tag_indices, entry.numeric_indices,
                                         entry.text_indices, entry.geo_indices,
                                         filter_error, qopts,
-                                        &entry.geoshape_indices, &params);
+                                        &entry.geoshape_indices, &params,
+                                        &entry.vector_indices);
         if (!filter_error.empty()) {
           return RedisModule_ReplyWithError(ctx, filter_error.c_str());
         }
-        knn_results = vidx->KnnQueryFiltered(
-            reinterpret_cast<const float*>(blob.data()), parsed.knn_k, candidates);
+        knn_results = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, candidates);
       } else {
-        knn_results = vidx->KnnQuery(
-            reinterpret_cast<const float*>(blob.data()), parsed.knn_k);
+        knn_results = vidx->KnnQueryEf(qvec.data(), parsed.knn_k,
+                                       parsed.knn_ef_runtime);
       }
     }
 
@@ -643,12 +644,15 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     RedisModule_ReplyWithArray(ctx, 1 + total * multiplier);
     RedisModule_ReplyWithLongLong(ctx, total);
 
+    const char* score_field = parsed.knn_score_alias.empty()
+                                  ? "__vec_score"
+                                  : parsed.knn_score_alias.c_str();
     for (auto& kr : knn_results) {
       RedisModule_ReplyWithCString(ctx, kr.doc_id.c_str());
       if (!opts.nocontent) {
         auto score_str = std::to_string(kr.score);
         ReplyWithDocFields(ctx, entry.doc_store.Get(kr.doc_id), opts,
-                           &score_str, query_terms);
+                           &score_str, query_terms, score_field);
       }
     }
 
@@ -667,7 +671,7 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         parsed.root, entry.spec, entry.doc_store,
         entry.tag_indices, entry.numeric_indices,
         entry.text_indices, entry.geo_indices, eval_error, qopts,
-        &entry.geoshape_indices, &params);
+        &entry.geoshape_indices, &params, &entry.vector_indices);
     if (!eval_error.empty()) {
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
@@ -676,7 +680,7 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         parsed.root, entry.spec, entry.doc_store,
         entry.tag_indices, entry.numeric_indices,
         entry.text_indices, entry.geo_indices, eval_error, qopts,
-        &entry.geoshape_indices, &params);
+        &entry.geoshape_indices, &params, &entry.vector_indices);
     if (!eval_error.empty()) {
       return RedisModule_ReplyWithError(ctx, eval_error.c_str());
     }
@@ -859,6 +863,30 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
     }
 
+    // Optional $YIELD_DISTANCE_AS from VECTOR_RANGE node
+    std::string yield_alias;
+    std::unordered_map<std::string, std::string> yield_dists;
+    auto FindVecRange = [&](auto& self, const QueryNode& n) -> void {
+      if (n.type == QueryNode::Type::kVectorRange && !n.vec_score_alias.empty() &&
+          yield_alias.empty()) {
+        yield_alias = n.vec_score_alias;
+        const auto* fspec = entry.spec.FindField(n.field_name);
+        const auto* vidx = entry.vector_indices.Get(n.field_name);
+        auto pit = params.find(n.vec_param_name);
+        if (fspec && vidx && pit != params.end()) {
+          std::vector<float> qvec;
+          if (DecodeVectorBlob(pit->second, fspec->vector_params.dim,
+                               fspec->vector_params.data_type, qvec)) {
+            for (const auto& h : vidx->RangeQuery(qvec.data(), static_cast<float>(n.vec_radius))) {
+              yield_dists[h.doc_id] = std::to_string(h.score);
+            }
+          }
+        }
+      }
+      for (const auto& ch : n.children) self(self, ch);
+    };
+    FindVecRange(FindVecRange, parsed.root);
+
     long total = static_cast<long>(result_ids.size());
     long multiplier = opts.nocontent ? 1 : 2;
     RedisModule_ReplyWithArray(ctx, 1 + total * multiplier);
@@ -867,7 +895,11 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     for (auto& rid : result_ids) {
       RedisModule_ReplyWithCString(ctx, rid.c_str());
       if (!opts.nocontent) {
-        ReplyWithDocFields(ctx, entry.doc_store.Get(rid), opts, nullptr, query_terms);
+        const std::string* dptr = nullptr;
+        auto dit = yield_dists.find(rid);
+        if (!yield_alias.empty() && dit != yield_dists.end()) dptr = &dit->second;
+        ReplyWithDocFields(ctx, entry.doc_store.Get(rid), opts, dptr, query_terms,
+                           yield_alias.empty() ? "__vec_score" : yield_alias.c_str());
       }
     }
   }
@@ -924,6 +956,10 @@ static std::string ExplainNode(const QueryNode& node, int indent) {
                op_name + " $" + node.geoshape_param_name + "]\n";
       break;
     }
+    case QueryNode::Type::kVectorRange:
+      result = pad + "VECTOR_RANGE @" + node.field_name + ":[" +
+               std::to_string(node.vec_radius) + " $" + node.vec_param_name + "]\n";
+      break;
     case QueryNode::Type::kAnd:
       result = pad + "AND\n";
       for (auto& c : node.children) result += ExplainNode(c, indent + 1);

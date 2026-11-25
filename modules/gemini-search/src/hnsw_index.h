@@ -21,9 +21,12 @@ class HnswIndex : public VectorIndexBase {
   void Add(const std::string& doc_id, const float* data) override;
   bool Remove(const std::string& doc_id) override;
   std::vector<KnnResult> KnnQuery(const float* query, size_t k) const override;
+  std::vector<KnnResult> KnnQueryEf(const float* query, size_t k,
+                                    size_t ef_runtime) const override;
   std::vector<KnnResult> KnnQueryFiltered(
       const float* query, size_t k,
       const std::vector<std::string>& candidates) const override;
+  std::vector<KnnResult> RangeQuery(const float* query, float radius) const override;
   size_t Size() const override;
   size_t Dim() const override;
   DistanceMetric Metric() const override;

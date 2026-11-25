@@ -3132,6 +3132,54 @@ test_assert "RESP3 HELLO 3 works for FT.SEARCH, FT.AGGREGATE, FT.INFO, FT.PROFIL
 }
 
 # ============================================================
+# Phase 32: Advanced Vector Search (VECTOR_RANGE, FLOAT64, EF_RUNTIME, AS)
+# ============================================================
+puts "\n=== Phase 32: Advanced Vector Search ==="
+
+test_assert "VECTOR_RANGE filters by distance radius and yields custom distance alias" {
+  r FT.CREATE p32vr SCHEMA cat TAG emb VECTOR FLAT DIM 2 DISTANCE_METRIC L2
+  set v0 [binary format ff 0.0 0.0]
+  set v1 [binary format ff 0.5 0.0]
+  set v2 [binary format ff 5.0 5.0]
+  r FT.ADD p32vr d0 FIELDS cat a emb $v0
+  r FT.ADD p32vr d1 FIELDS cat a emb $v1
+  r FT.ADD p32vr d2 FIELDS cat a emb $v2
+
+  # Radius 1.0 around (0,0) matches d0 (dist=0) and d1 (dist=0.25), excludes d2 (dist=50)
+  set res [r FT.SEARCH p32vr {@emb:[VECTOR_RANGE 1.0 $q]=>{$YIELD_DISTANCE_AS: dist}} PARAMS 2 q $v0]
+  if {[lindex $res 0] != 2} { error "Expected 2 VECTOR_RANGE matches, got $res" }
+  set flds [lindex $res 2]
+  if {[lsearch $flds "dist"] < 0} { error "Expected yielded distance alias 'dist' in fields: $flds" }
+  r FT.DROPINDEX p32vr
+}
+
+test_assert "VECTOR FLOAT64 type supports KNN and survives BGSAVE + restart" {
+  r FT.CREATE p32f64 SCHEMA emb VECTOR HNSW TYPE FLOAT64 DIM 2 DISTANCE_METRIC L2 M 8 EF_CONSTRUCTION 64
+  set d1 [binary format dd 1.0 0.0]
+  set d2 [binary format dd 10.0 10.0]
+  r FT.ADD p32f64 a1 FIELDS emb $d1
+  r FT.ADD p32f64 a2 FIELDS emb $d2
+
+  set res [r FT.SEARCH p32f64 {*=>[KNN 1 @emb $q EF_RUNTIME 50 AS my_dist]} PARAMS 2 q $d1]
+  if {[lindex $res 0] != 1 || [lindex $res 1] ne "a1"} { error "Expected a1 for FLOAT64 KNN, got $res" }
+  if {[lsearch [lindex $res 2] "my_dist"] < 0} { error "Expected custom AS alias 'my_dist', got $res" }
+
+  # Verify FLOAT64 survives RDB restart
+  r BGSAVE
+  after 500
+  global redis_fd port module_path
+  catch {redis_command $redis_fd SHUTDOWN SAVE}
+  catch {close $redis_fd}
+  after 500
+  start_redis $module_path $port
+  set redis_fd [redis_connect localhost $port]
+
+  set res2 [r FT.SEARCH p32f64 {*=>[KNN 1 @emb $q]} PARAMS 2 q $d1]
+  if {[lindex $res2 0] != 1 || [lindex $res2 1] ne "a1"} { error "Expected a1 after restart, got $res2" }
+  r FT.DROPINDEX p32f64
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

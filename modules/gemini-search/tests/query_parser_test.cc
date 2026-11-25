@@ -431,3 +431,27 @@ TEST_F(QueryEvalTest, CooperativeTimeoutAbortsPastDeadline) {
   EXPECT_TRUE(r.empty());
   EXPECT_EQ(eval_err, "ERR query timeout");
 }
+
+TEST(VectorQueryParserTest, KnnEfRuntimeAndAlias) {
+  ParsedQuery pq;
+  std::string err;
+  ASSERT_TRUE(ParseQuery("*=>[KNN 5 @emb $q EF_RUNTIME 100 AS my_dist]", pq, err));
+  EXPECT_TRUE(pq.has_knn);
+  EXPECT_EQ(pq.knn_k, 5u);
+  EXPECT_EQ(pq.knn_field, "emb");
+  EXPECT_EQ(pq.knn_param_name, "q");
+  EXPECT_EQ(pq.knn_ef_runtime, 100u);
+  EXPECT_EQ(pq.knn_score_alias, "my_dist");
+}
+
+TEST(VectorQueryParserTest, VectorRangeWithYieldDistanceAlias) {
+  ParsedQuery pq;
+  std::string err;
+  ASSERT_TRUE(ParseQuery("@emb:[VECTOR_RANGE 0.5 $q]=>{$YIELD_DISTANCE_AS: vdist}", pq, err));
+  EXPECT_FALSE(pq.has_knn);
+  EXPECT_EQ(pq.root.type, QueryNode::Type::kVectorRange);
+  EXPECT_EQ(pq.root.field_name, "emb");
+  EXPECT_DOUBLE_EQ(pq.root.vec_radius, 0.5);
+  EXPECT_EQ(pq.root.vec_param_name, "q");
+  EXPECT_EQ(pq.root.vec_score_alias, "vdist");
+}

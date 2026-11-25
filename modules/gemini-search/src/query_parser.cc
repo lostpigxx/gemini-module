@@ -58,7 +58,8 @@ std::vector<std::string> EvaluateQuery(
     const GeoFieldIndices& geo_indices, std::string& error_msg,
     const QueryOptions& qopts,
     const GeoShapeFieldIndices* geoshape_indices,
-    const std::unordered_map<std::string, std::string>* params) {
+    const std::unordered_map<std::string, std::string>* params,
+    const VectorFieldIndices* vector_indices) {
   if (qopts.deadline_ms > 0 && QueryMonotonicMs() > qopts.deadline_ms) {
     error_msg = "ERR query timeout";
     return {};
@@ -201,6 +202,30 @@ std::vector<std::string> EvaluateQuery(
       return idx->Query(node.geoshape_op, query_shape);
     }
 
+    case QueryNode::Type::kVectorRange: {
+      const auto* fspec = spec.FindField(node.field_name);
+      if (!fspec) { error_msg = "ERR query field not in schema"; return {}; }
+      if (fspec->type != FieldType::kVector) { error_msg = "ERR field is not a VECTOR field"; return {}; }
+      if (!vector_indices) return {};
+      const auto* vidx = vector_indices->Get(node.field_name);
+      if (!vidx) return {};
+      if (!params || node.vec_param_name.empty()) { error_msg = "ERR VECTOR_RANGE requires $param"; return {}; }
+      auto pit = params->find(node.vec_param_name);
+      if (pit == params->end()) { error_msg = "ERR VECTOR_RANGE param not found"; return {}; }
+      std::vector<float> qvec;
+      if (!DecodeVectorBlob(pit->second, fspec->vector_params.dim,
+                            fspec->vector_params.data_type, qvec)) {
+        error_msg = "ERR query vector dimension mismatch";
+        return {};
+      }
+      auto hits = vidx->RangeQuery(qvec.data(), static_cast<float>(node.vec_radius));
+      std::vector<std::string> ids;
+      ids.reserve(hits.size());
+      for (const auto& h : hits) ids.push_back(h.doc_id);
+      std::sort(ids.begin(), ids.end());
+      return ids;
+    }
+
     case QueryNode::Type::kOptional:
       return doc_store.AllIds();
 
@@ -211,11 +236,13 @@ std::vector<std::string> EvaluateQuery(
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
                                  tag_indices, numeric_indices, text_indices,
-                                 geo_indices, error_msg, qopts, geoshape_indices, params);
+                                 geo_indices, error_msg, qopts, geoshape_indices, params,
+                                 vector_indices);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  geo_indices, error_msg, qopts, geoshape_indices, params);
+                                  geo_indices, error_msg, qopts, geoshape_indices, params,
+                                 vector_indices);
       if (!error_msg.empty()) return {};
       return SetIntersect(left, right);
     }
@@ -227,11 +254,13 @@ std::vector<std::string> EvaluateQuery(
       }
       auto left = EvaluateQuery(node.children[0], spec, doc_store,
                                  tag_indices, numeric_indices, text_indices,
-                                 geo_indices, error_msg, qopts, geoshape_indices, params);
+                                 geo_indices, error_msg, qopts, geoshape_indices, params,
+                                 vector_indices);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQuery(node.children[1], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  geo_indices, error_msg, qopts, geoshape_indices, params);
+                                  geo_indices, error_msg, qopts, geoshape_indices, params,
+                                 vector_indices);
       if (!error_msg.empty()) return {};
       return SetUnion(left, right);
     }
@@ -244,7 +273,8 @@ std::vector<std::string> EvaluateQuery(
       auto all = doc_store.AllIds();
       auto child = EvaluateQuery(node.children[0], spec, doc_store,
                                   tag_indices, numeric_indices, text_indices,
-                                  geo_indices, error_msg, qopts, geoshape_indices, params);
+                                  geo_indices, error_msg, qopts, geoshape_indices, params,
+                                 vector_indices);
       if (!error_msg.empty()) return {};
       return SetDifference(all, child);
     }
@@ -309,7 +339,8 @@ std::vector<ScoredResult> EvaluateQueryScored(
     const GeoFieldIndices& geo_indices, std::string& error_msg,
     const QueryOptions& qopts,
     const GeoShapeFieldIndices* geoshape_indices,
-    const std::unordered_map<std::string, std::string>* params) {
+    const std::unordered_map<std::string, std::string>* params,
+    const VectorFieldIndices* vector_indices) {
   if (qopts.deadline_ms > 0 && QueryMonotonicMs() > qopts.deadline_ms) {
     error_msg = "ERR query timeout";
     return {};
@@ -441,7 +472,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
     case QueryNode::Type::kGeoFilter: {
       auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
                                numeric_indices, text_indices, geo_indices,
-                               error_msg, qopts, geoshape_indices, params);
+                               error_msg, qopts, geoshape_indices, params, vector_indices);
       if (!error_msg.empty()) return {};
       std::vector<ScoredResult> out;
       out.reserve(ids.size());
@@ -449,10 +480,12 @@ std::vector<ScoredResult> EvaluateQueryScored(
       return out;
     }
 
-    case QueryNode::Type::kGeoShapeQuery: {
+    case QueryNode::Type::kGeoShapeQuery:
+    case QueryNode::Type::kVectorRange: {
       auto ids = EvaluateQuery(node, spec, doc_store, tag_indices,
                                numeric_indices, text_indices, geo_indices,
-                               error_msg, qopts, geoshape_indices, params);
+                               error_msg, qopts, geoshape_indices, params,
+                               vector_indices);
       if (!error_msg.empty()) return {};
       std::vector<ScoredResult> out;
       out.reserve(ids.size());
@@ -468,7 +501,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts, geoshape_indices, params);
+                                        error_msg, qopts, geoshape_indices, params, vector_indices);
       if (!error_msg.empty()) return {};
       auto all_ids = doc_store.AllIds();
       std::unordered_map<std::string, double> score_map;
@@ -494,12 +527,12 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
                                        tag_indices, numeric_indices,
                                        text_indices, geo_indices,
-                                       error_msg, qopts, geoshape_indices, params);
+                                       error_msg, qopts, geoshape_indices, params, vector_indices);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts, geoshape_indices, params);
+                                        error_msg, qopts, geoshape_indices, params, vector_indices);
       if (!error_msg.empty()) return {};
       return ScoredIntersect(left, right);
     }
@@ -512,12 +545,12 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto left = EvaluateQueryScored(node.children[0], spec, doc_store,
                                        tag_indices, numeric_indices,
                                        text_indices, geo_indices,
-                                       error_msg, qopts, geoshape_indices, params);
+                                       error_msg, qopts, geoshape_indices, params, vector_indices);
       if (!error_msg.empty()) return {};
       auto right = EvaluateQueryScored(node.children[1], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts, geoshape_indices, params);
+                                        error_msg, qopts, geoshape_indices, params, vector_indices);
       if (!error_msg.empty()) return {};
       return ScoredUnion(left, right);
     }
@@ -534,7 +567,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
       auto child = EvaluateQueryScored(node.children[0], spec, doc_store,
                                         tag_indices, numeric_indices,
                                         text_indices, geo_indices,
-                                        error_msg, qopts, geoshape_indices, params);
+                                        error_msg, qopts, geoshape_indices, params, vector_indices);
       if (!error_msg.empty()) return {};
       return ScoredDifference(all, child);
     }
@@ -785,6 +818,62 @@ struct Parser {
         out.geo_radius = radius;
         out.geo_unit = unit;
         return true;
+      }
+
+      if (tokens.size() == 3) {
+        std::string op_upper = tokens[0];
+        for (auto& c : op_upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (op_upper == "VECTOR_RANGE" && !tokens[2].empty() && tokens[2][0] == '$') {
+          char* ep = nullptr;
+          double radius = std::strtod(tokens[1].c_str(), &ep);
+          if (*ep != '\0' || std::isnan(radius) || radius < 0) {
+            error_msg = "ERR syntax error: VECTOR_RANGE radius must be a non-negative number";
+            return false;
+          }
+          out.type = QueryNode::Type::kVectorRange;
+          out.field_name = std::move(field_name);
+          out.vec_radius = radius;
+          out.vec_param_name = tokens[2].substr(1);
+          // Optional =>{$YIELD_DISTANCE_AS: alias}
+          size_t save_pos = pos;
+          SkipSpaces();
+          if (pos + 2 < input.size() && input[pos] == '=' && input[pos + 1] == '>') {
+            size_t p2 = pos + 2;
+            while (p2 < input.size() && (input[p2] == ' ' || input[p2] == '\t')) p2++;
+            if (p2 < input.size() && input[p2] == '{') {
+              size_t c2 = FindClosing('{', '}', p2 + 1);
+              if (c2 != std::string::npos) {
+                std::string attrs = input.substr(p2 + 1, c2 - p2 - 1);
+                size_t colon = attrs.find(':');
+                if (colon != std::string::npos) {
+                  std::string k = attrs.substr(0, colon);
+                  std::string v = attrs.substr(colon + 1);
+                  auto Trim = [](std::string& s) {
+                    size_t a = s.find_first_not_of(" \t");
+                    if (a == std::string::npos) { s.clear(); return; }
+                    size_t b = s.find_last_not_of(" \t");
+                    s = s.substr(a, b - a + 1);
+                  };
+                  Trim(k);
+                  Trim(v);
+                  std::string ku = k;
+                  for (auto& ch : ku) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+                  if (ku == "$YIELD_DISTANCE_AS" && !v.empty()) {
+                    out.vec_score_alias = v;
+                  }
+                }
+                pos = c2 + 1;
+              } else {
+                pos = save_pos;
+              }
+            } else {
+              pos = save_pos;
+            }
+          } else {
+            pos = save_pos;
+          }
+          return true;
+        }
       }
 
       if (tokens.size() == 2) {
@@ -1075,7 +1164,7 @@ static bool ParseKnnSuffix(const std::string& knn_str, ParsedQuery& out,
     tp = sp + 1;
   }
 
-  if (tokens.size() != 4 || (tokens[0] != "KNN" && tokens[0] != "knn")) {
+  if (tokens.size() < 4 || (tokens[0] != "KNN" && tokens[0] != "knn")) {
     error_msg = "ERR syntax error: expected [KNN k @field $param]";
     return false;
   }
@@ -1107,10 +1196,35 @@ static bool ParseKnnSuffix(const std::string& knn_str, ParsedQuery& out,
     return false;
   }
 
+  size_t ef_runtime = 0;
+  std::string score_alias;
+  for (size_t ti = 4; ti < tokens.size(); ) {
+    std::string kw = tokens[ti];
+    for (auto& ch : kw) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    if (kw == "EF_RUNTIME" && ti + 1 < tokens.size()) {
+      char* ep = nullptr;
+      long ef = std::strtol(tokens[ti + 1].c_str(), &ep, 10);
+      if (*ep != '\0' || ef <= 0) {
+        error_msg = "ERR syntax error: EF_RUNTIME must be a positive integer";
+        return false;
+      }
+      ef_runtime = static_cast<size_t>(ef);
+      ti += 2;
+    } else if (kw == "AS" && ti + 1 < tokens.size()) {
+      score_alias = tokens[ti + 1];
+      ti += 2;
+    } else {
+      error_msg = "ERR syntax error: unexpected token in KNN clause";
+      return false;
+    }
+  }
+
   out.has_knn = true;
   out.knn_k = static_cast<size_t>(k_val);
   out.knn_field = std::move(knn_field);
   out.knn_param_name = std::move(knn_param);
+  out.knn_ef_runtime = ef_runtime;
+  out.knn_score_alias = std::move(score_alias);
   return true;
 }
 
@@ -1125,8 +1239,18 @@ bool ParseQuery(const std::string& input, ParsedQuery& out,
   size_t end = input.find_last_not_of(" \t\r\n");
   std::string trimmed = input.substr(start, end - start + 1);
 
-  // Check for => KNN suffix
-  size_t arrow = trimmed.find("=>");
+  // Check for =>[KNN ...] suffix (distinguish from =>{$YIELD_DISTANCE_AS:...})
+  size_t arrow = std::string::npos;
+  for (size_t search_pos = 0; ; ) {
+    size_t found = trimmed.find("=>", search_pos);
+    if (found == std::string::npos) break;
+    size_t after = trimmed.find_first_not_of(" \t", found + 2);
+    if (after != std::string::npos && trimmed[after] == '[') {
+      arrow = found;
+      break;
+    }
+    search_pos = found + 2;
+  }
   if (arrow != std::string::npos) {
     std::string filter_part = trimmed.substr(0, arrow);
     std::string knn_part = trimmed.substr(arrow + 2);

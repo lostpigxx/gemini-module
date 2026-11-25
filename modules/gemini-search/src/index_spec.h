@@ -21,6 +21,20 @@ inline const char* FieldTypeName(FieldType t) {
 
 enum class VectorAlgorithm { kFlat, kHnsw };
 
+enum class VectorDataType { kFloat32, kFloat64 };
+
+inline const char* VectorDataTypeName(VectorDataType t) {
+  switch (t) {
+    case VectorDataType::kFloat32: return "FLOAT32";
+    case VectorDataType::kFloat64: return "FLOAT64";
+  }
+  return "FLOAT32";
+}
+
+inline size_t VectorElementSize(VectorDataType t) {
+  return (t == VectorDataType::kFloat64) ? sizeof(double) : sizeof(float);
+}
+
 enum class DistanceMetric { kL2, kCosine, kIP };
 
 inline const char* DistanceMetricName(DistanceMetric m) {
@@ -48,6 +62,7 @@ struct VectorFieldParams {
   DistanceMetric metric = DistanceMetric::kL2;
   size_t m = 16;
   size_t ef_construction = 200;
+  VectorDataType data_type = VectorDataType::kFloat32;
 };
 
 struct FieldSpec {

@@ -181,10 +181,11 @@ void AddDocToIndices(
         entry.numeric_indices.GetOrCreate(fname).Add(num, doc_id);
       }
     } else if (fspec->type == FieldType::kVector) {
-      size_t dim = fspec->vector_params.dim;
-      if (fval.size() == dim * sizeof(float)) {
+      std::vector<float> vec;
+      if (DecodeVectorBlob(fval, fspec->vector_params.dim,
+                           fspec->vector_params.data_type, vec)) {
         auto& vidx = entry.vector_indices.GetOrCreate(fname, fspec->vector_params);
-        vidx.Add(doc_id, reinterpret_cast<const float*>(fval.data()));
+        vidx.Add(doc_id, vec.data());
       }
     } else if (fspec->type == FieldType::kText) {
       entry.text_indices.GetOrCreate(fname).Add(doc_id, fval, !fspec->phonetic.empty());

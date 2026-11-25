@@ -20,14 +20,23 @@ float InnerProductDistance(const float* a, const float* b, size_t dim);
 using DistFn = float (*)(const float*, const float*, size_t);
 DistFn GetDistanceFunction(DistanceMetric metric);
 
+// Decode a binary vector blob (FLOAT32 or FLOAT64) into float32 buffer.
+bool DecodeVectorBlob(const std::string& blob, size_t dim,
+                      VectorDataType dtype, std::vector<float>& out);
+
 class VectorIndexBase {
  public:
   virtual ~VectorIndexBase() = default;
   virtual void Add(const std::string& doc_id, const float* data) = 0;
   virtual bool Remove(const std::string& doc_id) = 0;
   virtual std::vector<KnnResult> KnnQuery(const float* query, size_t k) const = 0;
+  virtual std::vector<KnnResult> KnnQueryEf(const float* query, size_t k,
+                                            size_t /*ef_runtime*/) const {
+    return KnnQuery(query, k);
+  }
   virtual std::vector<KnnResult> KnnQueryFiltered(const float* query, size_t k,
                                                    const std::vector<std::string>& candidates) const = 0;
+  virtual std::vector<KnnResult> RangeQuery(const float* query, float radius) const = 0;
   virtual size_t Size() const = 0;
   virtual size_t Dim() const = 0;
   virtual DistanceMetric Metric() const = 0;
@@ -46,6 +55,7 @@ class FlatVectorIndex : public VectorIndexBase {
   std::vector<KnnResult> KnnQuery(const float* query, size_t k) const override;
   std::vector<KnnResult> KnnQueryFiltered(const float* query, size_t k,
                                            const std::vector<std::string>& candidates) const override;
+  std::vector<KnnResult> RangeQuery(const float* query, float radius) const override;
   size_t Size() const override;
   size_t Dim() const override;
   DistanceMetric Metric() const override;

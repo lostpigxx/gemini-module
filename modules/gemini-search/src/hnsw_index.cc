@@ -215,6 +215,11 @@ bool HnswIndex::Remove(const std::string& doc_id) {
 
 std::vector<KnnResult> HnswIndex::KnnQuery(const float* query,
                                             size_t k) const {
+  return KnnQueryEf(query, k, ef_runtime_);
+}
+
+std::vector<KnnResult> HnswIndex::KnnQueryEf(const float* query, size_t k,
+                                              size_t ef_runtime) const {
   if (nodes_.empty()) return {};
 
   std::string cur = entry_point_;
@@ -223,7 +228,7 @@ std::vector<KnnResult> HnswIndex::KnnQuery(const float* query,
     if (!nearest.empty()) cur = nearest[0];
   }
 
-  size_t ef = std::max(ef_runtime_, k);
+  size_t ef = std::max(ef_runtime > 0 ? ef_runtime : ef_runtime_, k);
   auto candidates = SearchLayer(query, cur, ef, 0);
 
   std::vector<KnnResult> results;
@@ -236,6 +241,23 @@ std::vector<KnnResult> HnswIndex::KnnQuery(const float* query,
               return a.score < b.score;
             });
   if (results.size() > k) results.resize(k);
+  return results;
+}
+
+std::vector<KnnResult> HnswIndex::RangeQuery(const float* query,
+                                              float radius) const {
+  std::vector<KnnResult> results;
+  for (const auto& [doc_id, node] : nodes_) {
+    float score = dist_fn_(query, node.vector.data(), dim_);
+    if (score <= radius) {
+      results.push_back({doc_id, score});
+    }
+  }
+  std::sort(results.begin(), results.end(),
+            [](const KnnResult& a, const KnnResult& b) {
+              if (a.score != b.score) return a.score < b.score;
+              return a.doc_id < b.doc_id;
+            });
   return results;
 }
 

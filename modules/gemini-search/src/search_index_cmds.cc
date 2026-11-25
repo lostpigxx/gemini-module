@@ -172,7 +172,21 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       bool has_dim = false, has_metric = false;
       while (i < argc) {
         auto param = ArgView(argv[i]);
-        if (MatchArg(param, "DIM")) {
+        if (MatchArg(param, "TYPE")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR TYPE requires a value");
+          }
+          auto dtype_str = ArgView(argv[i + 1]);
+          if (MatchArg(dtype_str, "FLOAT32")) {
+            fspec.vector_params.data_type = VectorDataType::kFloat32;
+          } else if (MatchArg(dtype_str, "FLOAT64")) {
+            fspec.vector_params.data_type = VectorDataType::kFloat64;
+          } else {
+            return RedisModule_ReplyWithError(
+                ctx, "ERR unknown VECTOR TYPE, expected FLOAT32 or FLOAT64");
+          }
+          i += 2;
+        } else if (MatchArg(param, "DIM")) {
           if (i + 1 >= argc) {
             return RedisModule_ReplyWithError(ctx, "ERR DIM requires a value");
           }
@@ -497,7 +511,8 @@ int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     std::string fval_str = ArgStr(argv[i + 1]);
 
     if (fspec->type == FieldType::kVector) {
-      size_t expected = fspec->vector_params.dim * sizeof(float);
+      size_t expected = fspec->vector_params.dim *
+                        VectorElementSize(fspec->vector_params.data_type);
       if (fval_str.size() != expected) {
         return RedisModule_ReplyWithError(
             ctx, "ERR vector dimension mismatch");

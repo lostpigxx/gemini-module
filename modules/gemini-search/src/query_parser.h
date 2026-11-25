@@ -7,6 +7,7 @@
 #include "numeric_index.h"
 #include "tag_index.h"
 #include "text_index.h"
+#include "vector_index.h"
 
 #include <cstdint>
 #include <string>
@@ -26,6 +27,7 @@ struct QueryNode {
     kTextMatch,
     kGeoFilter,
     kGeoShapeQuery,
+    kVectorRange,
     kAnd,
     kOr,
     kNot,
@@ -53,6 +55,10 @@ struct QueryNode {
   GeoShapeOp geoshape_op = GeoShapeOp::kWithin;
   std::string geoshape_param_name;
 
+  double vec_radius = 0;
+  std::string vec_param_name;
+  std::string vec_score_alias;
+
   std::vector<QueryNode> children;
 };
 
@@ -62,6 +68,8 @@ struct ParsedQuery {
   size_t knn_k = 0;
   std::string knn_field;
   std::string knn_param_name;
+  size_t knn_ef_runtime = 0;
+  std::string knn_score_alias;
 };
 
 struct QueryOptions {
@@ -95,7 +103,8 @@ std::vector<std::string> EvaluateQuery(
     std::string& error_msg,
     const QueryOptions& qopts = {},
     const GeoShapeFieldIndices* geoshape_indices = nullptr,
-    const std::unordered_map<std::string, std::string>* params = nullptr);
+    const std::unordered_map<std::string, std::string>* params = nullptr,
+    const VectorFieldIndices* vector_indices = nullptr);
 
 struct ScoredResult {
   std::string doc_id;
@@ -110,4 +119,5 @@ std::vector<ScoredResult> EvaluateQueryScored(
     const GeoFieldIndices& geo_indices, std::string& error_msg,
     const QueryOptions& qopts = {},
     const GeoShapeFieldIndices* geoshape_indices = nullptr,
-    const std::unordered_map<std::string, std::string>* params = nullptr);
+    const std::unordered_map<std::string, std::string>* params = nullptr,
+    const VectorFieldIndices* vector_indices = nullptr);

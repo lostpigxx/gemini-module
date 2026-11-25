@@ -113,6 +113,8 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
       RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(f.vector_params.metric));
       RedisModule_SaveUnsigned(rdb, f.vector_params.m);
       RedisModule_SaveUnsigned(rdb, f.vector_params.ef_construction);
+      // encver >= 8: vector data type (FLOAT32 / FLOAT64)
+      RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(f.vector_params.data_type));
     }
     RedisModule_SaveStringBuffer(rdb, f.json_path.c_str(), f.json_path.size());
     RedisModule_SaveUnsigned(rdb, f.sortable ? 1 : 0);
@@ -216,6 +218,14 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
         if (raw_m == 0 || raw_m > 1024 || raw_efc == 0 || raw_efc > 100000) return nullptr;
         f.vector_params.m = static_cast<size_t>(raw_m);
         f.vector_params.ef_construction = static_cast<size_t>(raw_efc);
+      }
+      if (encver >= 8) {
+        uint64_t raw_dt = 0;
+        if (!SafeLoadUnsigned(rdb, raw_dt) ||
+            raw_dt > static_cast<uint64_t>(VectorDataType::kFloat64)) {
+          return nullptr;
+        }
+        f.vector_params.data_type = static_cast<VectorDataType>(raw_dt);
       }
     }
     if (encver >= 5) {
@@ -377,6 +387,10 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value) {
     create_args.push_back(FieldTypeName(f.type));
     if (f.type == FieldType::kVector) {
       create_args.push_back(VectorAlgorithmName(f.vector_params.algorithm));
+      if (f.vector_params.data_type != VectorDataType::kFloat32) {
+        create_args.push_back("TYPE");
+        create_args.push_back(VectorDataTypeName(f.vector_params.data_type));
+      }
       create_args.push_back("DIM");
       create_args.push_back(std::to_string(f.vector_params.dim));
       create_args.push_back("DISTANCE_METRIC");

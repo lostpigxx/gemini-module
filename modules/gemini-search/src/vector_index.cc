@@ -106,6 +106,43 @@ size_t FlatVectorIndex::Dim() const { return dim_; }
 DistanceMetric FlatVectorIndex::Metric() const { return metric_; }
 void FlatVectorIndex::Clear() { vectors_.clear(); }
 
+std::vector<KnnResult> FlatVectorIndex::RangeQuery(const float* query,
+                                                    float radius) const {
+  DistFn dist_fn = GetDistanceFunction(metric_);
+  std::vector<KnnResult> results;
+  for (const auto& [doc_id, vec] : vectors_) {
+    float score = dist_fn(query, vec.data(), dim_);
+    if (score <= radius) {
+      results.push_back({doc_id, score});
+    }
+  }
+  std::sort(results.begin(), results.end(),
+            [](const KnnResult& a, const KnnResult& b) {
+              if (a.score != b.score) return a.score < b.score;
+              return a.doc_id < b.doc_id;
+            });
+  return results;
+}
+
+bool DecodeVectorBlob(const std::string& blob, size_t dim,
+                      VectorDataType dtype, std::vector<float>& out) {
+  if (dim == 0) return false;
+  if (dtype == VectorDataType::kFloat64) {
+    if (blob.size() != dim * sizeof(double)) return false;
+    out.resize(dim);
+    for (size_t i = 0; i < dim; i++) {
+      double d = 0.0;
+      std::memcpy(&d, blob.data() + i * sizeof(double), sizeof(double));
+      out[i] = static_cast<float>(d);
+    }
+    return true;
+  }
+  if (blob.size() != dim * sizeof(float)) return false;
+  out.resize(dim);
+  std::memcpy(out.data(), blob.data(), blob.size());
+  return true;
+}
+
 DistFn GetDistanceFunction(DistanceMetric metric) {
   switch (metric) {
     case DistanceMetric::kL2: return L2Distance;

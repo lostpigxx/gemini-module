@@ -219,6 +219,8 @@ if(GTest_FOUND)
     src/stemmer.cc
     src/phonetic.cc
     src/numeric_index.cc
+    src/vector_index.cc
+    src/hnsw_index.cc
     src/geo_index.cc
     src/geoshape_index.cc
   )
