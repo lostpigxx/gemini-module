@@ -3933,6 +3933,57 @@ test_assert "FT.CONFIG MAXSEARCHRESULTS and ON_TIMEOUT governance" {
 }
 
 # ============================================================
+# Phase 50: Non-Blocking Async Query Offload
+# ============================================================
+puts "\n=== Phase 50: Non-Blocking Async Query Offload ==="
+
+test_assert "FT.SEARCH async KNN offload via RedisModule_BlockClient" {
+  r FT.CREATE p50async SCHEMA tag TAG title TEXT v VECTOR FLAT DIM 2 DISTANCE_METRIC L2
+  set v1 [binary format f* {1.0 0.0}]
+  set v2 [binary format f* {0.0 1.0}]
+  set v3 [binary format f* {0.9 0.1}]
+  r FT.ADD p50async a1 PAYLOAD "pl_a1" FIELDS tag "hot" title "one" v $v1
+  r FT.ADD p50async a2 PAYLOAD "pl_a2" FIELDS tag "cold" title "two" v $v2
+  r FT.ADD p50async a3 PAYLOAD "pl_a3" FIELDS tag "hot" title "three" v $v3
+
+  # Enable async offload for indices >= 1 doc
+  r FT.CONFIG SET ASYNC_MIN_DOCS 1
+  set cfg [r FT.CONFIG GET ASYNC_MIN_DOCS]
+  if {[lindex $cfg 1] ne "1"} { error "Expected ASYNC_MIN_DOCS=1, got $cfg" }
+
+  # Unfiltered async KNN with WITHPAYLOADS & RETURN AS
+  set r1 [r FT.SEARCH p50async {*=>[KNN 2 @v $q AS dist]} PARAMS 2 q $v1 WITHPAYLOADS RETURN 3 title AS t]
+  if {[lindex $r1 0] != 2 || [lindex $r1 1] ne "a1" || [lindex $r1 2] ne "pl_a1"} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p50async
+    error "Async unfiltered KNN mismatch: $r1"
+  }
+
+  # Filtered async KNN
+  set r2 [r FT.SEARCH p50async {(@tag:{cold})=>[KNN 2 @v $q]} PARAMS 2 q $v1 NOCONTENT]
+  if {[lindex $r2 0] != 1 || [lindex $r2 1] ne "a2"} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p50async
+    error "Async filtered KNN mismatch: $r2"
+  }
+
+  # Async LIMIT 0 0 count-only
+  set r3 [r FT.SEARCH p50async {*=>[KNN 3 @v $q]} PARAMS 2 q $v1 LIMIT 0 0]
+  if {[llength $r3] != 1 || [lindex $r3 0] != 3} {
+    r FT.CONFIG SET ASYNC_MIN_DOCS 0
+    r FT.DROPINDEX p50async
+    error "Async LIMIT 0 0 mismatch: $r3"
+  }
+
+  # Reject negative ASYNC_MIN_DOCS
+  set bad_amd 0
+  if {[catch {r FT.CONFIG SET ASYNC_MIN_DOCS -1}]} { set bad_amd 1 }
+  r FT.CONFIG SET ASYNC_MIN_DOCS 0
+  r FT.DROPINDEX p50async
+  if {!$bad_amd} { error "Expected negative ASYNC_MIN_DOCS to fail" }
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

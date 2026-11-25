@@ -12,6 +12,8 @@
 #include <vector>
 
 static std::unordered_map<std::string, IndexEntry> g_indices;
+static std::shared_mutex g_indices_mutex;
+static SearchExecutor g_executor(2);
 static std::unordered_map<std::string, std::string> g_aliases;
 static std::unordered_map<uint64_t, AggCursor> g_cursors;
 static uint64_t g_next_cursor_id = 1;
@@ -26,9 +28,12 @@ static std::unordered_map<std::string, std::string> g_config = {
     {"MINSTEMLEN", "3"},
     {"ON_TIMEOUT", "FAIL"},
     {"MAXSEARCHRESULTS", "1000000"},
+    {"ASYNC_MIN_DOCS", "0"},
 };
 
 std::unordered_map<std::string, IndexEntry>& GetIndices() { return g_indices; }
+std::shared_mutex& GetIndicesMutex() { return g_indices_mutex; }
+SearchExecutor& GetSearchExecutor() { return g_executor; }
 std::unordered_map<uint64_t, AggCursor>& GetCursors() { return g_cursors; }
 uint64_t NextCursorId() {
   g_cursors_created++;
@@ -84,6 +89,16 @@ size_t GetMaxSearchResults() {
     if (*ep == '\0' && v >= 0) return static_cast<size_t>(v);
   }
   return 1000000;
+}
+
+size_t GetAsyncMinDocs() {
+  auto it = g_config.find("ASYNC_MIN_DOCS");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long long v = std::strtoll(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v >= 0) return static_cast<size_t>(v);
+  }
+  return 0;
 }
 
 bool IsOnTimeoutReturn() {
@@ -147,6 +162,7 @@ void ClearAllGlobalState() {
       {"MINSTEMLEN", "3"},
       {"ON_TIMEOUT", "FAIL"},
       {"MAXSEARCHRESULTS", "1000000"},
+      {"ASYNC_MIN_DOCS", "0"},
   };
 }
 

@@ -23,6 +23,7 @@ set(SEARCH_SOURCES
   src/stemmer.cc
   src/phonetic.cc
   src/hybrid_fusion.cc
+  src/search_executor.cc
 )
 
 add_library(redis_search SHARED ${SEARCH_SOURCES})
@@ -31,7 +32,7 @@ target_include_directories(redis_search PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(redis_search PRIVATE redis_module_api)
+target_link_libraries(redis_search PRIVATE redis_module_api pthread)
 
 target_compile_options(redis_search PRIVATE
   -Wall -Wextra -Wpedantic -fno-exceptions -Wno-c++20-designator
@@ -257,6 +258,7 @@ if(GTest_FOUND)
     tests/search_rdb_test.cc
     src/search_rdb.cc
     src/search_state.cc
+    src/search_executor.cc
     src/index_spec.cc
     src/document_store.cc
     src/tag_index.cc
@@ -279,6 +281,7 @@ if(GTest_FOUND)
   target_link_libraries(search_rdb_test PRIVATE
     redis_module_api
     GTest::gtest_main
+    pthread
   )
   target_compile_definitions(search_rdb_test PRIVATE GEMINI_SEARCH_TESTING)
   target_compile_options(search_rdb_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
@@ -322,6 +325,27 @@ if(GTest_FOUND)
   target_compile_definitions(hybrid_search_test PRIVATE GEMINI_SEARCH_TESTING)
   target_compile_options(hybrid_search_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(search_executor_test EXCLUDE_FROM_ALL
+    tests/search_executor_test.cc
+    src/search_executor.cc
+    src/text_index.cc
+    src/stemmer.cc
+    src/phonetic.cc
+    src/vector_index.cc
+    src/hnsw_index.cc
+    src/index_spec.cc
+  )
+  target_include_directories(search_executor_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(search_executor_test PRIVATE
+    redis_module_api
+    GTest::gtest_main
+    pthread
+  )
+  target_compile_definitions(search_executor_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(search_executor_test PRIVATE -Wall -Wextra -Wpedantic)
+
   add_custom_target(search_test
     COMMAND index_spec_test --gtest_color=yes
     COMMAND document_store_test --gtest_color=yes
@@ -337,8 +361,9 @@ if(GTest_FOUND)
     COMMAND expr_engine_test --gtest_color=yes
     COMMAND query_parser_test --gtest_color=yes
     COMMAND hybrid_search_test --gtest_color=yes
+    COMMAND search_executor_test --gtest_color=yes
     COMMAND search_rdb_test --gtest_color=yes
     COMMAND search_asan_test --gtest_color=yes
-    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test phonetic_test geoshape_index_test suggest_dict_test expr_engine_test query_parser_test hybrid_search_test search_rdb_test search_asan_test
+    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test phonetic_test geoshape_index_test suggest_dict_test expr_engine_test query_parser_test hybrid_search_test search_executor_test search_rdb_test search_asan_test
   )
 endif()

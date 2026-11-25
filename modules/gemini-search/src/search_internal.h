@@ -1,8 +1,10 @@
 #pragma once
 
 #include "search_commands.h"
+#include "search_executor.h"
 
 #include <cstdint>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -21,6 +23,8 @@ constexpr size_t kMaxCursorsPerIndex = 128;
 
 // Global state accessors (defined in search_state.cc)
 std::unordered_map<std::string, IndexEntry>& GetIndices();
+std::shared_mutex& GetIndicesMutex();
+SearchExecutor& GetSearchExecutor();
 std::unordered_map<uint64_t, AggCursor>& GetCursors();
 uint64_t NextCursorId();
 std::string ResolveAlias(const std::string& name);
@@ -30,6 +34,7 @@ int GetDefaultDialect();
 size_t GetMaxExpansions();
 size_t GetMinStemLen();
 size_t GetMaxSearchResults();
+size_t GetAsyncMinDocs();
 bool IsOnTimeoutReturn();
 uint64_t GetTotalCursorsCreated();
 uint64_t GetTotalCursorsExpired();

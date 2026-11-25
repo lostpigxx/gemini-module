@@ -381,6 +381,7 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   std::string idx_str(index_name);
+  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
   auto [it, inserted] = GetIndices().try_emplace(idx_str);
   if (!inserted) {
     return RedisModule_ReplyWithError(ctx, "ERR index already exists");
@@ -423,6 +424,7 @@ int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
   auto it = GetIndices().find(idx_str);
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
@@ -462,6 +464,7 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
   auto it = GetIndices().find(idx_str);
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
@@ -677,9 +680,12 @@ int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   std::string doc_id_str(doc_id);
 
-  RemoveDocFromIndices(entry, doc_id_str);
-  entry.doc_store.Add(doc_id_str, doc_fields, std::move(payload), has_payload);
-  AddDocToIndices(entry, doc_id_str, doc_fields);
+  {
+    std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
+    RemoveDocFromIndices(entry, doc_id_str);
+    entry.doc_store.Add(doc_id_str, doc_fields, std::move(payload), has_payload);
+    AddDocToIndices(entry, doc_id_str, doc_fields);
+  }
 
   RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
@@ -692,6 +698,7 @@ int FtDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
   auto it = GetIndices().find(idx_str);
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
@@ -718,6 +725,7 @@ int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
   auto it = GetIndices().find(idx_str);
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
@@ -845,6 +853,7 @@ int FtTagvalsCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
   auto it = GetIndices().find(idx_str);
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");

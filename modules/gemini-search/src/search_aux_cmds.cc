@@ -393,11 +393,11 @@ int FtConfigCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (MatchArg(val, "FAIL")) val = "FAIL";
       else if (MatchArg(val, "RETURN")) val = "RETURN";
       else return RedisModule_ReplyWithError(ctx, "ERR ON_TIMEOUT must be FAIL or RETURN");
-    } else if (param == "MAXSEARCHRESULTS") {
+    } else if (param == "MAXSEARCHRESULTS" || param == "ASYNC_MIN_DOCS") {
       char* ep = nullptr;
       long long v = std::strtoll(val.c_str(), &ep, 10);
       if (*ep != '\0' || v < 0) {
-        return RedisModule_ReplyWithError(ctx, "ERR MAXSEARCHRESULTS must be a non-negative integer");
+        return RedisModule_ReplyWithError(ctx, "ERR parameter must be a non-negative integer");
       }
     }
     it->second = std::move(val);

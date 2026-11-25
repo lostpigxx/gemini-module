@@ -703,6 +703,180 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
 
     const auto* vidx = entry.vector_indices.Get(parsed.knn_field);
+
+    // Phase 50: Non-blocking async KNN offload via RedisModule_BlockClient
+    size_t async_min = GetAsyncMinDocs();
+    if (RedisModule_BlockClient && RedisModule_UnblockClient &&
+        async_min > 0 && entry.doc_store.Size() >= async_min && vidx) {
+      struct AsyncKnnRow {
+        std::string doc_id;
+        std::string score_str;
+        bool has_payload = false;
+        std::string payload;
+        std::vector<std::pair<std::string, std::string>> fields;
+      };
+      struct AsyncKnnReply {
+        std::string error;
+        bool count_only = false;
+        long long total_count = 0;
+        SearchOptions opts;
+        std::string score_field;
+        std::vector<AsyncKnnRow> rows;
+      };
+
+      auto ReplyCb = [](RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) -> int {
+        auto* r = static_cast<AsyncKnnReply*>(RedisModule_GetBlockedClientPrivateData(c));
+        if (!r) return RedisModule_ReplyWithError(c, "ERR async query internal error");
+        if (!r->error.empty()) return RedisModule_ReplyWithError(c, r->error.c_str());
+        if (r->count_only) {
+          RedisModule_ReplyWithArray(c, 1);
+          RedisModule_ReplyWithLongLong(c, r->total_count);
+          return REDISMODULE_OK;
+        }
+        long total = static_cast<long>(r->rows.size());
+        long mult = 1 + (r->opts.withpayloads ? 1 : 0) + (r->opts.nocontent ? 0 : 1);
+        RedisModule_ReplyWithArray(c, 1 + total * mult);
+        RedisModule_ReplyWithLongLong(c, total);
+        for (const auto& row : r->rows) {
+          RedisModule_ReplyWithCString(c, row.doc_id.c_str());
+          if (r->opts.withpayloads) {
+            if (row.has_payload) {
+              RedisModule_ReplyWithStringBuffer(c, row.payload.data(), row.payload.size());
+            } else {
+              RedisModule_ReplyWithNull(c);
+            }
+          }
+          if (!r->opts.nocontent) {
+            RedisModule_ReplyWithArray(c, static_cast<long>(row.fields.size()) * 2 + 2);
+            RedisModule_ReplyWithCString(c, r->score_field.c_str());
+            RedisModule_ReplyWithCString(c, row.score_str.c_str());
+            for (const auto& [k, v] : row.fields) {
+              RedisModule_ReplyWithCString(c, k.c_str());
+              RedisModule_ReplyWithCString(c, v.c_str());
+            }
+          }
+        }
+        return REDISMODULE_OK;
+      };
+      auto TimeoutCb = [](RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) -> int {
+        if (IsOnTimeoutReturn()) {
+          RedisModule_ReplyWithArray(c, 1);
+          RedisModule_ReplyWithLongLong(c, 0);
+          return REDISMODULE_OK;
+        }
+        return RedisModule_ReplyWithError(c, "ERR query timed out");
+      };
+      auto FreeCb = [](RedisModuleCtx* /*c*/, void* priv) {
+        delete static_cast<AsyncKnnReply*>(priv);
+      };
+
+      long long block_ms = opts.has_timeout ? opts.timeout_ms : 0;
+      RedisModuleBlockedClient* bc =
+          RedisModule_BlockClient(ctx, ReplyCb, TimeoutCb, FreeCb, block_ms);
+
+      GetSearchExecutor().Submit(
+          [bc, idx_str, parsed = std::move(parsed), qvec = std::move(qvec),
+           opts = std::move(opts), params = std::move(params),
+           qopts = std::move(qopts)]() {
+            auto* rep = new AsyncKnnReply();
+            rep->opts = opts;
+            rep->score_field = parsed.knn_score_alias.empty()
+                                   ? "__vec_score"
+                                   : parsed.knn_score_alias;
+            {
+              std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+              auto iit = GetIndices().find(idx_str);
+              if (iit == GetIndices().end()) {
+                rep->error = "ERR index not found";
+              } else {
+                const auto& e = iit->second;
+                const auto* vi = e.vector_indices.Get(parsed.knn_field);
+                std::vector<KnnResult> knn_res;
+                if (vi) {
+                  if (parsed.root.type != QueryNode::Type::kMatchAll) {
+                    std::string ferr;
+                    auto cands = EvaluateQuery(
+                        parsed.root, e.spec, e.doc_store, e.tag_indices,
+                        e.numeric_indices, e.text_indices, e.geo_indices, ferr,
+                        qopts, &e.geoshape_indices, &params, &e.vector_indices,
+                        &e.synonyms);
+                    if (!ferr.empty()) {
+                      rep->error = ferr;
+                    } else {
+                      knn_res = vi->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands);
+                    }
+                  } else {
+                    knn_res = vi->KnnQueryEf(qvec.data(), parsed.knn_k,
+                                             parsed.knn_ef_runtime);
+                  }
+                }
+                if (rep->error.empty()) {
+                  if (opts.has_inkeys) {
+                    std::unordered_set<std::string> allowed(opts.inkeys.begin(),
+                                                            opts.inkeys.end());
+                    knn_res.erase(
+                        std::remove_if(knn_res.begin(), knn_res.end(),
+                                       [&](const KnnResult& r) {
+                                         return allowed.find(r.doc_id) == allowed.end();
+                                       }),
+                        knn_res.end());
+                  }
+                  long long total_before = static_cast<long long>(knn_res.size());
+                  if (opts.has_limit && opts.limit_offset == 0 && opts.limit_count == 0) {
+                    rep->count_only = true;
+                    rep->total_count = total_before;
+                  } else {
+                    if (opts.has_limit) {
+                      if (opts.limit_offset >= total_before) {
+                        knn_res.clear();
+                      } else {
+                        auto beg = knn_res.begin() + opts.limit_offset;
+                        auto end = (opts.limit_count >= 0 &&
+                                    opts.limit_offset + opts.limit_count < total_before)
+                                       ? knn_res.begin() + opts.limit_offset + opts.limit_count
+                                       : knn_res.end();
+                        knn_res = std::vector<KnnResult>(beg, end);
+                      }
+                    }
+                    rep->rows.reserve(knn_res.size());
+                    for (const auto& kr : knn_res) {
+                      AsyncKnnRow row;
+                      row.doc_id = kr.doc_id;
+                      row.score_str = std::to_string(kr.score);
+                      const auto* doc = e.doc_store.Get(kr.doc_id);
+                      if (doc) {
+                        row.has_payload = doc->has_payload;
+                        if (opts.withpayloads && doc->has_payload) row.payload = doc->payload;
+                        if (!opts.nocontent) {
+                          std::vector<std::string> keys;
+                          if (opts.has_return) {
+                            keys = opts.return_fields;
+                          } else {
+                            keys.reserve(doc->fields.size());
+                            for (const auto& [k, v] : doc->fields) keys.push_back(k);
+                            std::sort(keys.begin(), keys.end());
+                          }
+                          for (const auto& k : keys) {
+                            auto ait = opts.return_aliases.find(k);
+                            const std::string& out_k =
+                                (ait != opts.return_aliases.end()) ? ait->second : k;
+                            auto fit = doc->fields.find(k);
+                            row.fields.emplace_back(
+                                out_k, (fit != doc->fields.end()) ? fit->second : "");
+                          }
+                        }
+                      }
+                      rep->rows.push_back(std::move(row));
+                    }
+                  }
+                }
+              }
+            }
+            RedisModule_UnblockClient(bc, rep);
+          });
+      return REDISMODULE_OK;
+    }
+
     std::vector<KnnResult> knn_results;
     if (vidx) {
       if (parsed.root.type != QueryNode::Type::kMatchAll) {
