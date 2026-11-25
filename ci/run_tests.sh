@@ -16,6 +16,40 @@ header "GTest: gemini-bloom"
 cmake --build "$BUILD_DIR" --target bloom_test -j"$(nproc)" || \
   { red "FAIL: bloom gtest"; FAIL=1; }
 
+if [ "$REDIS_MAJOR" -ge 7 ]; then
+  header "ASan GTest: gemini-bloom"
+  cmake -B "${BUILD_DIR}_bloom_asan" -DENABLE_ASAN=ON >/dev/null && \
+    cmake --build "${BUILD_DIR}_bloom_asan" --target bloom_test -j"$(nproc)" || \
+    { red "FAIL: bloom asan gtest"; FAIL=1; }
+fi
+
+header "GTest: gemini-json"
+cmake --build "$BUILD_DIR" --target json_test -j"$(nproc)" || \
+  { red "FAIL: json gtest"; FAIL=1; }
+
+if [ "$REDIS_MAJOR" -ge 7 ]; then
+  header "ASan GTest: gemini-json"
+  cmake -B "${BUILD_DIR}_json_asan" -DENABLE_ASAN=ON >/dev/null && \
+    cmake --build "${BUILD_DIR}_json_asan" --target json_test -j"$(nproc)" || \
+    { red "FAIL: json asan gtest"; FAIL=1; }
+fi
+
+header "Tcl: gemini-json"
+tclsh modules/gemini-json/tests/tcl/json_test.tcl "./$BUILD_DIR/redis_json.so" || \
+  { red "FAIL: json tcl"; FAIL=1; }
+
+if [ "$REDIS_MAJOR" -ge 7 ]; then
+  header "Soak: gemini-json (${JSON_SOAK_DURATION_SEC:-30}s, RESP auto)"
+  SOAK_DURATION_SEC="${JSON_SOAK_DURATION_SEC:-30}" \
+    python3 ci/json_soak_test.py "./$BUILD_DIR/redis_json.so" || \
+    { red "FAIL: json soak"; FAIL=1; }
+
+  header "Soak: gemini-json (${JSON_SOAK_DURATION_SEC:-30}s, RESP2 forced)"
+  SOAK_DURATION_SEC="${JSON_SOAK_DURATION_SEC:-30}" RESP_PROTOCOL=2 \
+    python3 ci/json_soak_test.py "./$BUILD_DIR/redis_json.so" || \
+    { red "FAIL: json soak RESP2"; FAIL=1; }
+fi
+
 # ── Tcl integration tests (need redis-server) ───────────────
 header "Tcl: gemini-bloom"
 tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl "./$BUILD_DIR/redis_bloom.so" || \

@@ -556,3 +556,81 @@ TEST(JsonRdbOrder, ObjectKeyOrderPreserved) {
   }
   JsonValue::Destroy(v);
 }
+
+// ==================================================================
+// Hardened RDB security & Redis 7 ModuleType callbacks
+// ==================================================================
+
+TEST(JsonRdbHardening, TruncatedBinaryStreamRejected) {
+  MockRdbStream stream;
+  auto* v = Parse(R"({"a":[1,2,3],"b":"hello"})");
+  ASSERT_NE(v, nullptr);
+  JsonCompatMode = false;
+  RdbSaveJson(stream.IO(), v);
+  JsonValue::Destroy(v);
+
+  size_t half = stream.buf.size() / 2;
+  ASSERT_GT(half, 0u);
+  stream.buf.resize(half);
+  stream.Rewind();
+
+  auto* loaded = static_cast<JsonValue*>(RdbLoadJson(stream.IO(), 2));
+  EXPECT_EQ(loaded, nullptr);
+}
+
+TEST(JsonRdbHardening, ExcessiveDepthRejected) {
+  MockRdbStream stream;
+  for (int i = 0; i < 150; i++) {
+    RedisModule_SaveUnsigned(stream.IO(), 6);  // kTagArray
+    RedisModule_SaveUnsigned(stream.IO(), 1);
+  }
+  RedisModule_SaveUnsigned(stream.IO(), 0);  // kTagNull
+  stream.Rewind();
+
+  auto* loaded = static_cast<JsonValue*>(RdbLoadJson(stream.IO(), 2));
+  EXPECT_EQ(loaded, nullptr);
+}
+
+TEST(JsonRdbHardening, ExcessiveCollectionCountRejected) {
+  MockRdbStream stream;
+  RedisModule_SaveUnsigned(stream.IO(), 6);  // kTagArray
+  RedisModule_SaveUnsigned(stream.IO(), 999999999ULL);
+  stream.Rewind();
+
+  auto* loaded = static_cast<JsonValue*>(RdbLoadJson(stream.IO(), 2));
+  EXPECT_EQ(loaded, nullptr);
+}
+
+TEST(JsonModuleTypeTest, CopyFreeEffortDigestAndDefrag) {
+  auto* v1 = Parse(R"({"b":2,"a":[1,true,"x"]})");
+  auto* v2 = Parse(R"({"a":[1,true,"x"],"b":2})");
+  auto* v3 = Parse(R"({"a":[1,false,"x"],"b":2})");
+  ASSERT_NE(v1, nullptr);
+  ASSERT_NE(v2, nullptr);
+  ASSERT_NE(v3, nullptr);
+
+  auto* cloned = static_cast<JsonValue*>(CopyJson2(nullptr, v1));
+  ASSERT_NE(cloned, nullptr);
+  EXPECT_TRUE(v1->DeepEqual(cloned));
+  cloned->ObjectSet("c", 1, JsonValue::CreateInteger(99));
+  EXPECT_FALSE(v1->DeepEqual(cloned));
+
+  EXPECT_GE(FreeEffortJson2(nullptr, v1), 6u);
+  EXPECT_EQ(FreeEffortJson2(nullptr, nullptr), 1u);
+
+  MockDigest d1, d2, d3;
+  DigestJson(d1.Handle(), v1);
+  DigestJson(d2.Handle(), v2);
+  DigestJson(d3.Handle(), v3);
+  EXPECT_TRUE(d1.ended);
+  EXPECT_EQ(d1.bytes, d2.bytes);
+  EXPECT_NE(d1.bytes, d3.bytes);
+
+  void* ptr = v1;
+  EXPECT_EQ(DefragJson(nullptr, nullptr, &ptr), 0);
+
+  JsonValue::Destroy(cloned);
+  JsonValue::Destroy(v1);
+  JsonValue::Destroy(v2);
+  JsonValue::Destroy(v3);
+}

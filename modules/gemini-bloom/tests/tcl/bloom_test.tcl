@@ -2094,12 +2094,20 @@ test_assert "Bloom data replicates to a replica" {
   }
   if {!$replica_linked} { error "Master never saw replica as connected" }
 
-  # Create data on master
-  r DEL repl_test
+  # Create data on master across all 5 probabilistic types
+  r DEL repl_test repl_cf repl_cms repl_topk repl_td
   r BF.RESERVE repl_test 0.01 200
   for {set i 0} {$i < 50} {incr i} {
     r BF.ADD repl_test "repl_item_$i"
   }
+  r CF.RESERVE repl_cf 100
+  r CF.ADD repl_cf "cf_elem"
+  r CMS.INITBYDIM repl_cms 100 5
+  r CMS.INCRBY repl_cms "cms_elem" 7
+  r TOPK.RESERVE repl_topk 3
+  r TOPK.ADD repl_topk "hot1" "hot1" "hot2"
+  r TDIGEST.CREATE repl_td
+  r TDIGEST.ADD repl_td 10 20 30 40 50
 
   # Wait for replication to catch up
   r WAIT 1 5000
@@ -2111,6 +2119,11 @@ test_assert "Bloom data replicates to a replica" {
     set e [redis_command $rep_fd BF.EXISTS repl_test "repl_item_$i"]
     if {$e != 1} { set all_found 0; break }
   }
+  set rep_cf [redis_command $rep_fd CF.EXISTS repl_cf "cf_elem"]
+  set rep_cms [lindex [redis_command $rep_fd CMS.QUERY repl_cms "cms_elem"] 0]
+  set rep_topk [lindex [redis_command $rep_fd TOPK.QUERY repl_topk "hot1"] 0]
+  set rep_td_min [redis_command $rep_fd TDIGEST.MIN repl_td]
+  set rep_td_max [redis_command $rep_fd TDIGEST.MAX repl_td]
 
   # Cleanup
   catch {redis_command $rep_fd SHUTDOWN NOSAVE}
@@ -2120,6 +2133,12 @@ test_assert "Bloom data replicates to a replica" {
 
   if {$rep_card != 50} { error "Replica CARD=$rep_card, expected 50" }
   if {!$all_found} { error "Some items missing on replica" }
+  if {$rep_cf != 1} { error "Replica CF.EXISTS=$rep_cf, expected 1" }
+  if {$rep_cms != 7} { error "Replica CMS.QUERY=$rep_cms, expected 7" }
+  if {$rep_topk != 1} { error "Replica TOPK.QUERY=$rep_topk, expected 1" }
+  if {$rep_td_min != 10 || $rep_td_max != 50} {
+    error "Replica TDIGEST min/max=$rep_td_min/$rep_td_max, expected 10/50"
+  }
 }
 
 # ============================================================

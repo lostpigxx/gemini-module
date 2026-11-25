@@ -677,6 +677,104 @@ test_assert "Data survives BGSAVE + restart" {
   if {$scores != 3} { error "Scores length=$scores after restart, expected 3" }
 }
 
+puts "\n=== Redis 7 ModuleType & Master-Replica PSYNC ==="
+
+test_assert "MEMORY USAGE grows with document size" {
+  r JSON.SET mem_small $ {{"a":1}}
+  r JSON.SET mem_big $ {{"a":"[string repeat x 4096]","arr":[1,2,3,4,5,6,7,8,9,10]}}
+  set m1 [r MEMORY USAGE mem_small]
+  set m2 [r MEMORY USAGE mem_big]
+  if {$m2 <= $m1} { error "Expected mem_big ($m2) > mem_small ($m1)" }
+  r DEL mem_small mem_big
+}
+
+test_assert "COPY clones JSON key independently (Redis 7+)" {
+  set srv_info [r INFO server]
+  set rver 0
+  if {[regexp {redis_version:(\d+)\.} $srv_info -> maj]} { set rver $maj }
+  if {$rver >= 7} {
+    r JSON.SET copy_src $ {{"x":1,"arr":[10,20]}}
+    r COPY copy_src copy_dst
+    r JSON.NUMINCRBY copy_dst .x 99
+    set v_src [r JSON.GET copy_src .x]
+    set v_dst [r JSON.GET copy_dst .x]
+    if {$v_src != 1 || $v_dst != 100} {
+      error "COPY not independent: src=$v_src dst=$v_dst"
+    }
+    r DEL copy_src copy_dst
+  }
+}
+
+test_assert "Master-Replica PSYNC full sync and live JSON replication" {
+  global port module_path
+
+  r JSON.SET rep_pre $ {{"name":"before","n":10,"tags":["a"]}}
+
+  set rep_port [find_free_port]
+  set rep_rdb "json_tcl_replica_${rep_port}.rdb"
+  set rep_log "/tmp/json_tcl_replica_${rep_port}.log"
+  catch {
+    exec redis-server \
+      --port $rep_port \
+      --daemonize yes \
+      --loglevel warning \
+      --logfile $rep_log \
+      --dbfilename $rep_rdb \
+      --dir /tmp \
+      --loadmodule $module_path \
+      --replicaof 127.0.0.1 $port
+  }
+
+  set rep_fd ""
+  for {set i 0} {$i < 50} {incr i} {
+    if {![catch {set rep_fd [redis_connect localhost $rep_port]}]} { break }
+    after 100
+  }
+  if {$rep_fd eq ""} { error "Replica failed to start on port $rep_port" }
+
+  set synced 0
+  for {set i 0} {$i < 80} {incr i} {
+    set info ""
+    if {![catch {set info [redis_command $rep_fd INFO replication]}]} {
+      if {[string match "*master_link_status:up*" $info] &&
+          [string match "*master_sync_in_progress:0*" $info]} {
+        set synced 1
+        break
+      }
+    }
+    after 100
+  }
+  if {!$synced} {
+    catch {redis_command $rep_fd SHUTDOWN NOSAVE}
+    catch {close $rep_fd}
+    file delete -force "/tmp/$rep_rdb" $rep_log
+    error "Replica did not complete PSYNC within timeout"
+  }
+
+  # Verify full PSYNC RDB state
+  set pre_name [redis_command $rep_fd JSON.GET rep_pre .name]
+
+  # Live replication after PSYNC
+  r JSON.NUMINCRBY rep_pre .n 5
+  r JSON.ARRAPPEND rep_pre .tags {"b"}
+  r JSON.SET rep_live $ {{"ok":true}}
+  after 300
+
+  set live_n [redis_command $rep_fd JSON.GET rep_pre .n]
+  set live_len [redis_command $rep_fd JSON.ARRLEN rep_pre .tags]
+  set live_ok [redis_command $rep_fd JSON.GET rep_live .ok]
+
+  catch {redis_command $rep_fd SHUTDOWN NOSAVE}
+  catch {close $rep_fd}
+  file delete -force "/tmp/$rep_rdb" $rep_log
+  r DEL rep_pre rep_live
+
+  if {$pre_name ne {"before"}} { error "Full PSYNC mismatch: $pre_name" }
+  if {$live_n != 15 || $live_len != 2 || $live_ok ne "true"} {
+    error "Live replication mismatch: n=$live_n len=$live_len ok=$live_ok"
+  }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

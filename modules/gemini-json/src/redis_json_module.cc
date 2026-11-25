@@ -29,6 +29,10 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
     }
   }
 
+  if (RedisModule_SetModuleOptions) {
+    RedisModule_SetModuleOptions(ctx, REDISMODULE_OPTIONS_HANDLE_IO_ERRORS);
+  }
+
   const char* type_name = JsonCompatMode ? kTypeNameCompat : kTypeNameNative;
   int encver = JsonCompatMode ? kJsonEncVerMax : kJsonEncVerBinary;
 
@@ -39,6 +43,10 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
   tm.aof_rewrite = AofRewriteJson;
   tm.free = FreeJson;
   tm.mem_usage = JsonMemUsage;
+  tm.digest = DigestJson;
+  tm.copy2 = CopyJson2;
+  tm.free_effort2 = FreeEffortJson2;
+  tm.defrag = DefragJson;
 
   JsonModuleType = RedisModule_CreateDataType(ctx, type_name, encver, &tm);
   if (!JsonModuleType) {

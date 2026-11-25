@@ -3,17 +3,96 @@
 #include "json_parse.h"
 #include "json_serialize.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <vector>
 
 RedisModuleType* JsonModuleType = nullptr;
 bool JsonCompatMode = false;
 
+namespace {
+
+constexpr int kMaxRdbDepth = 128;
+constexpr uint64_t kMaxRdbCollectionLen = 10000000;
+
+bool HasIoError(RedisModuleIO* rdb) {
+  return RedisModule_IsIOError && RedisModule_IsIOError(rdb) != 0;
+}
+
+size_t CountNodes(const JsonValue* v, int depth = 0) {
+  if (!v || depth > kMaxRdbDepth) return 0;
+  size_t count = 1;
+  if (v->IsArray()) {
+    for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+      count += CountNodes(v->ArrayGet(i), depth + 1);
+    }
+  } else if (v->IsObject()) {
+    auto* entries = v->ObjectEntries();
+    for (uint32_t i = 0; i < v->ObjectLen(); i++) {
+      count += CountNodes(entries[i].value, depth + 1);
+    }
+  }
+  return count;
+}
+
+void DigestNode(RedisModuleDigest* digest, const JsonValue* v, int depth = 0) {
+  if (!v || depth > kMaxRdbDepth) return;
+  RedisModule_DigestAddLongLong(digest, static_cast<long long>(v->Type()));
+  switch (v->Type()) {
+    case JsonType::kNull:
+      break;
+    case JsonType::kBool:
+      RedisModule_DigestAddLongLong(digest, v->GetBool() ? 1 : 0);
+      break;
+    case JsonType::kInteger:
+      RedisModule_DigestAddLongLong(digest, v->GetInteger());
+      break;
+    case JsonType::kNumber: {
+      double d = v->GetNumber();
+      if (d == 0.0) d = 0.0;  // canonicalize -0.0
+      uint64_t bits = 0;
+      std::memcpy(&bits, &d, sizeof(bits));
+      RedisModule_DigestAddLongLong(digest, static_cast<long long>(bits));
+      break;
+    }
+    case JsonType::kString: {
+      auto sv = v->GetString();
+      RedisModule_DigestAddLongLong(digest, static_cast<long long>(sv.size()));
+      RedisModule_DigestAddStringBuffer(digest, sv.data(), sv.size());
+      break;
+    }
+    case JsonType::kArray:
+      RedisModule_DigestAddLongLong(digest, static_cast<long long>(v->ArrayLen()));
+      for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+        DigestNode(digest, v->ArrayGet(i), depth + 1);
+      }
+      break;
+    case JsonType::kObject: {
+      uint32_t n = v->ObjectLen();
+      RedisModule_DigestAddLongLong(digest, static_cast<long long>(n));
+      auto* entries = v->ObjectEntries();
+      std::vector<uint32_t> order(n);
+      for (uint32_t i = 0; i < n; i++) order[i] = i;
+      std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+        return std::string_view(entries[a].key, entries[a].key_len) <
+               std::string_view(entries[b].key, entries[b].key_len);
+      });
+      for (uint32_t idx : order) {
+        RedisModule_DigestAddLongLong(digest, static_cast<long long>(entries[idx].key_len));
+        RedisModule_DigestAddStringBuffer(digest, entries[idx].key, entries[idx].key_len);
+        DigestNode(digest, entries[idx].value, depth + 1);
+      }
+      break;
+    }
+  }
+}
+
+}  // namespace
+
 // ======================================================================
 // Binary RDB format (encver 2) — Gemini native
 // ======================================================================
-// Each node: type tag (uint64) followed by type-specific payload.
-// Tag values: 0=null, 1=false, 2=true, 3=integer, 4=double,
-//             5=string, 6=array, 7=object
 
 enum : uint64_t {
   kTagNull    = 0,
@@ -68,8 +147,11 @@ static void BinarySave(RedisModuleIO* rdb, const JsonValue* v) {
   }
 }
 
-static JsonValue* BinaryLoad(RedisModuleIO* rdb) {
+static JsonValue* BinaryLoad(RedisModuleIO* rdb, int depth = 0) {
+  if (depth > kMaxRdbDepth) return nullptr;
   uint64_t tag = RedisModule_LoadUnsigned(rdb);
+  if (HasIoError(rdb)) return nullptr;
+
   switch (tag) {
     case kTagNull:
       return JsonValue::CreateNull();
@@ -77,24 +159,34 @@ static JsonValue* BinaryLoad(RedisModuleIO* rdb) {
       return JsonValue::CreateBool(false);
     case kTagTrue:
       return JsonValue::CreateBool(true);
-    case kTagInteger:
-      return JsonValue::CreateInteger(RedisModule_LoadSigned(rdb));
-    case kTagDouble:
-      return JsonValue::CreateNumber(RedisModule_LoadDouble(rdb));
+    case kTagInteger: {
+      int64_t val = RedisModule_LoadSigned(rdb);
+      if (HasIoError(rdb)) return nullptr;
+      return JsonValue::CreateInteger(val);
+    }
+    case kTagDouble: {
+      double val = RedisModule_LoadDouble(rdb);
+      if (HasIoError(rdb) || !std::isfinite(val)) return nullptr;
+      return JsonValue::CreateNumber(val);
+    }
     case kTagString: {
-      size_t len;
+      size_t len = 0;
       char* buf = RedisModule_LoadStringBuffer(rdb, &len);
-      if (!buf) return nullptr;
+      if (HasIoError(rdb) || !buf) {
+        if (buf) RedisModule_Free(buf);
+        return nullptr;
+      }
       auto* v = JsonValue::CreateString(buf, static_cast<uint32_t>(len));
       RedisModule_Free(buf);
       return v;
     }
     case kTagArray: {
       uint64_t count = RedisModule_LoadUnsigned(rdb);
+      if (HasIoError(rdb) || count > kMaxRdbCollectionLen) return nullptr;
       auto* arr = JsonValue::CreateArray();
       if (!arr) return nullptr;
       for (uint64_t i = 0; i < count; i++) {
-        auto* child = BinaryLoad(rdb);
+        auto* child = BinaryLoad(rdb, depth + 1);
         if (!child || !arr->ArrayAppend(child)) {
           JsonValue::Destroy(child);
           JsonValue::Destroy(arr);
@@ -105,13 +197,18 @@ static JsonValue* BinaryLoad(RedisModuleIO* rdb) {
     }
     case kTagObject: {
       uint64_t count = RedisModule_LoadUnsigned(rdb);
+      if (HasIoError(rdb) || count > kMaxRdbCollectionLen) return nullptr;
       auto* obj = JsonValue::CreateObject();
       if (!obj) return nullptr;
       for (uint64_t i = 0; i < count; i++) {
-        size_t key_len;
+        size_t key_len = 0;
         char* key = RedisModule_LoadStringBuffer(rdb, &key_len);
-        if (!key) { JsonValue::Destroy(obj); return nullptr; }
-        auto* val = BinaryLoad(rdb);
+        if (HasIoError(rdb) || !key) {
+          if (key) RedisModule_Free(key);
+          JsonValue::Destroy(obj);
+          return nullptr;
+        }
+        auto* val = BinaryLoad(rdb, depth + 1);
         if (!val) {
           RedisModule_Free(key);
           JsonValue::Destroy(obj);
@@ -137,9 +234,12 @@ static void TextSave(RedisModuleIO* rdb, const JsonValue* v) {
 }
 
 static JsonValue* TextLoad(RedisModuleIO* rdb) {
-  size_t len;
+  size_t len = 0;
   char* buf = RedisModule_LoadStringBuffer(rdb, &len);
-  if (!buf) return nullptr;
+  if (HasIoError(rdb) || !buf) {
+    if (buf) RedisModule_Free(buf);
+    return nullptr;
+  }
   auto result = JsonParse(std::string_view{buf, len});
   RedisModule_Free(buf);
   return result.value;
@@ -151,7 +251,7 @@ static JsonValue* TextLoad(RedisModuleIO* rdb) {
 
 void* RdbLoadJson(RedisModuleIO* rdb, int encver) {
   if (encver == 1 || encver == 3) return TextLoad(rdb);
-  if (encver == 2) return BinaryLoad(rdb);
+  if (encver == 2) return BinaryLoad(rdb, 0);
   return nullptr;
 }
 
@@ -167,7 +267,7 @@ void RdbSaveJson(RedisModuleIO* rdb, void* value) {
 void AofRewriteJson(RedisModuleIO* aof, RedisModuleString* key, void* value) {
   auto* root = static_cast<JsonValue*>(value);
   auto json = JsonSerialize(root);
-  RedisModule_EmitAOF(aof, "JSON.SET", "scc", key, "$", json.c_str());
+  RedisModule_EmitAOF(aof, "JSON.SET", "scb", key, "$", json.data(), json.size());
 }
 
 void FreeJson(void* value) {
@@ -176,4 +276,24 @@ void FreeJson(void* value) {
 
 size_t JsonMemUsage(const void* value) {
   return static_cast<const JsonValue*>(value)->MemoryUsage();
+}
+
+void DigestJson(RedisModuleDigest* digest, void* value) {
+  DigestNode(digest, static_cast<const JsonValue*>(value), 0);
+  RedisModule_DigestEndSequence(digest);
+}
+
+void* CopyJson2(RedisModuleKeyOptCtx* /*ctx*/, const void* value) {
+  if (!value) return nullptr;
+  return static_cast<const JsonValue*>(value)->Clone();
+}
+
+size_t FreeEffortJson2(RedisModuleKeyOptCtx* /*ctx*/, const void* value) {
+  if (!value) return 1;
+  return CountNodes(static_cast<const JsonValue*>(value), 0);
+}
+
+int DefragJson(RedisModuleDefragCtx* /*ctx*/, RedisModuleString* /*key*/,
+               void** /*value*/) {
+  return 0;
 }

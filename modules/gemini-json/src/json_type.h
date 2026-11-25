@@ -36,3 +36,7 @@ void RdbSaveJson(RedisModuleIO* rdb, void* value);
 void AofRewriteJson(RedisModuleIO* aof, RedisModuleString* key, void* value);
 void FreeJson(void* value);
 size_t JsonMemUsage(const void* value);
+void DigestJson(RedisModuleDigest* digest, void* value);
+void* CopyJson2(RedisModuleKeyOptCtx* ctx, const void* value);
+size_t FreeEffortJson2(RedisModuleKeyOptCtx* ctx, const void* value);
+int DefragJson(RedisModuleDefragCtx* ctx, RedisModuleString* key, void** value);
