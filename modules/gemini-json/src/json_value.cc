@@ -130,6 +130,34 @@ JsonValue* JsonValue::CreateArray() {
   return v;
 }
 
+JsonValue* JsonValue::CreateIntArrayFrom(const int64_t* data, uint32_t len) {
+  auto* a = CreateArray();
+  if (!a) return nullptr;
+  if (len == 0) return a;
+  if (!a->ArrayReserve(len)) {
+    Destroy(a);
+    return nullptr;
+  }
+  a->gen_.tag = MakeTag(JsonType::kArray, kFlagIntArray);
+  std::memcpy(a->IntArrayDataMut(), data, static_cast<size_t>(len) * sizeof(int64_t));
+  a->gen_.payload.arr.len = len;
+  return a;
+}
+
+JsonValue* JsonValue::CreateDoubleArrayFrom(const double* data, uint32_t len) {
+  auto* a = CreateArray();
+  if (!a) return nullptr;
+  if (len == 0) return a;
+  if (!a->ArrayReserve(len)) {
+    Destroy(a);
+    return nullptr;
+  }
+  a->gen_.tag = MakeTag(JsonType::kArray, kFlagDoubleArray);
+  std::memcpy(a->DoubleArrayDataMut(), data, static_cast<size_t>(len) * sizeof(double));
+  a->gen_.payload.arr.len = len;
+  return a;
+}
+
 JsonValue* JsonValue::CreateObject() {
   auto* v = AllocValue();
   if (!v) return nullptr;
@@ -190,13 +218,15 @@ void JsonValue::Destroy(JsonValue* v) {
         break;
       case JsonType::kArray: {
         auto& arr = cur->gen_.payload.arr;
-        for (uint32_t i = 0; i < arr.len; i++) {
-          JsonValue* child = arr.items[i];
-          if (child) {
-            if (child->IsArray() || child->IsObject()) {
-              stack.push_back(child);
-            } else {
-              FreeLeaf(child);
+        if (!cur->IsTypedArray()) {
+          for (uint32_t i = 0; i < arr.len; i++) {
+            JsonValue* child = arr.items[i];
+            if (child) {
+              if (child->IsArray() || child->IsObject()) {
+                stack.push_back(child);
+              } else {
+                FreeLeaf(child);
+              }
             }
           }
         }
@@ -247,10 +277,17 @@ static JsonValue* CloneDepth(const JsonValue* v, int depth) {
       return JsonValue::CreateString(sv.data(), static_cast<uint32_t>(sv.size()));
     }
     case JsonType::kArray: {
+      uint32_t n = v->ArrayLen();
+      if (v->IsIntArray()) {
+        return JsonValue::CreateIntArrayFrom(v->IntArrayData(), n);
+      }
+      if (v->IsDoubleArray()) {
+        return JsonValue::CreateDoubleArrayFrom(v->DoubleArrayData(), n);
+      }
       auto* a = JsonValue::CreateArray();
       if (!a) return nullptr;
-      uint32_t n = v->ArrayLen();
-      if (n > 0 && !a->ArrayReserve(n)) {
+      if (n == 0) return a;
+      if (!a->ArrayReserve(n)) {
         JsonValue::Destroy(a);
         return nullptr;
       }
@@ -383,8 +420,144 @@ void JsonValue::ArrayShrinkIfNeeded() {
   }
 }
 
+static inline bool IntFitsExactDouble(int64_t v) {
+  constexpr int64_t kMaxExact = 1LL << 53;
+  return v >= -kMaxExact && v <= kMaxExact;
+}
+
+bool JsonValue::EnsureBoxedArray() const {
+  if (!IsTypedArray()) return true;
+  auto* self = const_cast<JsonValue*>(this);
+  auto& arr = self->gen_.payload.arr;
+  uint32_t n = arr.len;
+  if (n == 0) {
+    self->gen_.tag = MakeTag(JsonType::kArray);
+    return true;
+  }
+
+  uint32_t cap = arr.cap < n ? n : arr.cap;
+  auto** boxed = static_cast<JsonValue**>(RMAlloc(static_cast<size_t>(cap) * sizeof(JsonValue*)));
+  if (!boxed) return false;
+
+  if (IsIntArray()) {
+    const int64_t* src = IntArrayData();
+    for (uint32_t i = 0; i < n; i++) {
+      boxed[i] = CreateInteger(src[i]);
+      if (!boxed[i]) {
+        for (uint32_t j = 0; j < i; j++) Destroy(boxed[j]);
+        RMFree(boxed);
+        return false;
+      }
+    }
+  } else {
+    const double* src = DoubleArrayData();
+    for (uint32_t i = 0; i < n; i++) {
+      boxed[i] = CreateNumber(src[i]);
+      if (!boxed[i]) {
+        for (uint32_t j = 0; j < i; j++) Destroy(boxed[j]);
+        RMFree(boxed);
+        return false;
+      }
+    }
+  }
+
+  RMFree(arr.items);
+  arr.items = boxed;
+  arr.cap = cap;
+  self->gen_.tag = MakeTag(JsonType::kArray);
+  return true;
+}
+
+bool JsonValue::ArrayAppendInt(int64_t val) {
+  auto& arr = gen_.payload.arr;
+  if (arr.len == 0 && !IsTypedArray()) {
+    gen_.tag = MakeTag(JsonType::kArray, kFlagIntArray);
+  }
+  if (IsIntArray()) {
+    if (arr.len == arr.cap && !ArrayGrow()) return false;
+    IntArrayDataMut()[arr.len++] = val;
+    return true;
+  }
+  if (IsDoubleArray()) {
+    if (IntFitsExactDouble(val)) {
+      if (arr.len == arr.cap && !ArrayGrow()) return false;
+      DoubleArrayDataMut()[arr.len++] = static_cast<double>(val);
+      return true;
+    }
+    if (!EnsureBoxedArray()) return false;
+  }
+  auto* node = CreateInteger(val);
+  if (!node) return false;
+  if (!ArrayAppend(node)) {
+    Destroy(node);
+    return false;
+  }
+  return true;
+}
+
+bool JsonValue::ArrayAppendDouble(double val) {
+  auto& arr = gen_.payload.arr;
+  if (arr.len == 0 && !IsTypedArray()) {
+    gen_.tag = MakeTag(JsonType::kArray, kFlagDoubleArray);
+  }
+  if (IsDoubleArray()) {
+    if (arr.len == arr.cap && !ArrayGrow()) return false;
+    DoubleArrayDataMut()[arr.len++] = val;
+    return true;
+  }
+  if (IsIntArray()) {
+    // Promote int64[] -> double[] in place if all existing ints are exact in IEEE-754 double
+    const int64_t* src = IntArrayData();
+    bool all_exact = true;
+    for (uint32_t i = 0; i < arr.len; i++) {
+      if (!IntFitsExactDouble(src[i])) {
+        all_exact = false;
+        break;
+      }
+    }
+    if (all_exact) {
+      if (arr.len == arr.cap && !ArrayGrow()) return false;
+      int64_t* isrc = IntArrayDataMut();
+      double* ddst = DoubleArrayDataMut();
+      for (uint32_t i = 0; i < arr.len; i++) {
+        ddst[i] = static_cast<double>(isrc[i]);
+      }
+      gen_.tag = MakeTag(JsonType::kArray, kFlagDoubleArray);
+      ddst[arr.len++] = val;
+      return true;
+    }
+    if (!EnsureBoxedArray()) return false;
+  }
+  auto* node = CreateNumber(val);
+  if (!node) return false;
+  if (!ArrayAppend(node)) {
+    Destroy(node);
+    return false;
+  }
+  return true;
+}
+
 bool JsonValue::ArrayAppend(JsonValue* child) {
   auto& arr = gen_.payload.arr;
+  if (child && (arr.len == 0 || IsTypedArray())) {
+    if (child->Type() == JsonType::kInteger) {
+      int64_t v = child->GetInteger();
+      if (ArrayAppendInt(v)) {
+        Destroy(child);
+        return true;
+      }
+      return false;
+    }
+    if (child->Type() == JsonType::kNumber) {
+      double d = child->GetNumber();
+      if (ArrayAppendDouble(d)) {
+        Destroy(child);
+        return true;
+      }
+      return false;
+    }
+    if (IsTypedArray() && !EnsureBoxedArray()) return false;
+  }
   if (arr.len == arr.cap && !ArrayGrow()) return false;
   arr.items[arr.len++] = child;
   return true;
@@ -393,6 +566,33 @@ bool JsonValue::ArrayAppend(JsonValue* child) {
 bool JsonValue::ArrayInsert(uint32_t index, JsonValue* child) {
   auto& arr = gen_.payload.arr;
   if (index > arr.len) return false;
+  if (IsTypedArray()) {
+    if (child && IsIntArray() && child->Type() == JsonType::kInteger) {
+      if (arr.len == arr.cap && !ArrayGrow()) return false;
+      int64_t* data = IntArrayDataMut();
+      if (index < arr.len) {
+        std::memmove(&data[index + 1], &data[index],
+                     static_cast<size_t>(arr.len - index) * sizeof(int64_t));
+      }
+      data[index] = child->GetInteger();
+      arr.len++;
+      Destroy(child);
+      return true;
+    }
+    if (child && IsDoubleArray() && child->Type() == JsonType::kNumber) {
+      if (arr.len == arr.cap && !ArrayGrow()) return false;
+      double* data = DoubleArrayDataMut();
+      if (index < arr.len) {
+        std::memmove(&data[index + 1], &data[index],
+                     static_cast<size_t>(arr.len - index) * sizeof(double));
+      }
+      data[index] = child->GetNumber();
+      arr.len++;
+      Destroy(child);
+      return true;
+    }
+    if (!EnsureBoxedArray()) return false;
+  }
   if (arr.len == arr.cap && !ArrayGrow()) return false;
   if (index < arr.len) {
     std::memmove(&arr.items[index + 1], &arr.items[index],
@@ -411,6 +611,33 @@ JsonValue* JsonValue::ArrayPop(int32_t index) {
   if (resolved < 0 || static_cast<uint32_t>(resolved) >= arr.len) return nullptr;
   auto idx = static_cast<uint32_t>(resolved);
 
+  if (IsIntArray()) {
+    int64_t* data = IntArrayDataMut();
+    int64_t val = data[idx];
+    JsonValue* popped = CreateInteger(val);
+    if (!popped) return nullptr;
+    if (idx < arr.len - 1) {
+      std::memmove(&data[idx], &data[idx + 1],
+                   static_cast<size_t>(arr.len - idx - 1) * sizeof(int64_t));
+    }
+    arr.len--;
+    ArrayShrinkIfNeeded();
+    return popped;
+  }
+  if (IsDoubleArray()) {
+    double* data = DoubleArrayDataMut();
+    double val = data[idx];
+    JsonValue* popped = CreateNumber(val);
+    if (!popped) return nullptr;
+    if (idx < arr.len - 1) {
+      std::memmove(&data[idx], &data[idx + 1],
+                   static_cast<size_t>(arr.len - idx - 1) * sizeof(double));
+    }
+    arr.len--;
+    ArrayShrinkIfNeeded();
+    return popped;
+  }
+
   JsonValue* popped = arr.items[idx];
   if (idx < arr.len - 1) {
     std::memmove(&arr.items[idx], &arr.items[idx + 1],
@@ -423,6 +650,24 @@ JsonValue* JsonValue::ArrayPop(int32_t index) {
 
 void JsonValue::ArrayTrim(uint32_t start, uint32_t stop) {
   auto& arr = gen_.payload.arr;
+  if (IsTypedArray()) {
+    if (start >= arr.len || start > stop) {
+      arr.len = 0;
+      gen_.tag = MakeTag(JsonType::kArray);
+      ArrayShrinkIfNeeded();
+      return;
+    }
+    if (stop >= arr.len) stop = arr.len - 1;
+    uint32_t new_len = stop - start + 1;
+    if (start > 0) {
+      std::memmove(arr.items, reinterpret_cast<char*>(arr.items) + static_cast<size_t>(start) * 8,
+                   static_cast<size_t>(new_len) * 8);
+    }
+    arr.len = new_len;
+    ArrayShrinkIfNeeded();
+    return;
+  }
+
   if (start >= arr.len || start > stop) {
     for (uint32_t i = 0; i < arr.len; i++) Destroy(arr.items[i]);
     arr.len = 0;
@@ -756,7 +1001,11 @@ void JsonValue::Clear() {
   switch (Type()) {
     case JsonType::kArray: {
       auto& arr = gen_.payload.arr;
-      for (uint32_t i = 0; i < arr.len; i++) Destroy(arr.items[i]);
+      if (!IsTypedArray()) {
+        for (uint32_t i = 0; i < arr.len; i++) Destroy(arr.items[i]);
+      } else {
+        gen_.tag = MakeTag(JsonType::kArray);
+      }
       arr.len = 0;
       ArrayShrinkIfNeeded();
       break;
@@ -808,9 +1057,13 @@ size_t JsonValue::MemoryUsage() const {
         break;
       case JsonType::kArray: {
         const auto& arr = cur->gen_.payload.arr;
-        total += static_cast<size_t>(arr.cap) * sizeof(JsonValue*);
-        for (uint32_t i = 0; i < arr.len; i++) {
-          stack.push_back(arr.items[i]);
+        if (cur->IsTypedArray()) {
+          total += static_cast<size_t>(arr.cap) * sizeof(int64_t);
+        } else {
+          total += static_cast<size_t>(arr.cap) * sizeof(JsonValue*);
+          for (uint32_t i = 0; i < arr.len; i++) {
+            stack.push_back(arr.items[i]);
+          }
         }
         break;
       }
@@ -878,12 +1131,80 @@ static bool DeepEqualDepth(const JsonValue* a, const JsonValue* b, int depth) {
       return NumbersEqual(a->GetNumber(), b->GetNumber());
     case JsonType::kString:
       return a->GetString() == b->GetString();
-    case JsonType::kArray:
-      if (a->ArrayLen() != b->ArrayLen()) return false;
-      for (uint32_t i = 0; i < a->ArrayLen(); i++) {
+    case JsonType::kArray: {
+      uint32_t n = a->ArrayLen();
+      if (n != b->ArrayLen()) return false;
+      if (a->IsIntArray() && b->IsIntArray()) {
+        return n == 0 || std::memcmp(a->IntArrayData(), b->IntArrayData(),
+                                     static_cast<size_t>(n) * sizeof(int64_t)) == 0;
+      }
+      if (a->IsDoubleArray() && b->IsDoubleArray()) {
+        const double* da = a->DoubleArrayData();
+        const double* db = b->DoubleArrayData();
+        for (uint32_t i = 0; i < n; i++) {
+          if (!NumbersEqual(da[i], db[i])) return false;
+        }
+        return true;
+      }
+      if (a->IsTypedArray() || b->IsTypedArray()) {
+        for (uint32_t i = 0; i < n; i++) {
+          bool a_int = a->IsIntArray();
+          bool a_dbl = a->IsDoubleArray();
+          bool b_int = b->IsIntArray();
+          bool b_dbl = b->IsDoubleArray();
+          if (a_int && b_dbl) {
+            if (!IntEqualsDouble(a->IntArrayData()[i], b->DoubleArrayData()[i])) return false;
+          } else if (a_dbl && b_int) {
+            if (!IntEqualsDouble(b->IntArrayData()[i], a->DoubleArrayData()[i])) return false;
+          } else if (a_int) {
+            const JsonValue* bv = b->ArrayGet(i);
+            if (!bv) return false;
+            if (bv->Type() == JsonType::kInteger) {
+              if (a->IntArrayData()[i] != bv->GetInteger()) return false;
+            } else if (bv->Type() == JsonType::kNumber) {
+              if (!IntEqualsDouble(a->IntArrayData()[i], bv->GetNumber())) return false;
+            } else {
+              return false;
+            }
+          } else if (a_dbl) {
+            const JsonValue* bv = b->ArrayGet(i);
+            if (!bv) return false;
+            if (bv->Type() == JsonType::kNumber) {
+              if (!NumbersEqual(a->DoubleArrayData()[i], bv->GetNumber())) return false;
+            } else if (bv->Type() == JsonType::kInteger) {
+              if (!IntEqualsDouble(bv->GetInteger(), a->DoubleArrayData()[i])) return false;
+            } else {
+              return false;
+            }
+          } else if (b_int) {
+            const JsonValue* av = a->ArrayGet(i);
+            if (!av) return false;
+            if (av->Type() == JsonType::kInteger) {
+              if (av->GetInteger() != b->IntArrayData()[i]) return false;
+            } else if (av->Type() == JsonType::kNumber) {
+              if (!IntEqualsDouble(b->IntArrayData()[i], av->GetNumber())) return false;
+            } else {
+              return false;
+            }
+          } else {
+            const JsonValue* av = a->ArrayGet(i);
+            if (!av) return false;
+            if (av->Type() == JsonType::kNumber) {
+              if (!NumbersEqual(av->GetNumber(), b->DoubleArrayData()[i])) return false;
+            } else if (av->Type() == JsonType::kInteger) {
+              if (!IntEqualsDouble(av->GetInteger(), b->DoubleArrayData()[i])) return false;
+            } else {
+              return false;
+            }
+          }
+        }
+        return true;
+      }
+      for (uint32_t i = 0; i < n; i++) {
         if (!DeepEqualDepth(a->ArrayGet(i), b->ArrayGet(i), depth + 1)) return false;
       }
       return true;
+    }
     case JsonType::kObject: {
       if (a->ObjectLen() != b->ObjectLen()) return false;
       auto* entries = a->ObjectEntries();
@@ -929,9 +1250,11 @@ JsonValue* JsonValue::DefragTree(JsonValue* root, DefragAllocFn defrag_fn, void*
       case JsonType::kArray: {
         auto& arr = cur->gen_.payload.arr;
         Reloc(arr.items);
-        for (uint32_t i = 0; i < arr.len; i++) {
-          Reloc(arr.items[i]);
-          if (arr.items[i]) stack.push_back(arr.items[i]);
+        if (!cur->IsTypedArray()) {
+          for (uint32_t i = 0; i < arr.len; i++) {
+            Reloc(arr.items[i]);
+            if (arr.items[i]) stack.push_back(arr.items[i]);
+          }
         }
         break;
       }

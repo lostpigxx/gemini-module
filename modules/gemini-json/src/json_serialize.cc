@@ -118,10 +118,35 @@ struct Writer {
         if (len == 0) { out.append("[]", 2); break; }
         out.push_back('[');
         depth++;
-        for (uint32_t i = 0; i < len; i++) {
-          if (i > 0) out.push_back(',');
-          WriteIndent();
-          WriteValue(v->ArrayGet(i));
+        if (v->IsIntArray()) {
+          const int64_t* data = v->IntArrayData();
+          char buf[32];
+          for (uint32_t i = 0; i < len; i++) {
+            if (i > 0) out.push_back(',');
+            WriteIndent();
+            auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), data[i]);
+            out.append(buf, static_cast<size_t>(ptr - buf));
+          }
+        } else if (v->IsDoubleArray()) {
+          const double* data = v->DoubleArrayData();
+          char buf[64];
+          for (uint32_t i = 0; i < len; i++) {
+            if (i > 0) out.push_back(',');
+            WriteIndent();
+            double d = data[i];
+            if (std::isinf(d) || std::isnan(d)) {
+              out.append("null", 4);
+            } else {
+              auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), d);
+              out.append(buf, static_cast<size_t>(ptr - buf));
+            }
+          }
+        } else {
+          for (uint32_t i = 0; i < len; i++) {
+            if (i > 0) out.push_back(',');
+            WriteIndent();
+            WriteValue(v->ArrayGet(i));
+          }
         }
         depth--;
         WriteIndent();

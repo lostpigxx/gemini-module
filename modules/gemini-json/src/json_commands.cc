@@ -7,6 +7,7 @@
 #include "rm_alloc.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -212,6 +213,7 @@ static size_t CalcDepth(const JsonValue* v, int depth = 0) {
   if (!v || depth > kMaxJsonDepth) return 0;
   size_t max_child = 0;
   if (v->IsArray()) {
+    if (v->IsTypedArray()) return 1;
     for (uint32_t i = 0; i < v->ArrayLen(); i++) {
       max_child = std::max(max_child, CalcDepth(v->ArrayGet(i), depth + 1));
     }
@@ -688,6 +690,40 @@ static int CmdArrIndex(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
     int64_t e = stop_set ? (stop_arg < 0 ? stop_arg + len : stop_arg) : len;
     if (s < 0) s = 0;
     if (e > len) e = len;
+    if (arr_val->IsIntArray()) {
+      if (search_val->Type() != JsonType::kInteger && search_val->Type() != JsonType::kNumber) {
+        return -1;
+      }
+      const int64_t* data = arr_val->IntArrayData();
+      if (search_val->Type() == JsonType::kInteger) {
+        int64_t target = search_val->GetInteger();
+        for (int64_t i = s; i < e; i++) {
+          if (data[i] == target) return static_cast<long long>(i);
+        }
+      } else {
+        double target = search_val->GetNumber();
+        if (!std::isfinite(target) || std::trunc(target) != target ||
+            target < -9223372036854775808.0 || target >= 9223372036854775808.0) {
+          return -1;
+        }
+        int64_t itarget = static_cast<int64_t>(target);
+        for (int64_t i = s; i < e; i++) {
+          if (data[i] == itarget) return static_cast<long long>(i);
+        }
+      }
+      return -1;
+    }
+    if (arr_val->IsDoubleArray()) {
+      if (search_val->Type() != JsonType::kInteger && search_val->Type() != JsonType::kNumber) {
+        return -1;
+      }
+      const double* data = arr_val->DoubleArrayData();
+      double target = search_val->GetNumber();
+      for (int64_t i = s; i < e; i++) {
+        if (data[i] == target) return static_cast<long long>(i);
+      }
+      return -1;
+    }
     for (int64_t i = s; i < e; i++) {
       if (i >= 0 && i < len &&
           arr_val->ArrayGet(static_cast<uint32_t>(i))->DeepEqual(search_val)) {
@@ -1731,6 +1767,7 @@ static size_t CalcFields(const JsonValue* v, int depth = 0) {
   if (!v || depth > kMaxJsonDepth) return 0;
   if (v->IsArray()) {
     size_t total = v->ArrayLen();
+    if (v->IsTypedArray()) return total;
     for (uint32_t i = 0; i < v->ArrayLen(); i++) {
       total += CalcFields(v->ArrayGet(i), depth + 1);
     }
@@ -1830,8 +1867,22 @@ static void ReplyResp(RedisModuleCtx* ctx, const JsonValue* v, int depth = 0) {
     case JsonType::kArray: {
       RedisModule_ReplyWithArray(ctx, v->ArrayLen() + 1);
       RedisModule_ReplyWithSimpleString(ctx, "[");
-      for (uint32_t i = 0; i < v->ArrayLen(); i++) {
-        ReplyResp(ctx, v->ArrayGet(i), depth + 1);
+      if (v->IsIntArray()) {
+        const int64_t* data = v->IntArrayData();
+        for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+          RedisModule_ReplyWithLongLong(ctx, data[i]);
+        }
+      } else if (v->IsDoubleArray()) {
+        const double* data = v->DoubleArrayData();
+        for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+          char buf[64];
+          auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), data[i]);
+          RedisModule_ReplyWithStringBuffer(ctx, buf, static_cast<size_t>(ptr - buf));
+        }
+      } else {
+        for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+          ReplyResp(ctx, v->ArrayGet(i), depth + 1);
+        }
       }
       break;
     }

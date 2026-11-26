@@ -40,6 +40,7 @@
 - **`JsonValue`（24 字节）**：
   - 区分 `kNull`、`kBool`、`kInteger`（`int64_t`）、`kNumber`（`double`）、`kString`、`kArray`、`kObject`。
   - **短字符串内联（SSO）**：`<= 21` 字节的字符串直接内联在 24B 节点中，零额外堆分配。
+  - **紧凑数值数组（Typed Numeric Array）**：纯整数数组（`kFlagIntArray`）与纯浮点/数值数组（`kFlagDoubleArray`）直接以连续 `int64_t[]` / `double[]`（8 字节/元素）存储，零子节点堆分配；支持无损 `int -> double` 自动提升（`|v| <= 2^53`）、遇到超精度整数或非数值元素时透明按需退化（`EnsureBoxedArray`），并在 Parser、Serializer、Clone、Destroy、Defrag、Digest、RDB 二进制持久化（`kTagIntArray`/`kTagDoubleArray`）、`JSON.ARR*`/`JSON.RESP` 全路径走零装箱快路径。
 - **`ObjEntry`（32 字节）与有序哈希对象**：
   - **短键内联（SKO）**：`<= 15` 字节的对象键直接内联在 `ObjEntry` 内部，消除数组套对象（如数千条同结构记录）中海量字段名的独立堆分配碎片。
   - 对象同时维护插入顺序数组 `entries` 与 2 的幂开放寻址哈希索引 `hash_idx`，保证按插入顺序遍历的同时实现均摊 $O(1)$ 查找/更新/删除（墓碑标记 + 阈值压缩）。
@@ -82,6 +83,7 @@
 | 指标 | 实测结果 |
 |---|---:|
 | `sizeof(JsonValue)` / `sizeof(ObjEntry)` | `24 B` / `32 B`（`<=21B` SSO / `<=15B` SKO） |
+| 100k 整数数组 DOM 内存（Typed Array） | **`1,024 KB`**（`10.5 B/elem`，精确容量 `8.0 B/elem`，较装箱 `3,367 KB` 省 **69.6%**） |
 | Parse small (`~110 B`) / large (`~1 MB`) | `347.5 MB/s` / `316.3 MB/s` |
 | Parse / Serialize 256 KB clean string (SIMD) | `20.3 GB/s` / `24.4 GB/s` |
 | Serialize escaped (`~200 KB`) | `1,417 MB/s` |

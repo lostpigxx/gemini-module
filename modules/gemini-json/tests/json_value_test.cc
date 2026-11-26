@@ -509,3 +509,63 @@ TEST(JsonValueTest, EmbeddedNullBytesInStringsAndKeys) {
   JsonValue::Destroy(clone);
   JsonValue::Destroy(obj);
 }
+
+TEST(JsonValueTest, TypedNumericArraysMemoryAndTransitions) {
+  // 1. 100k int64 array: compact 8B/elem (~800KB-1MB) instead of ~3.37MB boxed
+  auto* iarr = JsonValue::CreateArray();
+  ASSERT_TRUE(iarr->ArrayReserve(100000));
+  for (int64_t i = 0; i < 100000; i++) {
+    ASSERT_TRUE(iarr->ArrayAppendInt(i));
+  }
+  EXPECT_TRUE(iarr->IsIntArray());
+  EXPECT_EQ(iarr->ArrayLen(), 100000u);
+  EXPECT_LT(iarr->MemoryUsage(), 900000u) << "Expected ~800KB, got " << iarr->MemoryUsage();
+
+  // Clone, DeepEqual, Pop, Insert, Trim all preserve typed representation
+  auto* iclone = iarr->Clone();
+  ASSERT_NE(iclone, nullptr);
+  EXPECT_TRUE(iclone->IsIntArray());
+  EXPECT_TRUE(iarr->DeepEqual(iclone));
+
+  auto* popped = iclone->ArrayPop(-1);
+  ASSERT_NE(popped, nullptr);
+  EXPECT_EQ(popped->GetInteger(), 99999);
+  JsonValue::Destroy(popped);
+  EXPECT_TRUE(iclone->IsIntArray());
+  EXPECT_EQ(iclone->ArrayLen(), 99999u);
+
+  ASSERT_TRUE(iclone->ArrayInsert(0, JsonValue::CreateInteger(-1)));
+  EXPECT_TRUE(iclone->IsIntArray());
+  EXPECT_EQ(iclone->IntArrayData()[0], -1);
+
+  iclone->ArrayTrim(0, 9);
+  EXPECT_TRUE(iclone->IsIntArray());
+  EXPECT_EQ(iclone->ArrayLen(), 10u);
+
+  // 2. Promoting int array -> double array when a float is appended
+  ASSERT_TRUE(iclone->ArrayAppendDouble(3.5));
+  EXPECT_TRUE(iclone->IsDoubleArray());
+  EXPECT_DOUBLE_EQ(iclone->DoubleArrayData()[0], -1.0);
+  EXPECT_DOUBLE_EQ(iclone->DoubleArrayData()[10], 3.5);
+
+  // 3. Precision guard: appending > 2^53 int into double array demotes to boxed
+  constexpr int64_t kBigInt = (1LL << 54) + 3;
+  ASSERT_TRUE(iclone->ArrayAppendInt(kBigInt));
+  EXPECT_FALSE(iclone->IsTypedArray());
+  EXPECT_EQ(iclone->ArrayGet(11)->GetInteger(), kBigInt);
+
+  // 4. Appending a string into an int array demotes to boxed cleanly
+  auto* mixed = JsonValue::CreateArray();
+  ASSERT_TRUE(mixed->ArrayAppendInt(10));
+  ASSERT_TRUE(mixed->ArrayAppendInt(20));
+  EXPECT_TRUE(mixed->IsIntArray());
+  ASSERT_TRUE(mixed->ArrayAppend(JsonValue::CreateString("hi", 2)));
+  EXPECT_FALSE(mixed->IsTypedArray());
+  EXPECT_EQ(mixed->ArrayLen(), 3u);
+  EXPECT_EQ(mixed->ArrayGet(0)->GetInteger(), 10);
+  EXPECT_EQ(mixed->ArrayGet(2)->GetString(), "hi");
+
+  JsonValue::Destroy(mixed);
+  JsonValue::Destroy(iclone);
+  JsonValue::Destroy(iarr);
+}

@@ -4,6 +4,9 @@ All notable changes to `gemini-module` are documented in this file.
 
 ## [Unreleased]
 
+### gemini-json (`redis_json.so`)
+- **Typed Numeric Arrays (`int64_t[]` / `double[]`)**: Pure integer and numeric arrays are now stored contiguously at `8 B/elem` inside the existing 24-byte `JsonValue` layout (`kFlagIntArray` / `kFlagDoubleArray`) with zero per-element heap allocations, lossless `int -> double` promotion (`|v| <= 2^53`), transparent lazy boxing (`EnsureBoxedArray`) on mixed types or element mutation, and zero-boxing fast paths across Parser, Serializer, `Clone`/`Destroy`/`Defrag`, `Digest`, binary RDB (`kTagIntArray`/`kTagDoubleArray`, backward-compatible with `kTagArray`), `JSON.ARR*`, and `JSON.RESP`. Cuts 100k int array DOM footprint from `3,367 KB` to **`1,024 KB` (-69.6%)**.
+
 ### gemini-search (`redis_search.so`)
 - **Phase 62 — HNSW Direct RDB Graph Persistence (`encver 14`)**: Compact live-node serialization & strict bounds-checked deserialization of `HnswIndex` layered neighbor graphs (`FP32` / `SQ8` / `BQ`), cutting 2k×768d reload time from `~91 ms` to `0.16 ms` (**~550× faster**).
 - **Phase 63 — BQ Two-Stage Oversample & Rerank (`encver 15`)**: Optional `RERANK FP16|SQ8` and `OVERSAMPLE <n>` on `QUANTIZATION BQ` fields (with query-level override in `FT.SEARCH`, `FT.AGGREGATE`, and `FT.HYBRID ... VSIM`), combining BQ coarse speed with FP16/SQ8 precision recall.

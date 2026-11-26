@@ -357,7 +357,7 @@ static bool ParseDoubleFast(const char* first, const char* last, double& out) {
   }
 }
 
-static JsonValue* ParseNumber(Parser& p) {
+static bool ParseNumberRaw(Parser& p, bool& is_int, int64_t& int_out, double& dbl_out) {
   const char* num_start = p.pos;
   bool neg = false;
   bool is_float = false;
@@ -367,7 +367,7 @@ static JsonValue* ParseNumber(Parser& p) {
   if (!p.HasMore() || *p.pos < '0' || *p.pos > '9') {
     p.SetError("invalid number");
     p.pos = num_start;
-    return nullptr;
+    return false;
   }
 
   const char* digits_start = p.pos;
@@ -376,7 +376,7 @@ static JsonValue* ParseNumber(Parser& p) {
     if (p.HasMore() && *p.pos >= '0' && *p.pos <= '9') {
       p.SetError("leading zeros not allowed");
       p.pos = num_start;
-      return nullptr;
+      return false;
     }
   } else {
     while (p.HasMore() && *p.pos >= '0' && *p.pos <= '9') p.pos++;
@@ -389,7 +389,7 @@ static JsonValue* ParseNumber(Parser& p) {
     if (!p.HasMore() || *p.pos < '0' || *p.pos > '9') {
       p.SetError("expected digit after decimal point");
       p.pos = num_start;
-      return nullptr;
+      return false;
     }
     while (p.HasMore() && *p.pos >= '0' && *p.pos <= '9') p.pos++;
   }
@@ -401,7 +401,7 @@ static JsonValue* ParseNumber(Parser& p) {
     if (!p.HasMore() || *p.pos < '0' || *p.pos > '9') {
       p.SetError("expected digit in exponent");
       p.pos = num_start;
-      return nullptr;
+      return false;
     }
     while (p.HasMore() && *p.pos >= '0' && *p.pos <= '9') p.pos++;
   }
@@ -413,8 +413,9 @@ static JsonValue* ParseNumber(Parser& p) {
       for (const char* d = digits_start; d < digits_end; d++) {
         acc = acc * 10 + static_cast<uint64_t>(*d - '0');
       }
-      int64_t val = neg ? -static_cast<int64_t>(acc) : static_cast<int64_t>(acc);
-      return JsonValue::CreateInteger(val);
+      int_out = neg ? -static_cast<int64_t>(acc) : static_cast<int64_t>(acc);
+      is_int = true;
+      return true;
     }
     if (digit_count == 19) {
       uint64_t acc = 0;
@@ -422,23 +423,34 @@ static JsonValue* ParseNumber(Parser& p) {
         acc = acc * 10 + static_cast<uint64_t>(*d - '0');
       }
       if (!neg && acc <= static_cast<uint64_t>(INT64_MAX)) {
-        return JsonValue::CreateInteger(static_cast<int64_t>(acc));
+        int_out = static_cast<int64_t>(acc);
+        is_int = true;
+        return true;
       }
       if (neg && acc <= static_cast<uint64_t>(INT64_MAX) + 1ULL) {
-        if (acc == static_cast<uint64_t>(INT64_MAX) + 1ULL) {
-          return JsonValue::CreateInteger(INT64_MIN);
-        }
-        return JsonValue::CreateInteger(-static_cast<int64_t>(acc));
+        int_out = (acc == static_cast<uint64_t>(INT64_MAX) + 1ULL)
+                      ? INT64_MIN
+                      : -static_cast<int64_t>(acc);
+        is_int = true;
+        return true;
       }
     }
   }
 
-  double val = 0.0;
-  if (!ParseDoubleFast(num_start, p.pos, val)) {
+  if (!ParseDoubleFast(num_start, p.pos, dbl_out)) {
     p.SetError("invalid number");
-    return nullptr;
+    return false;
   }
-  return JsonValue::CreateNumber(val);
+  is_int = false;
+  return true;
+}
+
+static JsonValue* ParseNumber(Parser& p) {
+  bool is_int = false;
+  int64_t iv = 0;
+  double dv = 0.0;
+  if (!ParseNumberRaw(p, is_int, iv, dv)) return nullptr;
+  return is_int ? JsonValue::CreateInteger(iv) : JsonValue::CreateNumber(dv);
 }
 
 static JsonValue* ParseArray(Parser& p) {
@@ -460,14 +472,34 @@ static JsonValue* ParseArray(Parser& p) {
   }
 
   while (true) {
-    auto* elem = ParseValue(p);
-    if (!elem) { JsonValue::Destroy(arr); p.depth--; return nullptr; }
-    if (!arr->ArrayAppend(elem)) {
-      JsonValue::Destroy(elem);
-      JsonValue::Destroy(arr);
-      p.depth--;
-      p.SetError("allocation failure");
-      return nullptr;
+    char c = p.HasMore() ? p.Peek() : '\0';
+    if ((c == '-' || (c >= '0' && c <= '9')) &&
+        (arr->ArrayLen() == 0 || arr->IsTypedArray())) {
+      bool is_int = false;
+      int64_t iv = 0;
+      double dv = 0.0;
+      if (!ParseNumberRaw(p, is_int, iv, dv)) {
+        JsonValue::Destroy(arr);
+        p.depth--;
+        return nullptr;
+      }
+      bool ok = is_int ? arr->ArrayAppendInt(iv) : arr->ArrayAppendDouble(dv);
+      if (!ok) {
+        JsonValue::Destroy(arr);
+        p.depth--;
+        p.SetError("allocation failure");
+        return nullptr;
+      }
+    } else {
+      auto* elem = ParseValue(p);
+      if (!elem) { JsonValue::Destroy(arr); p.depth--; return nullptr; }
+      if (!arr->ArrayAppend(elem)) {
+        JsonValue::Destroy(elem);
+        JsonValue::Destroy(arr);
+        p.depth--;
+        p.SetError("allocation failure");
+        return nullptr;
+      }
     }
 
     p.SkipWhitespace();

@@ -58,6 +58,8 @@ public:
   static JsonValue* CreateNumber(double v);
   static JsonValue* CreateString(const char* data, uint32_t len);
   static JsonValue* CreateArray();
+  static JsonValue* CreateIntArrayFrom(const int64_t* data, uint32_t len);
+  static JsonValue* CreateDoubleArrayFrom(const double* data, uint32_t len);
   static JsonValue* CreateObject();
 
   static void Destroy(JsonValue* v);
@@ -89,12 +91,44 @@ public:
   bool StringAppend(std::string_view suffix);
 
   // Array operations
+  bool IsIntArray() const {
+    return Type() == JsonType::kArray && (gen_.tag & kFlagIntArray) != 0;
+  }
+  bool IsDoubleArray() const {
+    return Type() == JsonType::kArray && (gen_.tag & kFlagDoubleArray) != 0;
+  }
+  bool IsTypedArray() const {
+    return Type() == JsonType::kArray &&
+           (gen_.tag & (kFlagIntArray | kFlagDoubleArray)) != 0;
+  }
+  const int64_t* IntArrayData() const {
+    return reinterpret_cast<const int64_t*>(gen_.payload.arr.items);
+  }
+  const double* DoubleArrayData() const {
+    return reinterpret_cast<const double*>(gen_.payload.arr.items);
+  }
+  int64_t* IntArrayDataMut() {
+    return reinterpret_cast<int64_t*>(gen_.payload.arr.items);
+  }
+  double* DoubleArrayDataMut() {
+    return reinterpret_cast<double*>(gen_.payload.arr.items);
+  }
+  bool EnsureBoxedArray() const;
+
   uint32_t ArrayLen() const { return gen_.payload.arr.len; }
   uint32_t ArrayCap() const { return gen_.payload.arr.cap; }
-  JsonValue* ArrayGet(uint32_t index) const { return gen_.payload.arr.items[index]; }
-  JsonValue** ArrayData() const { return gen_.payload.arr.items; }
+  JsonValue* ArrayGet(uint32_t index) const {
+    if (IsTypedArray()) EnsureBoxedArray();
+    return gen_.payload.arr.items[index];
+  }
+  JsonValue** ArrayData() const {
+    if (IsTypedArray()) EnsureBoxedArray();
+    return gen_.payload.arr.items;
+  }
   bool ArrayReserve(uint32_t new_cap);
   bool ArrayAppend(JsonValue* child);
+  bool ArrayAppendInt(int64_t val);
+  bool ArrayAppendDouble(double val);
   bool ArrayInsert(uint32_t index, JsonValue* child);
   JsonValue* ArrayPop(int32_t index);
   void ArrayTrim(uint32_t start, uint32_t stop);
@@ -137,6 +171,8 @@ private:
 
   static constexpr uint8_t kTypeMask = 0x0F;
   static constexpr uint8_t kFlagInlineStr = 0x10;
+  static constexpr uint8_t kFlagIntArray = 0x20;
+  static constexpr uint8_t kFlagDoubleArray = 0x40;
   static constexpr uint32_t kObjHashThreshold = 8;
 
   struct HeapStr {

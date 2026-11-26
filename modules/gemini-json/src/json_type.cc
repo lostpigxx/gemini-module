@@ -26,6 +26,7 @@ size_t CountNodesBounded(const JsonValue* v, size_t limit, int depth = 0) {
   size_t count = 1;
   if (count >= limit) return count;
   if (v->IsArray()) {
+    if (v->IsTypedArray()) return 1;
     for (uint32_t i = 0; i < v->ArrayLen() && count < limit; i++) {
       count += CountNodesBounded(v->ArrayGet(i), limit - count, depth + 1);
     }
@@ -66,8 +67,26 @@ void DigestNode(RedisModuleDigest* digest, const JsonValue* v, int depth = 0) {
     }
     case JsonType::kArray:
       RedisModule_DigestAddLongLong(digest, static_cast<long long>(v->ArrayLen()));
-      for (uint32_t i = 0; i < v->ArrayLen(); i++) {
-        DigestNode(digest, v->ArrayGet(i), depth + 1);
+      if (v->IsIntArray()) {
+        const int64_t* data = v->IntArrayData();
+        for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+          RedisModule_DigestAddLongLong(digest, static_cast<long long>(JsonType::kInteger));
+          RedisModule_DigestAddLongLong(digest, data[i]);
+        }
+      } else if (v->IsDoubleArray()) {
+        const double* data = v->DoubleArrayData();
+        for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+          RedisModule_DigestAddLongLong(digest, static_cast<long long>(JsonType::kNumber));
+          double d = data[i];
+          if (d == 0.0) d = 0.0;
+          uint64_t bits = 0;
+          std::memcpy(&bits, &d, sizeof(bits));
+          RedisModule_DigestAddLongLong(digest, static_cast<long long>(bits));
+        }
+      } else {
+        for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+          DigestNode(digest, v->ArrayGet(i), depth + 1);
+        }
       }
       break;
     case JsonType::kObject: {
@@ -96,14 +115,16 @@ void DigestNode(RedisModuleDigest* digest, const JsonValue* v, int depth = 0) {
 // ======================================================================
 
 enum : uint64_t {
-  kTagNull    = 0,
-  kTagFalse   = 1,
-  kTagTrue    = 2,
-  kTagInteger = 3,
-  kTagDouble  = 4,
-  kTagString  = 5,
-  kTagArray   = 6,
-  kTagObject  = 7,
+  kTagNull        = 0,
+  kTagFalse       = 1,
+  kTagTrue        = 2,
+  kTagInteger     = 3,
+  kTagDouble      = 4,
+  kTagString      = 5,
+  kTagArray       = 6,
+  kTagObject      = 7,
+  kTagIntArray    = 8,
+  kTagDoubleArray = 9,
 };
 
 static void BinarySave(RedisModuleIO* rdb, const JsonValue* v, int depth = 0) {
@@ -133,10 +154,30 @@ static void BinarySave(RedisModuleIO* rdb, const JsonValue* v, int depth = 0) {
       break;
     }
     case JsonType::kArray:
-      RedisModule_SaveUnsigned(rdb, kTagArray);
-      RedisModule_SaveUnsigned(rdb, v->ArrayLen());
-      for (uint32_t i = 0; i < v->ArrayLen(); i++) {
-        BinarySave(rdb, v->ArrayGet(i), depth + 1);
+      if (v->IsIntArray()) {
+        uint32_t len = v->ArrayLen();
+        RedisModule_SaveUnsigned(rdb, kTagIntArray);
+        RedisModule_SaveUnsigned(rdb, len);
+        if (len > 0) {
+          RedisModule_SaveStringBuffer(
+              rdb, reinterpret_cast<const char*>(v->IntArrayData()),
+              static_cast<size_t>(len) * sizeof(int64_t));
+        }
+      } else if (v->IsDoubleArray()) {
+        uint32_t len = v->ArrayLen();
+        RedisModule_SaveUnsigned(rdb, kTagDoubleArray);
+        RedisModule_SaveUnsigned(rdb, len);
+        if (len > 0) {
+          RedisModule_SaveStringBuffer(
+              rdb, reinterpret_cast<const char*>(v->DoubleArrayData()),
+              static_cast<size_t>(len) * sizeof(double));
+        }
+      } else {
+        RedisModule_SaveUnsigned(rdb, kTagArray);
+        RedisModule_SaveUnsigned(rdb, v->ArrayLen());
+        for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+          BinarySave(rdb, v->ArrayGet(i), depth + 1);
+        }
       }
       break;
     case JsonType::kObject: {
@@ -184,6 +225,66 @@ static JsonValue* BinaryLoad(RedisModuleIO* rdb, int depth = 0) {
       auto* v = JsonValue::CreateString(buf, static_cast<uint32_t>(len));
       RedisModule_Free(buf);
       return v;
+    }
+    case kTagIntArray: {
+      uint64_t count = RedisModule_LoadUnsigned(rdb);
+      if (HasIoError(rdb) || count > kMaxRdbCollectionLen) return nullptr;
+      auto* arr = JsonValue::CreateArray();
+      if (!arr) return nullptr;
+      if (count == 0) return arr;
+      size_t bytes = 0;
+      char* buf = RedisModule_LoadStringBuffer(rdb, &bytes);
+      if (HasIoError(rdb) || !buf || bytes != static_cast<size_t>(count) * sizeof(int64_t)) {
+        if (buf) RedisModule_Free(buf);
+        JsonValue::Destroy(arr);
+        return nullptr;
+      }
+      if (!arr->ArrayReserve(static_cast<uint32_t>(count))) {
+        RedisModule_Free(buf);
+        JsonValue::Destroy(arr);
+        return nullptr;
+      }
+      for (uint64_t i = 0; i < count; i++) {
+        int64_t val = 0;
+        std::memcpy(&val, buf + static_cast<size_t>(i) * sizeof(int64_t), sizeof(int64_t));
+        if (!arr->ArrayAppendInt(val)) {
+          RedisModule_Free(buf);
+          JsonValue::Destroy(arr);
+          return nullptr;
+        }
+      }
+      RedisModule_Free(buf);
+      return arr;
+    }
+    case kTagDoubleArray: {
+      uint64_t count = RedisModule_LoadUnsigned(rdb);
+      if (HasIoError(rdb) || count > kMaxRdbCollectionLen) return nullptr;
+      auto* arr = JsonValue::CreateArray();
+      if (!arr) return nullptr;
+      if (count == 0) return arr;
+      size_t bytes = 0;
+      char* buf = RedisModule_LoadStringBuffer(rdb, &bytes);
+      if (HasIoError(rdb) || !buf || bytes != static_cast<size_t>(count) * sizeof(double)) {
+        if (buf) RedisModule_Free(buf);
+        JsonValue::Destroy(arr);
+        return nullptr;
+      }
+      if (!arr->ArrayReserve(static_cast<uint32_t>(count))) {
+        RedisModule_Free(buf);
+        JsonValue::Destroy(arr);
+        return nullptr;
+      }
+      for (uint64_t i = 0; i < count; i++) {
+        double val = 0.0;
+        std::memcpy(&val, buf + static_cast<size_t>(i) * sizeof(double), sizeof(double));
+        if (!std::isfinite(val) || !arr->ArrayAppendDouble(val)) {
+          RedisModule_Free(buf);
+          JsonValue::Destroy(arr);
+          return nullptr;
+        }
+      }
+      RedisModule_Free(buf);
+      return arr;
     }
     case kTagArray: {
       uint64_t count = RedisModule_LoadUnsigned(rdb);
