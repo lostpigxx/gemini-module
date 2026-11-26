@@ -4283,6 +4283,104 @@ if {[file exists $json_so_p61]} {
 }
 
 # ============================================================
+# Phase 62: HNSW Direct RDB Persistence (encver 14) + Restart
+# ============================================================
+
+puts "\n=== Phase 62: HNSW Direct RDB Persistence (encver 14) ==="
+
+test_assert "Phase 62: HNSW FP32/SQ8/BQ direct RDB save/load preserves KNN across restart" {
+  set p62_port [find_free_port]
+  set p62_rdb "search_p62_hnsw.rdb"
+  file delete -force /tmp/$p62_rdb /tmp/search_p62.log
+
+  exec redis-server \
+    --port $p62_port \
+    --daemonize yes \
+    --loglevel warning \
+    --logfile /tmp/search_p62.log \
+    --dir /tmp \
+    --dbfilename $p62_rdb \
+    --save "" \
+    --loadmodule $module_path
+  for {set i 0} {$i < 50} {incr i} {
+    if {![catch {socket localhost $p62_port} fd]} {
+      close $fd
+      break
+    }
+    after 100
+  }
+  set fd1 [redis_connect localhost $p62_port]
+
+  redis_command $fd1 FT.CREATE p62_hnsw SCHEMA \
+    vf VECTOR HNSW TYPE FLOAT32 DIM 4 DISTANCE_METRIC L2 \
+    vs VECTOR HNSW TYPE FLOAT32 QUANTIZATION SQ8 DIM 4 DISTANCE_METRIC COSINE \
+    vq VECTOR HNSW TYPE FLOAT32 QUANTIZATION BQ DIM 4 DISTANCE_METRIC COSINE
+
+  set b1 [binary format f4 {1.0 0.0 0.0 0.0}]
+  set b2 [binary format f4 {0.0 1.0 0.0 0.0}]
+  set b3 [binary format f4 {0.0 0.0 1.0 0.0}]
+  set b4 [binary format f4 {-1.0 -1.0 -1.0 -1.0}]
+
+  redis_command $fd1 FT.ADD p62_hnsw d1 FIELDS vf $b1 vs $b1 vq $b1
+  redis_command $fd1 FT.ADD p62_hnsw d2 FIELDS vf $b2 vs $b2 vq $b2
+  redis_command $fd1 FT.ADD p62_hnsw d3 FIELDS vf $b3 vs $b3 vq $b3
+  redis_command $fd1 FT.ADD p62_hnsw d4 FIELDS vf $b4 vs $b4 vq $b4
+  redis_command $fd1 FT.DEL p62_hnsw d2
+
+  set before_f [redis_command $fd1 FT.SEARCH p62_hnsw "*=>\[KNN 3 @vf \$qv\]" PARAMS 2 qv $b1 NOCONTENT DIALECT 2]
+  set before_s [redis_command $fd1 FT.SEARCH p62_hnsw "*=>\[KNN 3 @vs \$qv\]" PARAMS 2 qv $b1 NOCONTENT DIALECT 2]
+  set before_q [redis_command $fd1 FT.SEARCH p62_hnsw "*=>\[KNN 3 @vq \$qv\]" PARAMS 2 qv $b1 NOCONTENT DIALECT 2]
+  redis_command $fd1 SAVE
+  catch {redis_command $fd1 SHUTDOWN NOSAVE}
+  catch {close $fd1}
+  after 200
+
+  exec redis-server \
+    --port $p62_port \
+    --daemonize yes \
+    --loglevel warning \
+    --logfile /tmp/search_p62.log \
+    --dir /tmp \
+    --dbfilename $p62_rdb \
+    --save "" \
+    --loadmodule $module_path
+  for {set i 0} {$i < 50} {incr i} {
+    if {![catch {socket localhost $p62_port} fd]} {
+      close $fd
+      break
+    }
+    after 100
+  }
+  set fd2 [redis_connect localhost $p62_port]
+
+  set after_f [redis_command $fd2 FT.SEARCH p62_hnsw "*=>\[KNN 3 @vf \$qv\]" PARAMS 2 qv $b1 NOCONTENT DIALECT 2]
+  set after_s [redis_command $fd2 FT.SEARCH p62_hnsw "*=>\[KNN 3 @vs \$qv\]" PARAMS 2 qv $b1 NOCONTENT DIALECT 2]
+  set after_q [redis_command $fd2 FT.SEARCH p62_hnsw "*=>\[KNN 3 @vq \$qv\]" PARAMS 2 qv $b1 NOCONTENT DIALECT 2]
+
+  # Post-reload mutation must also succeed
+  set b5 [binary format f4 {0.99 0.01 0.0 0.0}]
+  redis_command $fd2 FT.ADD p62_hnsw d5 FIELDS vf $b5 vs $b5 vq $b5
+  set after_add [redis_command $fd2 FT.SEARCH p62_hnsw "*=>\[KNN 2 @vf \$qv\]" PARAMS 2 qv $b1 NOCONTENT DIALECT 2]
+
+  catch {redis_command $fd2 SHUTDOWN NOSAVE}
+  catch {close $fd2}
+  file delete -force /tmp/$p62_rdb /tmp/search_p62.log
+
+  if {$after_f ne $before_f} {
+    error "HNSW FP32 KNN mismatch after RDB reload: before=$before_f after=$after_f"
+  }
+  if {$after_s ne $before_s} {
+    error "HNSW SQ8 KNN mismatch after RDB reload: before=$before_s after=$after_s"
+  }
+  if {$after_q ne $before_q} {
+    error "HNSW BQ KNN mismatch after RDB reload: before=$before_q after=$after_q"
+  }
+  if {[lindex $after_add 0] != 2 || [lsearch -exact $after_add "d5"] < 0} {
+    error "HNSW post-reload FT.ADD failed: $after_add"
+  }
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

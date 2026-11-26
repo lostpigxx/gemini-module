@@ -471,3 +471,105 @@ TEST(HnswIndexTest, BqQuantizationRecallAndConsistency) {
   }
   EXPECT_GT(total_recall / 15.0, 0.90);
 }
+
+TEST(HnswIndexTest, SerializeDeserializeRoundTripAllQuantizations) {
+  constexpr size_t N = 200;
+  constexpr size_t DIM = 32;
+  std::mt19937 rng(6201);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+  // Empty graph round-trip
+  {
+    HnswIndex empty_src(DIM, DistanceMetric::kL2, 16, 100, VectorQuantization::kNone);
+    std::string blob = empty_src.SerializeGraph();
+    HnswIndex empty_dst(DIM, DistanceMetric::kL2, 16, 100, VectorQuantization::kNone);
+    EXPECT_TRUE(empty_dst.DeserializeGraph(blob.data(), blob.size()));
+    EXPECT_EQ(empty_dst.Size(), 0u);
+  }
+
+  for (VectorQuantization q :
+       {VectorQuantization::kNone, VectorQuantization::kSq8, VectorQuantization::kBq}) {
+    for (DistanceMetric metric :
+         {DistanceMetric::kL2, DistanceMetric::kCosine, DistanceMetric::kIP}) {
+      HnswIndex src(DIM, metric, 12, 80, q);
+      src.SetEfRuntime(32);
+
+      std::vector<float> buf(DIM);
+      for (size_t i = 0; i < N; i++) {
+        for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+        src.Add("d" + std::to_string(i), buf.data());
+      }
+      // Delete every 4th node (including node 0) to exercise tombstone compaction
+      for (size_t i = 0; i < N; i += 4) {
+        src.Remove("d" + std::to_string(i));
+      }
+      ASSERT_EQ(src.Size(), N - N / 4);
+
+      std::string blob = src.SerializeGraph();
+      HnswIndex dst(DIM, metric, 12, 80, q);
+      ASSERT_TRUE(dst.DeserializeGraph(blob.data(), blob.size()));
+      EXPECT_EQ(dst.Size(), src.Size());
+      EXPECT_EQ(dst.M(), src.M());
+      EXPECT_EQ(dst.EfConstruction(), src.EfConstruction());
+      EXPECT_EQ(dst.EfRuntime(), src.EfRuntime());
+
+      // Exact KNN-10 match across 10 random queries
+      for (int qi = 0; qi < 10; qi++) {
+        for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+        auto r1 = src.KnnQuery(buf.data(), 10);
+        auto r2 = dst.KnnQuery(buf.data(), 10);
+        ASSERT_EQ(r1.size(), r2.size());
+        for (size_t k = 0; k < r1.size(); k++) {
+          EXPECT_EQ(r1[k].doc_id, r2[k].doc_id);
+          EXPECT_FLOAT_EQ(r1[k].score, r2[k].score);
+        }
+      }
+
+      // Post-reload mutations (Add + Remove) must continue to work cleanly
+      for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+      dst.Add("post_reload_doc", buf.data());
+      EXPECT_EQ(dst.Size(), src.Size() + 1);
+      EXPECT_TRUE(dst.Remove("post_reload_doc"));
+      EXPECT_EQ(dst.Size(), src.Size());
+    }
+  }
+}
+
+TEST(HnswIndexTest, DeserializeGraphCorruptionAndFuzz) {
+  constexpr size_t DIM = 8;
+  HnswIndex src(DIM, DistanceMetric::kL2, 8, 40, VectorQuantization::kSq8);
+  std::mt19937 rng(6202);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  std::vector<float> buf(DIM);
+  for (int i = 0; i < 20; i++) {
+    for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+    src.Add("n" + std::to_string(i), buf.data());
+  }
+
+  std::string valid = src.SerializeGraph();
+  HnswIndex dst(DIM, DistanceMetric::kL2, 8, 40, VectorQuantization::kSq8);
+
+  // Mismatched dim / metric / quantization must fail
+  HnswIndex wrong_dim(DIM + 1, DistanceMetric::kL2, 8, 40, VectorQuantization::kSq8);
+  EXPECT_FALSE(wrong_dim.DeserializeGraph(valid.data(), valid.size()));
+  HnswIndex wrong_metric(DIM, DistanceMetric::kCosine, 8, 40, VectorQuantization::kSq8);
+  EXPECT_FALSE(wrong_metric.DeserializeGraph(valid.data(), valid.size()));
+  HnswIndex wrong_quant(DIM, DistanceMetric::kL2, 8, 40, VectorQuantization::kBq);
+  EXPECT_FALSE(wrong_quant.DeserializeGraph(valid.data(), valid.size()));
+
+  // Trailing garbage must fail
+  std::string with_trailing = valid + std::string(1, '\0');
+  EXPECT_FALSE(dst.DeserializeGraph(with_trailing.data(), with_trailing.size()));
+
+  // Every byte-by-byte truncation must fail cleanly
+  for (size_t cut = 0; cut < valid.size(); cut++) {
+    EXPECT_FALSE(dst.DeserializeGraph(valid.data(), cut)) << "cut=" << cut;
+  }
+
+  // Deterministic bit-flip fuzzing must never crash or leak
+  for (size_t pos = 0; pos < valid.size(); pos += 2) {
+    std::string bad = valid;
+    bad[pos] ^= static_cast<char>(0xFF);
+    (void)dst.DeserializeGraph(bad.data(), bad.size());
+  }
+}

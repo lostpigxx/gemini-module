@@ -839,3 +839,99 @@ TEST_F(SearchRdbTest, MultiValueNumericIndexingAndRdbRoundTrip) {
 
   delete loaded_name;
 }
+
+TEST_F(SearchRdbTest, RoundTripEncver14HnswDirectPersistence) {
+  constexpr size_t kDim = 16;
+  constexpr size_t kDocs = 60;
+
+  IndexSpec spec;
+  spec.name = "hnsw14";
+  spec.prefixes = {"h:"};
+
+  VectorFieldParams vp_fp32;
+  vp_fp32.algorithm = VectorAlgorithm::kHnsw;
+  vp_fp32.dim = kDim;
+  vp_fp32.metric = DistanceMetric::kL2;
+  vp_fp32.m = 12;
+  vp_fp32.ef_construction = 80;
+  vp_fp32.quantization = VectorQuantization::kNone;
+
+  VectorFieldParams vp_sq8 = vp_fp32;
+  vp_sq8.metric = DistanceMetric::kCosine;
+  vp_sq8.quantization = VectorQuantization::kSq8;
+
+  VectorFieldParams vp_bq = vp_fp32;
+  vp_bq.metric = DistanceMetric::kCosine;
+  vp_bq.quantization = VectorQuantization::kBq;
+
+  spec.fields = {
+      {"tag", FieldType::kTag, {}},
+      {"v_fp32", FieldType::kVector, vp_fp32},
+      {"v_sq8", FieldType::kVector, vp_sq8},
+      {"v_bq", FieldType::kVector, vp_bq},
+  };
+
+  std::vector<std::pair<std::string, std::unordered_map<std::string, std::string>>> docs;
+  std::vector<float> vec(kDim);
+  for (size_t i = 0; i < kDocs; i++) {
+    for (size_t d = 0; d < kDim; d++) {
+      vec[d] = std::sin(static_cast<float>(i * 7 + d * 3)) * 2.0f;
+    }
+    std::string blob(reinterpret_cast<const char*>(vec.data()), kDim * sizeof(float));
+    docs.push_back({"h:" + std::to_string(i),
+                    {{"tag", i % 2 == 0 ? "even" : "odd"},
+                     {"v_fp32", blob},
+                     {"v_sq8", blob},
+                     {"v_bq", blob}}});
+  }
+
+  ASSERT_TRUE(CreateIndexFromRdb("hnsw14", spec, docs));
+  auto* orig = GetIndexEntry("hnsw14");
+  ASSERT_NE(orig, nullptr);
+
+  // Remove a few docs before save to test tombstone compaction
+  for (size_t i = 0; i < kDocs; i += 10) {
+    std::string id = "h:" + std::to_string(i);
+    RemoveDocFromIndices(*orig, id);
+    orig->doc_store.Remove(id);
+  }
+
+  std::vector<float> query(kDim);
+  for (size_t d = 0; d < kDim; d++) query[d] = std::cos(static_cast<float>(d + 1));
+
+  auto orig_fp32 = orig->vector_indices.Get("v_fp32")->KnnQueryEf(query.data(), 10, 32);
+  auto orig_sq8 = orig->vector_indices.Get("v_sq8")->KnnQueryEf(query.data(), 10, 32);
+  auto orig_bq = orig->vector_indices.Get("v_bq")->KnnQueryEf(query.data(), 10, 32);
+  ASSERT_EQ(orig_fp32.size(), 10u);
+
+  MockRdbStream stream;
+  SaveIndex(stream, "hnsw14");
+  stream.Rewind();
+  EraseIndexEntry("hnsw14");
+
+  auto* loaded_name = static_cast<std::string*>(RdbLoadSearch(stream.IO(), kSearchEncVer));
+  ASSERT_NE(loaded_name, nullptr);
+  EXPECT_EQ(*loaded_name, "hnsw14");
+
+  auto* loaded = GetIndexEntry("hnsw14");
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->doc_store.Size(), kDocs - kDocs / 10);
+
+  auto new_fp32 = loaded->vector_indices.Get("v_fp32")->KnnQueryEf(query.data(), 10, 32);
+  auto new_sq8 = loaded->vector_indices.Get("v_sq8")->KnnQueryEf(query.data(), 10, 32);
+  auto new_bq = loaded->vector_indices.Get("v_bq")->KnnQueryEf(query.data(), 10, 32);
+
+  ASSERT_EQ(new_fp32.size(), orig_fp32.size());
+  ASSERT_EQ(new_sq8.size(), orig_sq8.size());
+  ASSERT_EQ(new_bq.size(), orig_bq.size());
+  for (size_t i = 0; i < 10; i++) {
+    EXPECT_EQ(new_fp32[i].doc_id, orig_fp32[i].doc_id);
+    EXPECT_FLOAT_EQ(new_fp32[i].score, orig_fp32[i].score);
+    EXPECT_EQ(new_sq8[i].doc_id, orig_sq8[i].doc_id);
+    EXPECT_FLOAT_EQ(new_sq8[i].score, orig_sq8[i].score);
+    EXPECT_EQ(new_bq[i].doc_id, orig_bq[i].doc_id);
+    EXPECT_FLOAT_EQ(new_bq[i].score, orig_bq[i].score);
+  }
+
+  delete loaded_name;
+}

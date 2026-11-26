@@ -1,4 +1,5 @@
 #include "search_rdb.h"
+#include "hnsw_index.h"
 #include "search_commands.h"
 
 #include <algorithm>
@@ -186,6 +187,25 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
       RedisModule_SaveUnsigned(rdb, 0);
       RedisModule_SaveUnsigned(rdb, 0);
     }
+  }
+
+  // encver >= 14: directly persist compacted HNSW graphs to avoid O(N log N) rebuild on load
+  std::vector<std::pair<std::string, const HnswIndex*>> hnsw_fields;
+  for (const auto& f : spec.fields) {
+    if (f.type == FieldType::kVector &&
+        f.vector_params.algorithm == VectorAlgorithm::kHnsw) {
+      if (const auto* vidx = entry->vector_indices.Get(f.name)) {
+        if (const auto* hnsw = dynamic_cast<const HnswIndex*>(vidx)) {
+          hnsw_fields.emplace_back(f.name, hnsw);
+        }
+      }
+    }
+  }
+  RedisModule_SaveUnsigned(rdb, hnsw_fields.size());
+  for (const auto& [fname, hnsw] : hnsw_fields) {
+    RedisModule_SaveStringBuffer(rdb, fname.c_str(), fname.size());
+    std::string blob = hnsw->SerializeGraph();
+    RedisModule_SaveStringBuffer(rdb, blob.data(), blob.size());
   }
 }
 
@@ -404,12 +424,31 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
     docs.emplace_back(std::move(doc_id), std::move(doc_fields));
   }
 
+  std::unordered_map<std::string, std::string> prebuilt_hnsw;
+  if (encver >= 14) {
+    uint64_t hnsw_count = 0;
+    if (!SafeLoadUnsigned(rdb, hnsw_count) || hnsw_count > kMaxRdbFields) return nullptr;
+    prebuilt_hnsw.reserve(static_cast<size_t>(hnsw_count));
+    for (uint64_t hi = 0; hi < hnsw_count; hi++) {
+      std::string fname, blob;
+      if (!SafeLoadString(rdb, fname) || fname.empty() || !SafeLoadString(rdb, blob)) {
+        return nullptr;
+      }
+      if (!prebuilt_hnsw.emplace(std::move(fname), std::move(blob)).second) {
+        return nullptr;  // duplicate HNSW field entry
+      }
+    }
+  }
+
   IndexSpec spec{index_name, std::move(fields), std::move(prefixes),
                  std::move(language), source_type, std::move(custom_stopwords),
                  has_custom_stopwords, nofreqs, nooffsets, nohl, temporary_ttl,
                  std::move(filter_expr), false, std::move(language_field),
                  std::move(custom_dict)};
-  CreateIndexFromRdb(index_name, std::move(spec), docs);
+  if (!CreateIndexFromRdb(index_name, std::move(spec), docs,
+                          prebuilt_hnsw.empty() ? nullptr : &prebuilt_hnsw)) {
+    return nullptr;
+  }
 
   if (auto* entry = GetIndexEntry(index_name)) {
     for (auto& [did, pl] : doc_payloads) {

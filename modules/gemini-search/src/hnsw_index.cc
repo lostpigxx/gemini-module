@@ -441,3 +441,295 @@ void HnswIndex::Clear() {
   max_level_ = -1;
   live_count_ = 0;
 }
+
+namespace {
+
+constexpr uint32_t kHnswGraphMagic = 0x57534E48u;  // "HNSW"
+constexpr uint32_t kHnswGraphVersion = 1u;
+constexpr uint32_t kMaxHnswRdbNodes = 100000000u;
+constexpr int32_t kMaxHnswRdbLevel = 32;
+
+template <typename T>
+void AppendPod(std::string& out, const T& val) {
+  const char* p = reinterpret_cast<const char*>(&val);
+  out.append(p, sizeof(T));
+}
+
+template <typename T>
+bool ReadPod(const char* data, size_t len, size_t& pos, T& out) {
+  if (pos > len || len - pos < sizeof(T)) return false;
+  std::memcpy(&out, data + pos, sizeof(T));
+  pos += sizeof(T);
+  return true;
+}
+
+bool ReadBytes(const char* data, size_t len, size_t& pos, void* dst, size_t n) {
+  if (pos > len || len - pos < n) return false;
+  if (n > 0) std::memcpy(dst, data + pos, n);
+  pos += n;
+  return true;
+}
+
+}  // namespace
+
+std::string HnswIndex::SerializeGraph() const {
+  // Compact live nodes to dense IDs 0..live_count_-1 so tombstones are stripped
+  std::vector<uint32_t> old_to_new(alive_.size(), kInvalidNode);
+  std::vector<uint32_t> new_to_old;
+  new_to_old.reserve(live_count_);
+  for (uint32_t i = 0; i < alive_.size(); i++) {
+    if (alive_[i]) {
+      old_to_new[i] = static_cast<uint32_t>(new_to_old.size());
+      new_to_old.push_back(i);
+    }
+  }
+
+  uint32_t num_nodes = static_cast<uint32_t>(new_to_old.size());
+  uint32_t new_entry = kInvalidNode;
+  int32_t new_max_level = -1;
+  if (num_nodes > 0 && entry_point_ < alive_.size() && alive_[entry_point_]) {
+    new_entry = old_to_new[entry_point_];
+    new_max_level = max_level_;
+  } else if (num_nodes > 0) {
+    // Defensive fallback: pick highest-layer live node
+    for (uint32_t nid = 0; nid < num_nodes; nid++) {
+      int ly = max_layers_[new_to_old[nid]];
+      if (ly > new_max_level) {
+        new_max_level = ly;
+        new_entry = nid;
+      }
+    }
+  }
+
+  size_t vec_bytes_per_node = 0;
+  if (quantization_ == VectorQuantization::kSq8) {
+    vec_bytes_per_node = sizeof(Sq8Meta) + dim_ * sizeof(uint8_t);
+  } else if (quantization_ == VectorQuantization::kBq) {
+    vec_bytes_per_node = bq_words_ * sizeof(uint64_t);
+  } else {
+    vec_bytes_per_node = dim_ * sizeof(float);
+  }
+
+  std::string out;
+  out.reserve(64 + static_cast<size_t>(num_nodes) * (32 + vec_bytes_per_node + m_max0_ * 4));
+
+  AppendPod<uint32_t>(out, kHnswGraphMagic);
+  AppendPod<uint32_t>(out, kHnswGraphVersion);
+  AppendPod<uint32_t>(out, static_cast<uint32_t>(dim_));
+  AppendPod<uint8_t>(out, static_cast<uint8_t>(metric_));
+  AppendPod<uint8_t>(out, static_cast<uint8_t>(quantization_));
+  AppendPod<uint32_t>(out, static_cast<uint32_t>(m_));
+  AppendPod<uint32_t>(out, static_cast<uint32_t>(m_max0_));
+  AppendPod<uint32_t>(out, static_cast<uint32_t>(ef_construction_));
+  AppendPod<uint32_t>(out, static_cast<uint32_t>(ef_runtime_));
+  AppendPod<uint32_t>(out, num_nodes);
+  AppendPod<uint32_t>(out, new_entry);
+  AppendPod<int32_t>(out, new_max_level);
+
+  std::vector<uint32_t> mapped_nbs;
+  for (uint32_t nid = 0; nid < num_nodes; nid++) {
+    uint32_t old_id = new_to_old[nid];
+    const std::string& did = doc_ids_[old_id];
+    AppendPod<uint32_t>(out, static_cast<uint32_t>(did.size()));
+    out.append(did.data(), did.size());
+
+    int32_t layer_cap = std::min<int32_t>(
+        max_layers_[old_id],
+        static_cast<int32_t>(neighbors_[old_id].size()) - 1);
+    if (layer_cap < 0) layer_cap = 0;
+    AppendPod<int32_t>(out, layer_cap);
+
+    if (quantization_ == VectorQuantization::kSq8) {
+      AppendPod<float>(out, sq8_meta_[old_id].min_val);
+      AppendPod<float>(out, sq8_meta_[old_id].scale);
+      const uint8_t* ptr = sq8_vectors_.data() + static_cast<size_t>(old_id) * dim_;
+      out.append(reinterpret_cast<const char*>(ptr), dim_ * sizeof(uint8_t));
+    } else if (quantization_ == VectorQuantization::kBq) {
+      const uint64_t* ptr = bq_vectors_.data() + static_cast<size_t>(old_id) * bq_words_;
+      out.append(reinterpret_cast<const char*>(ptr), bq_words_ * sizeof(uint64_t));
+    } else {
+      const float* ptr = vectors_.data() + static_cast<size_t>(old_id) * dim_;
+      out.append(reinterpret_cast<const char*>(ptr), dim_ * sizeof(float));
+    }
+
+    for (int32_t lc = 0; lc <= layer_cap; lc++) {
+      mapped_nbs.clear();
+      if (static_cast<size_t>(lc) < neighbors_[old_id].size()) {
+        for (uint32_t old_nb : neighbors_[old_id][static_cast<size_t>(lc)]) {
+          if (old_nb < old_to_new.size() && old_to_new[old_nb] != kInvalidNode &&
+              old_to_new[old_nb] != nid) {
+            mapped_nbs.push_back(old_to_new[old_nb]);
+          }
+        }
+      }
+      AppendPod<uint32_t>(out, static_cast<uint32_t>(mapped_nbs.size()));
+      if (!mapped_nbs.empty()) {
+        out.append(reinterpret_cast<const char*>(mapped_nbs.data()),
+                   mapped_nbs.size() * sizeof(uint32_t));
+      }
+    }
+  }
+
+  return out;
+}
+
+bool HnswIndex::DeserializeGraph(const char* data, size_t len) {
+  if (!data && len > 0) return false;
+  size_t pos = 0;
+
+  uint32_t magic = 0, version = 0, dim = 0;
+  uint8_t raw_metric = 0, raw_quant = 0;
+  uint32_t m = 0, m_max0 = 0, ef_c = 0, ef_r = 0;
+  uint32_t num_nodes = 0, entry_point = kInvalidNode;
+  int32_t max_level = -1;
+
+  if (!ReadPod(data, len, pos, magic) || magic != kHnswGraphMagic) return false;
+  if (!ReadPod(data, len, pos, version) || version != kHnswGraphVersion) return false;
+  if (!ReadPod(data, len, pos, dim) || dim != dim_) return false;
+  if (!ReadPod(data, len, pos, raw_metric) ||
+      raw_metric != static_cast<uint8_t>(metric_)) {
+    return false;
+  }
+  if (!ReadPod(data, len, pos, raw_quant) ||
+      raw_quant != static_cast<uint8_t>(quantization_)) {
+    return false;
+  }
+  if (!ReadPod(data, len, pos, m) || m == 0 || m > 1024) return false;
+  if (!ReadPod(data, len, pos, m_max0) || m_max0 < m || m_max0 > 4096) return false;
+  if (!ReadPod(data, len, pos, ef_c) || ef_c == 0 || ef_c > 100000) return false;
+  if (!ReadPod(data, len, pos, ef_r) || ef_r > 100000) return false;
+  if (!ReadPod(data, len, pos, num_nodes) || num_nodes > kMaxHnswRdbNodes) return false;
+  if (!ReadPod(data, len, pos, entry_point)) return false;
+  if (!ReadPod(data, len, pos, max_level)) return false;
+
+  if (num_nodes == 0) {
+    if (entry_point != kInvalidNode || max_level != -1 || pos != len) return false;
+    Clear();
+    m_ = m;
+    m_max0_ = m_max0;
+    ef_construction_ = ef_c;
+    ef_runtime_ = ef_r;
+    ml_ = 1.0 / std::log(static_cast<double>(m_ > 1 ? m_ : 2));
+    return true;
+  }
+
+  if (entry_point >= num_nodes || max_level < 0 || max_level > kMaxHnswRdbLevel) {
+    return false;
+  }
+
+  size_t vec_bytes_per_node = 0;
+  if (quantization_ == VectorQuantization::kSq8) {
+    vec_bytes_per_node = sizeof(float) * 2 + dim_ * sizeof(uint8_t);
+  } else if (quantization_ == VectorQuantization::kBq) {
+    vec_bytes_per_node = bq_words_ * sizeof(uint64_t);
+  } else {
+    vec_bytes_per_node = dim_ * sizeof(float);
+  }
+  // Minimum bytes per node: doc_id_len(4) + max_layer(4) + vec_bytes + layer0_deg(4)
+  size_t min_node_bytes = 12 + vec_bytes_per_node;
+  if (num_nodes > (len - pos) / min_node_bytes) return false;
+
+  std::vector<float> new_vectors;
+  std::vector<uint8_t> new_sq8_vectors;
+  std::vector<Sq8Meta> new_sq8_meta;
+  std::vector<uint64_t> new_bq_vectors;
+  if (quantization_ == VectorQuantization::kSq8) {
+    new_sq8_vectors.resize(static_cast<size_t>(num_nodes) * dim_);
+    new_sq8_meta.resize(num_nodes);
+  } else if (quantization_ == VectorQuantization::kBq) {
+    new_bq_vectors.resize(static_cast<size_t>(num_nodes) * bq_words_);
+  } else {
+    new_vectors.resize(static_cast<size_t>(num_nodes) * dim_);
+  }
+
+  std::vector<std::string> new_doc_ids(num_nodes);
+  std::vector<uint8_t> new_alive(num_nodes, 1);
+  std::vector<int> new_max_layers(num_nodes, 0);
+  std::vector<std::vector<std::vector<uint32_t>>> new_neighbors(num_nodes);
+  std::unordered_map<std::string, uint32_t> new_id_to_node;
+  new_id_to_node.reserve(num_nodes);
+
+  for (uint32_t nid = 0; nid < num_nodes; nid++) {
+    uint32_t did_len = 0;
+    if (!ReadPod(data, len, pos, did_len) || did_len == 0 || did_len > len - pos) {
+      return false;
+    }
+    new_doc_ids[nid].assign(data + pos, did_len);
+    pos += did_len;
+    if (!new_id_to_node.emplace(new_doc_ids[nid], nid).second) {
+      return false;  // duplicate doc_id
+    }
+
+    int32_t layer_cap = 0;
+    if (!ReadPod(data, len, pos, layer_cap) || layer_cap < 0 || layer_cap > max_level) {
+      return false;
+    }
+    new_max_layers[nid] = layer_cap;
+
+    if (quantization_ == VectorQuantization::kSq8) {
+      float mv = 0.0f, sc = 0.0f;
+      if (!ReadPod(data, len, pos, mv) || !ReadPod(data, len, pos, sc)) return false;
+      if (!std::isfinite(mv) || !std::isfinite(sc) || sc < 0.0f) return false;
+      new_sq8_meta[nid] = Sq8Meta{mv, sc};
+      if (!ReadBytes(data, len, pos,
+                     new_sq8_vectors.data() + static_cast<size_t>(nid) * dim_,
+                     dim_ * sizeof(uint8_t))) {
+        return false;
+      }
+    } else if (quantization_ == VectorQuantization::kBq) {
+      if (!ReadBytes(data, len, pos,
+                     new_bq_vectors.data() + static_cast<size_t>(nid) * bq_words_,
+                     bq_words_ * sizeof(uint64_t))) {
+        return false;
+      }
+    } else {
+      if (!ReadBytes(data, len, pos,
+                     new_vectors.data() + static_cast<size_t>(nid) * dim_,
+                     dim_ * sizeof(float))) {
+        return false;
+      }
+    }
+
+    auto& node_layers = new_neighbors[nid];
+    node_layers.resize(static_cast<size_t>(layer_cap + 1));
+    for (int32_t lc = 0; lc <= layer_cap; lc++) {
+      uint32_t deg = 0;
+      if (!ReadPod(data, len, pos, deg)) return false;
+      uint32_t max_conn = (lc == 0) ? m_max0 : m;
+      if (deg > max_conn || deg > (len - pos) / sizeof(uint32_t)) return false;
+      auto& nb_list = node_layers[static_cast<size_t>(lc)];
+      nb_list.resize(deg);
+      if (deg > 0) {
+        if (!ReadBytes(data, len, pos, nb_list.data(), deg * sizeof(uint32_t))) {
+          return false;
+        }
+        for (uint32_t nb : nb_list) {
+          if (nb >= num_nodes || nb == nid) return false;
+        }
+      }
+    }
+  }
+
+  if (pos != len) return false;
+
+  // Commit atomically after full validation
+  m_ = m;
+  m_max0_ = m_max0;
+  ef_construction_ = ef_c;
+  ef_runtime_ = ef_r;
+  ml_ = 1.0 / std::log(static_cast<double>(m_ > 1 ? m_ : 2));
+  entry_point_ = entry_point;
+  max_level_ = max_level;
+  live_count_ = num_nodes;
+  vectors_ = std::move(new_vectors);
+  sq8_vectors_ = std::move(new_sq8_vectors);
+  sq8_meta_ = std::move(new_sq8_meta);
+  bq_vectors_ = std::move(new_bq_vectors);
+  doc_ids_ = std::move(new_doc_ids);
+  alive_ = std::move(new_alive);
+  max_layers_ = std::move(new_max_layers);
+  neighbors_ = std::move(new_neighbors);
+  free_slots_.clear();
+  id_to_node_ = std::move(new_id_to_node);
+  return true;
+}

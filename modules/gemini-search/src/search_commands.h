@@ -55,9 +55,12 @@ int RegisterSearchCommands(RedisModuleCtx* ctx);
 IndexEntry* GetIndexEntry(const std::string& name);
 bool CreateIndexEntry(const std::string& name, IndexEntry entry);
 void EraseIndexEntry(const std::string& name);
-void CreateIndexFromRdb(const std::string& name, IndexSpec spec,
-                        const std::vector<std::pair<std::string,
-                            std::unordered_map<std::string, std::string>>>& docs);
+bool CreateIndexFromRdb(
+    const std::string& name, IndexSpec spec,
+    const std::vector<
+        std::pair<std::string, std::unordered_map<std::string, std::string>>>&
+        docs,
+    const std::unordered_map<std::string, std::string>* prebuilt_hnsw = nullptr);
 
 std::unordered_map<std::string, std::string>& GetAliases();
 std::unordered_map<std::string, SuggestDict>& GetSuggestDicts();

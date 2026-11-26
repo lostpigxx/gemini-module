@@ -33,6 +33,12 @@ class HnswIndex : public VectorIndexBase {
   size_t EfConstruction() const;
   size_t EfRuntime() const;
   void SetEfRuntime(size_t ef);
+  VectorQuantization Quantization() const { return quantization_; }
+
+  // Direct binary serialization/deserialization of the compacted HNSW graph
+  // (avoids O(N log N) graph reconstruction on RDB reload).
+  std::string SerializeGraph() const;
+  bool DeserializeGraph(const char* data, size_t len);
 
  private:
   static constexpr uint32_t kInvalidNode = std::numeric_limits<uint32_t>::max();

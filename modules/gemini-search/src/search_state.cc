@@ -1,5 +1,6 @@
 #include "search_internal.h"
 #include "expr_engine.h"
+#include "hnsw_index.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -8,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -166,24 +168,46 @@ void ClearAllGlobalState() {
   };
 }
 
-// Forward declaration of static helper defined below
-void AddDocToIndices(
+// Forward declaration of internal helper defined below
+static void AddDocToIndicesInternal(
     IndexEntry& entry, const std::string& doc_id,
-    const std::unordered_map<std::string, std::string>& fields);
+    const std::unordered_map<std::string, std::string>& fields,
+    const std::unordered_set<std::string>* skip_vector_fields);
 
-void CreateIndexFromRdb(
+bool CreateIndexFromRdb(
     const std::string& name, IndexSpec spec,
     const std::vector<
         std::pair<std::string, std::unordered_map<std::string, std::string>>>&
-        docs) {
+        docs,
+    const std::unordered_map<std::string, std::string>* prebuilt_hnsw) {
   IndexEntry entry;
   entry.spec = std::move(spec);
   entry.last_access_ms = NowMs();
+
+  std::unordered_set<std::string> skip_vector_fields;
+  if (prebuilt_hnsw && !prebuilt_hnsw->empty()) {
+    for (const auto& [fname, blob] : *prebuilt_hnsw) {
+      const auto* fspec = entry.spec.FindField(fname);
+      if (!fspec || fspec->type != FieldType::kVector ||
+          fspec->vector_params.algorithm != VectorAlgorithm::kHnsw) {
+        return false;
+      }
+      auto& vidx = entry.vector_indices.GetOrCreate(fname, fspec->vector_params);
+      auto* hnsw = dynamic_cast<HnswIndex*>(&vidx);
+      if (!hnsw || !hnsw->DeserializeGraph(blob.data(), blob.size())) {
+        return false;
+      }
+      skip_vector_fields.insert(fname);
+    }
+  }
+
+  const auto* skip_ptr = skip_vector_fields.empty() ? nullptr : &skip_vector_fields;
   for (auto& [doc_id, fields] : docs) {
     entry.doc_store.Add(doc_id, fields);
-    AddDocToIndices(entry, doc_id, fields);
+    AddDocToIndicesInternal(entry, doc_id, fields, skip_ptr);
   }
   g_indices[name] = std::move(entry);
+  return true;
 }
 
 bool TryParseDouble(const std::string& s, double& out) {
@@ -256,9 +280,10 @@ void RemoveDocFromIndices(IndexEntry& entry,
   }
 }
 
-void AddDocToIndices(
+static void AddDocToIndicesInternal(
     IndexEntry& entry, const std::string& doc_id,
-    const std::unordered_map<std::string, std::string>& fields) {
+    const std::unordered_map<std::string, std::string>& fields,
+    const std::unordered_set<std::string>* skip_vector_fields) {
   for (auto& [fname, fval] : fields) {
     const auto* fspec = entry.spec.FindField(fname);
     if (!fspec || fspec->noindex) continue;
@@ -281,6 +306,9 @@ void AddDocToIndices(
     } else if (fspec->type == FieldType::kNumeric) {
       // already indexed above
     } else if (fspec->type == FieldType::kVector) {
+      if (skip_vector_fields && skip_vector_fields->count(fname) > 0) {
+        continue;
+      }
       std::vector<float> vec;
       if (DecodeVectorBlob(fval, fspec->vector_params.dim,
                            fspec->vector_params.data_type, vec)) {
@@ -315,6 +343,12 @@ void AddDocToIndices(
       }
     }
   }
+}
+
+void AddDocToIndices(
+    IndexEntry& entry, const std::string& doc_id,
+    const std::unordered_map<std::string, std::string>& fields) {
+  AddDocToIndicesInternal(entry, doc_id, fields, nullptr);
 }
 
 bool PassesIndexFilter(const IndexSpec& spec,

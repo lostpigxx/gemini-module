@@ -119,6 +119,16 @@ int main() {
     double hnsw_build_ms =
         std::chrono::duration<double, std::milli>(Clock::now() - th0).count();
     std::printf("%-34s  %9.2f ms     (2000x128)\n", "HnswIndex Build (2kx128)", hnsw_build_ms);
+    std::string hnsw_blob;
+    BenchUs("HnswIndex Serialize (2kx128)", 10, [&]() {
+      hnsw_blob = hnsw.SerializeGraph();
+      sink += hnsw_blob.size();
+    });
+    BenchUs("HnswIndex Deserialize (2kx128)", 10, [&]() {
+      HnswIndex restored(kDim, DistanceMetric::kL2, 16, 100);
+      restored.DeserializeGraph(hnsw_blob.data(), hnsw_blob.size());
+      sink += restored.Size();
+    });
     BenchUs("HnswIndex L2 KNN-10 (2kx128)", 200, [&]() {
       sink += hnsw.KnnQueryEf(q.data(), 10, 40).size();
     });
@@ -213,6 +223,16 @@ int main() {
     double hnsw_bq_build_ms =
         std::chrono::duration<double, std::milli>(Clock::now() - tb0).count();
     std::printf("%-34s  %9.2f ms     (2000x768)\n", "HnswIndex BQ Build (2kx768)", hnsw_bq_build_ms);
+    std::string hnsw_bq_blob;
+    BenchUs("HnswIndex BQ Serialize (2kx768)", 10, [&]() {
+      hnsw_bq_blob = hnsw_bq.SerializeGraph();
+      sink += hnsw_bq_blob.size();
+    });
+    BenchUs("HnswIndex BQ Deserialize (2kx768)", 10, [&]() {
+      HnswIndex restored(dim, DistanceMetric::kCosine, 16, 100, VectorQuantization::kBq);
+      restored.DeserializeGraph(hnsw_bq_blob.data(), hnsw_bq_blob.size());
+      sink += restored.Size();
+    });
     BenchUs("HnswIndex BQ KNN-10 (2kx768)", 500, [&]() {
       sink += hnsw_bq.KnnQueryEf(q.data(), 10, 40).size();
     });
