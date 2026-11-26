@@ -49,6 +49,10 @@ public:
   // caller (cf_chain.cc); Create() requires an already-power-of-two value.
   static std::optional<CuckooFilter> Create(uint64_t numBuckets, uint32_t bucketSize,
                                              uint32_t maxIterations);
+  // Zero-copy constructor for RDB load: adopts an already-allocated bucket
+  // buffer of size numBuckets * bucketSize (takes ownership on success).
+  static std::optional<CuckooFilter> FromLoadedBuffer(uint64_t numBuckets, uint32_t bucketSize,
+                                                      uint32_t maxIterations, uint8_t* adoptedBuf);
 
   // Tri-state result mirrors ScalingBloomFilter::Put: a value means the
   // insert completed (always true for cuckoo — duplicates are stored as

@@ -132,6 +132,24 @@ std::optional<CuckooFilter> CuckooFilter::Create(uint64_t numBuckets, uint32_t b
   return filter;
 }
 
+std::optional<CuckooFilter> CuckooFilter::FromLoadedBuffer(uint64_t numBuckets, uint32_t bucketSize,
+                                                           uint32_t maxIterations, uint8_t* adoptedBuf) {
+  if (!adoptedBuf) return std::nullopt;
+  if (numBuckets == 0 || (numBuckets & (numBuckets - 1)) != 0) return std::nullopt;
+  if (numBuckets > kCfMaxBuckets) return std::nullopt;
+  if (bucketSize == 0 || bucketSize > kCfMaxBucketSize) return std::nullopt;
+  if (maxIterations == 0 || maxIterations > kCfMaxIterations) return std::nullopt;
+  if (numBuckets * static_cast<uint64_t>(bucketSize) > kCfMaxLayerDataSize) return std::nullopt;
+
+  CuckooFilter filter;
+  filter.numBuckets_ = numBuckets;
+  filter.bucketSize_ = bucketSize;
+  filter.maxIterations_ = maxIterations;
+  filter.buckets_ = adoptedBuf;
+  filter.RecountItems();
+  return filter;
+}
+
 std::optional<CuckooFilter> CuckooFilter::Clone() const {
   CuckooFilter copy;
   copy.numBuckets_ = numBuckets_;

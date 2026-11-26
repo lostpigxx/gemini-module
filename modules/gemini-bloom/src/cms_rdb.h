@@ -30,6 +30,7 @@ void RdbSaveCms(RedisModuleIO* rdb, void* value);
 void AofRewriteCms(RedisModuleIO* aof, RedisModuleString* key, void* value);
 void FreeCms(void* value);
 size_t CmsMemUsage(const void* value);
+size_t CmsMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t sample_size);
 void DigestCms(RedisModuleDigest* digest, void* value);
 void* CopyCms2(RedisModuleKeyOptCtx* ctx, const void* value);
 size_t FreeEffortCms2(RedisModuleKeyOptCtx* ctx, const void* value);

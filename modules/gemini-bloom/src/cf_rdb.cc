@@ -113,16 +113,15 @@ static CuckooChain* ReadCfChain(RdbReader& r) {
     }
     totalDataSize += static_cast<uint64_t>(bufLen);
 
-    auto maybeFilter = CuckooFilter::Create(numBuckets, shell.bucketSize, shell.maxIterations);
+    // Zero-copy adoption of RedisModule_LoadStringBuffer allocation.
+    auto maybeFilter = CuckooFilter::FromLoadedBuffer(
+      numBuckets, shell.bucketSize, shell.maxIterations, reinterpret_cast<uint8_t*>(buf));
     if (!maybeFilter) {
       RedisModule_Free(buf);
       chain->~CuckooChain();
       RMFree(chain);
       return nullptr;
     }
-    if (bufLen > 0) std::memcpy(maybeFilter->GetBucketArray(), buf, bufLen);
-    RedisModule_Free(buf);
-    maybeFilter->RecountItems();
     itemSum += maybeFilter->NumItems();
 
     chain->SetLayer(i, CfFilterLayer{std::move(*maybeFilter)});
@@ -285,6 +284,12 @@ void FreeCuckoo(void* value) {
 size_t CuckooMemUsage(const void* value) {
   if (!value) return 0;
   return static_cast<const CuckooChain*>(value)->BytesUsed();
+}
+
+size_t CuckooMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t sample_size) {
+  (void)ctx;
+  (void)sample_size;
+  return CuckooMemUsage(value);
 }
 
 void DigestCuckoo(RedisModuleDigest* digest, void* value) {

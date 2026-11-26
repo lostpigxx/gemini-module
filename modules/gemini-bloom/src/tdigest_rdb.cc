@@ -4,8 +4,10 @@
 #include "tdigest_sketch.h"
 #include "rm_alloc.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 // --- Field validation ---
 // Rejects states that would cause UB (divide-by-zero, out-of-bounds) or
@@ -102,16 +104,21 @@ static TdigestSketch* ReadTdigestSketch(RdbReader& r) {
     return nullptr;
   }
 
+  double sumMerged = 0.0;
+  double prevMean = -std::numeric_limits<double>::infinity();
   for (uint64_t i = 0; i < rawNumCentroids; i++) {
     TdigestSketch::Centroid c{};
     std::memcpy(&c, centroidBuf + i * sizeof(TdigestSketch::Centroid), sizeof(c));
-    if (!std::isfinite(c.mean) || !std::isfinite(c.weight) || c.weight <= 0.0) {
+    if (!std::isfinite(c.mean) || !std::isfinite(c.weight) || c.weight <= 0.0 || c.mean < prevMean) {
       if (centroidBuf) RedisModule_Free(centroidBuf);
       if (bufferBuf) RedisModule_Free(bufferBuf);
       return nullptr;
     }
+    prevMean = c.mean;
+    sumMerged += c.weight;
     maybeSketch->AppendCentroidForLoad(c.mean, c.weight);
   }
+  double sumBuffered = 0.0;
   for (uint64_t i = 0; i < rawNumBuffered; i++) {
     TdigestSketch::Centroid c{};
     std::memcpy(&c, bufferBuf + i * sizeof(TdigestSketch::Centroid), sizeof(c));
@@ -120,10 +127,25 @@ static TdigestSketch* ReadTdigestSketch(RdbReader& r) {
       if (bufferBuf) RedisModule_Free(bufferBuf);
       return nullptr;
     }
+    sumBuffered += c.weight;
     maybeSketch->AppendBufferedForLoad(c.mean, c.weight);
   }
   if (centroidBuf) RedisModule_Free(centroidBuf);
   if (bufferBuf) RedisModule_Free(bufferBuf);
+
+  if (!std::isfinite(sumMerged) || !std::isfinite(sumBuffered)) return nullptr;
+  if ((rawNumCentroids == 0 && mergedWeight != 0.0) || (rawNumCentroids > 0 && mergedWeight == 0.0)) {
+    return nullptr;
+  }
+  if ((rawNumBuffered == 0 && unmergedWeight != 0.0) || (rawNumBuffered > 0 && unmergedWeight == 0.0)) {
+    return nullptr;
+  }
+  if (rawNumCentroids > 0 && std::fabs(sumMerged - mergedWeight) > 1e-6 * std::max(1.0, mergedWeight)) {
+    return nullptr;
+  }
+  if (rawNumBuffered > 0 && std::fabs(sumBuffered - unmergedWeight) > 1e-6 * std::max(1.0, unmergedWeight)) {
+    return nullptr;
+  }
 
   maybeSketch->SetBookkeepingForLoad(mergedWeight, unmergedWeight, rawMin, rawMax, numCompressions);
 
@@ -215,21 +237,41 @@ TdigestSketch* TdigestDeserializeChunk(const void* data, size_t length) {
   if (!maybeSketch) return nullptr;
   if (!maybeSketch->AllocateForLoad(hdr.numCentroids, hdr.numBuffered)) return nullptr;
 
+  double sumMerged = 0.0;
+  double prevMean = -std::numeric_limits<double>::infinity();
   for (uint32_t i = 0; i < hdr.numCentroids; i++) {
     TdigestSketch::Centroid c{};
     std::memcpy(&c, centroidPtr + static_cast<size_t>(i) * sizeof(c), sizeof(c));
-    if (!std::isfinite(c.mean) || !std::isfinite(c.weight) || c.weight <= 0.0) {
+    if (!std::isfinite(c.mean) || !std::isfinite(c.weight) || c.weight <= 0.0 || c.mean < prevMean) {
       return nullptr;
     }
+    prevMean = c.mean;
+    sumMerged += c.weight;
     maybeSketch->AppendCentroidForLoad(c.mean, c.weight);
   }
+  double sumBuffered = 0.0;
   for (uint32_t i = 0; i < hdr.numBuffered; i++) {
     TdigestSketch::Centroid c{};
     std::memcpy(&c, bufferPtr + static_cast<size_t>(i) * sizeof(c), sizeof(c));
     if (!std::isfinite(c.mean) || !std::isfinite(c.weight) || c.weight <= 0.0) {
       return nullptr;
     }
+    sumBuffered += c.weight;
     maybeSketch->AppendBufferedForLoad(c.mean, c.weight);
+  }
+
+  if (!std::isfinite(sumMerged) || !std::isfinite(sumBuffered)) return nullptr;
+  if ((hdr.numCentroids == 0 && hdr.mergedWeight != 0.0) || (hdr.numCentroids > 0 && hdr.mergedWeight == 0.0)) {
+    return nullptr;
+  }
+  if ((hdr.numBuffered == 0 && hdr.unmergedWeight != 0.0) || (hdr.numBuffered > 0 && hdr.unmergedWeight == 0.0)) {
+    return nullptr;
+  }
+  if (hdr.numCentroids > 0 && std::fabs(sumMerged - hdr.mergedWeight) > 1e-6 * std::max(1.0, hdr.mergedWeight)) {
+    return nullptr;
+  }
+  if (hdr.numBuffered > 0 && std::fabs(sumBuffered - hdr.unmergedWeight) > 1e-6 * std::max(1.0, hdr.unmergedWeight)) {
+    return nullptr;
   }
 
   maybeSketch->SetBookkeepingForLoad(hdr.mergedWeight, hdr.unmergedWeight, hdr.rawMin, hdr.rawMax,
@@ -284,6 +326,12 @@ size_t TdigestMemUsage(const void* value) {
   return sizeof(TdigestSketch) +
          static_cast<size_t>(sketch->CentroidCapacity()) * (sizeof(TdigestSketch::Centroid) + sizeof(double)) +
          static_cast<size_t>(sketch->BufferCapacity()) * sizeof(TdigestSketch::Centroid);
+}
+
+size_t TdigestMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t sample_size) {
+  (void)ctx;
+  (void)sample_size;
+  return TdigestMemUsage(value);
 }
 
 void DigestTdigest(RedisModuleDigest* digest, void* value) {

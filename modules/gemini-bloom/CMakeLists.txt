@@ -264,6 +264,33 @@ if(GTest_FOUND)
   target_compile_definitions(tdigest_rdb_test PRIVATE REDIS_BLOOM_TESTING)
   target_compile_options(tdigest_rdb_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
 
+  add_executable(bloom_fuzz_test EXCLUDE_FROM_ALL
+    tests/bloom_fuzz_test.cc
+    src/bloom_rdb.cc
+    src/sb_chain.cc
+    src/bloom_filter.cc
+    src/cf_rdb.cc
+    src/cf_chain.cc
+    src/cuckoo_filter.cc
+    src/cms_rdb.cc
+    src/cms_sketch.cc
+    src/topk_rdb.cc
+    src/topk_sketch.cc
+    src/tdigest_rdb.cc
+    src/tdigest_sketch.cc
+    src/murmur2.cc
+  )
+  target_include_directories(bloom_fuzz_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/include
+  )
+  target_link_libraries(bloom_fuzz_test PRIVATE
+    redis_module_api
+    GTest::gtest_main
+  )
+  target_compile_definitions(bloom_fuzz_test PRIVATE REDIS_BLOOM_TESTING)
+  target_compile_options(bloom_fuzz_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
+
   add_custom_target(bloom_test
     COMMAND bloom_filter_test --gtest_color=yes
     COMMAND sb_chain_test --gtest_color=yes
@@ -277,10 +304,12 @@ if(GTest_FOUND)
     COMMAND topk_rdb_test --gtest_color=yes
     COMMAND tdigest_sketch_test --gtest_color=yes
     COMMAND tdigest_rdb_test --gtest_color=yes
+    COMMAND bloom_fuzz_test --gtest_color=yes
     DEPENDS bloom_filter_test sb_chain_test bloom_rdb_test
             cuckoo_filter_test cf_chain_test cf_rdb_test
             cms_sketch_test cms_rdb_test
             topk_sketch_test topk_rdb_test
             tdigest_sketch_test tdigest_rdb_test
+            bloom_fuzz_test
   )
 endif()

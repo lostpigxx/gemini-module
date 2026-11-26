@@ -60,6 +60,7 @@ void RdbSaveBloom(RedisModuleIO* rdb, void* value);
 void AofRewriteBloom(RedisModuleIO* aof, RedisModuleString* key, void* value);
 void FreeBloom(void* value);
 size_t BloomMemUsage(const void* value);
+size_t BloomMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t sample_size);
 void DigestBloom(RedisModuleDigest* digest, void* value);
 void* CopyBloom2(RedisModuleKeyOptCtx* ctx, const void* value);
 size_t FreeEffortBloom2(RedisModuleKeyOptCtx* ctx, const void* value);

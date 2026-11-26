@@ -30,6 +30,7 @@ void RdbSaveTopk(RedisModuleIO* rdb, void* value);
 void AofRewriteTopk(RedisModuleIO* aof, RedisModuleString* key, void* value);
 void FreeTopk(void* value);
 size_t TopkMemUsage(const void* value);
+size_t TopkMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t sample_size);
 void DigestTopk(RedisModuleDigest* digest, void* value);
 void* CopyTopk2(RedisModuleKeyOptCtx* ctx, const void* value);
 size_t FreeEffortTopk2(RedisModuleKeyOptCtx* ctx, const void* value);

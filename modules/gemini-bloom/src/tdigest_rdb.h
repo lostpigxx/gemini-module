@@ -30,6 +30,7 @@ void RdbSaveTdigest(RedisModuleIO* rdb, void* value);
 void AofRewriteTdigest(RedisModuleIO* aof, RedisModuleString* key, void* value);
 void FreeTdigest(void* value);
 size_t TdigestMemUsage(const void* value);
+size_t TdigestMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t sample_size);
 void DigestTdigest(RedisModuleDigest* digest, void* value);
 void* CopyTdigest2(RedisModuleKeyOptCtx* ctx, const void* value);
 size_t FreeEffortTdigest2(RedisModuleKeyOptCtx* ctx, const void* value);

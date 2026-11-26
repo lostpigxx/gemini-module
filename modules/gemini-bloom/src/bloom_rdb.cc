@@ -111,13 +111,9 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
     if (buf) RedisModule_Free(buf);
     return std::nullopt;
   }
-  layer.bitArray_ = static_cast<uint8_t*>(RMAlloc(layer.dataSize_));
-  if (!layer.bitArray_) {
-    RedisModule_Free(buf);
-    return std::nullopt;
-  }
-  std::memcpy(layer.bitArray_, buf, bufLen);
-  RedisModule_Free(buf);
+  // Zero-copy adoption: LoadStringBuffer allocates with RedisModule_Alloc
+  // (matching RMFree in ~BloomLayer), eliminating 2x peak memory and memcpy.
+  layer.bitArray_ = reinterpret_cast<uint8_t*>(buf);
   layer.fastMod_.Init(layer.totalBits_);
   return layer;
 }
@@ -386,6 +382,12 @@ void FreeBloom(void* value) {
 size_t BloomMemUsage(const void* value) {
   if (!value) return 0;
   return static_cast<const ScalingBloomFilter*>(value)->BytesUsed();
+}
+
+size_t BloomMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t sample_size) {
+  (void)ctx;
+  (void)sample_size;
+  return BloomMemUsage(value);
 }
 
 void DigestBloom(RedisModuleDigest* digest, void* value) {

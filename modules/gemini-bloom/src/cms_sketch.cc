@@ -76,6 +76,22 @@ std::optional<CmsSketch> CmsSketch::Create(uint32_t width, uint32_t depth) {
   return sketch;
 }
 
+std::optional<CmsSketch> CmsSketch::FromLoadedBuffer(uint32_t width, uint32_t depth,
+                                                     uint32_t* adoptedBuf, uint64_t totalCount) {
+  if (!adoptedBuf) return std::nullopt;
+  if (width == 0 || width > kCmsMaxWidth) return std::nullopt;
+  if (depth == 0 || depth > kCmsMaxDepth) return std::nullopt;
+  if (static_cast<uint64_t>(width) * depth > kCmsMaxCounters) return std::nullopt;
+
+  CmsSketch sketch;
+  sketch.width_ = width;
+  sketch.depth_ = depth;
+  sketch.widthFastModM_ = ComputeFastMod32M(width);
+  sketch.counters_ = adoptedBuf;
+  sketch.totalCount_ = totalCount;
+  return sketch;
+}
+
 std::optional<CmsSketch> CmsSketch::CreateByProb(double error, double probability) {
   if (!std::isfinite(error) || error <= 0.0 || error >= 1.0) return std::nullopt;
   if (!std::isfinite(probability) || probability <= 0.0 || probability >= 1.0) return std::nullopt;

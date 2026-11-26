@@ -47,14 +47,14 @@ static CmsSketch* ReadCmsSketch(RdbReader& r) {
     return nullptr;
   }
 
-  auto maybeSketch = CmsSketch::Create(static_cast<uint32_t>(rawWidth), static_cast<uint32_t>(rawDepth));
+  // Zero-copy adoption of RedisModule_LoadStringBuffer allocation.
+  auto maybeSketch = CmsSketch::FromLoadedBuffer(
+    static_cast<uint32_t>(rawWidth), static_cast<uint32_t>(rawDepth),
+    reinterpret_cast<uint32_t*>(buf), totalCount);
   if (!maybeSketch) {
     RedisModule_Free(buf);
     return nullptr;
   }
-  std::memcpy(maybeSketch->GetCounterArray(), buf, bufLen);
-  RedisModule_Free(buf);
-  maybeSketch->SetTotalCount(totalCount);
 
   auto* sketch = static_cast<CmsSketch*>(RMAlloc(sizeof(CmsSketch)));
   if (!sketch) return nullptr;
@@ -155,6 +155,12 @@ size_t CmsMemUsage(const void* value) {
   if (!value) return 0;
   auto* sketch = static_cast<const CmsSketch*>(value);
   return sizeof(CmsSketch) + sketch->GetDataSize();
+}
+
+size_t CmsMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t sample_size) {
+  (void)ctx;
+  (void)sample_size;
+  return CmsMemUsage(value);
 }
 
 void DigestCms(RedisModuleDigest* digest, void* value) {

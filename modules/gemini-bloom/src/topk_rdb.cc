@@ -68,14 +68,14 @@ static TopkSketch* ReadTopkSketch(RdbReader& r) {
     return nullptr;
   }
 
-  auto maybeSketch = TopkSketch::Create(static_cast<uint32_t>(rawK), static_cast<uint32_t>(rawWidth),
-                                         static_cast<uint32_t>(rawDepth), decay);
+  // Zero-copy adoption of RedisModule_LoadStringBuffer allocation.
+  auto maybeSketch = TopkSketch::FromLoadedBuffer(
+    static_cast<uint32_t>(rawK), static_cast<uint32_t>(rawWidth),
+    static_cast<uint32_t>(rawDepth), decay, reinterpret_cast<TopkSketch::Cell*>(cellBuf));
   if (!maybeSketch) {
     RedisModule_Free(cellBuf);
     return nullptr;
   }
-  std::memcpy(maybeSketch->GetCellArray(), cellBuf, cellBufLen);
-  RedisModule_Free(cellBuf);
 
   uint64_t prevCount = UINT64_MAX;
   for (uint32_t i = 0; i < rawNumActive; i++) {
@@ -85,15 +85,14 @@ static TopkSketch* ReadTopkSketch(RdbReader& r) {
       if (nameBuf) RedisModule_Free(nameBuf);
       return nullptr;
     }
-    // Entries must be persisted in non-increasing count order — this
-    // maintains the invariant Add()/IncrBy() rely on (the last active
-    // entry always holds the current top-k minimum).
-    if (nameLen > kTopkMaxNameLen || count > prevCount) {
+    // Entries must be persisted in non-increasing count order with unique names.
+    auto nameSpan = AsBytes(nameBuf, nameLen);
+    if (nameLen > kTopkMaxNameLen || count > prevCount || maybeSketch->Query(nameSpan)) {
       RedisModule_Free(nameBuf);
       return nullptr;
     }
     prevCount = count;
-    bool ok = maybeSketch->AppendEntryForLoad(AsBytes(nameBuf, nameLen), count);
+    bool ok = maybeSketch->AppendEntryForLoad(nameSpan, count);
     RedisModule_Free(nameBuf);
     if (!ok) return nullptr;
   }
@@ -196,11 +195,13 @@ TopkSketch* TopkDeserializeChunk(const void* data, size_t length) {
     cursor += sizeof(TopkWireEntryHeader);
     remaining -= sizeof(TopkWireEntryHeader);
 
-    if (entryHdr.nameLen > kTopkMaxNameLen || entryHdr.count > prevCount || remaining < entryHdr.nameLen) {
+    auto nameSpan = AsBytes(cursor, entryHdr.nameLen);
+    if (entryHdr.nameLen > kTopkMaxNameLen || entryHdr.count > prevCount ||
+        remaining < entryHdr.nameLen || maybeSketch->Query(nameSpan)) {
       return nullptr;
     }
     prevCount = entryHdr.count;
-    if (!maybeSketch->AppendEntryForLoad(AsBytes(cursor, entryHdr.nameLen), entryHdr.count)) {
+    if (!maybeSketch->AppendEntryForLoad(nameSpan, entryHdr.count)) {
       return nullptr;
     }
     cursor += entryHdr.nameLen;
@@ -263,6 +264,12 @@ size_t TopkMemUsage(const void* value) {
     size += entries[i].nameLen == 0 ? 1 : entries[i].nameLen;
   }
   return size;
+}
+
+size_t TopkMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t sample_size) {
+  (void)ctx;
+  (void)sample_size;
+  return TopkMemUsage(value);
 }
 
 void DigestTopk(RedisModuleDigest* digest, void* value) {

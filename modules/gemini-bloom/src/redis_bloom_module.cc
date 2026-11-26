@@ -39,7 +39,7 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
   tm.rdb_save = RdbSaveBloom;
   tm.aof_rewrite = AofRewriteBloom;
   tm.free = FreeBloom;
-  tm.mem_usage = BloomMemUsage;
+  tm.mem_usage2 = BloomMemUsage2;
   tm.digest = DigestBloom;
   tm.copy2 = CopyBloom2;
   tm.free_effort2 = FreeEffortBloom2;
@@ -65,7 +65,7 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
   tm2.rdb_save = RdbSaveCuckoo;
   tm2.aof_rewrite = AofRewriteCuckoo;
   tm2.free = FreeCuckoo;
-  tm2.mem_usage = CuckooMemUsage;
+  tm2.mem_usage2 = CuckooMemUsage2;
   tm2.digest = DigestCuckoo;
   tm2.copy2 = CopyCuckoo2;
   tm2.free_effort2 = FreeEffortCuckoo2;
@@ -92,7 +92,7 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
   tm3.rdb_save = RdbSaveCms;
   tm3.aof_rewrite = AofRewriteCms;
   tm3.free = FreeCms;
-  tm3.mem_usage = CmsMemUsage;
+  tm3.mem_usage2 = CmsMemUsage2;
   tm3.digest = DigestCms;
   tm3.copy2 = CopyCms2;
   tm3.free_effort2 = FreeEffortCms2;
@@ -119,7 +119,7 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
   tm4.rdb_save = RdbSaveTopk;
   tm4.aof_rewrite = AofRewriteTopk;
   tm4.free = FreeTopk;
-  tm4.mem_usage = TopkMemUsage;
+  tm4.mem_usage2 = TopkMemUsage2;
   tm4.digest = DigestTopk;
   tm4.copy2 = CopyTopk2;
   tm4.free_effort2 = FreeEffortTopk2;
@@ -146,7 +146,7 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
   tm5.rdb_save = RdbSaveTdigest;
   tm5.aof_rewrite = AofRewriteTdigest;
   tm5.free = FreeTdigest;
-  tm5.mem_usage = TdigestMemUsage;
+  tm5.mem_usage2 = TdigestMemUsage2;
   tm5.digest = DigestTdigest;
   tm5.copy2 = CopyTdigest2;
   tm5.free_effort2 = FreeEffortTdigest2;

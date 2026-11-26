@@ -233,3 +233,28 @@
      - `ci/bloom_migrate_test.py`（RedisBloom 2.6.25 ↔ GeminiBloom 双向，RESP3 + RESP2）
      - `ci/bloom_soak_test.py`
    - 输出最终 `bloom_bench` Phase 1 基线 vs Phase 5 最终性能/内存/精度对比报告并归档至 `doc/gemini-bloom/`。
+
+---
+
+## 四、优化前后实测对比（`bloom_bench`）
+
+| 指标 | 优化前基线 | Phase 5 最终实测 | 提升幅度 |
+|---|---:|---:|---:|
+| `MurmurHash2` (1M keys) | 246.21 M ops/s | 276.01 M ops/s | **+12.1%** |
+| `MurmurHash64A` (1M keys) | 365.78 M ops/s | 409.11 M ops/s | **+11.8%** |
+| `Bloom Put 500k` (single layer, NoRound) | 27.68 M ops/s | 30.27 M ops/s | **+9.4%** |
+| `Cuckoo Add 200k` | 56.54 M ops/s | 107.16 M ops/s | **1.90×** |
+| `Cuckoo Contains 200k` (hit) | 52.77 M ops/s | 126.52 M ops/s | **2.40×** |
+| `Cuckoo Delete 100k` | 66.78 M ops/s | 137.26 M ops/s | **2.06×** |
+| `CMS IncrBy 300k` | 34.11 M ops/s | 55.35 M ops/s | **1.62×** |
+| `CMS Merge 100x` (65536×7) | 3,277 merges/s | 6,723 merges/s | **2.05×** |
+| `Top-K Add 100k` (k=20) | 15.24 M ops/s | 21.08 M ops/s | **1.38×** |
+| `Top-K IncrBy 100×1000` (k=20) | 28.06 K calls/s | 10,435 K calls/s | **372×** |
+| `Top-K Add 100k` (k=1000) | 2.87 M ops/s | 13.57 M ops/s | **4.73×** |
+| `Top-K Query 100k` (k=1000) | 2.32 M ops/s | 144.85 M ops/s | **62.4×** |
+| `T-Digest Quantile 100k` | 4.00 M ops/s | 166.62 M ops/s | **41.7×** |
+| `T-Digest CDF 100k` | 19.28 M ops/s | 38.55 M ops/s | **2.00×** |
+| `T-Digest p99.00` 相对误差 (Exp(1)) | 2.19% | 0.02% | **误差降 109×** |
+| `T-Digest p99.90` 相对误差 (Exp(1)) | 79.87% | 0.85% | **误差降 94×** |
+| `T-Digest p99.99` 相对误差 (Exp(1)) | 32.31% | 4.42% | **误差降 7.3×** |
+

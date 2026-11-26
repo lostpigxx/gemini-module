@@ -157,6 +157,38 @@ std::optional<TopkSketch> TopkSketch::Create(uint32_t k, uint32_t width, uint32_
   return sketch;
 }
 
+std::optional<TopkSketch> TopkSketch::FromLoadedBuffer(uint32_t k, uint32_t width, uint32_t depth,
+                                                       double decay, Cell* adoptedCells) {
+  if (!adoptedCells) return std::nullopt;
+  if (k == 0 || k > kTopkMaxK) return std::nullopt;
+  if (width == 0 || width > kTopkMaxWidth) return std::nullopt;
+  if (depth == 0 || depth > kTopkMaxDepth) return std::nullopt;
+  if (static_cast<uint64_t>(width) * depth > kTopkMaxCells) return std::nullopt;
+  if (!std::isfinite(decay) || decay <= 0.0 || decay >= 1.0) return std::nullopt;
+
+  TopkSketch sketch;
+  sketch.k_ = k;
+  sketch.width_ = width;
+  sketch.depth_ = depth;
+  sketch.decay_ = decay;
+  sketch.InitTables();
+  sketch.cells_ = adoptedCells;
+
+  sketch.entries_ = static_cast<Entry*>(RMCalloc(k, sizeof(Entry)));
+  if (!sketch.entries_) {
+    sketch.cells_ = nullptr;  // Caller frees adoptedCells on failure
+    return std::nullopt;
+  }
+  uint32_t idxCap = std::bit_ceil(std::max<uint32_t>(16u, k * 2u));
+  sketch.indexTable_ = static_cast<uint32_t*>(RMCalloc(idxCap, sizeof(uint32_t)));
+  if (!sketch.indexTable_) {
+    sketch.cells_ = nullptr;  // Caller frees adoptedCells on failure
+    return std::nullopt;
+  }
+  sketch.indexCap_ = idxCap;
+  return sketch;
+}
+
 uint32_t TopkSketch::FingerprintOf(std::span<const std::byte> item) const {
   auto* ptr = reinterpret_cast<const void*>(item.data());
   auto len = static_cast<int>(std::min(item.size(), static_cast<size_t>(INT_MAX)));

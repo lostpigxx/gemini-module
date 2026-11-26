@@ -59,6 +59,10 @@ public:
 
   // decay must be in (0, 1) exclusive.
   static std::optional<TopkSketch> Create(uint32_t k, uint32_t width, uint32_t depth, double decay);
+  // Zero-copy constructor for RDB load: adopts an already-allocated cell array
+  // of size width * depth * sizeof(Cell) (takes ownership on success).
+  static std::optional<TopkSketch> FromLoadedBuffer(uint32_t k, uint32_t width, uint32_t depth,
+                                                    double decay, Cell* adoptedCells);
 
   // Processes one occurrence of `item`. If this causes another item to be
   // evicted from the top-k list, returns the evicted item's name.

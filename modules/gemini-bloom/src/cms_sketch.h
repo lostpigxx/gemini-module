@@ -40,6 +40,10 @@ public:
   CmsSketch& operator=(CmsSketch&& other) noexcept;
 
   static std::optional<CmsSketch> Create(uint32_t width, uint32_t depth);
+  // Zero-copy constructor for RDB load: adopts an already-allocated counter
+  // buffer of size width * depth * sizeof(uint32_t) (takes ownership on success).
+  static std::optional<CmsSketch> FromLoadedBuffer(uint32_t width, uint32_t depth,
+                                                    uint32_t* adoptedBuf, uint64_t totalCount);
   // Returns nullopt if error/probability are out of (0, 1) or the derived
   // width/depth would exceed kCmsMaxWidth/kCmsMaxDepth.
   static std::optional<CmsSketch> CreateByProb(double error, double probability);
