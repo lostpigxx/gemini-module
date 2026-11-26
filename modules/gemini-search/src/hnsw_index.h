@@ -25,7 +25,9 @@ class HnswIndex : public VectorIndexBase {
                                     size_t oversample = 0) const override;
   std::vector<KnnResult> KnnQueryFiltered(
       const float* query, size_t k,
-      const std::vector<std::string>& candidates) const override;
+      const std::vector<std::string>& candidates,
+      size_t ef_runtime = 0,
+      size_t oversample = 0) const override;
   std::vector<KnnResult> RangeQuery(const float* query, float radius) const override;
   size_t Size() const override;
   size_t Dim() const override;

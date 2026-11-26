@@ -4511,6 +4511,36 @@ test_assert "Phase 64: FT.CREATE background timer indexing + FT.INFO progress + 
 }
 
 # ============================================================
+# Phase 65: Adaptive Filtered HNSW (Selectivity-Based)
+# ============================================================
+
+puts "\n=== Phase 65: Adaptive Filtered HNSW ==="
+
+test_assert "Phase 65: Filtered HNSW adapts on large candidate set and returns only matching docs" {
+  r FT.CREATE p65_fh SCHEMA cat TAG vec VECTOR HNSW TYPE FLOAT32 DIM 4 DISTANCE_METRIC L2 M 8 EF_CONSTRUCTION 64
+  for {set i 0} {$i < 1100} {incr i} {
+    set tag [expr {($i % 2 == 0) ? "even" : "odd"}]
+    set x [expr {double($i) / 100.0}]
+    set vb [binary format f4 [list $x 0.0 0.0 0.0]]
+    r FT.ADD p65_fh "d$i" FIELDS cat $tag vec $vb
+  }
+  set qv [binary format f4 {0.0 0.0 0.0 0.0}]
+  # 550/1100 = 50% selectivity -> exercises Filtered HNSW graph traversal path
+  set res [r FT.SEARCH p65_fh "(@cat:{even})=>\[KNN 5 @vec \$qv EF_RUNTIME 64\]" PARAMS 2 qv $qv NOCONTENT DIALECT 2]
+  if {[lindex $res 0] != 5} {
+    error "Expected 5 filtered HNSW results, got: $res"
+  }
+  for {set j 1} {$j <= 5} {incr j} {
+    set did [lindex $res $j]
+    set num [string range $did 1 end]
+    if {$num % 2 != 0} {
+      error "Filtered HNSW returned non-even doc $did in $res"
+    }
+  }
+  r FT.DROPINDEX p65_fh
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

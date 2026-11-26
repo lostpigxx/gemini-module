@@ -37,9 +37,9 @@
 
 1. **`gemini-search` 分布式集群查询（Cluster Scatter-Gather）**
    - 在 Redis Cluster 多分片架构下支持跨节点分发与归并排序（`FT.SEARCH` / `FT.HYBRID` / `FT.AGGREGATE`）。
-2. **`gemini-search` 过滤 + 向量联合检索与大规模向量扩展**
-   - 针对 RAG 常见模式 `(@tag:{...} @num:[...])=>[KNN 10 @vec ...]`，按过滤选择度自适应选择 Filtered HNSW 遍历或 Flat 扫描。
-   - 评估 Product Quantization (PQ) 或 mmap / 磁盘混合存储以支撑千万级向量。
+2. **`gemini-search` 千万级向量扩展（按需）**
+   - ~~过滤 + 向量联合检索优化（自适应 Filtered HNSW）~~：已在 Phase 65 完成。
+   - **Product Quantization (PQ，乘积量化)**：面向千万级高维向量（如 768d/1536d）提供 64× 压缩（子空间 k-means 码本 + ADC 查表距离），以及评估 mmap / 磁盘混合存储。
    - 多语言分词增强（统计/HMM 分词、更多语种词干与音似编码）。
 3. **`gemini-json` 容器紧凑值存储**
    - 落地 [optimization-plan-v2.md](./gemini-json/optimization-plan-v2.md) Phase 9 备选方案 B（容器按值存储 / Typed Array），进一步压缩超大 JSON 数组内存占用。

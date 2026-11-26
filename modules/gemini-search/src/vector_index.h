@@ -63,8 +63,11 @@ class VectorIndexBase {
                                             size_t /*oversample*/ = 0) const {
     return KnnQuery(query, k);
   }
-  virtual std::vector<KnnResult> KnnQueryFiltered(const float* query, size_t k,
-                                                   const std::vector<std::string>& candidates) const = 0;
+  virtual std::vector<KnnResult> KnnQueryFiltered(
+      const float* query, size_t k,
+      const std::vector<std::string>& candidates,
+      size_t /*ef_runtime*/ = 0,
+      size_t /*oversample*/ = 0) const = 0;
   virtual std::vector<KnnResult> RangeQuery(const float* query, float radius) const = 0;
   virtual size_t Size() const = 0;
   virtual size_t Dim() const = 0;
@@ -101,8 +104,11 @@ class FlatVectorIndex : public VectorIndexBase {
   std::vector<KnnResult> KnnQueryEf(const float* query, size_t k,
                                     size_t ef_runtime,
                                     size_t oversample = 0) const override;
-  std::vector<KnnResult> KnnQueryFiltered(const float* query, size_t k,
-                                           const std::vector<std::string>& candidates) const override;
+  std::vector<KnnResult> KnnQueryFiltered(
+      const float* query, size_t k,
+      const std::vector<std::string>& candidates,
+      size_t ef_runtime = 0,
+      size_t oversample = 0) const override;
   std::vector<KnnResult> RangeQuery(const float* query, float radius) const override;
   size_t Size() const override;
   size_t Dim() const override;

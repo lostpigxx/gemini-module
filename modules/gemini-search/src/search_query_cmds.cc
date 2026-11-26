@@ -893,7 +893,8 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                     if (!ferr.empty()) {
                       rep->error = ferr;
                     } else {
-                      knn_res = vi->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands);
+                      knn_res = vi->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands,
+                                                     parsed.knn_ef_runtime, parsed.knn_oversample);
                     }
                   } else {
                     knn_res = vi->KnnQueryEf(qvec.data(), parsed.knn_k,
@@ -980,7 +981,8 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         if (!filter_error.empty()) {
           return RedisModule_ReplyWithError(ctx, filter_error.c_str());
         }
-        knn_results = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, candidates);
+        knn_results = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, candidates,
+                                             parsed.knn_ef_runtime, parsed.knn_oversample);
       } else {
         knn_results = vidx->KnnQueryEf(qvec.data(), parsed.knn_k,
                                        parsed.knn_ef_runtime, parsed.knn_oversample);
@@ -2614,7 +2616,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
                   if (!ferr.empty()) {
                     rep->error = ferr;
                   } else {
-                    vec_hits = vi->KnnQueryFiltered(qvec.data(), knn_k, cands);
+                    vec_hits = vi->KnnQueryFiltered(qvec.data(), knn_k, cands,
+                                                    ef_runtime, oversample);
                   }
                 } else {
                   vec_hits = vi->KnnQueryEf(qvec.data(), knn_k, ef_runtime, oversample);
@@ -2719,7 +2722,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
           ferr, qopts, &entry.geoshape_indices, &params, &entry.vector_indices,
           &entry.synonyms);
       if (!ferr.empty()) return RedisModule_ReplyWithError(ctx, ferr.c_str());
-      vec_hits = vidx->KnnQueryFiltered(qvec.data(), knn_k, candidates);
+      vec_hits = vidx->KnnQueryFiltered(qvec.data(), knn_k, candidates,
+                                        ef_runtime, oversample);
     } else {
       vec_hits = vidx->KnnQueryEf(qvec.data(), knn_k, ef_runtime, oversample);
     }

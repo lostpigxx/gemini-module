@@ -132,6 +132,12 @@ int main() {
     BenchUs("HnswIndex L2 KNN-10 (2kx128)", 200, [&]() {
       sink += hnsw.KnnQueryEf(q.data(), 10, 40).size();
     });
+    std::vector<std::string> half_cands;
+    half_cands.reserve(1000);
+    for (int i = 0; i < 2000; i += 2) half_cands.push_back("h" + std::to_string(i));
+    BenchUs("HnswIndex Filtered 50% (2kx128)", 200, [&]() {
+      sink += hnsw.KnnQueryFiltered(q.data(), 10, half_cands, 40).size();
+    });
   }
 
   // 4. DocumentStore string-to-double sort vs SortableColumn pre-extracted sort (10,000 docs)

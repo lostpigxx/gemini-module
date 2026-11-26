@@ -888,7 +888,8 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                     if (!ferr.empty()) {
                       rep->error = ferr;
                     } else {
-                      knn_hits = vi->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands);
+                      knn_hits = vi->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands,
+                                                      parsed.knn_ef_runtime, parsed.knn_oversample);
                     }
                   } else {
                     knn_hits = vi->KnnQueryEf(qvec.data(), parsed.knn_k,
@@ -946,7 +947,8 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                                    qopts, &entry.geoshape_indices, &params,
                                    &entry.vector_indices, &entry.synonyms);
         if (!ferr.empty()) return RedisModule_ReplyWithError(ctx, ferr.c_str());
-        knn_hits = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands);
+        knn_hits = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands,
+                                          parsed.knn_ef_runtime, parsed.knn_oversample);
       } else {
         knn_hits = vidx->KnnQueryEf(qvec.data(), parsed.knn_k,
                                     parsed.knn_ef_runtime, parsed.knn_oversample);

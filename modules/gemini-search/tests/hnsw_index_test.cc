@@ -677,3 +677,80 @@ TEST(HnswIndexTest, BqTwoStageOversampleAndRerankBoostsRecall) {
     }
   }
 }
+
+TEST(HnswIndexTest, AdaptiveFilteredHnswSelectivityAndRecall) {
+  constexpr size_t N = 1600;
+  constexpr size_t DIM = 32;
+  constexpr size_t K = 10;
+  std::mt19937 rng(6501);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+  HnswIndex hnsw(DIM, DistanceMetric::kL2, 16, 150, VectorQuantization::kNone);
+  FlatVectorIndex flat(DIM, DistanceMetric::kL2, VectorQuantization::kNone);
+  HnswIndex hnsw_bq_fp16(DIM, DistanceMetric::kCosine, 16, 150, VectorQuantization::kBq,
+                         VectorRerankType::kFp16, 6);
+
+  std::vector<float> buf(DIM);
+  std::vector<std::string> cands_small;   // ~2% (brute-force path)
+  std::vector<std::string> cands_medium;  // 35% (Filtered HNSW path)
+  std::vector<std::string> cands_large;   // 70% (Filtered HNSW path)
+  std::unordered_set<std::string> set_small, set_medium, set_large;
+
+  for (size_t i = 0; i < N; i++) {
+    for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+    std::string id = "f" + std::to_string(i);
+    hnsw.Add(id, buf.data());
+    flat.Add(id, buf.data());
+    hnsw_bq_fp16.Add(id, buf.data());
+    if (i % 50 == 0) {
+      cands_small.push_back(id);
+      set_small.insert(id);
+    }
+    if (i % 100 < 35) {
+      cands_medium.push_back(id);
+      set_medium.insert(id);
+    }
+    if (i % 10 < 7) {
+      cands_large.push_back(id);
+      set_large.insert(id);
+    }
+  }
+  // Include duplicate and non-existent IDs to test robustness
+  cands_medium.push_back(cands_medium.front());
+  cands_medium.push_back("nonexistent_doc");
+
+  auto check_filtered = [&](const std::vector<std::string>& cands,
+                            const std::unordered_set<std::string>& allowed,
+                            double min_recall) {
+    double total_recall = 0.0;
+    constexpr int kQueries = 15;
+    for (int q = 0; q < kQueries; q++) {
+      for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+      auto hr = hnsw.KnnQueryFiltered(buf.data(), K, cands, 64);
+      auto fr = flat.KnnQueryFiltered(buf.data(), K, cands);
+      ASSERT_EQ(hr.size(), K);
+      std::unordered_set<std::string> gt;
+      for (const auto& r : fr) gt.insert(r.doc_id);
+      size_t hits = 0;
+      for (size_t i = 0; i < hr.size(); i++) {
+        EXPECT_TRUE(allowed.count(hr[i].doc_id) > 0) << "Returned non-matching doc " << hr[i].doc_id;
+        if (i > 0) EXPECT_LE(hr[i - 1].score, hr[i].score + 1e-6f);
+        if (gt.count(hr[i].doc_id)) hits++;
+      }
+      total_recall += static_cast<double>(hits) / static_cast<double>(K);
+    }
+    EXPECT_GE(total_recall / kQueries, min_recall);
+  };
+
+  check_filtered(cands_small, set_small, 1.0);
+  check_filtered(cands_medium, set_medium, 0.85);
+  check_filtered(cands_large, set_large, 0.90);
+
+  // Filtered HNSW with BQ + FP16 Rerank
+  for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+  auto br = hnsw_bq_fp16.KnnQueryFiltered(buf.data(), K, cands_large, 64, 4);
+  ASSERT_EQ(br.size(), K);
+  for (const auto& r : br) {
+    EXPECT_TRUE(set_large.count(r.doc_id) > 0);
+  }
+}

@@ -462,28 +462,203 @@ std::vector<KnnResult> HnswIndex::RangeQuery(const float* query,
 
 std::vector<KnnResult> HnswIndex::KnnQueryFiltered(
     const float* query, size_t k,
-    const std::vector<std::string>& candidates) const {
+    const std::vector<std::string>& candidates,
+    size_t ef_runtime, size_t oversample) const {
+  if (live_count_ == 0 || entry_point_ == kInvalidNode || k == 0 || candidates.empty()) {
+    return {};
+  }
+
   const bool do_rerank =
       (quantization_ == VectorQuantization::kBq && rerank_ != VectorRerankType::kNone);
-  BqQueryBuf qbq;
-  if (!do_rerank) qbq.Init(query, dim_, bq_words_, quantization_);
 
-  std::vector<KnnResult> results;
-  results.reserve(candidates.size());
+  auto brute_force = [&](const std::vector<uint32_t>* resolved_nids) -> std::vector<KnnResult> {
+    BqQueryBuf qbq;
+    if (!do_rerank) qbq.Init(query, dim_, bq_words_, quantization_);
+
+    std::vector<KnnResult> results;
+    if (resolved_nids) {
+      results.reserve(resolved_nids->size());
+      for (uint32_t nid : *resolved_nids) {
+        float d = do_rerank ? RerankDistanceTo(query, nid)
+                            : DistanceTo(query, qbq.ptr, nid);
+        results.push_back({doc_ids_[nid], d});
+      }
+    } else {
+      results.reserve(candidates.size());
+      for (const auto& doc_id : candidates) {
+        auto it = id_to_node_.find(doc_id);
+        if (it == id_to_node_.end()) continue;
+        float d = do_rerank ? RerankDistanceTo(query, it->second)
+                            : DistanceTo(query, qbq.ptr, it->second);
+        results.push_back({doc_id, d});
+      }
+    }
+    size_t n = std::min(k, results.size());
+    std::partial_sort(results.begin(), results.begin() + static_cast<ptrdiff_t>(n),
+                      results.end(),
+                      [](const KnnResult& a, const KnnResult& b) {
+                        return a.score < b.score;
+                      });
+    results.resize(n);
+    return results;
+  };
+
+  // Adaptive selectivity threshold:
+  // For small candidate sets (< 512) or low selectivity (< 5%) or small graphs (< 1024),
+  // direct brute-force over candidates is faster and 100% exact.
+  constexpr size_t kBruteForceMaxCands = 512;
+  constexpr size_t kMinGraphSizeForFilteredHnsw = 1024;
+  constexpr double kMinSelectivityForFilteredHnsw = 0.05;
+
+  double est_selectivity =
+      static_cast<double>(std::min(candidates.size(), live_count_)) /
+      static_cast<double>(live_count_);
+  if (live_count_ < kMinGraphSizeForFilteredHnsw ||
+      candidates.size() <= kBruteForceMaxCands ||
+      est_selectivity < kMinSelectivityForFilteredHnsw) {
+    return brute_force(nullptr);
+  }
+
+  // Thread-local zero-allocation epoch-stamped allowed set & visited set
+  struct ThreadEpochBuf {
+    std::vector<uint32_t> epoch;
+    uint32_t cur = 0;
+    uint32_t Next(size_t n) {
+      if (epoch.size() < n) epoch.resize(n, 0);
+      if (cur == std::numeric_limits<uint32_t>::max()) {
+        std::fill(epoch.begin(), epoch.end(), 0);
+        cur = 1;
+      } else {
+        cur++;
+      }
+      return cur;
+    }
+  };
+  thread_local ThreadEpochBuf allowed_buf;
+  thread_local ThreadEpochBuf visited_buf;
+
+  const uint32_t allow_epoch = allowed_buf.Next(alive_.size());
+  size_t valid_cands = 0;
+  std::vector<uint32_t> valid_nids;
+  valid_nids.reserve(std::min(candidates.size(), live_count_));
   for (const auto& doc_id : candidates) {
     auto it = id_to_node_.find(doc_id);
     if (it == id_to_node_.end()) continue;
-    float d = do_rerank ? RerankDistanceTo(query, it->second)
-                        : DistanceTo(query, qbq.ptr, it->second);
-    results.push_back({doc_id, d});
+    uint32_t nid = it->second;
+    if (nid < alive_.size() && alive_[nid] && allowed_buf.epoch[nid] != allow_epoch) {
+      allowed_buf.epoch[nid] = allow_epoch;
+      valid_nids.push_back(nid);
+      valid_cands++;
+    }
   }
-  size_t n = std::min(k, results.size());
-  std::partial_sort(results.begin(), results.begin() + static_cast<ptrdiff_t>(n),
-                    results.end(),
-                    [](const KnnResult& a, const KnnResult& b) {
-                      return a.score < b.score;
-                    });
-  results.resize(n);
+  if (valid_cands == 0) return {};
+
+  double actual_sel = static_cast<double>(valid_cands) / static_cast<double>(live_count_);
+  if (valid_cands <= kBruteForceMaxCands || actual_sel < kMinSelectivityForFilteredHnsw) {
+    return brute_force(&valid_nids);
+  }
+
+  // Filtered HNSW graph traversal (uses BQ Hamming if quantized, with optional rerank)
+  BqQueryBuf qbq;
+  qbq.Init(query, dim_, bq_words_, quantization_);
+
+  uint32_t cur = entry_point_;
+  for (int lc = max_level_; lc > 0; lc--) {
+    cur = GreedySearchLayer(query, qbq.ptr, cur, lc);
+  }
+
+  size_t cand_k = k;
+  if (do_rerank) {
+    size_t os = (oversample > 0) ? oversample : bq_oversample_;
+    cand_k = std::min(valid_cands, std::max(k, k * os));
+  } else {
+    cand_k = std::min(valid_cands, k);
+  }
+  size_t target_ef = std::max(ef_runtime > 0 ? ef_runtime : ef_runtime_, cand_k);
+  size_t max_expansions = static_cast<size_t>(
+      std::ceil(static_cast<double>(target_ef) / std::max(actual_sel, 0.05)));
+  max_expansions = std::min(live_count_, std::max(max_expansions * 2, target_ef * 4));
+
+  using Pair = std::pair<float, uint32_t>;
+  auto cmp_min = [](const Pair& a, const Pair& b) { return a.first > b.first; };
+  auto cmp_max = [](const Pair& a, const Pair& b) { return a.first < b.first; };
+  std::priority_queue<Pair, std::vector<Pair>, decltype(cmp_min)> frontier(cmp_min);
+  std::priority_queue<Pair, std::vector<Pair>, decltype(cmp_max)> filtered(cmp_max);
+
+  const uint32_t visit_epoch = visited_buf.Next(alive_.size());
+  float entry_dist = DistanceTo(query, qbq.ptr, cur);
+  frontier.push({entry_dist, cur});
+  visited_buf.epoch[cur] = visit_epoch;
+  if (allowed_buf.epoch[cur] == allow_epoch) {
+    filtered.push({entry_dist, cur});
+  }
+
+  size_t expanded = 0;
+  while (!frontier.empty() && expanded < max_expansions) {
+    auto [c_dist, c_id] = frontier.top();
+    frontier.pop();
+    expanded++;
+
+    if (filtered.size() >= target_ef && c_dist > filtered.top().first) {
+      break;
+    }
+
+    if (neighbors_[c_id].empty()) continue;
+    const auto& nb_list = neighbors_[c_id][0];
+    for (uint32_t nb_id : nb_list) {
+      if (visited_buf.epoch[nb_id] == visit_epoch) continue;
+      visited_buf.epoch[nb_id] = visit_epoch;
+      if (!alive_[nb_id]) continue;
+
+      float n_dist = DistanceTo(query, qbq.ptr, nb_id);
+      if (filtered.size() < target_ef || n_dist < filtered.top().first) {
+        frontier.push({n_dist, nb_id});
+        if (allowed_buf.epoch[nb_id] == allow_epoch) {
+          filtered.push({n_dist, nb_id});
+          if (filtered.size() > target_ef) filtered.pop();
+        }
+      }
+    }
+  }
+
+  // Fallback to exact brute-force if disconnected graph yielded fewer than min(k, valid_cands)
+  if (filtered.size() < std::min(k, valid_cands)) {
+    return brute_force(&valid_nids);
+  }
+
+  std::vector<Pair> matched;
+  matched.reserve(filtered.size());
+  while (!filtered.empty()) {
+    matched.push_back(filtered.top());
+    filtered.pop();
+  }
+  std::reverse(matched.begin(), matched.end());
+
+  if (do_rerank) {
+    std::vector<KnnResult> reranked;
+    reranked.reserve(std::min(cand_k, matched.size()));
+    for (const auto& [dist, nid] : matched) {
+      (void)dist;
+      reranked.push_back({doc_ids_[nid], RerankDistanceTo(query, nid)});
+      if (reranked.size() >= cand_k) break;
+    }
+    size_t n = std::min(k, reranked.size());
+    std::partial_sort(reranked.begin(),
+                      reranked.begin() + static_cast<ptrdiff_t>(n),
+                      reranked.end(),
+                      [](const KnnResult& a, const KnnResult& b) {
+                        return a.score < b.score;
+                      });
+    reranked.resize(n);
+    return reranked;
+  }
+
+  std::vector<KnnResult> results;
+  results.reserve(std::min(k, matched.size()));
+  for (const auto& [dist, nid] : matched) {
+    results.push_back({doc_ids_[nid], dist});
+    if (results.size() >= k) break;
+  }
   return results;
 }
 

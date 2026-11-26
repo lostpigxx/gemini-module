@@ -689,7 +689,8 @@ std::vector<KnnResult> FlatVectorIndex::KnnQueryEf(const float* query, size_t k,
 
 std::vector<KnnResult> FlatVectorIndex::KnnQueryFiltered(
     const float* query, size_t k,
-    const std::vector<std::string>& candidates) const {
+    const std::vector<std::string>& candidates,
+    size_t /*ef_runtime*/, size_t /*oversample*/) const {
   DistFn dist_fn = GetDistanceFunction(metric_);
   std::vector<KnnResult> results;
   if (quantization_ == VectorQuantization::kBq &&
