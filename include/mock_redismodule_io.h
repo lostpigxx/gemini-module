@@ -140,13 +140,19 @@ static void Mock_SaveStringBuffer(RedisModuleIO* io, const char* str, size_t len
 }
 
 static char* Mock_LoadStringBuffer(RedisModuleIO* io, size_t* lenptr) {
+  auto* s = StreamOf(io);
   uint64_t n = 0;
-  StreamOf(io)->ReadBytes(&n, sizeof(n));
+  s->ReadBytes(&n, sizeof(n));
+  if (s->error || n > s->buf.size() - s->read_pos) {
+    s->error = true;
+    if (lenptr) *lenptr = 0;
+    return nullptr;
+  }
   if (lenptr) *lenptr = static_cast<size_t>(n);
   // Allocate with malloc — matches Mock_Free below and the TESTING alloc path
-  auto* buf = static_cast<char*>(std::malloc(n + 1));
+  auto* buf = static_cast<char*>(std::malloc(static_cast<size_t>(n) + 1));
   if (buf) {
-    StreamOf(io)->ReadBytes(buf, static_cast<size_t>(n));
+    s->ReadBytes(buf, static_cast<size_t>(n));
     buf[n] = '\0';
   }
   return buf;
