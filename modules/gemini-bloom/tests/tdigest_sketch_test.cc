@@ -268,3 +268,35 @@ TEST(TdigestSketchTest, HugeWeightRankDoesNotOverflowUB) {
   EXPECT_EQ(sketch->Rank(20.0), INT64_MAX);
   EXPECT_EQ(sketch->RevRank(0.0), INT64_MAX);
 }
+
+TEST(TdigestSketchTest, K1ScaleFunctionHighTailAccuracyOnHeavyTailedData) {
+  auto sketch = TdigestSketch::Create(100.0);
+  ASSERT_TRUE(sketch.has_value());
+  constexpr int kN = 100000;
+  std::vector<double> vals(kN);
+  // Deterministic exponential-like heavy-tailed samples via inverse CDF.
+  uint64_t s = 0xdeadbeefcafebabeULL;
+  for (int i = 0; i < kN; i++) {
+    s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+    double u = (static_cast<double>(s >> 11) + 0.5) / 9007199254740992.0;
+    double v = -std::log(1.0 - u);
+    vals[i] = v;
+    ASSERT_TRUE(sketch->Add(v));
+  }
+  sketch->Compress();
+  std::sort(vals.begin(), vals.end());
+
+  auto CheckQ = [&](double q, double maxRelErr) {
+    double exact = vals[static_cast<size_t>(q * (kN - 1))];
+    double est = sketch->Quantile(q);
+    double relErr = std::fabs(est - exact) / exact;
+    EXPECT_LT(relErr, maxRelErr) << "q=" << q << " est=" << est << " exact=" << exact;
+  };
+  // Flat bucketing previously had ~80% error at p99.9 and ~32% at p99.99.
+  // With Dunning-Ertl k1 arcsin scaling, tail error is < 2%!
+  CheckQ(0.50, 0.02);
+  CheckQ(0.90, 0.02);
+  CheckQ(0.99, 0.02);
+  CheckQ(0.999, 0.03);
+  CheckQ(0.9999, 0.05);
+}

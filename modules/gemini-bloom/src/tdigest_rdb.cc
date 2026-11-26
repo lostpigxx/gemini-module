@@ -282,7 +282,7 @@ size_t TdigestMemUsage(const void* value) {
   if (!value) return 0;
   auto* sketch = static_cast<const TdigestSketch*>(value);
   return sizeof(TdigestSketch) +
-         static_cast<size_t>(sketch->NumCentroids()) * sizeof(TdigestSketch::Centroid) +
+         static_cast<size_t>(sketch->CentroidCapacity()) * (sizeof(TdigestSketch::Centroid) + sizeof(double)) +
          static_cast<size_t>(sketch->BufferCapacity()) * sizeof(TdigestSketch::Centroid);
 }
 
@@ -328,6 +328,11 @@ int DefragTdigest(RedisModuleDefragCtx* ctx, RedisModuleString* key, void** valu
   if (auto* relocatedCentroids =
         static_cast<TdigestSketch::Centroid*>(RedisModule_DefragAlloc(ctx, sketch->GetCentroidArray()))) {
     sketch->AdoptCentroidArray(relocatedCentroids);
+  }
+
+  if (auto* relocatedPrefix =
+        static_cast<double*>(RedisModule_DefragAlloc(ctx, sketch->GetPrefixWeightsArray()))) {
+    sketch->AdoptPrefixWeightsArray(relocatedPrefix);
   }
 
   if (auto* relocatedBuffer =

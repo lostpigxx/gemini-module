@@ -154,7 +154,7 @@ static int CmdQuantile(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
   RedisModule_AutoMemory(ctx);
 
   auto* key = static_cast<RedisModuleKey*>(
-    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
+    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ));
 
   if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
     return RedisModule_ReplyWithError(ctx, "ERR key does not exist");
@@ -184,7 +184,7 @@ static int CmdCdf(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   RedisModule_AutoMemory(ctx);
 
   auto* key = static_cast<RedisModuleKey*>(
-    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
+    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ));
 
   if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
     return RedisModule_ReplyWithError(ctx, "ERR key does not exist");
@@ -214,7 +214,7 @@ static int CmdRank(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   RedisModule_AutoMemory(ctx);
 
   auto* key = static_cast<RedisModuleKey*>(
-    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
+    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ));
 
   if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
     return RedisModule_ReplyWithError(ctx, "ERR key does not exist");
@@ -244,7 +244,7 @@ static int CmdRevrank(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   RedisModule_AutoMemory(ctx);
 
   auto* key = static_cast<RedisModuleKey*>(
-    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
+    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ));
 
   if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
     return RedisModule_ReplyWithError(ctx, "ERR key does not exist");
@@ -274,7 +274,7 @@ static int CmdByrank(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   RedisModule_AutoMemory(ctx);
 
   auto* key = static_cast<RedisModuleKey*>(
-    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
+    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ));
 
   if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
     return RedisModule_ReplyWithError(ctx, "ERR key does not exist");
@@ -304,7 +304,7 @@ static int CmdByrevrank(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
   RedisModule_AutoMemory(ctx);
 
   auto* key = static_cast<RedisModuleKey*>(
-    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
+    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ));
 
   if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
     return RedisModule_ReplyWithError(ctx, "ERR key does not exist");
@@ -334,7 +334,7 @@ static int CmdTrimmedMean(RedisModuleCtx* ctx, RedisModuleString** argv, int arg
   RedisModule_AutoMemory(ctx);
 
   auto* key = static_cast<RedisModuleKey*>(
-    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
+    RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ));
 
   if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
     return RedisModule_ReplyWithError(ctx, "ERR key does not exist");
@@ -572,13 +572,13 @@ int RegisterTdigestCommands(RedisModuleCtx* ctx) {
   CmdEntry commands[] = {
     {"TDIGEST.CREATE",       CmdCreate,       "write deny-oom"},
     {"TDIGEST.ADD",          CmdAdd,          "write deny-oom"},
-    {"TDIGEST.QUANTILE",     CmdQuantile,     "write deny-oom"},
-    {"TDIGEST.CDF",          CmdCdf,          "write deny-oom"},
-    {"TDIGEST.RANK",         CmdRank,         "write deny-oom"},
-    {"TDIGEST.REVRANK",      CmdRevrank,      "write deny-oom"},
-    {"TDIGEST.BYRANK",       CmdByrank,       "write deny-oom"},
-    {"TDIGEST.BYREVRANK",    CmdByrevrank,    "write deny-oom"},
-    {"TDIGEST.TRIMMED_MEAN", CmdTrimmedMean,  "write deny-oom"},
+    {"TDIGEST.QUANTILE",     CmdQuantile,     "readonly"},
+    {"TDIGEST.CDF",          CmdCdf,          "readonly"},
+    {"TDIGEST.RANK",         CmdRank,         "readonly"},
+    {"TDIGEST.REVRANK",      CmdRevrank,      "readonly"},
+    {"TDIGEST.BYRANK",       CmdByrank,       "readonly"},
+    {"TDIGEST.BYREVRANK",    CmdByrevrank,    "readonly"},
+    {"TDIGEST.TRIMMED_MEAN", CmdTrimmedMean,  "readonly"},
     {"TDIGEST.MIN",          CmdMin,          "readonly"},
     {"TDIGEST.MAX",          CmdMax,          "readonly"},
     {"TDIGEST.RESET",        CmdReset,        "write deny-oom"},

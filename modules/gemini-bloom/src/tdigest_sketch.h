@@ -113,6 +113,7 @@ public:
   Centroid* GetCentroidArray() { return centroids_; }
   const Centroid* GetBufferArray() const { return buffer_; }
   Centroid* GetBufferArray() { return buffer_; }
+  double* GetPrefixWeightsArray() { return prefixWeights_; }
   uint32_t BufferCapacity() const { return bufferCapacity_; }
   uint32_t CentroidCapacity() const { return centroidCapacity_; }
 
@@ -120,6 +121,7 @@ public:
   // via RedisModule_DefragAlloc) and transfers ownership.
   void AdoptCentroidArray(Centroid* relocated) { centroids_ = relocated; }
   void AdoptBufferArray(Centroid* relocated) { buffer_ = relocated; }
+  void AdoptPrefixWeightsArray(double* relocated) { prefixWeights_ = relocated; }
 
   // For RDB/wire load: reconstruct internal state directly from
   // already-validated data. `numCentroids`/`numBuffered` sizes and the
@@ -132,35 +134,28 @@ public:
                               uint64_t numCompressions);
 
 private:
-  struct Anchor {
-    double rank;
-    double value;
-  };
-
-  // Groups `points` (arbitrary order) into a new sorted centroid array using
-  // this sketch's compression setting, replacing centroids_/buffer_.
-  // `totalWeight` must equal the sum of all points' weights. Returns false
-  // on allocation failure (sketch left in a valid but unspecified state).
-  bool RebuildFromPoints(std::vector<Centroid> points, double totalWeight);
+  // Groups `points` (already sorted ascending by mean) into a new sorted
+  // centroid array using Dunning-Ertl's k1 (arcsin) scale function with
+  // alternating sweep directions. Replaces centroids_/prefixWeights_.
+  bool RebuildFromSorted(const Centroid* points, size_t count, double totalWeight);
 
   // Grows buffer_/centroids_ (via RMRealloc) so capacity >= needed. Returns
   // false on allocation failure (array left unmodified).
   bool EnsureBufferCapacity(uint32_t needed);
   bool EnsureCentroidCapacity(uint32_t needed);
 
-  // Rank-space anchors for ByRank/ByRevRank/Quantile/TrimmedMean: one point
-  // per centroid at (cumulative weight before it + half its own weight,
-  // its mean), with the first and last points' values overridden to the
-  // exact tracked min_/max_.
-  std::vector<Anchor> BuildAnchors() const;
-  static double ValueAtRank(double rank, const std::vector<Anchor>& anchors);
+  // Recomputes midpoint rank prefix sums (prefixWeights_) for O(log C) queries.
+  void RebuildPrefixWeights();
 
-  // (sum of weights of centroids with mean < value) + half (sum of weights
-  // of centroids with mean == value). Direct O(numCentroids_) scan.
+  // O(log C) zero-allocation interpolation at `rank` using prefixWeights_.
+  double ValueAtRank(double rank) const;
+
+  // O(log C) zero-allocation (sum of weights < value) + 0.5 * (sum == value).
   double RankReal(double value) const;
 
   double compression_ = 0.0;
   Centroid* centroids_ = nullptr;
+  double* prefixWeights_ = nullptr;
   uint32_t numCentroids_ = 0;
   uint32_t centroidCapacity_ = 0;
   Centroid* buffer_ = nullptr;
