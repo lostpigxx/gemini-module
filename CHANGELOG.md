@@ -11,6 +11,8 @@ All notable changes to `gemini-module` are documented in this file.
 - **Client SDK Compatibility Fixes**: Added `FT.CREATE` `SCORE`/`SCORE_FIELD`/`PAYLOAD_FIELD`/`NOFIELDS` and standard `VECTOR FLAT|HNSW <attr_count>` parsing, fixed `ON HASH` auto-indexing of `VECTOR` fields in `IndexHashKey`, and added `SCORER`/`VERBATIM`/`ADDSCORES` support in `FT.AGGREGATE`.
 
 ### Tooling, Tests & Documentation
+- Added `ci/cluster_test.py` (3-node Redis 7 Cluster integration test verifying multi-shard routing, `MOVED`, `CROSSSLOT` enforcement, and live slot `MIGRATE` across all 6 module types: BF/CF/CMS/Top-K/T-Digest/JSON) and wired it into `ci/run_tests.sh`.
+- Fixed `CMS.MERGE` and `TDIGEST.MERGE` in `gemini-bloom` to register `"getkeys-api"` (`RedisModule_IsKeysPositionRequest`) alongside Redis 7 `SetCommandInfo` KeySpecs so Redis Cluster enforces `CROSSSLOT` on all source keys.
 - Added `ci/sdk_compat_test.py` (`redis-py` end-to-end compatibility test across all 3 modules for RESP2 & RESP3) and wired it into `ci/run_tests.sh`.
 - Added unified `ci/run_benchmarks.sh` script for `bloom_bench`, `json_bench`, and `search_bench`.
 - Added `modules/gemini-json/DESIGN.md`, `doc/roadmap.md`, and `doc/v1.1-development-plan.md`, and updated `.gitignore` for `build_*` directories.

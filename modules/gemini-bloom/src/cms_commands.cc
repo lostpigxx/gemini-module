@@ -216,6 +216,13 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   int sourcesStart = 3;
   if (numKeys > argc - sourcesStart) return RedisModule_WrongArity(ctx);
+  if (RedisModule_IsKeysPositionRequest(ctx)) {
+    RedisModule_KeyAtPos(ctx, 1);
+    for (long long i = 0; i < numKeys; i++) {
+      RedisModule_KeyAtPos(ctx, sourcesStart + static_cast<int>(i));
+    }
+    return REDISMODULE_OK;
+  }
   int weightsStart = sourcesStart + static_cast<int>(numKeys);
 
   SmallBuf<double> weights;
@@ -378,13 +385,14 @@ int RegisterCmsCommands(RedisModuleCtx* ctx) {
     {"CMS.INITBYPROB", CmdInitbyprob, "write deny-oom"},
     {"CMS.INCRBY",     CmdIncrby,     "write deny-oom"},
     {"CMS.QUERY",      CmdQuery,      "readonly"},
-    {"CMS.MERGE",      CmdMerge,      "write deny-oom"},
+    {"CMS.MERGE",      CmdMerge,      "write deny-oom getkeys-api"},
     {"CMS.INFO",       CmdInfo,       "readonly"},
     {"CMS.LOADCHUNK",  CmdLoadchunk,  "write deny-oom"},
   };
 
   for (auto& cmd : commands) {
-    if (RedisModule_CreateCommand(ctx, cmd.name, cmd.handler, cmd.flags, 1, 1, 1) == REDISMODULE_ERR) {
+    int fk = (std::strcmp(cmd.name, "CMS.MERGE") == 0) ? 0 : 1;
+    if (RedisModule_CreateCommand(ctx, cmd.name, cmd.handler, cmd.flags, fk, fk, fk) == REDISMODULE_ERR) {
       return REDISMODULE_ERR;
     }
   }

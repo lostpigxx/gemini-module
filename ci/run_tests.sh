@@ -145,6 +145,12 @@ if [ "$REDIS_MAJOR" -ge 7 ]; then
     "./$BUILD_DIR/redis_json.so" \
     "./$BUILD_DIR/redis_search.so" || \
     { red "FAIL: redis-py sdk compat"; FAIL=1; }
+
+  header "Cluster: 3-node Redis 7 Cluster (routing, KeySpecs CROSSSLOT, live MIGRATE)"
+  python3 ci/cluster_test.py \
+    "./$BUILD_DIR/redis_bloom.so" \
+    "./$BUILD_DIR/redis_json.so" || \
+    { red "FAIL: redis cluster integration"; FAIL=1; }
 fi
 
 # ── Summary ──────────────────────────────────────────────────
