@@ -1,4 +1,6 @@
 build/
+build_*/
+.git/
 .claude/
 .vscode/
 .clangd
@@ -6,3 +8,4 @@ build/
 __pycache__/
 *.pyc
 dump.rdb
+
