@@ -8,7 +8,7 @@ gemini-search 是一个基于 C++20 从零实现的 Redis 全文检索、向量�
 
 - **目标 Redis 版本**：仅面向 **Redis 7**（基线 Redis 7.2.11），不考虑 Redis 5/6 兼容。
 - **Clean-room 原则**：严格仅基于公开命令文档（redis.io）和学术算法（BM25、Porter2、Double Metaphone、HNSW arXiv:1603.09320、RRF、Ray Casting）独立设计与实现，禁止阅读或引用 RediSearch 源码（RSALv2/SSPL）。
-- **数据格式**：使用私有模块数据类型名 `GmSearch-`（当前 `kSearchEncVer = 13`，向下兼容 `1..13`）和私有 `aux_save2`/`aux_load` 持久化格式，全部写命令调用 `RedisModule_ReplicateVerbatim` 支持 Master-Replica `PSYNC` 全量与在线复制。
+- **数据格式**：使用私有模块数据类型名 `GmSearch-`（当前 `kSearchEncVer = 15`，向下兼容 `1..15`）和私有 `aux_save2`/`aux_load` 持久化格式，全部写命令调用 `RedisModule_ReplicateVerbatim` 支持 Master-Replica `PSYNC` 全量与在线复制。
 
 ---
 
@@ -24,22 +24,25 @@ modules/gemini-search/
     search_internal.h        # 命令层内部共享声明（状态访问器、helper、命令函数）
     search_state.cc          # 全局状态（g_indices/g_aliases/g_cursors/词典/配置）与公共 helper
     search_index_cmds.cc     # FT.CREATE / DROPINDEX / INFO / _LIST / ADD / DEL / ALTER / ALIAS* / TAGVALS
-    search_query_cmds.cc     # FT.SEARCH / EXPLAIN / EXPLAINCLI / PROFILE / 高亮与摘要
+    search_query_cmds.cc     # FT.SEARCH / FT.HYBRID / EXPLAIN / EXPLAINCLI / PROFILE / 高亮与摘要
     search_agg_cmds.cc       # FT.AGGREGATE / CURSOR / 聚合管道与游标生命周期
     search_aux_cmds.cc       # FT.SUG* / DICT* / SYN* / SPELLCHECK / CONFIG / _DEBUG
-    search_keyspace.cc       # ON HASH / ON JSON 扫描、Keyspace 事件与 FLUSHDB/LOADING 服务端事件
-    search_rdb.h/.cc         # RDB 序列化/反序列化（encver 1..7）、aux_save2/aux_load、AOF Rewrite、ModuleType 回调
+    search_keyspace.cc       # ON HASH / ON JSON 扫描、后台增量建索引 Timer、Keyspace 事件与 FLUSHDB/LOADING
+    search_rdb.h/.cc         # RDB 序列化/反序列化（encver 1..15）、aux_save2/aux_load、AOF Rewrite、ModuleType 回调
     # ── 纯算法核心层（不 include redismodule.h，可独立编译运行 GTest）──
     index_spec.h/.cc         # Schema 定义（FieldSpec / IndexSpec）
     document_store.h/.cc     # 文档存储与精确内存统计（MemoryUsage）
-    tag_index.h/.cc          # TAG 倒排索引
-    numeric_index.h/.cc      # NUMERIC 有序范围索引
-    text_index.h/.cc         # TEXT 倒排索引（位置信息、BM25、前缀/模糊/短语/词干/音似）
-    stemmer.h/.cc            # 英文 Porter2 词干提取
+    tag_index.h/.cc          # TAG 倒排索引（紧凑排序向量 + 槽位复用）
+    numeric_index.h/.cc      # NUMERIC 有序范围索引（紧凑排序向量 + 槽位复用）
+    sort_index.h             # 预解析 SORTABLE 列加速 SORTBY
+    text_index.h/.cc         # TEXT 倒排索引（位置信息、BM25 + WAND Top-K、前缀/模糊/短语/词干/音似/CJK FMM）
+    stemmer.h/.cc            # 多语言词干提取（英/法/德/西）
     phonetic.h/.cc           # Double Metaphone 音似编码
-    vector_index.h/.cc       # VECTOR FLAT 暴力 KNN（L2 / COSINE / IP）
-    hnsw_index.h/.cc         # VECTOR HNSW 近似最近邻图
-    geo_index.h/.cc          # GEO 经纬度索引（Haversine 半径检索）
+    vector_index.h/.cc       # VECTOR FLAT 暴力 KNN（L2/COSINE/IP、NEON/AVX2 SIMD、FP16/BF16/SQ8/BQ）
+    hnsw_index.h/.cc         # VECTOR HNSW（直接 RDB 序列化、BQ 两阶段重排、自适应 Filtered HNSW）
+    hybrid_fusion.h/.cc      # FT.HYBRID 多路融合（RRF / LINEAR）
+    search_executor.h/.cc    # 异步查询线程池（配合 RedisModule_BlockClient 非阻塞卸载）
+    geo_index.h/.cc          # GEO 经纬度索引（0.5° 空间网格 + Haversine 半径检索）
     geoshape_index.h/.cc     # GEOSHAPE WKT 解析与多边形空间关系判断
     query_parser.h/.cc       # 递归下降查询解析器（DIALECT 1/2）、AST 求值与协作式超时
     expr_engine.h/.cc        # 聚合表达式解析与求值引擎（APPLY / FILTER）
@@ -55,6 +58,7 @@ modules/gemini-search/
   1. 清理超出 `MAXIDLE` 的 `FT.AGGREGATE` 游标；
   2. 自动删除超出 `TEMPORARY <seconds>` 空闲 TTL 的临时索引（含关联别名与 Redis key）。
 - **游标配额**：每个索引最多允许 `kMaxCursorsPerIndex = 128` 个活跃游标，防止客户端泄漏导致内存无限增长。
+- **后台增量异步建索引（Phase 64）**：当 DB key 数量 `>= BG_INDEX_MIN_KEYS` 时，`FT.CREATE` 立即返回 `OK`，后台通过 Redis 7 `RedisModule_CreateTimer` + `RedisModule_ScanCursor` 按时间片（`BG_INDEX_BATCH_KEYS` / `BG_INDEX_TICK_MS`）增量扫描并写入索引，在 `FT.INFO` 中暴露 `indexing` 与 `percent_indexed`，并在 `FT.DROPINDEX` / `FLUSHDB` 时安全取消。
 
 ---
 
@@ -77,9 +81,11 @@ modules/gemini-search/
 
 ### 4.1 RDB 序列化（`GmSearch-`，`kSearchEncVer = 15`）
 
-- 向下兼容加载 `encver 1..13`。
+- 向下兼容加载 `encver 1..15`。
 - `encver 13` 完整持久化：索引名、前缀、数据源类型（`HASH`/`JSON`）、全部字段定义（含 `VECTOR` 参数与 `FLOAT32`/`FLOAT64`/`FLOAT16`/`BFLOAT16`、`QUANTIZATION SQ8/BQ`、`json_path`、`sortable`/`noindex`/`index_missing`/`index_empty`/`weight`、`nostem`/`phonetic`、`tag_separator`/`case_sensitive`、`geoshape_coord`）、索引选项（自定义 stopwords、`nofreqs`/`nooffsets`/`nohl`、`temporary_ttl`、`language`、`language_field`、`custom_dict`、`filter_expr`）、每索引同义词组、全部文档及二进制 `PAYLOAD`。
-- 开启 `REDISMODULE_OPTIONS_HANDLE_IO_ERRORS`，反序列化阶段对 IO 错误、枚举值范围、向量维度、NaN/负权重及各类集合数量上限做严格校验，非法流直接返回 `nullptr`。
+- `encver 14`（Phase 62）新增 `HnswIndex` 分层邻接表与量化向量直接持久化（活节点紧凑重编号、启动线性加载，图块缺失时安全回退到重建）。
+- `encver 15`（Phase 63）新增 BQ 两阶段精排配置（`RERANK FP16|SQ8`、`OVERSAMPLE`）与精排向量持久化。
+- 开启 `REDISMODULE_OPTIONS_HANDLE_IO_ERRORS`，反序列化阶段对 IO 错误、枚举值范围、向量维度、HNSW 图边/度/节点上限、NaN/负权重及各类集合数量上限做严格校验，非法流直接返回 `nullptr`。
 
 ### 4.2 全局非 Key 状态持久化（`aux_save2` / `aux_load`）
 
@@ -122,9 +128,10 @@ modules/gemini-search/
 ## 6. 测试与 CI 体系
 
 - **GTest 单元测试**（17 个测试二进制，覆盖核心算法与并发安全）：覆盖 `TextIndex`（含 CJK FMM 词典分词、BM25 WAND Top-K 精确等价性）、`TagIndex`/`NumericIndex`、`VectorIndex`/`HnswIndex`（含 FP32/SQ8/BQ SIMD 任意维度一致性与 4 线程并发读压测）、`HybridFusion`、`SearchExecutor`、`QueryParser`、`ExprEngine`、`Rdb/Aux/AOF/ModuleType`（含恶意流拒绝）及 ASan+UBSan 内存安全测试。
-- **Tcl 集成测试**（`modules/gemini-search/tests/tcl/search_test.tcl`，**377 用例**）：覆盖全部 32 个 `FT.*` 命令（含 `FT.HYBRID`、`QUANTIZATION SQ8/BQ`、CJK FMM `DICT`、全路径异步非阻塞查询）、BGSAVE/BGREWRITEAOF 重启、Master-Replica `PSYNC` 复制、Keyspace 事件、`ON JSON` 与 `gemini-json` 联调、RESP3 连接。
+- **Tcl 集成测试**（`modules/gemini-search/tests/tcl/search_test.tcl`）：覆盖全部 32 个 `FT.*` 命令（含 `FT.HYBRID`、`QUANTIZATION SQ8/BQ`、`RERANK FP16/SQ8`、`OVERSAMPLE`、自适应 Filtered HNSW、后台增量异步建索引、CJK FMM `DICT`、全路径异步非阻塞查询）、BGSAVE/BGREWRITEAOF 重启、Master-Replica `PSYNC` 复制、Keyspace 事件、`ON JSON` 与 `gemini-json` 联调、RESP3 连接。
+- **SDK 兼容测试**（`ci/sdk_compat_test.py`）：使用 `redis-py` 高层 `r.ft()` API 在 RESP2 与 RESP3 下验证 `ON HASH` / `ON JSON`、`FT.CREATE`/`FT.SEARCH`/`FT.AGGREGATE`/KNN/`FT.INFO`/Suggest/Spellcheck/Alias/TagVals 全链路兼容。
 - **Python 长稳测试**（`ci/search_soak_test.py`）：持续混合执行 `HSET`/`UNLINK`/HNSW 增删、`FT.SEARCH` 正确性校验、`FT.AGGREGATE WITHCURSOR`、`FT.PROFILE` 和 `MEMORY USAGE` 内存增长检查（支持 RESP2 + RESP3，60s 实测 ~500k ops，内存增量 `+0.20 MB`）。
-- **Docker CI**：在 `Dockerfile.redis7`（Redis 7.2.11）中通过 `ci/run_tests.sh` 统一运行三模块（`gemini-bloom` / `gemini-json` / `gemini-search`）的 GTest、ASan+UBSan GTest、Tcl 集成测试与 Soak 测试。
+- **Docker CI**：在 `Dockerfile.redis7`（Redis 7.2.11）中通过 `ci/run_tests.sh` 并行运行三模块全部 21 个测试任务（GTest Normal/ASan、Tcl、Compat、Migrate、SDK Compat、3 节点 Cluster、Soak）。
 
 ---
 
@@ -136,9 +143,9 @@ modules/gemini-search/
 
 ---
 
-## 8. 核心演进总结与性能基线（截至 Phase 64）
+## 8. 核心演进总结与性能基线（截至 Phase 65）
 
-### 8.1 近期里程碑（v5–v1.1，Phases 40–64）
+### 8.1 近期里程碑（v5–v1.1，Phases 40–65）
 
 | 阶段 | 核心能力与优化 |
 |---|---|
@@ -148,7 +155,7 @@ modules/gemini-search/
 | **v8 (P52–P54)** | `SQ8` ARM NEON & x86-64 AVX2 SIMD 内核、`FT.HYBRID` 与非游标 `FT.AGGREGATE` 异步非阻塞卸载、CJK 自定义词典前向最大匹配（FMM）分词（`FT.DICTADD` + `FT.CREATE ... DICT`） |
 | **v9 (P55–P58)** | 1-bit 二值量化 `QUANTIZATION BQ`（32× 内存压缩 + NEON `vcntq_u8`/`popcnt` 汉明距离）、BM25 Top-K WAND 剪枝引擎（`TextIndex::SearchTopK`）、`HnswIndex` `thread_local` 并发读安全、Per-Index 细粒度 `shared_mutex` 读写锁、非 KNN `FT.SEARCH` 全路径异步卸载 |
 | **v1.0 (P59–P61)** | RDB `encver 13`（BQ/`DICT`/`LANGUAGE_FIELD` 闭环）、`mem_usage2`、RDB 逐字节模糊测试、HNSW 零分配 `GreedySearchLayer` + BQ 预量化 + WAND 接入 `FT.SEARCH`、`ON JSON` 多值数组通配索引 |
-| **v1.1 (P62–P64)** | **P62**：HNSW 图结构直接 RDB 序列化（`encver 14`，重启加载提速 480×–550×）；**P63**：BQ 两阶段检索（`RERANK FP16/SQ8` + `OVERSAMPLE`，`encver 15`）；**P64**：`FT.CREATE` 基于 Redis 7 Timer + ScanCursor 的后台增量异步建索引（`FT.INFO` `indexing`/`percent_indexed`）及 `redis-py` SDK 兼容闭环 |
+| **v1.1 (P62–P65)** | **P62**：HNSW 图结构直接 RDB 序列化（`encver 14`，2k×768d 加载提速 ~550×）；**P63**：BQ 两阶段检索（`RERANK FP16/SQ8` + `OVERSAMPLE`，`encver 15`）；**P64**：`FT.CREATE` 基于 Redis 7 Timer + ScanCursor 的后台增量异步建索引及 `redis-py` SDK 兼容闭环；**P65**：按过滤选择度自适应切换的 Filtered HNSW（零分配 epoch-bitset + 连通性保持遍历） |
 
 ### 8.2 `search_bench` 实测基线（Apple Silicon ARM64 NEON）
 
@@ -158,7 +165,10 @@ modules/gemini-search/
 | `FlatVector SQ8 Cosine KNN-10 (5k × 768d)` | `615.97 us/op` | 4× 内存压缩，NEON 动态反量化 |
 | `FlatVector BQ Hamming KNN-10 (5k × 768d)` | **`19.57 us/op`** | **32× 内存压缩，较 FP32 提速 ~28×** |
 | `FlatVector L2 KNN-10 (5k × 128d)` | `40.15 us/op` | NEON SIMD FP32 |
-| `HnswIndex L2 KNN-10 (2k × 128d)` | **`10.38 us/op`** | 建图 `89.51 ms`，线程安全零分配遍历 |
+| `HnswIndex L2 KNN-10 (2k × 128d)` | **`10.79 us/op`** | 线程安全零分配遍历 |
+| `HnswIndex Filtered 50% (2k × 128d)` | **`24.90 us/op`** | Phase 65 自适应 Filtered HNSW |
+| `HnswIndex Deserialize (2k × 128d / 2k × 768d BQ)` | **`198 us / 227 us`** | Phase 62 直接图反序列化（~550× 提速） |
+| `HnswIndex BQ / BQ+FP16 OS4 (2k × 768d)` | **`10.71 us / 58.73 us`** | Phase 63 两阶段粗排 + FP16 精排 |
 | `TextIndex::Search Full BM25 (20k docs)` | `589.39 us/op` | 4 词全量 BM25 |
 | `TextIndex::SearchTopK WAND-10 (20k docs)` | **`76.33 us/op`** | **与全量等价，提速 7.7×** |
 | `TextIndex::Update/Remove (30k vocab)` | `3.29 us/op` | 稠密 ID + 前向词表 |
@@ -166,18 +176,10 @@ modules/gemini-search/
 
 ---
 
-## 9. 后续演进与待办路线（v10+ Handoff）
+## 9. 后续演进方向（v2.0 长期按需）
 
-以下为当前已识别、尚未实施的高价值演进方向，下次重启 `gemini-search` 开发时可直接从 [development-plan-v10.md](../../doc/gemini-search/development-plan-v10.md) 切入：
+详见全仓规划 [doc/roadmap.md](../../doc/roadmap.md)：
 
-1. **v10 方向（推荐优先）— 持久化闭环与 `ON JSON` 深度联动（Phases 59–61）**
-   - **P59 — RDB `encver 13` + AOF 闭环**：将 Phase 54 的 `IndexSpec::custom_dict` 持久化进 RDB 并在 `FT.INFO` 中展示；补齐 `AofRewriteSearch` 对 `DICT` 与 `QUANTIZATION BQ` 的完整重写；同时消除 `search_rdb.cc` 中 `custom_dict` 缺失初始化的编译告警。
-   - **P60 — HNSW 图结构直接 RDB 序列化 / 并发重建**：在 RDB 中持久化 `HnswIndex` 的分层邻接表（或加载期多线程重建），将大向量索引的重启恢复耗时从全量重插降至毫秒级直接加载。
-   - **P61 — `ON JSON` 多值数组 JSONPath 索引**：支持 `$.tags[*]`、`$.items[*].title` 等数组通配路径展开建索引，并与 `gemini-json` 联调完整的嵌套文档增删改查测试。
-2. **向量检索进阶（v11 候选）**
-   - **BQ 粗排 + 原向量精排（Oversample & Rerank）**：保留 BQ 32× 压缩与 `~19 us` 粗排速度的同时，通过 oversample + FP16/SQ8 精排将高维召回率提升至 95%+。
-   - **Product Quantization (PQ)**：面向百万级高维向量进一步在内存与召回间提供可调档位。
-   - **WAND 接入 `EvaluateQueryScored` 多词 OR/AND 查询路径**：当前 `TextIndex::SearchTopK` 已实现并完成基准验证，可进一步在 `FT.SEARCH ... LIMIT offset count`（无额外 `SORTBY`）的顶层单字段/多字段 BM25 查询中自动触发 WAND Top-K 剪枝。
-3. **跨模块工程化（待办）**
-   - **GitHub Actions CI**（`.github/workflows/ci.yml`）：自动触发 Docker Redis 7 全量三模块构建、GTest、ASan/UBSan、Tcl 与短时长 Soak 回归。
-   - **统一性能基线回归脚本**：整合 `gemini-bloom` / `gemini-json` / `gemini-search` 的压测脚本与历史基线对比。
+1. **分布式集群查询（Cluster Scatter-Gather）**：在 Redis Cluster 多分片架构下支持跨节点分发与归并排序（`FT.SEARCH` / `FT.HYBRID` / `FT.AGGREGATE`）。
+2. **Product Quantization (PQ，乘积量化)**：面向千万级高维向量（768d/1536d）提供 64× 压缩（子空间 k-means 码本 + ADC 查表距离），并按需评估 mmap / 磁盘混合存储。
+3. **多语言分词与音似增强**：统计/HMM 中文分词、更多语种词干与非英文音似编码。

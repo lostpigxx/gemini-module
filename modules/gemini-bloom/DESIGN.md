@@ -45,7 +45,7 @@ gemini-bloom 是 Gemini 产品线的 Bloom Filter 组件，不是 RedisBloom 的
 
 兼容性已通过 Redis 6.2.17 + RedisBloom v2.4.20 的对照矩阵验证，覆盖 9 个 corpus（empty、single-layer、multi-layer、fixed、expansion 1/2/4、binary items、long item、large 16MB）在 RDB/DUMP/RESTORE/MIGRATE/RDB-preamble AOF/fullsync replication 路径上的双向数据完整性。该结论不能外推到其他 RedisBloom 版本或 Redis 8 内置 Bloom。
 
-**验证 corpus 与复现**：上述对照矩阵为早期本地验证结果，fixture 文件未入库。目前 RDB 兼容性由 Docker CI 中的 `ci/bloom_migrate_test.py` 持续守护：在 Redis 5.0.14 + RedisBloom 2.2.18、Redis 6.2.20 + RedisBloom 2.4.20、Redis 7.2.11 + RedisBloom 2.6.25 三组环境中，执行 4 个方向的 RDB 迁移（RB→GB、GB→RB、GB→GB、RB→RB）与多跳链式迁移，覆盖 16 种 filter 配置、约 30 万 items，验证 `BF.EXISTS` 结果 100% 一致（含 false positive）。`ci/bloom_compat_test.py` 则逐条对比 gemini-bloom 与 RedisBloom 的 `BF.*` 命令返回值。
+**验证 corpus 与复现**：上述对照矩阵为早期本地验证结果，fixture 文件未入库。目前 RDB 兼容性与协议一致性由统一面向 **Redis 7.2.11 + RedisBloom 2.6.25** 的离线 Docker CI（`Dockerfile.redis7`）持续守护：`ci/bloom_migrate_test.py` 执行 4 个方向的 RDB 迁移（RB→GB、GB→RB、GB→GB、RB→RB）与多跳链式迁移，覆盖 16 种 filter 配置、约 30 万 items，验证 `BF.EXISTS` 结果 100% 一致（含 false positive）；`ci/bloom_compat_test.py` 逐条对比 `BF.*` 命令返回值（RESP2 & RESP3）；`ci/sdk_compat_test.py` 与 `ci/cluster_test.py` 分别验证 `redis-py` 高层 SDK（RESP2 & RESP3）及 3 节点 Redis 7 Cluster 路由、`CROSSSLOT`（含 `CMS.MERGE`/`TDIGEST.MERGE` `"getkeys-api"`）与在线 `MIGRATE`。
 
 ---
 
@@ -186,8 +186,8 @@ gemini 同一 filter 的 chunk 序列:
 | 未知 option | 拒绝（ERR unrecognized option） | 静默接受 |
 | 重复 option | 拒绝（ERR duplicate） | 最后一次赋值生效 |
 | NOCREATE + CAPACITY | 前置拒绝（ERR NOCREATE cannot be used with CAPACITY or ERROR） | 后置拒绝（ERR not found） |
-| BF.INSERT EXPANSION 0 | 映射为 NONSCALING | 拒绝（ERR Bad argument received） |
-| BF.RESERVE EXPANSION 0 | 映射为 NONSCALING | 映射为 NONSCALING |
+| `BF.INSERT EXPANSION 0` | 拒绝（ERR expansion should be greater or equal to 1） | 拒绝（ERR Bad argument received） |
+| `BF.RESERVE EXPANSION 0` | 拒绝（ERR expansion should be greater or equal to 1，对齐 RedisBloom 2.6） | 映射为 NONSCALING（2.6 起同样拒绝） |
 
 gemini 总体上比 RedisBloom 更严格。这是有意为之的设计选择 — 宁可在参数阶段就拒绝，也不让不明确的意图静默通过。
 
@@ -335,6 +335,8 @@ modules/gemini-bloom/
     bloom_filter_test.cc    # BloomLayer 单元测试 + hash golden vectors
     sb_chain_test.cc        # ScalingBloomFilter 单元测试
     bloom_rdb_test.cc       # RDB/wire 序列化 round-trip + 恶意 metadata 测试
+    bloom_fuzz_test.cc      # RDB 逐字节截断/篡改模糊测试（覆盖全部 5 种类型）
+    bloom_bench.cc          # 性能微基准（BF/CF/CMS/Top-K/T-Digest）
     cuckoo_filter_test.cc cf_chain_test.cc cf_rdb_test.cc
     cms_sketch_test.cc cms_rdb_test.cc topk_sketch_test.cc topk_rdb_test.cc
     tdigest_sketch_test.cc tdigest_rdb_test.cc
@@ -409,7 +411,7 @@ modules/gemini-bloom/
 |---|---|---|
 | `rdb_load` / `rdb_save` | `RdbLoadBloom` / `RdbSaveBloom` | RDB 持久化（§5.1） |
 | `aof_rewrite` | `AofRewriteBloom` | command-AOF rewrite（§5.3） |
-| `free` / `mem_usage` | `FreeBloom` / `BloomMemUsage` | 释放与 `MEMORY USAGE` |
+| `free` / `mem_usage2` | `FreeBloom` / `BloomMemUsage2` | 释放与 `MEMORY USAGE`（Redis 7） |
 | `digest` | `DigestBloom` | 参与 `DEBUG DIGEST-VALUE` 一致性校验 |
 | `copy2` | `CopyBloom2` | 支持 `COPY` 命令（基于 `ScalingBloomFilter::Clone` / `BloomLayer::Clone` 深拷贝） |
 | `free_effort2` | `FreeEffortBloom2` | 让 Redis 判断是否 lazy free |
@@ -610,11 +612,13 @@ RDB 文件、LOADCHUNK payload 均视为非信任输入：
 |---|---|---|---|
 | BloomLayer 单元测试 | GTest (`bloom_filter_test`) | 30 | 单层 Bloom Filter 核心逻辑、hash 函数、flags、Clone |
 | ScalingBloomFilter 单元测试 | GTest (`sb_chain_test`) | 23 | 多层管理、扩容、固定大小、loading 状态、极端参数、Clone |
-| RDB/wire 序列化测试 | GTest (`bloom_rdb_test`) | 69 | 序列化 round-trip、恶意输入拒绝、encver 兼容、loading flag 剥离、digest/copy/defrag callbacks |
+| RDB/wire 序列化测试 | GTest (`bloom_rdb_test` + `bloom_fuzz_test`) | 69+ & Fuzz | 序列化 round-trip、恶意输入拒绝、逐字节截断/篡改 Fuzz、encver 兼容、loading flag 剥离、digest/copy/defrag callbacks |
 | 集成测试 | TCL (`bloom_test.tcl`) | ~185 | 完整命令语义、Redis 持久化、loading 状态保护、模块配置、通用命令（RENAME/COPY/DUMP/RESTORE/MULTI/Lua）、FP rate |
-| 对照测试 | Python (`ci/bloom_compat_test.py`) | 12 场景 | 与 RedisBloom 逐条对比 `BF.*` 返回值（RESP2 + RESP3） |
-| 长稳测试 | Python (`ci/bloom_soak_test.py`) | 默认 300s | 零 false negative、内存无泄漏 |
-| RDB 迁移测试 | Python (`ci/bloom_migrate_test.py`) | 16 配置 / ~30 万 items | gemini ↔ RedisBloom 4 方向 + 多跳 RDB 迁移 |
+| 对照测试 | Python (`ci/bloom_compat_test.py`) | 12 场景 | 与 RedisBloom 2.6.25 逐条对比 `BF.*` 返回值（RESP2 + RESP3） |
+| SDK 兼容测试 | Python (`ci/sdk_compat_test.py`) | 全 5 子模块 | `redis-py` 高层 API 端到端验证（RESP2 + RESP3） |
+| Cluster 集成测试 | Python (`ci/cluster_test.py`) | 3 节点 Cluster | 多分片路由、`MOVED`、`CROSSSLOT`（含 `CMS.MERGE`/`TDIGEST.MERGE`）与在线 `MIGRATE` |
+| 长稳测试 | Python (`ci/bloom_soak_test.py`) | 默认 300s | 零 false negative、内存无泄漏（覆盖全 5 子模块，RESP2 + RESP3） |
+| RDB 迁移测试 | Python (`ci/bloom_migrate_test.py`) | 16 配置 / ~30 万 items | gemini ↔ RedisBloom 4 方向 + 多跳 RDB 迁移（RESP2 + RESP3） |
 
 > 用例数为本文档更新时（2026-11）按 `TEST()` / `test*` 宏统计的近似值，以源码为准。
 

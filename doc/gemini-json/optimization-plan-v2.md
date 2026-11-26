@@ -112,7 +112,7 @@
 | 指标 | Phase 1 基线 | Phase 5 | Phase 9 最终 | 总提升（vs 基线） |
 |---|---:|---:|---:|---:|
 | `sizeof(JsonValue)` / `sizeof(ObjEntry)` | 40 B / 24 B (+堆key) | 24 B / 24 B (+堆key) | **24 B / 32 B (≤15B SKO)** | **-40% 节点 / 0 短键堆分配** |
-| 100k 整数数组 DOM 内存 | 4930 KB | 3367 KB | **3367 KB** | **-31.7%** |
+| 100k 整数数组 DOM 内存 | 4930 KB | 3367 KB | **1024 KB**（Phase 9B Typed Array） | **-79.2%**（vs Phase 5 **-69.6%**） |
 | Parse small (~110B) | 146.76 MB/s | 190.11 MB/s | **347.50 MB/s** | **2.37×** |
 | Parse medium (~50KB, 300 recs) | 185.31 MB/s | 244.00 MB/s | **311.41 MB/s** | **+68.1%** |
 | Parse large (~1MB, 6k recs) | 205.56 MB/s | 285.30 MB/s | **316.33 MB/s** | **+53.9%** |

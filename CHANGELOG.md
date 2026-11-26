@@ -15,6 +15,7 @@ All notable changes to `gemini-module` are documented in this file.
 - **Client SDK Compatibility Fixes**: Added `FT.CREATE` `SCORE`/`SCORE_FIELD`/`PAYLOAD_FIELD`/`NOFIELDS` and standard `VECTOR FLAT|HNSW <attr_count>` parsing, fixed `ON HASH` auto-indexing of `VECTOR` fields in `IndexHashKey`, and added `SCORER`/`VERBATIM`/`ADDSCORES` support in `FT.AGGREGATE`.
 
 ### Tooling, Tests & Documentation
+- Parallelized all 21 Docker CI test jobs in `ci/run_tests.sh` (Stage 1 Normal + ASan parallel build, Stage 2 21 concurrent jobs) and added `.dockerignore` (`build_*/`, `.git/`), cutting Docker build context from `1.28 GB` to `<500 KB` and full CI wall time from `~6.5 min` to `~45s` (**~9× faster**).
 - Added `ci/cluster_test.py` (3-node Redis 7 Cluster integration test verifying multi-shard routing, `MOVED`, `CROSSSLOT` enforcement, and live slot `MIGRATE` across all 6 module types: BF/CF/CMS/Top-K/T-Digest/JSON) and wired it into `ci/run_tests.sh`.
 - Fixed `CMS.MERGE` and `TDIGEST.MERGE` in `gemini-bloom` to register `"getkeys-api"` (`RedisModule_IsKeysPositionRequest`) alongside Redis 7 `SetCommandInfo` KeySpecs so Redis Cluster enforces `CROSSSLOT` on all source keys.
 - Added `ci/sdk_compat_test.py` (`redis-py` end-to-end compatibility test across all 3 modules for RESP2 & RESP3) and wired it into `ci/run_tests.sh`.

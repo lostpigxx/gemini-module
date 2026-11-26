@@ -94,5 +94,5 @@
 
 ### 4.2 测试矩阵
 - **GTest（普通 + ASan/UBSan）**：6 套单测（`json_value_test`、`json_parse_test`、`json_path_test`、`json_rdb_test`、`json_asan_test`、`json_stress_test`），含 RDB 截断/篡改模糊测试。
-- **Tcl 集成测试**：`modules/gemini-json/tests/tcl/json_test.tcl`（118+ 用例，含 `COPY`、`activedefrag`、KeySpecs、Compat RDB）。
-- **SDK 兼容测试 & Soak**：`ci/sdk_compat_test.py`（`redis-py` RESP2/RESP3）与 `ci/json_soak_test.py`（RESP2/RESP3 长稳压测）。
+- **Tcl 集成测试**：`modules/gemini-json/tests/tcl/json_test.tcl`（120+ 用例，含 `COPY`、`activedefrag`、KeySpecs、Compat RDB、Typed Numeric Arrays）。
+- **SDK 兼容、Cluster & Soak**：`ci/sdk_compat_test.py`（`redis-py` RESP2/RESP3）、`ci/cluster_test.py`（3 节点 Redis 7 Cluster 路由、`MOVED`、`CROSSSLOT` 与 `MIGRATE`）与 `ci/json_soak_test.py`（RESP2/RESP3 长稳压测）。
