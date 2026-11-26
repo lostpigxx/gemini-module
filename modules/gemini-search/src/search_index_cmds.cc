@@ -480,7 +480,8 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   auto& entry = it->second;
 
-  long info_len = (entry.spec.HasPrefixes() ? 10 : 8) + 8;
+  long info_len = (entry.spec.HasPrefixes() ? 10 : 8) + 8 +
+                  (!entry.spec.custom_dict.empty() ? 2 : 0);
   RedisModule_ReplyWithArray(ctx, info_len);
 
   RedisModule_ReplyWithSimpleString(ctx, "index_name");
@@ -492,6 +493,11 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   RedisModule_ReplyWithSimpleString(ctx, "language");
   RedisModule_ReplyWithCString(ctx, entry.spec.language.c_str());
+
+  if (!entry.spec.custom_dict.empty()) {
+    RedisModule_ReplyWithSimpleString(ctx, "custom_dict");
+    RedisModule_ReplyWithCString(ctx, entry.spec.custom_dict.c_str());
+  }
 
   if (entry.spec.HasPrefixes()) {
     RedisModule_ReplyWithSimpleString(ctx, "index_definition");

@@ -18,7 +18,7 @@ extern "C" {
 
 extern RedisModuleType* SearchModuleType;
 
-constexpr int kSearchEncVer = 12;
+constexpr int kSearchEncVer = 13;
 constexpr uint64_t kSearchAuxEncVer = 1;
 
 void* RdbLoadSearch(RedisModuleIO* rdb, int encver);
@@ -26,6 +26,7 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value);
 void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value);
 void FreeSearch(void* value);
 size_t SearchMemUsage(const void* value);
+size_t SearchMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t sample_size);
 void DigestSearch(RedisModuleDigest* digest, void* value);
 void* CopySearch2(RedisModuleKeyOptCtx* ctx, const void* value);
 size_t FreeEffortSearch2(RedisModuleKeyOptCtx* ctx, const void* value);

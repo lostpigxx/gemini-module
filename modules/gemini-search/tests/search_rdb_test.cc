@@ -639,5 +639,154 @@ TEST_F(SearchRdbTest, FreeEffortDefragAndMemUsage) {
   entry->doc_store.Add("d2", {{"body", big_text}});
 
   EXPECT_GT(SearchMemUsage(&key), empty_mem + 8192u);
+  EXPECT_EQ(SearchMemUsage2(nullptr, &key, 0), SearchMemUsage(&key));
   EXPECT_EQ(FreeEffortSearch2(nullptr, &key), 3u);
+}
+
+TEST_F(SearchRdbTest, RoundTripVectorBqAndCustomDictEncver13) {
+  IndexSpec spec;
+  spec.name = "bqidx";
+  spec.language = "english";
+  spec.language_field = "lang";
+  spec.custom_dict = "my_dict";
+
+  VectorFieldParams vp;
+  vp.algorithm = VectorAlgorithm::kHnsw;
+  vp.dim = 64;
+  vp.metric = DistanceMetric::kCosine;
+  vp.m = 16;
+  vp.ef_construction = 64;
+  vp.quantization = VectorQuantization::kBq;
+  spec.fields = {
+      {"title", FieldType::kText, {}},
+      {"vec", FieldType::kVector, vp},
+  };
+
+  std::vector<float> v1(64, 1.0f);
+  std::vector<float> v2(64, -1.0f);
+  std::string b1(reinterpret_cast<const char*>(v1.data()), v1.size() * sizeof(float));
+  std::string b2(reinterpret_cast<const char*>(v2.data()), v2.size() * sizeof(float));
+
+  CreateIndexFromRdb("bqidx", spec, {
+      {"d1", {{"title", "positive"}, {"vec", b1}}},
+      {"d2", {{"title", "negative"}, {"vec", b2}}},
+  });
+
+  // Verify AOF rewrite includes DICT, LANGUAGE_FIELD, and QUANTIZATION BQ
+  MockRmString key{"bqidx"};
+  std::string val("bqidx");
+  MockRdbStream dummy_aof;
+  AofRewriteSearch(dummy_aof.IO(), reinterpret_cast<RedisModuleString*>(&key), &val);
+  ASSERT_GE(g_emitted_aof.size(), 1u);
+  const auto& create_args = g_emitted_aof[0].second;
+  auto has_pair = [&](const std::string& k, const std::string& v) {
+    for (size_t i = 0; i + 1 < create_args.size(); i++) {
+      if (create_args[i] == k && create_args[i + 1] == v) return true;
+    }
+    return false;
+  };
+  EXPECT_TRUE(has_pair("DICT", "my_dict"));
+  EXPECT_TRUE(has_pair("LANGUAGE_FIELD", "lang"));
+  EXPECT_TRUE(has_pair("QUANTIZATION", "BQ"));
+
+  // Save and reload via RDB encver 13
+  MockRdbStream stream;
+  SaveIndex(stream, "bqidx");
+  stream.Rewind();
+  EraseIndexEntry("bqidx");
+
+  auto* loaded_name = static_cast<std::string*>(RdbLoadSearch(stream.IO(), kSearchEncVer));
+  ASSERT_NE(loaded_name, nullptr);
+  EXPECT_EQ(*loaded_name, "bqidx");
+
+  auto* loaded = GetIndexEntry("bqidx");
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->spec.custom_dict, "my_dict");
+  EXPECT_EQ(loaded->spec.language_field, "lang");
+  EXPECT_EQ(loaded->spec.fields[1].vector_params.quantization, VectorQuantization::kBq);
+
+  auto* vidx = loaded->vector_indices.Get("vec");
+  ASSERT_NE(vidx, nullptr);
+  auto res = vidx->KnnQuery(v1.data(), 1);
+  ASSERT_EQ(res.size(), 1u);
+  EXPECT_EQ(res[0].doc_id, "d1");
+
+  // MemUsage2 for BQ should be strictly smaller than an equivalent FP32 index
+  size_t bq_mem = SearchMemUsage2(nullptr, loaded_name, 0);
+  EXPECT_GT(bq_mem, 0u);
+  delete loaded_name;
+
+  spec.name = "fp32idx";
+  spec.fields[1].vector_params.quantization = VectorQuantization::kNone;
+  CreateIndexFromRdb("fp32idx", spec, {
+      {"d1", {{"title", "positive"}, {"vec", b1}}},
+      {"d2", {{"title", "negative"}, {"vec", b2}}},
+  });
+  std::string fp32_key("fp32idx");
+  size_t fp32_mem = SearchMemUsage2(nullptr, &fp32_key, 0);
+  EXPECT_LT(bq_mem, fp32_mem);
+}
+
+TEST_F(SearchRdbTest, RdbByteByByteTruncationAndBitFlipFuzz) {
+  IndexSpec spec;
+  spec.name = "fuzzidx";
+  spec.prefixes = {"f:"};
+  spec.language = "english";
+  spec.language_field = "lang";
+  spec.custom_dict = "dict1";
+  spec.has_custom_stopwords = true;
+  spec.custom_stopwords = {"the"};
+
+  VectorFieldParams vp;
+  vp.algorithm = VectorAlgorithm::kHnsw;
+  vp.dim = 8;
+  vp.metric = DistanceMetric::kL2;
+  vp.quantization = VectorQuantization::kBq;
+
+  spec.fields = {
+      {"title", FieldType::kText, {}},
+      {"tag", FieldType::kTag, {}},
+      {"price", FieldType::kNumeric, {}},
+      {"vec", FieldType::kVector, vp},
+  };
+
+  float v[8] = {1, -1, 2, -2, 3, -3, 4, -4};
+  std::string vblob(reinterpret_cast<const char*>(v), sizeof(v));
+  CreateIndexFromRdb("fuzzidx", spec, {
+      {"f:1", {{"title", "hello world"}, {"tag", "a,b"}, {"price", "42.5"}, {"vec", vblob}}},
+  });
+  GetIndexEntry("fuzzidx")->doc_store.SetPayload("f:1", "payload_bytes");
+  GetIndexEntry("fuzzidx")->synonyms.Update("g1", {"hello", "hi"});
+
+  MockRdbStream full;
+  SaveIndex(full, "fuzzidx");
+  EraseIndexEntry("fuzzidx");
+
+  // Every single byte truncation offset must fail cleanly with nullptr
+  for (size_t cut = 0; cut < full.buf.size(); cut++) {
+    MockRdbStream partial;
+    partial.buf.assign(full.buf.begin(), full.buf.begin() + static_cast<ptrdiff_t>(cut));
+    partial.Rewind();
+    void* res = RdbLoadSearch(partial.IO(), kSearchEncVer);
+    if (res) {
+      auto* s = static_cast<std::string*>(res);
+      EraseIndexEntry(*s);
+      delete s;
+      FAIL() << "Expected nullptr for truncated stream at cut=" << cut;
+    }
+  }
+
+  // Deterministic single-byte bit-flip fuzzing across the buffer
+  for (size_t pos = 0; pos < full.buf.size(); pos += 3) {
+    MockRdbStream corrupted;
+    corrupted.buf = full.buf;
+    corrupted.buf[pos] ^= 0xFF;
+    corrupted.Rewind();
+    void* res = RdbLoadSearch(corrupted.IO(), kSearchEncVer);
+    if (res) {
+      auto* s = static_cast<std::string*>(res);
+      EraseIndexEntry(*s);
+      delete s;
+    }
+  }
 }

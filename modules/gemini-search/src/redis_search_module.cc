@@ -11,9 +11,7 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
     return REDISMODULE_ERR;
   }
 
-  if (RedisModule_SetModuleOptions) {
-    RedisModule_SetModuleOptions(ctx, REDISMODULE_OPTIONS_HANDLE_IO_ERRORS);
-  }
+  RedisModule_SetModuleOptions(ctx, REDISMODULE_OPTIONS_HANDLE_IO_ERRORS);
 
   RedisModuleTypeMethods tm = {};
   tm.version = REDISMODULE_TYPE_METHOD_VERSION;
@@ -21,7 +19,7 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
   tm.rdb_save = RdbSaveSearch;
   tm.aof_rewrite = AofRewriteSearch;
   tm.free = FreeSearch;
-  tm.mem_usage = SearchMemUsage;
+  tm.mem_usage2 = SearchMemUsage2;
   tm.digest = DigestSearch;
   tm.copy2 = CopySearch2;
   tm.free_effort2 = FreeEffortSearch2;

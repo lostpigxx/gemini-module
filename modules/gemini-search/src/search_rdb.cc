@@ -154,6 +154,8 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
   RedisModule_SaveStringBuffer(rdb, spec.filter_expr.c_str(), spec.filter_expr.size());
   // encver >= 10: language_field
   RedisModule_SaveStringBuffer(rdb, spec.language_field.c_str(), spec.language_field.size());
+  // encver >= 13: custom_dict
+  RedisModule_SaveStringBuffer(rdb, spec.custom_dict.c_str(), spec.custom_dict.size());
   auto syn_groups = entry->synonyms.Dump();
   RedisModule_SaveUnsigned(rdb, syn_groups.size());
   for (const auto& [gid, terms] : syn_groups) {
@@ -250,7 +252,7 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
       if (encver >= 12) {
         uint64_t raw_q = 0;
         if (!SafeLoadUnsigned(rdb, raw_q) ||
-            raw_q > static_cast<uint64_t>(VectorQuantization::kSq8)) {
+            raw_q > static_cast<uint64_t>(VectorQuantization::kBq)) {
           return nullptr;
         }
         f.vector_params.quantization = static_cast<VectorQuantization>(raw_q);
@@ -336,6 +338,7 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
   std::string language = "english";
   std::string filter_expr;
   std::string language_field;
+  std::string custom_dict;
   std::vector<std::pair<std::string, std::vector<std::string>>> syn_groups;
   if (encver >= 7) {
     if (!SafeLoadString(rdb, language)) return nullptr;
@@ -345,6 +348,9 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
     }
     if (encver >= 10) {
       if (!SafeLoadString(rdb, language_field)) return nullptr;
+    }
+    if (encver >= 13) {
+      if (!SafeLoadString(rdb, custom_dict)) return nullptr;
     }
     uint64_t syn_count = 0;
     if (!SafeLoadUnsigned(rdb, syn_count) || syn_count > kMaxRdbSynonymGroups) return nullptr;
@@ -401,7 +407,8 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
   IndexSpec spec{index_name, std::move(fields), std::move(prefixes),
                  std::move(language), source_type, std::move(custom_stopwords),
                  has_custom_stopwords, nofreqs, nooffsets, nohl, temporary_ttl,
-                 std::move(filter_expr), false, std::move(language_field)};
+                 std::move(filter_expr), false, std::move(language_field),
+                 std::move(custom_dict)};
   CreateIndexFromRdb(index_name, std::move(spec), docs);
 
   if (auto* entry = GetIndexEntry(index_name)) {
@@ -450,6 +457,14 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value) {
   if (!spec.filter_expr.empty()) {
     create_args.push_back("FILTER");
     create_args.push_back(spec.filter_expr);
+  }
+  if (!spec.language_field.empty()) {
+    create_args.push_back("LANGUAGE_FIELD");
+    create_args.push_back(spec.language_field);
+  }
+  if (!spec.custom_dict.empty()) {
+    create_args.push_back("DICT");
+    create_args.push_back(spec.custom_dict);
   }
 
   create_args.push_back("SCHEMA");
@@ -549,7 +564,9 @@ size_t SearchMemUsage(const void* value) {
   size_t bytes = sizeof(*entry) + entry->doc_store.MemoryUsage();
 
   // Schema metadata
-  bytes += entry->spec.name.capacity() + entry->spec.language.capacity();
+  bytes += entry->spec.name.capacity() + entry->spec.language.capacity() +
+           entry->spec.filter_expr.capacity() + entry->spec.language_field.capacity() +
+           entry->spec.custom_dict.capacity();
   for (const auto& p : entry->spec.prefixes) bytes += sizeof(std::string) + p.capacity();
   for (const auto& sw : entry->spec.custom_stopwords) bytes += sizeof(std::string) + sw.capacity();
   for (const auto& f : entry->spec.fields) {
@@ -572,9 +589,17 @@ size_t SearchMemUsage(const void* value) {
         break;
       case FieldType::kVector:
         if (const auto* idx = entry->vector_indices.Get(f.name)) {
-          size_t per_vec = idx->Dim() * sizeof(float) + 64;
+          size_t vec_bytes = 0;
+          if (f.vector_params.quantization == VectorQuantization::kBq) {
+            vec_bytes = BqWords(idx->Dim()) * sizeof(uint64_t);
+          } else if (f.vector_params.quantization == VectorQuantization::kSq8) {
+            vec_bytes = idx->Dim() * sizeof(uint8_t) + 2 * sizeof(float);
+          } else {
+            vec_bytes = idx->Dim() * sizeof(float);
+          }
+          size_t per_vec = vec_bytes + 64;
           if (f.vector_params.algorithm == VectorAlgorithm::kHnsw) {
-            per_vec += f.vector_params.m * 2 * sizeof(std::string);
+            per_vec += f.vector_params.m * 2 * sizeof(uint32_t) + sizeof(std::vector<uint32_t>);
           }
           bytes += idx->Size() * per_vec;
         }
@@ -600,6 +625,12 @@ size_t SearchMemUsage(const void* value) {
   return bytes;
 }
 
+size_t SearchMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t sample_size) {
+  (void)ctx;
+  (void)sample_size;
+  return SearchMemUsage(value);
+}
+
 void DigestSearch(RedisModuleDigest* digest, void* value) {
   auto* name_ptr = static_cast<std::string*>(value);
   auto* entry = GetIndexEntry(*name_ptr);
@@ -612,6 +643,8 @@ void DigestSearch(RedisModuleDigest* digest, void* value) {
   DigestString(digest, spec.name);
   RedisModule_DigestAddLongLong(digest, static_cast<long long>(spec.source_type));
   DigestString(digest, spec.language);
+  DigestString(digest, spec.language_field);
+  DigestString(digest, spec.custom_dict);
   RedisModule_DigestAddLongLong(digest, spec.has_custom_stopwords ? 1 : 0);
   RedisModule_DigestAddLongLong(digest, spec.nofreqs ? 1 : 0);
   RedisModule_DigestAddLongLong(digest, spec.nooffsets ? 1 : 0);
@@ -634,6 +667,7 @@ void DigestSearch(RedisModuleDigest* digest, void* value) {
       RedisModule_DigestAddLongLong(digest, static_cast<long long>(f.vector_params.algorithm));
       RedisModule_DigestAddLongLong(digest, static_cast<long long>(f.vector_params.dim));
       RedisModule_DigestAddLongLong(digest, static_cast<long long>(f.vector_params.metric));
+      RedisModule_DigestAddLongLong(digest, static_cast<long long>(f.vector_params.quantization));
     }
   }
 
