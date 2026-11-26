@@ -58,6 +58,7 @@ public:
   uint32_t MaxIterations() const { return maxIterations_; }
   uint32_t MaxExpansions() const { return maxExpansions_; }
   uint64_t TotalBuckets() const;
+  uint64_t TotalDataSize() const;
   uint64_t BytesUsed() const;
 
   // Two-phase construction for RDB / SCANDUMP deserialization, mirroring

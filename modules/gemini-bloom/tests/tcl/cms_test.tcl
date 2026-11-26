@@ -390,6 +390,55 @@ test_assert "DUMP / RESTORE round-trips a sketch" {
 }
 
 # ============================================================
+# Phase 1: Security, Atomicity, Self-Alias, Redis 7 KeySpecs
+# ============================================================
+
+puts "\n=== Phase 1: Security & KeySpecs ==="
+
+test_assert "CMS.MERGE rejects huge numKeys (int32 wrap DoS)" {
+  r CMS.INITBYDIM cms_dos_dst 100 3
+  r CMS.INITBYDIM cms_dos_src 100 3
+  set failed 0
+  if {[catch {r CMS.MERGE cms_dos_dst 4294967296 cms_dos_src} err]} {
+    set failed 1
+  }
+  if {!$failed} { error "expected error for numKeys=4294967296" }
+}
+
+test_assert "CMS.MERGE self-alias preserves destination data" {
+  r CMS.INITBYDIM cms_self_a 200 4
+  r CMS.INITBYDIM cms_self_b 200 4
+  r CMS.INCRBY cms_self_a foo 10
+  r CMS.INCRBY cms_self_b foo 5
+  r CMS.MERGE cms_self_a 2 cms_self_a cms_self_b WEIGHTS 2 3
+  set q [r CMS.QUERY cms_self_a foo]
+  if {$q != 35} { error "expected 35, got $q" }
+}
+
+test_assert "CMS.MERGE rejects NaN and negative weights" {
+  set failed1 [catch {r CMS.MERGE cms_self_a 1 cms_self_b WEIGHTS nan}]
+  set failed2 [catch {r CMS.MERGE cms_self_a 1 cms_self_b WEIGHTS -1}]
+  if {!$failed1 || !$failed2} { error "expected NaN and negative weights to fail" }
+}
+
+test_assert "CMS.INCRBY multi-item overflow rolls back atomically" {
+  r CMS.INITBYDIM cms_atom 100 3
+  r CMS.INCRBY cms_atom item1 10
+  set failed [catch {r CMS.INCRBY cms_atom item1 5 item2 4294967296}]
+  if {!$failed} { error "expected overflow error" }
+  set q1 [r CMS.QUERY cms_atom item1]
+  if {$q1 != 10} { error "expected atomic rollback to 10, got $q1" }
+}
+
+test_assert "CMS.MERGE Redis 7 COMMAND GETKEYS returns dest and sources" {
+  set srv [r INFO server]
+  if {[regexp {redis_version:([0-9]+)\.} $srv -> major] && $major >= 7} {
+    set keys [r COMMAND GETKEYS CMS.MERGE dst 2 s1 s2 WEIGHTS 1 2]
+    if {$keys ne "dst s1 s2"} { error "expected 'dst s1 s2', got '$keys'" }
+  }
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

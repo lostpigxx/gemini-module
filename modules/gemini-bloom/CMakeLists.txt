@@ -40,6 +40,23 @@ set_target_properties(redis_bloom PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
+add_executable(bloom_bench EXCLUDE_FROM_ALL
+  tests/bloom_bench.cc
+  src/bloom_filter.cc
+  src/sb_chain.cc
+  src/cuckoo_filter.cc
+  src/cf_chain.cc
+  src/cms_sketch.cc
+  src/topk_sketch.cc
+  src/tdigest_sketch.cc
+  src/murmur2.cc
+)
+target_include_directories(bloom_bench PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(bloom_bench PRIVATE REDIS_BLOOM_TESTING)
+target_compile_options(bloom_bench PRIVATE -O2 -Wall -Wextra -Wpedantic)
+
 find_package(GTest QUIET)
 if(GTest_FOUND)
   add_executable(bloom_filter_test EXCLUDE_FROM_ALL

@@ -5,10 +5,10 @@
 #include "rm_alloc.h"
 
 #include <climits>
+#include <cmath>
 #include <cstring>
 #include <strings.h>
 #include <string_view>
-#include <vector>
 
 // Defaults per the public TOPK.RESERVE documentation (redis.io): width=8,
 // depth=7, decay=0.9.
@@ -83,7 +83,8 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
         static_cast<uint64_t>(depth) > kTopkMaxDepth) {
       return RedisModule_ReplyWithError(ctx, "ERR invalid depth");
     }
-    if (RedisModule_StringToDouble(argv[5], &decay) != REDISMODULE_OK || decay <= 0.0 || decay >= 1.0) {
+    if (RedisModule_StringToDouble(argv[5], &decay) != REDISMODULE_OK ||
+        !std::isfinite(decay) || decay <= 0.0 || decay >= 1.0) {
       return RedisModule_ReplyWithError(ctx, "ERR invalid decay");
     }
   }
@@ -120,6 +121,14 @@ static int CmdAdd(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (!sketch) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
 
   int numItems = argc - 2;
+  for (int i = 0; i < numItems; i++) {
+    size_t len;
+    RedisModule_StringPtrLen(argv[2 + i], &len);
+    if (len > kTopkMaxNameLen) {
+      return RedisModule_ReplyWithError(ctx, "ERR item too large");
+    }
+  }
+
   RedisModule_ReplyWithArray(ctx, numItems);
   for (int i = 0; i < numItems; i++) {
     size_t len;
@@ -146,23 +155,36 @@ static int CmdIncrby(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (!sketch) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
 
   int numItems = (argc - 2) / 2;
-  std::vector<long long> increments(static_cast<size_t>(numItems));
+  long long stackInc[32];
+  long long* increments = stackInc;
+  if (numItems > 32) {
+    increments = static_cast<long long*>(RMAlloc(static_cast<size_t>(numItems) * sizeof(long long)));
+    if (!increments) return RedisModule_ReplyWithError(ctx, "ERR allocation failure");
+  }
   for (int i = 0; i < numItems; i++) {
+    size_t len;
+    RedisModule_StringPtrLen(argv[2 + i * 2], &len);
+    if (len > kTopkMaxNameLen) {
+      if (increments != stackInc) RMFree(increments);
+      return RedisModule_ReplyWithError(ctx, "ERR item too large");
+    }
     long long increment;
     if (RedisModule_StringToLongLong(argv[3 + i * 2], &increment) != REDISMODULE_OK ||
         increment < 1 || increment > kTopkMaxIncrement) {
+      if (increments != stackInc) RMFree(increments);
       return RedisModule_ReplyWithError(ctx, "ERR invalid increment");
     }
-    increments[static_cast<size_t>(i)] = increment;
+    increments[i] = increment;
   }
 
   RedisModule_ReplyWithArray(ctx, numItems);
   for (int i = 0; i < numItems; i++) {
     size_t len;
     const char* item = RedisModule_StringPtrLen(argv[2 + i * 2], &len);
-    auto evicted = sketch->IncrBy(AsBytes(item, len), static_cast<uint32_t>(increments[static_cast<size_t>(i)]));
+    auto evicted = sketch->IncrBy(AsBytes(item, len), static_cast<uint32_t>(increments[i]));
     ReplyWithEvicted(ctx, evicted);
   }
+  if (increments != stackInc) RMFree(increments);
 
   RedisModule_ReplicateVerbatim(ctx);
   return REDISMODULE_OK;

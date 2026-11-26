@@ -51,6 +51,12 @@ public:
   // overflow/underflow leaves the sketch untouched. Returns the new
   // min-count estimate on success, nullopt on overflow.
   std::optional<uint64_t> IncrBy(std::span<const std::byte> item, int64_t delta);
+  // Atomically applies a batch of (item, delta) pairs. If any item would
+  // overflow/underflow [0, UINT32_MAX], the sketch is rolled back to its exact
+  // pre-call state and false is returned.
+  bool IncrByBatch(std::span<const std::span<const std::byte>> items,
+                   std::span<const int64_t> deltas,
+                   std::span<uint64_t> outResults);
   uint64_t Query(std::span<const std::byte> item) const;
 
   // Merges `sources` (each weighted by the corresponding entry in

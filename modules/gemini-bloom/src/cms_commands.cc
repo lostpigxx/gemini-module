@@ -5,10 +5,46 @@
 #include "rm_alloc.h"
 
 #include <climits>
+#include <cmath>
 #include <cstring>
 #include <strings.h>
 #include <string_view>
-#include <vector>
+
+namespace {
+template <typename T, size_t InlineCap = 32>
+class SmallBuf {
+public:
+  SmallBuf() = default;
+  ~SmallBuf() {
+    if (heap_) RMFree(heap_);
+  }
+  SmallBuf(const SmallBuf&) = delete;
+  SmallBuf& operator=(const SmallBuf&) = delete;
+
+  bool Init(size_t n) {
+    size_ = n;
+    if (n <= InlineCap) {
+      ptr_ = stack_;
+      return true;
+    }
+    if (n > SIZE_MAX / sizeof(T)) return false;
+    heap_ = static_cast<T*>(RMAlloc(n * sizeof(T)));
+    if (!heap_) return false;
+    ptr_ = heap_;
+    return true;
+  }
+
+  T* data() { return ptr_; }
+  size_t size() const { return size_; }
+  T& operator[](size_t i) { return ptr_[i]; }
+
+private:
+  T stack_[InlineCap];
+  T* heap_ = nullptr;
+  T* ptr_ = stack_;
+  size_t size_ = 0;
+};
+}  // namespace
 
 // --- Helpers ---
 
@@ -113,29 +149,30 @@ static int CmdIncrby(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   auto* sketch = GetSketch(key);
   if (!sketch) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
 
-  int numItems = (argc - 2) / 2;
-  std::vector<int64_t> deltas(numItems);
-  for (int i = 0; i < numItems; i++) {
+  size_t numItems = static_cast<size_t>((argc - 2) / 2);
+  SmallBuf<std::span<const std::byte>> items;
+  SmallBuf<int64_t> deltas;
+  SmallBuf<uint64_t> results;
+  if (!items.Init(numItems) || !deltas.Init(numItems) || !results.Init(numItems)) {
+    return RedisModule_ReplyWithError(ctx, "ERR allocation failure");
+  }
+  for (size_t i = 0; i < numItems; i++) {
     long long delta;
     if (RedisModule_StringToLongLong(argv[3 + i * 2], &delta) != REDISMODULE_OK) {
       return RedisModule_ReplyWithError(ctx, "ERR invalid increment");
     }
     deltas[i] = delta;
-  }
-
-  std::vector<uint64_t> results(numItems);
-  for (int i = 0; i < numItems; i++) {
     size_t len;
     const char* item = RedisModule_StringPtrLen(argv[2 + i * 2], &len);
-    auto result = sketch->IncrBy(AsBytes(item, len), deltas[i]);
-    if (!result.has_value()) {
-      return RedisModule_ReplyWithError(ctx, "ERR overflow error");
-    }
-    results[i] = *result;
+    items[i] = AsBytes(item, len);
   }
 
-  RedisModule_ReplyWithArray(ctx, numItems);
-  for (int i = 0; i < numItems; i++) {
+  if (!sketch->IncrByBatch({items.data(), numItems}, {deltas.data(), numItems}, {results.data(), numItems})) {
+    return RedisModule_ReplyWithError(ctx, "ERR overflow error");
+  }
+
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(numItems));
+  for (size_t i = 0; i < numItems; i++) {
     RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(results[i]));
   }
 
@@ -178,10 +215,15 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   }
 
   int sourcesStart = 3;
+  if (numKeys > argc - sourcesStart) return RedisModule_WrongArity(ctx);
   int weightsStart = sourcesStart + static_cast<int>(numKeys);
-  if (weightsStart > argc) return RedisModule_WrongArity(ctx);
 
-  std::vector<double> weights(static_cast<size_t>(numKeys), 1.0);
+  SmallBuf<double> weights;
+  if (!weights.Init(static_cast<size_t>(numKeys))) {
+    return RedisModule_ReplyWithError(ctx, "ERR allocation failure");
+  }
+  for (long long i = 0; i < numKeys; i++) weights[static_cast<size_t>(i)] = 1.0;
+
   if (weightsStart < argc) {
     size_t len;
     const char* arg = RedisModule_StringPtrLen(argv[weightsStart], &len);
@@ -193,7 +235,8 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     }
     for (long long i = 0; i < numKeys; i++) {
       double w;
-      if (RedisModule_StringToDouble(argv[weightsStart + 1 + i], &w) != REDISMODULE_OK) {
+      if (RedisModule_StringToDouble(argv[weightsStart + 1 + i], &w) != REDISMODULE_OK ||
+          !std::isfinite(w) || w < 0.0) {
         return RedisModule_ReplyWithError(ctx, "ERR invalid weight");
       }
       weights[static_cast<size_t>(i)] = w;
@@ -208,7 +251,10 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   auto* dest = GetSketch(destKey);
   if (!dest) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
 
-  std::vector<CmsSketch*> sources(static_cast<size_t>(numKeys));
+  SmallBuf<const CmsSketch*> sources;
+  if (!sources.Init(static_cast<size_t>(numKeys))) {
+    return RedisModule_ReplyWithError(ctx, "ERR allocation failure");
+  }
   for (long long i = 0; i < numKeys; i++) {
     auto* srcKey = static_cast<RedisModuleKey*>(
       RedisModule_OpenKey(ctx, argv[sourcesStart + i], REDISMODULE_READ));
@@ -220,7 +266,8 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     sources[static_cast<size_t>(i)] = src;
   }
 
-  if (!dest->Merge(sources, weights)) {
+  if (!dest->Merge({sources.data(), static_cast<size_t>(numKeys)},
+                   {weights.data(), static_cast<size_t>(numKeys)})) {
     return RedisModule_ReplyWithError(ctx, "ERR width/depth mismatch");
   }
 
@@ -301,6 +348,38 @@ int RegisterCmsCommands(RedisModuleCtx* ctx) {
   for (auto& cmd : commands) {
     if (RedisModule_CreateCommand(ctx, cmd.name, cmd.handler, cmd.flags, 1, 1, 1) == REDISMODULE_ERR) {
       return REDISMODULE_ERR;
+    }
+  }
+
+  // Redis 7 dynamic KeySpecs for CMS.MERGE:
+  //   CMS.MERGE dest numKeys src1 [src2 ...] [WEIGHTS w1 [w2 ...]]
+  if (RedisModule_GetCommand && RedisModule_SetCommandInfo) {
+    RedisModuleCommand* mergeCmd = RedisModule_GetCommand(ctx, "CMS.MERGE");
+    if (mergeCmd) {
+      static RedisModuleCommandKeySpec kMergeKeySpecs[3] = {};
+      kMergeKeySpecs[0].flags = REDISMODULE_CMD_KEY_RW | REDISMODULE_CMD_KEY_UPDATE;
+      kMergeKeySpecs[0].begin_search_type = REDISMODULE_KSPEC_BS_INDEX;
+      kMergeKeySpecs[0].bs.index.pos = 1;
+      kMergeKeySpecs[0].find_keys_type = REDISMODULE_KSPEC_FK_RANGE;
+      kMergeKeySpecs[0].fk.range.lastkey = 0;
+      kMergeKeySpecs[0].fk.range.keystep = 1;
+      kMergeKeySpecs[0].fk.range.limit = 0;
+
+      kMergeKeySpecs[1].flags = REDISMODULE_CMD_KEY_RO | REDISMODULE_CMD_KEY_ACCESS;
+      kMergeKeySpecs[1].begin_search_type = REDISMODULE_KSPEC_BS_INDEX;
+      kMergeKeySpecs[1].bs.index.pos = 2;
+      kMergeKeySpecs[1].find_keys_type = REDISMODULE_KSPEC_FK_KEYNUM;
+      kMergeKeySpecs[1].fk.keynum.keynumidx = 0;
+      kMergeKeySpecs[1].fk.keynum.firstkey = 1;
+      kMergeKeySpecs[1].fk.keynum.keystep = 1;
+
+      RedisModuleCommandInfo info = {};
+      info.version = REDISMODULE_COMMAND_INFO_VERSION;
+      info.arity = -4;
+      info.key_specs = kMergeKeySpecs;
+      if (RedisModule_SetCommandInfo(mergeCmd, &info) == REDISMODULE_ERR) {
+        return REDISMODULE_ERR;
+      }
     }
   }
   return REDISMODULE_OK;

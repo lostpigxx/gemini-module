@@ -283,7 +283,9 @@ double TdigestSketch::ValueAtRank(double rank, const std::vector<Anchor>& anchor
     if (rank <= anchors[i].rank) {
       const Anchor& a = anchors[i - 1];
       const Anchor& b = anchors[i];
-      double t = (rank - a.rank) / (b.rank - a.rank);
+      double denom = b.rank - a.rank;
+      if (denom <= 0.0) return a.value;
+      double t = (rank - a.rank) / denom;
       return a.value + t * (b.value - a.value);
     }
   }
@@ -321,20 +323,30 @@ double TdigestSketch::Cdf(double value) {
   return RankReal(value) / TotalWeight();
 }
 
+namespace {
+int64_t ClampFloorToInt64(double v) {
+  if (!std::isfinite(v) || v <= 0.0) return 0;
+  constexpr double kMaxI64 = 9223372036854775808.0;  // 2^63 (exact in double)
+  double f = std::floor(v);
+  if (f >= kMaxI64) return INT64_MAX;
+  return static_cast<int64_t>(f);
+}
+}  // namespace
+
 int64_t TdigestSketch::Rank(double value) {
   Compress();
   if (Empty()) return -2;
   if (value < min_) return -1;
-  if (value > max_) return static_cast<int64_t>(std::floor(TotalWeight()));
-  return static_cast<int64_t>(std::floor(RankReal(value)));
+  if (value > max_) return ClampFloorToInt64(TotalWeight());
+  return ClampFloorToInt64(RankReal(value));
 }
 
 int64_t TdigestSketch::RevRank(double value) {
   Compress();
   if (Empty()) return -2;
   if (value > max_) return -1;
-  if (value < min_) return static_cast<int64_t>(std::floor(TotalWeight()));
-  return static_cast<int64_t>(std::floor(TotalWeight() - RankReal(value)));
+  if (value < min_) return ClampFloorToInt64(TotalWeight());
+  return ClampFloorToInt64(TotalWeight() - RankReal(value));
 }
 
 double TdigestSketch::ByRank(double rank) {

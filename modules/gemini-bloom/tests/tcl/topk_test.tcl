@@ -397,6 +397,21 @@ test_assert "DUMP / RESTORE round-trips a sketch" {
   if {$q != 1} { error "expected 1 after DUMP/RESTORE, got $q" }
 }
 
+puts "\n=== Phase 1: Security & Validation ==="
+
+test_assert "TOPK.RESERVE rejects NaN decay" {
+  set failed [catch {r TOPK.RESERVE topk_nan 5 8 7 nan} err]
+  if {!$failed} { error "expected NaN decay to fail" }
+  if {![string match "*invalid decay*" $err]} { error "expected invalid decay error, got $err" }
+}
+
+test_assert "TOPK.ADD rejects item exceeding 1 MiB limit" {
+  r TOPK.RESERVE topk_big 5 8 7 0.9
+  set huge [string repeat "x" 1048577]
+  set failed [catch {r TOPK.ADD topk_big $huge} err]
+  if {!$failed} { error "expected oversized item to fail" }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

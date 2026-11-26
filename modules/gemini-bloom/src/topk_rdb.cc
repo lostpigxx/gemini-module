@@ -93,8 +93,9 @@ static TopkSketch* ReadTopkSketch(RdbReader& r) {
       return nullptr;
     }
     prevCount = count;
-    maybeSketch->AppendEntryForLoad(AsBytes(nameBuf, nameLen), count);
+    bool ok = maybeSketch->AppendEntryForLoad(AsBytes(nameBuf, nameLen), count);
     RedisModule_Free(nameBuf);
+    if (!ok) return nullptr;
   }
 
   auto* sketch = static_cast<TopkSketch*>(RMAlloc(sizeof(TopkSketch)));
@@ -131,25 +132,32 @@ size_t TopkComputeChunkSize(const TopkSketch& sketch) {
 size_t TopkSerializeChunk(const TopkSketch& sketch, void* output) {
   auto* cursor = static_cast<char*>(output);
 
-  auto* hdr = reinterpret_cast<TopkWireHeader*>(cursor);
-  hdr->k = sketch.K();
-  hdr->width = sketch.Width();
-  hdr->depth = sketch.Depth();
-  hdr->decay = sketch.Decay();
-  hdr->numActive = sketch.NumActive();
+  TopkWireHeader hdr{};
+  hdr.k = sketch.K();
+  hdr.width = sketch.Width();
+  hdr.depth = sketch.Depth();
+  hdr.decay = sketch.Decay();
+  hdr.numActive = sketch.NumActive();
+  std::memcpy(cursor, &hdr, sizeof(hdr));
   cursor += sizeof(TopkWireHeader);
 
-  std::memcpy(cursor, sketch.GetCellArray(), sketch.GetCellDataSize());
-  cursor += sketch.GetCellDataSize();
+  uint64_t cellBytes = sketch.GetCellDataSize();
+  if (cellBytes > 0) {
+    std::memcpy(cursor, sketch.GetCellArray(), cellBytes);
+    cursor += cellBytes;
+  }
 
   const auto* entries = sketch.GetEntries();
   for (uint32_t i = 0; i < sketch.NumActive(); i++) {
-    auto* entryHdr = reinterpret_cast<TopkWireEntryHeader*>(cursor);
-    entryHdr->count = entries[i].count;
-    entryHdr->nameLen = entries[i].nameLen;
+    TopkWireEntryHeader entryHdr{};
+    entryHdr.count = entries[i].count;
+    entryHdr.nameLen = entries[i].nameLen;
+    std::memcpy(cursor, &entryHdr, sizeof(entryHdr));
     cursor += sizeof(TopkWireEntryHeader);
-    std::memcpy(cursor, entries[i].name, entries[i].nameLen);
-    cursor += entries[i].nameLen;
+    if (entries[i].nameLen > 0) {
+      std::memcpy(cursor, entries[i].name, entries[i].nameLen);
+      cursor += entries[i].nameLen;
+    }
   }
 
   return static_cast<size_t>(cursor - static_cast<char*>(output));
@@ -158,39 +166,45 @@ size_t TopkSerializeChunk(const TopkSketch& sketch, void* output) {
 TopkSketch* TopkDeserializeChunk(const void* data, size_t length) {
   if (length < sizeof(TopkWireHeader)) return nullptr;
 
-  const auto* hdr = static_cast<const TopkWireHeader*>(data);
+  TopkWireHeader hdr{};
+  std::memcpy(&hdr, data, sizeof(hdr));
   const char* cursor = static_cast<const char*>(data) + sizeof(TopkWireHeader);
   size_t remaining = length - sizeof(TopkWireHeader);
 
-  if (remaining < static_cast<uint64_t>(hdr->width) * hdr->depth * sizeof(TopkSketch::Cell)) {
+  uint64_t cellDataSize = static_cast<uint64_t>(hdr.width) * hdr.depth * sizeof(TopkSketch::Cell);
+  if (!ValidateTopkFields(hdr.k, hdr.width, hdr.depth, hdr.decay, cellDataSize, hdr.numActive)) {
     return nullptr;
   }
-  uint64_t cellDataSize = static_cast<uint64_t>(hdr->width) * hdr->depth * sizeof(TopkSketch::Cell);
-  if (!ValidateTopkFields(hdr->k, hdr->width, hdr->depth, hdr->decay, cellDataSize, hdr->numActive)) {
+  if (remaining < cellDataSize) {
     return nullptr;
   }
 
-  auto maybeSketch = TopkSketch::Create(hdr->k, hdr->width, hdr->depth, hdr->decay);
+  auto maybeSketch = TopkSketch::Create(hdr.k, hdr.width, hdr.depth, hdr.decay);
   if (!maybeSketch) return nullptr;
 
-  std::memcpy(maybeSketch->GetCellArray(), cursor, cellDataSize);
-  cursor += cellDataSize;
-  remaining -= cellDataSize;
+  if (cellDataSize > 0) {
+    std::memcpy(maybeSketch->GetCellArray(), cursor, cellDataSize);
+    cursor += cellDataSize;
+    remaining -= cellDataSize;
+  }
 
   uint64_t prevCount = UINT64_MAX;
-  for (uint32_t i = 0; i < hdr->numActive; i++) {
+  for (uint32_t i = 0; i < hdr.numActive; i++) {
     if (remaining < sizeof(TopkWireEntryHeader)) return nullptr;
-    const auto* entryHdr = reinterpret_cast<const TopkWireEntryHeader*>(cursor);
+    TopkWireEntryHeader entryHdr{};
+    std::memcpy(&entryHdr, cursor, sizeof(entryHdr));
     cursor += sizeof(TopkWireEntryHeader);
     remaining -= sizeof(TopkWireEntryHeader);
 
-    if (entryHdr->nameLen > kTopkMaxNameLen || entryHdr->count > prevCount || remaining < entryHdr->nameLen) {
+    if (entryHdr.nameLen > kTopkMaxNameLen || entryHdr.count > prevCount || remaining < entryHdr.nameLen) {
       return nullptr;
     }
-    prevCount = entryHdr->count;
-    maybeSketch->AppendEntryForLoad(AsBytes(cursor, entryHdr->nameLen), entryHdr->count);
-    cursor += entryHdr->nameLen;
-    remaining -= entryHdr->nameLen;
+    prevCount = entryHdr.count;
+    if (!maybeSketch->AppendEntryForLoad(AsBytes(cursor, entryHdr.nameLen), entryHdr.count)) {
+      return nullptr;
+    }
+    cursor += entryHdr.nameLen;
+    remaining -= entryHdr.nameLen;
   }
 
   if (remaining != 0) return nullptr;

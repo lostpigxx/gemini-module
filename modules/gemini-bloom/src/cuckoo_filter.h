@@ -22,6 +22,8 @@
 constexpr uint64_t kCfMaxBuckets = 1ULL << 30;
 constexpr uint32_t kCfMaxBucketSize = 255;
 constexpr uint32_t kCfMaxIterations = 65535;
+constexpr uint64_t kCfMaxLayerDataSize = 1ULL * 1024 * 1024 * 1024;
+constexpr uint64_t kCfMaxTotalDataSize = 2ULL * 1024 * 1024 * 1024;
 
 class CuckooFilter {
 public:

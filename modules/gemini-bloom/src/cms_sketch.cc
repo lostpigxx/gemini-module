@@ -81,28 +81,76 @@ uint32_t CmsSketch::ColumnOf(std::span<const std::byte> item, uint32_t row) cons
 }
 
 std::optional<uint64_t> CmsSketch::IncrBy(std::span<const std::byte> item, int64_t delta) {
-  // Pass 1: validate every row's resulting counter fits in uint32_t before
-  // mutating anything, so a rejected call leaves the sketch untouched.
+  // Pass 1: validate every row's resulting counter fits in [0, UINT32_MAX]
+  // without signed integer overflow UB (even for INT64_MAX / INT64_MIN).
+  uint32_t cols[kCmsMaxDepth];
   for (uint32_t row = 0; row < depth_; row++) {
     uint32_t col = ColumnOf(item, row);
-    int64_t result = static_cast<int64_t>(CounterAt(row, col)) + delta;
-    if (result < 0 || result > static_cast<int64_t>(UINT32_MAX)) return std::nullopt;
+    cols[row] = col;
+    uint32_t cur = CounterAt(row, col);
+    if (delta >= 0) {
+      uint64_t inc = static_cast<uint64_t>(delta);
+      if (inc > static_cast<uint64_t>(UINT32_MAX) - cur) return std::nullopt;
+    } else {
+      uint64_t dec = static_cast<uint64_t>(-(delta + 1)) + 1ULL;
+      if (dec > cur) return std::nullopt;
+    }
   }
 
   uint64_t minCount = UINT64_MAX;
   for (uint32_t row = 0; row < depth_; row++) {
-    uint32_t col = ColumnOf(item, row);
-    uint32_t updated = static_cast<uint32_t>(static_cast<int64_t>(CounterAt(row, col)) + delta);
+    uint32_t col = cols[row];
+    uint32_t cur = CounterAt(row, col);
+    uint32_t updated;
+    if (delta >= 0) {
+      updated = cur + static_cast<uint32_t>(delta);
+    } else {
+      uint64_t dec = static_cast<uint64_t>(-(delta + 1)) + 1ULL;
+      updated = cur - static_cast<uint32_t>(dec);
+    }
     CounterAt(row, col) = updated;
     minCount = std::min<uint64_t>(minCount, updated);
   }
   if (delta > 0) {
-    totalCount_ += static_cast<uint64_t>(delta);
+    uint64_t inc = static_cast<uint64_t>(delta);
+    totalCount_ = (inc > UINT64_MAX - totalCount_) ? UINT64_MAX : totalCount_ + inc;
   } else if (delta < 0) {
-    uint64_t dec = static_cast<uint64_t>(-delta);
+    uint64_t dec = static_cast<uint64_t>(-(delta + 1)) + 1ULL;
     totalCount_ = (dec > totalCount_) ? 0 : totalCount_ - dec;
   }
   return minCount;
+}
+
+bool CmsSketch::IncrByBatch(std::span<const std::span<const std::byte>> items,
+                            std::span<const int64_t> deltas,
+                            std::span<uint64_t> outResults) {
+  size_t n = items.size();
+  if (n != deltas.size() || n != outResults.size()) return false;
+  if (n == 0) return true;
+  if (n == 1) {
+    auto res = IncrBy(items[0], deltas[0]);
+    if (!res.has_value()) return false;
+    outResults[0] = *res;
+    return true;
+  }
+
+  // Record each applied item's delta so we can roll back in reverse order on
+  // failure without allocating a full copy of the counter table.
+  uint64_t savedTotal = totalCount_;
+  for (size_t i = 0; i < n; i++) {
+    auto res = IncrBy(items[i], deltas[i]);
+    if (!res.has_value()) {
+      for (size_t j = i; j-- > 0;) {
+        // Since deltas[j] fit in [-UINT32_MAX, UINT32_MAX] (validated by IncrBy),
+        // -deltas[j] is guaranteed not to overflow int64_t.
+        (void)IncrBy(items[j], -deltas[j]);
+      }
+      totalCount_ = savedTotal;
+      return false;
+    }
+    outResults[i] = *res;
+  }
+  return true;
 }
 
 uint64_t CmsSketch::Query(std::span<const std::byte> item) const {
@@ -115,27 +163,55 @@ uint64_t CmsSketch::Query(std::span<const std::byte> item) const {
 }
 
 bool CmsSketch::Merge(std::span<const CmsSketch* const> sources, std::span<const double> weights) {
-  for (const auto* src : sources) {
+  if (sources.size() != weights.size()) return false;
+  bool selfAliased = false;
+  for (size_t i = 0; i < sources.size(); i++) {
+    const auto* src = sources[i];
     if (!src || src->width_ != width_ || src->depth_ != depth_) return false;
+    if (!std::isfinite(weights[i]) || weights[i] < 0.0) return false;
+    if (src == this) selfAliased = true;
   }
 
   uint64_t numCounters = static_cast<uint64_t>(width_) * depth_;
-  std::memset(counters_, 0, numCounters * sizeof(uint32_t));
-  totalCount_ = 0;
+  uint32_t* target = counters_;
+  if (selfAliased) {
+    target = static_cast<uint32_t*>(RMCalloc(static_cast<size_t>(numCounters), sizeof(uint32_t)));
+    if (!target) return false;
+  } else {
+    std::memset(target, 0, numCounters * sizeof(uint32_t));
+  }
+
+  uint64_t newTotal = 0;
+  constexpr double kMaxU32 = static_cast<double>(UINT32_MAX);
+  constexpr double kMaxU64 = 18446744073709551616.0;  // 2^64 (exact in double)
 
   for (size_t i = 0; i < sources.size(); i++) {
     const auto* src = sources[i];
     double weight = weights[i];
     for (uint64_t idx = 0; idx < numCounters; idx++) {
-      double weighted = static_cast<double>(src->counters_[idx]) * weight;
-      double sum = static_cast<double>(counters_[idx]) + weighted;
-      if (sum < 0.0) sum = 0.0;
-      if (sum > static_cast<double>(UINT32_MAX)) sum = static_cast<double>(UINT32_MAX);
-      counters_[idx] = static_cast<uint32_t>(sum);
+      double sum = static_cast<double>(target[idx]) + static_cast<double>(src->counters_[idx]) * weight;
+      if (!std::isfinite(sum) || sum >= kMaxU32) {
+        target[idx] = UINT32_MAX;
+      } else if (sum <= 0.0) {
+        target[idx] = 0;
+      } else {
+        target[idx] = static_cast<uint32_t>(sum);
+      }
     }
     double weightedTotal = static_cast<double>(src->totalCount_) * weight;
-    if (weightedTotal > 0.0) totalCount_ += static_cast<uint64_t>(weightedTotal);
+    if (!std::isfinite(weightedTotal) || weightedTotal >= kMaxU64) {
+      newTotal = UINT64_MAX;
+    } else if (weightedTotal > 0.0) {
+      uint64_t add = static_cast<uint64_t>(weightedTotal);
+      newTotal = (add > UINT64_MAX - newTotal) ? UINT64_MAX : newTotal + add;
+    }
   }
+
+  if (selfAliased) {
+    RMFree(counters_);
+    counters_ = target;
+  }
+  totalCount_ = newTotal;
   return true;
 }
 

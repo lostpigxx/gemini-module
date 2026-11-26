@@ -322,3 +322,24 @@ TEST(CuckooChainTest, CloneOfEmptyFilter) {
   clone->~CuckooChain();
   free(clone);
 }
+
+TEST(CuckooChainTest, NonPowerOfTwoExpansionSucceeds) {
+  // expansion=3 previously produced non-power-of-two nextBuckets and failed.
+  CuckooChain chain(64, 2, 20, 3, 8);
+  ASSERT_TRUE(chain.IsValid());
+  for (int i = 0; i < 300; i++) {
+    std::string item = "exp3_" + std::to_string(i);
+    ASSERT_TRUE(chain.Add(ToSpan(item)).has_value());
+  }
+  EXPECT_GT(chain.NumLayers(), 1u);
+  for (int i = 0; i < 300; i++) {
+    std::string item = "exp3_" + std::to_string(i);
+    EXPECT_TRUE(chain.Contains(ToSpan(item)));
+  }
+}
+
+TEST(CuckooChainTest, RejectsLayerExceedingMemoryCap) {
+  // 2^30 buckets * 255 bucketSize = 255 GiB > kCfMaxLayerDataSize (1 GiB).
+  auto tooBig = CuckooFilter::Create(1ULL << 26, 32, 20);  // 2 GiB > 1 GiB
+  EXPECT_FALSE(tooBig.has_value());
+}

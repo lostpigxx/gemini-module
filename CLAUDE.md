@@ -51,5 +51,4 @@ Dockerfile 必须支持纯离线构建（面向无外网的内网环境）。所
 
 ### 5. 目标 Redis 版本范围
 
-- **gemini-bloom**：兼容 Redis 5 / 6 / 7（单二进制，Docker CI 覆盖三组环境）
-- **gemini-search**：仅面向 **Redis 7**（无需兼容 Redis 5/6，可直接使用 Redis 7 Module API，如 `aux_save2`/`aux_load`、`EmitAOF` `"v"` 向量参数、`SubscribeToServerEvent`、`CreateTimer`、`ReplyWithMap` 等；Docker CI 仅在 `redis7` 环境运行）
+- **gemini-bloom / gemini-json / gemini-search**：均仅面向 **Redis 7**（无需兼容 Redis 5/6，可直接使用 Redis 7 Module API，如 `SetCommandInfo`、`mem_usage2`、`aux_save2`/`aux_load`、`EmitAOF` `"v"` 向量参数、`SubscribeToServerEvent`、`CreateTimer`、`ReplyWithMap` 等；Docker CI 仅在 `redis7` 环境运行）

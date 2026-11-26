@@ -10,8 +10,10 @@ namespace {
 // Rounds capacity/bucketSize up to the next power of two, matching
 // BloomLayer's std::bit_ceil usage for bit-array sizing.
 uint64_t BucketsForCapacity(uint64_t capacity, uint32_t bucketSize) {
-  uint64_t buckets = (capacity + bucketSize - 1) / bucketSize;
+  if (bucketSize == 0) return 0;
+  uint64_t buckets = capacity / bucketSize + (capacity % bucketSize != 0 ? 1 : 0);
   if (buckets == 0) buckets = 1;
+  if (buckets > kCfMaxBuckets) return kCfMaxBuckets + 1;
   return std::bit_ceil(buckets);
 }
 
@@ -99,6 +101,11 @@ bool CuckooChain::AppendLayer(uint64_t numBuckets) {
   auto maybeFilter = CuckooFilter::Create(numBuckets, bucketSize_, maxIterations_);
   if (!maybeFilter) return false;
 
+  uint64_t newDataSize = maybeFilter->GetDataSize();
+  if (newDataSize > kCfMaxTotalDataSize || TotalDataSize() > kCfMaxTotalDataSize - newDataSize) {
+    return false;
+  }
+
   auto* slot = &layers_[numLayers_];
   new (slot) CfFilterLayer{std::move(*maybeFilter)};
   numLayers_++;
@@ -120,7 +127,7 @@ std::optional<bool> CuckooChain::Add(std::span<const std::byte> item) {
   uint64_t nextBuckets = prevBuckets;
   if (expansion_ > 1) {
     if (prevBuckets > kCfMaxBuckets / expansion_) return std::nullopt;
-    nextBuckets = prevBuckets * expansion_;
+    nextBuckets = std::bit_ceil(prevBuckets * expansion_);
   }
   if (nextBuckets > kCfMaxBuckets || !AppendLayer(nextBuckets)) return std::nullopt;
 
@@ -159,6 +166,14 @@ uint64_t CuckooChain::TotalBuckets() const {
   uint64_t total = 0;
   for (const auto& layer : Layers()) {
     total += layer.cuckoo.NumBuckets();
+  }
+  return total;
+}
+
+uint64_t CuckooChain::TotalDataSize() const {
+  uint64_t total = 0;
+  for (const auto& layer : Layers()) {
+    total += layer.cuckoo.GetDataSize();
   }
   return total;
 }

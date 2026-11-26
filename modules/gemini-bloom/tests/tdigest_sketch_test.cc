@@ -258,3 +258,13 @@ TEST(TdigestSketchTest, LoadHelpersReconstructState) {
   EXPECT_DOUBLE_EQ(sketch->Max(), 30.0);
   EXPECT_EQ(sketch->NumCompressions(), 3u);
 }
+
+TEST(TdigestSketchTest, HugeWeightRankDoesNotOverflowUB) {
+  auto sketch = TdigestSketch::Create(100.0);
+  ASSERT_TRUE(sketch.has_value());
+  ASSERT_TRUE(sketch->AllocateForLoad(1, 0));
+  sketch->AppendCentroidForLoad(10.0, 1e30);
+  sketch->SetBookkeepingForLoad(1e30, 0.0, 10.0, 10.0, 1);
+  EXPECT_EQ(sketch->Rank(20.0), INT64_MAX);
+  EXPECT_EQ(sketch->RevRank(0.0), INT64_MAX);
+}

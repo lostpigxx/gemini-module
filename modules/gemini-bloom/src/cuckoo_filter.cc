@@ -106,6 +106,7 @@ std::optional<CuckooFilter> CuckooFilter::Create(uint64_t numBuckets, uint32_t b
   filter.maxIterations_ = maxIterations;
 
   uint64_t dataSize = numBuckets * static_cast<uint64_t>(bucketSize);
+  if (dataSize > kCfMaxLayerDataSize) return std::nullopt;
   filter.buckets_ = static_cast<uint8_t*>(RMCalloc(dataSize, 1));
   if (!filter.buckets_) return std::nullopt;
 

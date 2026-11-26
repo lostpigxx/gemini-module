@@ -490,6 +490,45 @@ test_assert "DUMP / RESTORE round-trips a sketch" {
   if {abs($hi - 3.0) > 0.0001} { error "expected max=3.0 after DUMP/RESTORE, got $hi" }
 }
 
+puts "\n=== Phase 1: Security, Self-Alias, Atomicity, KeySpecs ==="
+
+test_assert "TDIGEST.MERGE rejects huge numKeys (int32 wrap DoS)" {
+  r TDIGEST.CREATE td_dos_s
+  r TDIGEST.ADD td_dos_s 1 2 3
+  set failed [catch {r TDIGEST.MERGE td_dos_d 4294967296 td_dos_s}]
+  if {!$failed} { error "expected error for numKeys=4294967296" }
+}
+
+test_assert "TDIGEST.MERGE OVERRIDE self-alias preserves source data" {
+  r TDIGEST.CREATE td_self_a
+  r TDIGEST.CREATE td_self_b
+  r TDIGEST.ADD td_self_a 10 20 30
+  r TDIGEST.ADD td_self_b 40 50
+  r TDIGEST.MERGE td_self_a 2 td_self_a td_self_b OVERRIDE
+  set lo [r TDIGEST.MIN td_self_a]
+  set hi [r TDIGEST.MAX td_self_a]
+  if {abs($lo - 10.0) > 0.0001 || abs($hi - 50.0) > 0.0001} {
+    error "expected [10, 50], got [$lo, $hi]"
+  }
+}
+
+test_assert "TDIGEST.ADD rejects NaN atomically without partial writes" {
+  r TDIGEST.CREATE td_atom
+  r TDIGEST.ADD td_atom 100
+  set failed [catch {r TDIGEST.ADD td_atom 1 2 nan 3}]
+  if {!$failed} { error "expected NaN to fail" }
+  set lo [r TDIGEST.MIN td_atom]
+  if {abs($lo - 100.0) > 0.0001} { error "expected atomic rejection (min=100), got $lo" }
+}
+
+test_assert "TDIGEST.MERGE Redis 7 COMMAND GETKEYS returns dest and sources" {
+  set srv [r INFO server]
+  if {[regexp {redis_version:([0-9]+)\.} $srv -> major] && $major >= 7} {
+    set keys [r COMMAND GETKEYS TDIGEST.MERGE dst 2 s1 s2 COMPRESSION 200 OVERRIDE]
+    if {$keys ne "dst s1 s2"} { error "expected 'dst s1 s2', got '$keys'" }
+  }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

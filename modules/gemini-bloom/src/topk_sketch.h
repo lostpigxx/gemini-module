@@ -100,7 +100,7 @@ public:
   // For RDB/wire load: append an owned copy of `name` with `count` as the
   // next active entry. Caller must append in descending-count order (as
   // this class always persists them) and never exceed k_ entries.
-  void AppendEntryForLoad(std::span<const std::byte> name, uint64_t count);
+  bool AppendEntryForLoad(std::span<const std::byte> name, uint64_t count);
 
 private:
   uint32_t FingerprintOf(std::span<const std::byte> item) const;
@@ -110,7 +110,7 @@ private:
   uint64_t ApplyOneIncrement(std::span<const std::byte> item);
   std::optional<std::string> UpdateTopK(std::span<const std::byte> item, uint64_t newCount);
   int FindEntryIndex(std::span<const std::byte> item) const;
-  void SetEntryName(uint32_t idx, std::span<const std::byte> name);
+  bool SetEntryName(uint32_t idx, std::span<const std::byte> name);
   void FreeEntryName(uint32_t idx);
 
   uint32_t k_ = 0;

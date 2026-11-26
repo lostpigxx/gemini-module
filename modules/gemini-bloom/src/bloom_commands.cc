@@ -5,6 +5,7 @@
 #include "rm_alloc.h"
 
 #include <climits>
+#include <cmath>
 #include <cstring>
 #include <strings.h>
 #include <string_view>
@@ -103,7 +104,7 @@ static int CmdReserve(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   double rate;
   if (RedisModule_StringToDouble(argv[2], &rate) != REDISMODULE_OK ||
-      rate <= 0.0 || rate >= 1.0) {
+      !std::isfinite(rate) || rate <= 0.0 || rate >= 1.0) {
     return RedisModule_ReplyWithError(ctx, "ERR false positive rate must be in (0, 1)");
   }
 
@@ -269,7 +270,7 @@ static bool ParseInsertOptions(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (++i >= argc) { RedisModule_WrongArity(ctx); return false; }
       double val;
       if (RedisModule_StringToDouble(argv[i], &val) != REDISMODULE_OK ||
-          val <= 0.0 || val >= 1.0) {
+          !std::isfinite(val) || val <= 0.0 || val >= 1.0) {
         RedisModule_ReplyWithError(ctx, "ERR false positive rate must be in (0, 1)");
         return false;
       }
@@ -643,15 +644,18 @@ static int CmdLoadchunk(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     size_t idx = static_cast<size_t>(cursor - 2);
     if (idx >= filter->NumLayers()) {
       RedisModule_DeleteKey(key);
+      RedisModule_Replicate(ctx, "DEL", "s", argv[1]);
       return RedisModule_ReplyWithError(ctx, "ERR cursor exceeds layer count");
     }
     if (idx != filter->ChunksLoaded()) {
       RedisModule_DeleteKey(key);
+      RedisModule_Replicate(ctx, "DEL", "s", argv[1]);
       return RedisModule_ReplyWithError(ctx, "ERR out-of-order chunk");
     }
     auto& layer = filter->Layers()[idx];
     if (dataLen != static_cast<size_t>(layer.bloom.GetDataSize())) {
       RedisModule_DeleteKey(key);
+      RedisModule_Replicate(ctx, "DEL", "s", argv[1]);
       return RedisModule_ReplyWithError(ctx, "ERR data length mismatch for layer");
     }
     std::memcpy(layer.bloom.GetBitArray(), data, dataLen);

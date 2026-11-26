@@ -17,6 +17,7 @@ static bool ValidateCfLayerFields(uint64_t numBuckets, uint32_t bucketSize, uint
   if (numBuckets > kCfMaxBuckets) return false;
   if (bucketSize == 0 || bucketSize > kCfMaxBucketSize) return false;
   if (dataSize != numBuckets * static_cast<uint64_t>(bucketSize)) return false;
+  if (dataSize > kCfMaxLayerDataSize) return false;
   return true;
 }
 
@@ -92,6 +93,7 @@ static CuckooChain* ReadCfChain(RdbReader& r) {
   if (!chain) return nullptr;
 
   uint64_t itemSum = 0;
+  uint64_t totalDataSize = 0;
   for (uint32_t i = 0; i < shell.numLayers; i++) {
     uint64_t numBuckets = r.GetUint();
     auto [buf, bufLen] = r.GetBlob();
@@ -101,12 +103,15 @@ static CuckooChain* ReadCfChain(RdbReader& r) {
       RMFree(chain);
       return nullptr;
     }
-    if (!ValidateCfLayerFields(numBuckets, shell.bucketSize, static_cast<uint64_t>(bufLen))) {
+    if (!ValidateCfLayerFields(numBuckets, shell.bucketSize, static_cast<uint64_t>(bufLen)) ||
+        static_cast<uint64_t>(bufLen) > kCfMaxTotalDataSize ||
+        totalDataSize > kCfMaxTotalDataSize - static_cast<uint64_t>(bufLen)) {
       RedisModule_Free(buf);
       chain->~CuckooChain();
       RMFree(chain);
       return nullptr;
     }
+    totalDataSize += static_cast<uint64_t>(bufLen);
 
     auto maybeFilter = CuckooFilter::Create(numBuckets, shell.bucketSize, shell.maxIterations);
     if (!maybeFilter) {
@@ -115,7 +120,7 @@ static CuckooChain* ReadCfChain(RdbReader& r) {
       RMFree(chain);
       return nullptr;
     }
-    std::memcpy(maybeFilter->GetBucketArray(), buf, bufLen);
+    if (bufLen > 0) std::memcpy(maybeFilter->GetBucketArray(), buf, bufLen);
     RedisModule_Free(buf);
     maybeFilter->RecountItems();
     itemSum += maybeFilter->NumItems();
@@ -154,19 +159,22 @@ size_t CfComputeHeaderSize(const CuckooChain& chain) {
 }
 
 size_t CfSerializeHeader(const CuckooChain& chain, void* output) {
-  auto* hdr = static_cast<CfWireHeader*>(output);
-  hdr->totalItems = chain.TotalItems();
-  hdr->totalDeleted = chain.TotalDeleted();
-  hdr->numLayers = static_cast<uint32_t>(chain.NumLayers());
-  hdr->bucketSize = chain.BucketSize();
-  hdr->maxIterations = chain.MaxIterations();
-  hdr->expansion = chain.Expansion();
-  hdr->maxExpansions = chain.MaxExpansions();
+  CfWireHeader hdr{};
+  hdr.totalItems = chain.TotalItems();
+  hdr.totalDeleted = chain.TotalDeleted();
+  hdr.numLayers = static_cast<uint32_t>(chain.NumLayers());
+  hdr.bucketSize = chain.BucketSize();
+  hdr.maxIterations = chain.MaxIterations();
+  hdr.expansion = chain.Expansion();
+  hdr.maxExpansions = chain.MaxExpansions();
+  std::memcpy(output, &hdr, sizeof(hdr));
 
-  auto* meta = reinterpret_cast<CfWireLayerMeta*>(static_cast<char*>(output) + sizeof(CfWireHeader));
+  auto* cursor = static_cast<char*>(output) + sizeof(CfWireHeader);
   for (size_t i = 0; i < chain.NumLayers(); i++) {
     const auto& layer = chain.Layers()[i];
-    meta[i] = {layer.cuckoo.NumBuckets(), layer.cuckoo.GetDataSize()};
+    CfWireLayerMeta meta{layer.cuckoo.NumBuckets(), layer.cuckoo.GetDataSize()};
+    std::memcpy(cursor, &meta, sizeof(meta));
+    cursor += sizeof(meta);
   }
 
   return sizeof(CfWireHeader) + chain.NumLayers() * sizeof(CfWireLayerMeta);
@@ -175,35 +183,45 @@ size_t CfSerializeHeader(const CuckooChain& chain, void* output) {
 CuckooChain* CfDeserializeHeader(const void* data, size_t length) {
   if (length < sizeof(CfWireHeader)) return nullptr;
 
-  const auto* hdr = static_cast<const CfWireHeader*>(data);
-  if (!ValidateCfChainFields(hdr->numLayers, hdr->bucketSize, hdr->maxIterations, hdr->expansion)) {
+  CfWireHeader hdr{};
+  std::memcpy(&hdr, data, sizeof(hdr));
+  if (!ValidateCfChainFields(hdr.numLayers, hdr.bucketSize, hdr.maxIterations, hdr.expansion)) {
     return nullptr;
   }
-  size_t required = sizeof(CfWireHeader) + hdr->numLayers * sizeof(CfWireLayerMeta);
+  if (hdr.totalDeleted > hdr.totalItems) return nullptr;
+  size_t required = sizeof(CfWireHeader) + static_cast<size_t>(hdr.numLayers) * sizeof(CfWireLayerMeta);
   if (length != required) return nullptr;
 
-  const auto* meta = reinterpret_cast<const CfWireLayerMeta*>(
-    static_cast<const char*>(data) + sizeof(CfWireHeader));
+  const char* metaBase = static_cast<const char*>(data) + sizeof(CfWireHeader);
 
-  for (uint32_t i = 0; i < hdr->numLayers; i++) {
-    if (!ValidateCfLayerFields(meta[i].numBuckets, hdr->bucketSize, meta[i].dataSize)) {
+  uint64_t totalDataSize = 0;
+  for (uint32_t i = 0; i < hdr.numLayers; i++) {
+    CfWireLayerMeta m{};
+    std::memcpy(&m, metaBase + static_cast<size_t>(i) * sizeof(CfWireLayerMeta), sizeof(m));
+    if (!ValidateCfLayerFields(m.numBuckets, hdr.bucketSize, m.dataSize)) {
       return nullptr;
     }
+    if (m.dataSize > kCfMaxTotalDataSize || totalDataSize > kCfMaxTotalDataSize - m.dataSize) {
+      return nullptr;
+    }
+    totalDataSize += m.dataSize;
   }
 
   auto* chain = CuckooChain::FromRdbShell({
-    .totalItems = hdr->totalItems,
-    .totalDeleted = hdr->totalDeleted,
-    .numLayers = hdr->numLayers,
-    .bucketSize = hdr->bucketSize,
-    .maxIterations = hdr->maxIterations,
-    .expansion = hdr->expansion,
-    .maxExpansions = hdr->maxExpansions,
+    .totalItems = hdr.totalItems,
+    .totalDeleted = hdr.totalDeleted,
+    .numLayers = hdr.numLayers,
+    .bucketSize = hdr.bucketSize,
+    .maxIterations = hdr.maxIterations,
+    .expansion = hdr.expansion,
+    .maxExpansions = hdr.maxExpansions,
   });
   if (!chain) return nullptr;
 
-  for (uint32_t i = 0; i < hdr->numLayers; i++) {
-    auto maybeFilter = CuckooFilter::Create(meta[i].numBuckets, hdr->bucketSize, hdr->maxIterations);
+  for (uint32_t i = 0; i < hdr.numLayers; i++) {
+    CfWireLayerMeta m{};
+    std::memcpy(&m, metaBase + static_cast<size_t>(i) * sizeof(CfWireLayerMeta), sizeof(m));
+    auto maybeFilter = CuckooFilter::Create(m.numBuckets, hdr.bucketSize, hdr.maxIterations);
     if (!maybeFilter) {
       chain->~CuckooChain();
       RMFree(chain);

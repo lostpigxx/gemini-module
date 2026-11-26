@@ -2,6 +2,7 @@
 #include "bloom_filter.h"
 
 #include <climits>
+#include <cmath>
 #include <cstring>
 #include <strings.h>
 
@@ -19,7 +20,7 @@ int BloomConfigLoad(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       }
       double val;
       if (RedisModule_StringToDouble(argv[i], &val) != REDISMODULE_OK ||
-          val <= 0.0 || val >= 1.0) {
+          !std::isfinite(val) || val <= 0.0 || val >= 1.0) {
         RedisModule_Log(ctx, "warning", "Invalid ERROR_RATE");
         return REDISMODULE_ERR;
       }

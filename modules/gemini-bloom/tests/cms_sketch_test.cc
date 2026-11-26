@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 #include "cms_sketch.h"
 
+#include <climits>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -184,4 +186,57 @@ TEST(CmsSketchTest, CloneDeepCopiesCounters) {
 
   sketch->IncrBy(ToSpan(std::string("after_clone")), 5);
   EXPECT_EQ(clone->Query(ToSpan(std::string("after_clone"))), 0u);
+}
+
+TEST(CmsSketchTest, IncrByExtremeInt64DoesNotOverflowUB) {
+  auto sketch = CmsSketch::Create(100, 4);
+  ASSERT_TRUE(sketch.has_value());
+  auto item = std::string("extreme");
+  ASSERT_TRUE(sketch->IncrBy(ToSpan(item), 10).has_value());
+  EXPECT_FALSE(sketch->IncrBy(ToSpan(item), INT64_MAX).has_value());
+  EXPECT_FALSE(sketch->IncrBy(ToSpan(item), INT64_MIN).has_value());
+  EXPECT_EQ(sketch->Query(ToSpan(item)), 10u);
+}
+
+TEST(CmsSketchTest, IncrByBatchIsAtomicOnOverflow) {
+  auto sketch = CmsSketch::Create(100, 4);
+  ASSERT_TRUE(sketch.has_value());
+  std::string a = "a", b = "b";
+  ASSERT_TRUE(sketch->IncrBy(ToSpan(a), 5).has_value());
+
+  std::span<const std::byte> items[] = {ToSpan(a), ToSpan(b), ToSpan(a)};
+  int64_t deltas[] = {10, 20, static_cast<int64_t>(UINT32_MAX)};
+  uint64_t out[3] = {};
+  EXPECT_FALSE(sketch->IncrByBatch(items, deltas, out));
+  EXPECT_EQ(sketch->Query(ToSpan(a)), 5u);
+  EXPECT_EQ(sketch->Query(ToSpan(b)), 0u);
+  EXPECT_EQ(sketch->TotalCount(), 5u);
+}
+
+TEST(CmsSketchTest, MergeSelfAliasedPreservesSelfData) {
+  auto dst = CmsSketch::Create(200, 4);
+  auto other = CmsSketch::Create(200, 4);
+  ASSERT_TRUE(dst.has_value() && other.has_value());
+  std::string k = "self_alias";
+  ASSERT_TRUE(dst->IncrBy(ToSpan(k), 10).has_value());
+  ASSERT_TRUE(other->IncrBy(ToSpan(k), 7).has_value());
+
+  const CmsSketch* sources[] = {&*dst, &*other};
+  double weights[] = {2.0, 3.0};
+  ASSERT_TRUE(dst->Merge(sources, weights));
+  EXPECT_EQ(dst->Query(ToSpan(k)), 41u);  // 10*2 + 7*3
+  EXPECT_EQ(dst->TotalCount(), 41u);
+}
+
+TEST(CmsSketchTest, MergeRejectsNonFiniteOrNegativeWeights) {
+  auto dst = CmsSketch::Create(100, 3);
+  auto src = CmsSketch::Create(100, 3);
+  ASSERT_TRUE(dst.has_value() && src.has_value());
+  const CmsSketch* sources[] = {&*src};
+  double nanW[] = {std::numeric_limits<double>::quiet_NaN()};
+  double infW[] = {std::numeric_limits<double>::infinity()};
+  double negW[] = {-1.0};
+  EXPECT_FALSE(dst->Merge(sources, nanW));
+  EXPECT_FALSE(dst->Merge(sources, infW));
+  EXPECT_FALSE(dst->Merge(sources, negW));
 }

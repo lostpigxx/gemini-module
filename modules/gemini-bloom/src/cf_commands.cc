@@ -574,15 +574,18 @@ static int CmdLoadchunk(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     size_t idx = static_cast<size_t>(cursor - 2);
     if (idx >= filter->NumLayers()) {
       RedisModule_DeleteKey(key);
+      RedisModule_Replicate(ctx, "DEL", "s", argv[1]);
       return RedisModule_ReplyWithError(ctx, "ERR cursor exceeds layer count");
     }
     if (idx != filter->ChunksLoaded()) {
       RedisModule_DeleteKey(key);
+      RedisModule_Replicate(ctx, "DEL", "s", argv[1]);
       return RedisModule_ReplyWithError(ctx, "ERR out-of-order chunk");
     }
     auto& layer = filter->Layers()[idx];
     if (dataLen != static_cast<size_t>(layer.cuckoo.GetDataSize())) {
       RedisModule_DeleteKey(key);
+      RedisModule_Replicate(ctx, "DEL", "s", argv[1]);
       return RedisModule_ReplyWithError(ctx, "ERR data length mismatch for layer");
     }
     std::memcpy(layer.cuckoo.GetBucketArray(), data, dataLen);

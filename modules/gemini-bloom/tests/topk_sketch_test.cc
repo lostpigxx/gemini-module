@@ -194,3 +194,11 @@ TEST(TopkSketchTest, AppendEntryForLoadPopulatesEntriesInOrder) {
   EXPECT_EQ(list[1].first, "second");
   EXPECT_EQ(list[1].second, 50u);
 }
+
+TEST(TopkSketchTest, AppendEntryForLoadRespectsCapacity) {
+  auto sketch = TopkSketch::Create(2, 64, 4, 0.9);
+  ASSERT_TRUE(sketch.has_value());
+  EXPECT_TRUE(sketch->AppendEntryForLoad(ToSpan(std::string("a")), 10));
+  EXPECT_TRUE(sketch->AppendEntryForLoad(ToSpan(std::string("b")), 5));
+  EXPECT_FALSE(sketch->AppendEntryForLoad(ToSpan(std::string("c")), 1));
+}

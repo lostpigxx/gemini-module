@@ -102,25 +102,25 @@ static TdigestSketch* ReadTdigestSketch(RdbReader& r) {
     return nullptr;
   }
 
-  const auto* centroidPairs = reinterpret_cast<const TdigestSketch::Centroid*>(centroidBuf);
   for (uint64_t i = 0; i < rawNumCentroids; i++) {
-    if (!std::isfinite(centroidPairs[i].mean) || !std::isfinite(centroidPairs[i].weight) ||
-        centroidPairs[i].weight <= 0.0) {
+    TdigestSketch::Centroid c{};
+    std::memcpy(&c, centroidBuf + i * sizeof(TdigestSketch::Centroid), sizeof(c));
+    if (!std::isfinite(c.mean) || !std::isfinite(c.weight) || c.weight <= 0.0) {
       if (centroidBuf) RedisModule_Free(centroidBuf);
       if (bufferBuf) RedisModule_Free(bufferBuf);
       return nullptr;
     }
-    maybeSketch->AppendCentroidForLoad(centroidPairs[i].mean, centroidPairs[i].weight);
+    maybeSketch->AppendCentroidForLoad(c.mean, c.weight);
   }
-  const auto* bufferPairs = reinterpret_cast<const TdigestSketch::Centroid*>(bufferBuf);
   for (uint64_t i = 0; i < rawNumBuffered; i++) {
-    if (!std::isfinite(bufferPairs[i].mean) || !std::isfinite(bufferPairs[i].weight) ||
-        bufferPairs[i].weight <= 0.0) {
+    TdigestSketch::Centroid c{};
+    std::memcpy(&c, bufferBuf + i * sizeof(TdigestSketch::Centroid), sizeof(c));
+    if (!std::isfinite(c.mean) || !std::isfinite(c.weight) || c.weight <= 0.0) {
       if (centroidBuf) RedisModule_Free(centroidBuf);
       if (bufferBuf) RedisModule_Free(bufferBuf);
       return nullptr;
     }
-    maybeSketch->AppendBufferedForLoad(bufferPairs[i].mean, bufferPairs[i].weight);
+    maybeSketch->AppendBufferedForLoad(c.mean, c.weight);
   }
   if (centroidBuf) RedisModule_Free(centroidBuf);
   if (bufferBuf) RedisModule_Free(bufferBuf);
@@ -157,24 +157,29 @@ size_t TdigestComputeChunkSize(const TdigestSketch& sketch) {
 size_t TdigestSerializeChunk(const TdigestSketch& sketch, void* output) {
   auto* cursor = static_cast<char*>(output);
 
-  auto* hdr = reinterpret_cast<TdigestWireHeader*>(cursor);
-  hdr->compression = sketch.Compression();
-  hdr->mergedWeight = sketch.MergedWeight();
-  hdr->unmergedWeight = sketch.UnmergedWeight();
-  hdr->rawMin = sketch.Min();
-  hdr->rawMax = sketch.Max();
-  hdr->numCompressions = sketch.NumCompressions();
-  hdr->numCentroids = sketch.NumCentroids();
-  hdr->numBuffered = sketch.NumBuffered();
+  TdigestWireHeader hdr{};
+  hdr.compression = sketch.Compression();
+  hdr.mergedWeight = sketch.MergedWeight();
+  hdr.unmergedWeight = sketch.UnmergedWeight();
+  hdr.rawMin = sketch.Min();
+  hdr.rawMax = sketch.Max();
+  hdr.numCompressions = sketch.NumCompressions();
+  hdr.numCentroids = sketch.NumCentroids();
+  hdr.numBuffered = sketch.NumBuffered();
+  std::memcpy(cursor, &hdr, sizeof(hdr));
   cursor += sizeof(TdigestWireHeader);
 
   size_t centroidBytes = static_cast<size_t>(sketch.NumCentroids()) * sizeof(TdigestSketch::Centroid);
-  std::memcpy(cursor, sketch.GetCentroidArray(), centroidBytes);
-  cursor += centroidBytes;
+  if (centroidBytes > 0) {
+    std::memcpy(cursor, sketch.GetCentroidArray(), centroidBytes);
+    cursor += centroidBytes;
+  }
 
   size_t bufferBytes = static_cast<size_t>(sketch.NumBuffered()) * sizeof(TdigestSketch::Centroid);
-  std::memcpy(cursor, sketch.GetBufferArray(), bufferBytes);
-  cursor += bufferBytes;
+  if (bufferBytes > 0) {
+    std::memcpy(cursor, sketch.GetBufferArray(), bufferBytes);
+    cursor += bufferBytes;
+  }
 
   return static_cast<size_t>(cursor - static_cast<char*>(output));
 }
@@ -182,50 +187,53 @@ size_t TdigestSerializeChunk(const TdigestSketch& sketch, void* output) {
 TdigestSketch* TdigestDeserializeChunk(const void* data, size_t length) {
   if (length < sizeof(TdigestWireHeader)) return nullptr;
 
-  const auto* hdr = static_cast<const TdigestWireHeader*>(data);
+  TdigestWireHeader hdr{};
+  std::memcpy(&hdr, data, sizeof(hdr));
   const char* cursor = static_cast<const char*>(data) + sizeof(TdigestWireHeader);
   size_t remaining = length - sizeof(TdigestWireHeader);
 
-  if (!ValidateTdigestFields(hdr->compression, hdr->numCentroids, hdr->numBuffered, hdr->mergedWeight,
-                              hdr->unmergedWeight, hdr->rawMin, hdr->rawMax)) {
+  if (!ValidateTdigestFields(hdr.compression, hdr.numCentroids, hdr.numBuffered, hdr.mergedWeight,
+                              hdr.unmergedWeight, hdr.rawMin, hdr.rawMax)) {
     return nullptr;
   }
 
-  size_t centroidBytes = static_cast<size_t>(hdr->numCentroids) * sizeof(TdigestSketch::Centroid);
+  size_t centroidBytes = static_cast<size_t>(hdr.numCentroids) * sizeof(TdigestSketch::Centroid);
   if (remaining < centroidBytes) return nullptr;
-  const auto* centroidPairs = reinterpret_cast<const TdigestSketch::Centroid*>(cursor);
+  const char* centroidPtr = cursor;
   cursor += centroidBytes;
   remaining -= centroidBytes;
 
-  size_t bufferBytes = static_cast<size_t>(hdr->numBuffered) * sizeof(TdigestSketch::Centroid);
+  size_t bufferBytes = static_cast<size_t>(hdr.numBuffered) * sizeof(TdigestSketch::Centroid);
   if (remaining < bufferBytes) return nullptr;
-  const auto* bufferPairs = reinterpret_cast<const TdigestSketch::Centroid*>(cursor);
+  const char* bufferPtr = cursor;
   cursor += bufferBytes;
   remaining -= bufferBytes;
 
   if (remaining != 0) return nullptr;
 
-  auto maybeSketch = TdigestSketch::Create(hdr->compression);
+  auto maybeSketch = TdigestSketch::Create(hdr.compression);
   if (!maybeSketch) return nullptr;
-  if (!maybeSketch->AllocateForLoad(hdr->numCentroids, hdr->numBuffered)) return nullptr;
+  if (!maybeSketch->AllocateForLoad(hdr.numCentroids, hdr.numBuffered)) return nullptr;
 
-  for (uint32_t i = 0; i < hdr->numCentroids; i++) {
-    if (!std::isfinite(centroidPairs[i].mean) || !std::isfinite(centroidPairs[i].weight) ||
-        centroidPairs[i].weight <= 0.0) {
+  for (uint32_t i = 0; i < hdr.numCentroids; i++) {
+    TdigestSketch::Centroid c{};
+    std::memcpy(&c, centroidPtr + static_cast<size_t>(i) * sizeof(c), sizeof(c));
+    if (!std::isfinite(c.mean) || !std::isfinite(c.weight) || c.weight <= 0.0) {
       return nullptr;
     }
-    maybeSketch->AppendCentroidForLoad(centroidPairs[i].mean, centroidPairs[i].weight);
+    maybeSketch->AppendCentroidForLoad(c.mean, c.weight);
   }
-  for (uint32_t i = 0; i < hdr->numBuffered; i++) {
-    if (!std::isfinite(bufferPairs[i].mean) || !std::isfinite(bufferPairs[i].weight) ||
-        bufferPairs[i].weight <= 0.0) {
+  for (uint32_t i = 0; i < hdr.numBuffered; i++) {
+    TdigestSketch::Centroid c{};
+    std::memcpy(&c, bufferPtr + static_cast<size_t>(i) * sizeof(c), sizeof(c));
+    if (!std::isfinite(c.mean) || !std::isfinite(c.weight) || c.weight <= 0.0) {
       return nullptr;
     }
-    maybeSketch->AppendBufferedForLoad(bufferPairs[i].mean, bufferPairs[i].weight);
+    maybeSketch->AppendBufferedForLoad(c.mean, c.weight);
   }
 
-  maybeSketch->SetBookkeepingForLoad(hdr->mergedWeight, hdr->unmergedWeight, hdr->rawMin, hdr->rawMax,
-                                      hdr->numCompressions);
+  maybeSketch->SetBookkeepingForLoad(hdr.mergedWeight, hdr.unmergedWeight, hdr.rawMin, hdr.rawMax,
+                                      hdr.numCompressions);
 
   auto* sketch = static_cast<TdigestSketch*>(RMAlloc(sizeof(TdigestSketch)));
   if (!sketch) return nullptr;

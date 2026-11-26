@@ -21,20 +21,20 @@ void RdbWriter::PutBlob(const uint8_t* data, uint64_t len) {
 uint64_t RdbReader::GetUint() {
   if (!ok_) return 0;
   uint64_t v = RedisModule_LoadUnsigned(io_);
-  if (RedisModule_IsIOError && RedisModule_IsIOError(io_)) ok_ = false;
+  if (RedisModule_IsIOError(io_)) ok_ = false;
   return v;
 }
 double RdbReader::GetFloat() {
   if (!ok_) return 0.0;
   double v = RedisModule_LoadDouble(io_);
-  if (RedisModule_IsIOError && RedisModule_IsIOError(io_)) ok_ = false;
+  if (RedisModule_IsIOError(io_)) ok_ = false;
   return v;
 }
 std::pair<char*, size_t> RdbReader::GetBlob() {
   if (!ok_) return {nullptr, 0};
   size_t len = 0;
   char* buf = RedisModule_LoadStringBuffer(io_, &len);
-  if (RedisModule_IsIOError && RedisModule_IsIOError(io_)) ok_ = false;
+  if (RedisModule_IsIOError(io_)) ok_ = false;
   return {buf, len};
 }
 
@@ -245,18 +245,19 @@ size_t ComputeHeaderSize(const ScalingBloomFilter& filter) {
 }
 
 size_t SerializeHeader(const ScalingBloomFilter& filter, void* output) {
-  auto* hdr = static_cast<WireFilterHeader*>(output);
-  hdr->totalItems = filter.TotalItems();
-  hdr->numLayers = static_cast<uint32_t>(filter.NumLayers());
-  hdr->flags = ToUnderlying(filter.Flags()) & kPersistentFlagsMask;
-  hdr->expansionFactor = filter.ExpansionFactor();
+  WireFilterHeader hdr{};
+  hdr.totalItems = filter.TotalItems();
+  hdr.numLayers = static_cast<uint32_t>(filter.NumLayers());
+  hdr.flags = ToUnderlying(filter.Flags()) & kPersistentFlagsMask;
+  hdr.expansionFactor = filter.ExpansionFactor();
+  std::memcpy(output, &hdr, sizeof(hdr));
 
-  auto* meta = reinterpret_cast<WireLayerMeta*>(
-    static_cast<char*>(output) + sizeof(WireFilterHeader));
-
+  auto* cursor = static_cast<char*>(output) + sizeof(WireFilterHeader);
   for (size_t i = 0; i < filter.NumLayers(); i++) {
     const auto& layer = filter.Layers()[i];
-    meta[i] = layer.bloom.ToWireMeta(layer.itemCount);
+    WireLayerMeta meta = layer.bloom.ToWireMeta(layer.itemCount);
+    std::memcpy(cursor, &meta, sizeof(meta));
+    cursor += sizeof(meta);
   }
 
   return sizeof(WireFilterHeader) + filter.NumLayers() * sizeof(WireLayerMeta);
@@ -271,52 +272,56 @@ static bool ValidateLayerMeta(const WireLayerMeta& meta) {
 ScalingBloomFilter* DeserializeHeader(const void* data, size_t length) {
   if (length < sizeof(WireFilterHeader)) return nullptr;
 
-  const auto* hdr = static_cast<const WireFilterHeader*>(data);
-  if (hdr->numLayers == 0 || hdr->numLayers > kMaxLayers) return nullptr;
-  size_t required = sizeof(WireFilterHeader) + hdr->numLayers * sizeof(WireLayerMeta);
+  WireFilterHeader hdr{};
+  std::memcpy(&hdr, data, sizeof(hdr));
+  if (hdr.numLayers == 0 || hdr.numLayers > kMaxLayers) return nullptr;
+  size_t required = sizeof(WireFilterHeader) + static_cast<size_t>(hdr.numLayers) * sizeof(WireLayerMeta);
   if (length != required) return nullptr;
 
-  if (!ValidateFlags(hdr->flags)) return nullptr;
+  if (!ValidateFlags(hdr.flags)) return nullptr;
 
-  auto filterFlags = FromUnderlying(hdr->flags);
+  auto filterFlags = FromUnderlying(hdr.flags);
 
-  if (hdr->expansionFactor > kMaxExpansion) return nullptr;
-  if (!HasFlag(filterFlags, BloomFlags::FixedSize) && hdr->expansionFactor == 0) {
+  if (hdr.expansionFactor > kMaxExpansion) return nullptr;
+  if (!HasFlag(filterFlags, BloomFlags::FixedSize) && hdr.expansionFactor == 0) {
     return nullptr;
   }
 
-  const auto* meta = reinterpret_cast<const WireLayerMeta*>(
-    static_cast<const char*>(data) + sizeof(WireFilterHeader));
+  const char* metaBase = static_cast<const char*>(data) + sizeof(WireFilterHeader);
 
   uint64_t itemSum = 0;
   uint64_t totalDataSize = 0;
-  for (size_t i = 0; i < hdr->numLayers; i++) {
-    if (!ValidateLayerMeta(meta[i])) return nullptr;
-    if (meta[i].itemCount > meta[i].capacity) return nullptr;
-    if (itemSum > UINT64_MAX - meta[i].itemCount) return nullptr;
-    itemSum += meta[i].itemCount;
-    if (meta[i].dataSize > kMaxTotalDataSize ||
-        totalDataSize > kMaxTotalDataSize - meta[i].dataSize) return nullptr;
-    totalDataSize += meta[i].dataSize;
+  for (size_t i = 0; i < hdr.numLayers; i++) {
+    WireLayerMeta m{};
+    std::memcpy(&m, metaBase + i * sizeof(WireLayerMeta), sizeof(m));
+    if (!ValidateLayerMeta(m)) return nullptr;
+    if (m.itemCount > m.capacity) return nullptr;
+    if (itemSum > UINT64_MAX - m.itemCount) return nullptr;
+    itemSum += m.itemCount;
+    if (m.dataSize > kMaxTotalDataSize ||
+        totalDataSize > kMaxTotalDataSize - m.dataSize) return nullptr;
+    totalDataSize += m.dataSize;
   }
-  if (itemSum != hdr->totalItems) return nullptr;
+  if (itemSum != hdr.totalItems) return nullptr;
 
   auto* filter = ScalingBloomFilter::FromRdbShell({
-    .totalItems = hdr->totalItems,
-    .numLayers = hdr->numLayers,
+    .totalItems = hdr.totalItems,
+    .numLayers = hdr.numLayers,
     .flags = filterFlags,
-    .expansionFactor = hdr->expansionFactor,
+    .expansionFactor = hdr.expansionFactor,
   });
   if (!filter) return nullptr;
 
-  for (size_t i = 0; i < hdr->numLayers; i++) {
-    auto layer = BloomLayer::FromWireMeta(meta[i], filterFlags);
+  for (size_t i = 0; i < hdr.numLayers; i++) {
+    WireLayerMeta m{};
+    std::memcpy(&m, metaBase + i * sizeof(WireLayerMeta), sizeof(m));
+    auto layer = BloomLayer::FromWireMeta(m, filterFlags);
     if (!layer) {
       filter->~ScalingBloomFilter();
       RMFree(filter);
       return nullptr;
     }
-    filter->SetLayer(i, {std::move(*layer), meta[i].itemCount});
+    filter->SetLayer(i, {std::move(*layer), m.itemCount});
   }
 
   return filter;

@@ -138,12 +138,14 @@ void TopkSketch::FreeEntryName(uint32_t idx) {
   }
 }
 
-void TopkSketch::SetEntryName(uint32_t idx, std::span<const std::byte> name) {
-  FreeEntryName(idx);
+bool TopkSketch::SetEntryName(uint32_t idx, std::span<const std::byte> name) {
   auto* buf = static_cast<char*>(RMAlloc(name.size() == 0 ? 1 : name.size()));
+  if (!buf) return false;
   if (name.size() > 0) std::memcpy(buf, name.data(), name.size());
+  FreeEntryName(idx);
   entries_[idx].name = buf;
   entries_[idx].nameLen = static_cast<uint32_t>(name.size());
+  return true;
 }
 
 // Per-row HeavyKeeper update: on a fingerprint match (or an empty cell),
@@ -165,7 +167,7 @@ uint64_t TopkSketch::ApplyOneIncrement(std::span<const std::byte> item) {
       cell.count = 1;
       fpMatchCount = std::max<uint64_t>(fpMatchCount, 1);
     } else if (cell.fingerprint == fp) {
-      cell.count++;
+      if (cell.count < UINT32_MAX) cell.count++;
       fpMatchCount = std::max<uint64_t>(fpMatchCount, cell.count);
     } else {
       double p = std::pow(decay_, static_cast<double>(cell.count));
@@ -186,7 +188,7 @@ std::optional<std::string> TopkSketch::UpdateTopK(std::span<const std::byte> ite
   int idx = FindEntryIndex(item);
   if (idx >= 0) {
     auto i = static_cast<uint32_t>(idx);
-    entries_[i].count += 1;
+    if (entries_[i].count < UINT64_MAX) entries_[i].count += 1;
     while (i > 0 && entries_[i - 1].count < entries_[i].count) {
       std::swap(entries_[i - 1], entries_[i]);
       i--;
@@ -198,7 +200,7 @@ std::optional<std::string> TopkSketch::UpdateTopK(std::span<const std::byte> ite
 
   if (numActive_ < k_) {
     uint32_t i = numActive_;
-    SetEntryName(i, item);
+    if (!SetEntryName(i, item)) return std::nullopt;
     entries_[i].count = candidateCount;
     numActive_++;
     while (i > 0 && entries_[i - 1].count < entries_[i].count) {
@@ -212,7 +214,7 @@ std::optional<std::string> TopkSketch::UpdateTopK(std::span<const std::byte> ite
   if (candidateCount <= entries_[minIdx].count) return std::nullopt;
 
   std::string evicted(entries_[minIdx].name, entries_[minIdx].nameLen);
-  SetEntryName(minIdx, item);
+  if (!SetEntryName(minIdx, item)) return std::nullopt;
   entries_[minIdx].count = candidateCount;
 
   uint32_t i = minIdx;
@@ -266,11 +268,13 @@ std::vector<std::pair<std::string, uint64_t>> TopkSketch::List() const {
   return result;
 }
 
-void TopkSketch::AppendEntryForLoad(std::span<const std::byte> name, uint64_t count) {
+bool TopkSketch::AppendEntryForLoad(std::span<const std::byte> name, uint64_t count) {
+  if (numActive_ >= k_) return false;
   uint32_t i = numActive_;
-  SetEntryName(i, name);
+  if (!SetEntryName(i, name)) return false;
   entries_[i].count = count;
   numActive_++;
+  return true;
 }
 
 std::optional<TopkSketch> TopkSketch::Clone() const {
@@ -284,16 +288,19 @@ std::optional<TopkSketch> TopkSketch::Clone() const {
   uint64_t cellDataSize = GetCellDataSize();
   copy.cells_ = static_cast<Cell*>(RMAlloc(cellDataSize));
   if (!copy.cells_) return std::nullopt;
-  std::memcpy(copy.cells_, cells_, cellDataSize);
+  if (cellDataSize > 0) std::memcpy(copy.cells_, cells_, cellDataSize);
 
   copy.entries_ = static_cast<Entry*>(RMCalloc(k_, sizeof(Entry)));
   if (!copy.entries_) {
     RMFree(copy.cells_);
+    copy.cells_ = nullptr;
     return std::nullopt;
   }
   for (uint32_t i = 0; i < numActive_; i++) {
-    copy.AppendEntryForLoad(std::span<const std::byte>(
-      reinterpret_cast<const std::byte*>(entries_[i].name), entries_[i].nameLen), entries_[i].count);
+    if (!copy.AppendEntryForLoad(std::span<const std::byte>(
+          reinterpret_cast<const std::byte*>(entries_[i].name), entries_[i].nameLen), entries_[i].count)) {
+      return std::nullopt;
+    }
   }
   return copy;
 }

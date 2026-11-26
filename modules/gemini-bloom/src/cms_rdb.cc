@@ -77,30 +77,36 @@ size_t CmsComputeChunkSize(const CmsSketch& sketch) {
 }
 
 size_t CmsSerializeChunk(const CmsSketch& sketch, void* output) {
-  auto* hdr = static_cast<CmsWireHeader*>(output);
-  hdr->width = sketch.Width();
-  hdr->depth = sketch.Depth();
-  hdr->totalCount = sketch.TotalCount();
+  CmsWireHeader hdr{};
+  hdr.width = sketch.Width();
+  hdr.depth = sketch.Depth();
+  hdr.totalCount = sketch.TotalCount();
+  std::memcpy(output, &hdr, sizeof(hdr));
 
-  std::memcpy(static_cast<char*>(output) + sizeof(CmsWireHeader), sketch.GetCounterArray(),
-              sketch.GetDataSize());
+  uint64_t dataSize = sketch.GetDataSize();
+  if (dataSize > 0) {
+    std::memcpy(static_cast<char*>(output) + sizeof(CmsWireHeader), sketch.GetCounterArray(), dataSize);
+  }
 
-  return sizeof(CmsWireHeader) + sketch.GetDataSize();
+  return sizeof(CmsWireHeader) + dataSize;
 }
 
 CmsSketch* CmsDeserializeChunk(const void* data, size_t length) {
   if (length < sizeof(CmsWireHeader)) return nullptr;
 
-  const auto* hdr = static_cast<const CmsWireHeader*>(data);
+  CmsWireHeader hdr{};
+  std::memcpy(&hdr, data, sizeof(hdr));
   uint64_t dataSize = length - sizeof(CmsWireHeader);
-  if (!ValidateCmsFields(hdr->width, hdr->depth, dataSize)) return nullptr;
+  if (!ValidateCmsFields(hdr.width, hdr.depth, dataSize)) return nullptr;
 
-  auto maybeSketch = CmsSketch::Create(hdr->width, hdr->depth);
+  auto maybeSketch = CmsSketch::Create(hdr.width, hdr.depth);
   if (!maybeSketch) return nullptr;
 
-  std::memcpy(maybeSketch->GetCounterArray(), static_cast<const char*>(data) + sizeof(CmsWireHeader),
-              dataSize);
-  maybeSketch->SetTotalCount(hdr->totalCount);
+  if (dataSize > 0) {
+    std::memcpy(maybeSketch->GetCounterArray(), static_cast<const char*>(data) + sizeof(CmsWireHeader),
+                dataSize);
+  }
+  maybeSketch->SetTotalCount(hdr.totalCount);
 
   auto* sketch = static_cast<CmsSketch*>(RMAlloc(sizeof(CmsSketch)));
   if (!sketch) return nullptr;
