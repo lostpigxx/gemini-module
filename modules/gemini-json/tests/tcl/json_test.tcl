@@ -1069,8 +1069,9 @@ test_assert "JSON.MERGE strips null keys on new root and new leaf (RFC 7396)" {
 }
 
 test_error "JSON.SET rejects combined depth > 128" {
-  set open_obj "{\"a\":"
-  set base "[string repeat $open_obj 80]1[string repeat \} 80]"
+  set lb [format %c 123]
+  set rb [format %c 125]
+  set base "[string repeat "${lb}\"a\":" 80]1[string repeat $rb 80]"
   set graft "[string repeat {[} 60]1[string repeat {]} 60]"
   r JSON.SET depth_guard $ $base
   set p "\$[string repeat {.a} 80]"
