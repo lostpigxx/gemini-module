@@ -42,6 +42,13 @@ namespace {
 
 constexpr size_t kMaxRegexPatternLen = 512;
 constexpr int kMaxFilterParenDepth = 32;
+constexpr size_t kMaxPathLen = 65536;
+constexpr size_t kMaxPathSegments = 128;
+constexpr size_t kMaxUnionMembers = 1024;
+constexpr size_t kMaxFilterNodes = 1024;
+constexpr size_t kMaxCacheablePathLen = 4096;
+constexpr size_t kMaxEvalSteps = 2000000;
+constexpr size_t kMaxEvalMatches = 500000;
 
 struct PathParser {
   const char* pos;
@@ -553,6 +560,10 @@ static int32_t ParseFilterPrimary(PathParser& p, std::vector<FilterNode>& nodes,
     p.error = "filter expression nested too deeply";
     return -1;
   }
+  if (nodes.size() >= kMaxFilterNodes) {
+    p.error = "filter expression too complex";
+    return -1;
+  }
   p.SkipSpaces();
   if (!p.HasMore()) { p.error = "unexpected end in filter"; return -1; }
 
@@ -761,6 +772,10 @@ static bool ParseUnionContent(PathParser& p, UnionParams& params) {
   params.members.clear();
 
   while (true) {
+    if (params.members.size() >= kMaxUnionMembers) {
+      p.error = "too many union members";
+      return false;
+    }
     p.SkipSpaces();
     if (!p.HasMore()) { p.error = "unterminated union"; return false; }
 
@@ -1202,6 +1217,11 @@ struct EvalState {
   MatchVec& results;
   // Used only when path.has_multi_recursive is true to prevent duplicate visits
   std::unordered_set<uint64_t> visited_rec;
+  size_t steps = 0;
+
+  inline bool BudgetExceeded() {
+    return (++steps > kMaxEvalSteps) || (results.size() >= kMaxEvalMatches);
+  }
 };
 
 static void Evaluate(EvalState& st, size_t seg_idx,
@@ -1213,7 +1233,7 @@ static void EvalRecursive(EvalState& st, size_t seg_idx,
                           JsonValue* current, JsonValue* parent,
                           int32_t arr_idx, std::string_view obj_key,
                           bool has_obj_key, int depth) {
-  if (depth > kMaxJsonDepth) return;
+  if (depth > kMaxJsonDepth || st.BudgetExceeded()) return;
   if (st.path.has_multi_recursive) {
     uint64_t key = (reinterpret_cast<uintptr_t>(current) * 0x9e3779b97f4a7c15ULL) ^
                    (static_cast<uint64_t>(seg_idx) * 0xbf58476d1ce4e5b9ULL);
@@ -1270,7 +1290,7 @@ static void Evaluate(EvalState& st, size_t seg_idx,
                      JsonValue* current, JsonValue* parent,
                      int32_t arr_idx, std::string_view obj_key,
                      bool has_obj_key, int depth) {
-  if (depth > kMaxJsonDepth) return;
+  if (depth > kMaxJsonDepth || st.BudgetExceeded()) return;
   if (seg_idx >= st.path.segments.size()) {
     st.results.push_back({current, parent, arr_idx,
                           has_obj_key ? std::string(obj_key) : std::string(),
@@ -1406,6 +1426,17 @@ struct PathLruCache {
   std::unordered_map<std::string_view, std::list<Entry>::iterator> map;
 
   const JsonPath* GetOrParse(std::string_view input, const char** error) {
+    if (input.size() > kMaxCacheablePathLen) {
+      // Oversized paths bypass LRU cache using a single reusable slot
+      auto pr = ParsePath(input);
+      if (pr.error) {
+        if (error) *error = pr.error;
+        return nullptr;
+      }
+      oversized_slot = std::move(pr.path);
+      if (error) *error = nullptr;
+      return &oversized_slot;
+    }
     auto it = map.find(input);
     if (it != map.end()) {
       lru.splice(lru.begin(), lru, it->second);
@@ -1430,12 +1461,19 @@ struct PathLruCache {
     if (error) *error = nullptr;
     return &front->path;
   }
+
+  JsonPath oversized_slot;
 };
 
 } // namespace
 
 PathParseResult ParsePath(std::string_view input) {
   PathParseResult result;
+
+  if (input.size() > kMaxPathLen) {
+    result.error = "path too long";
+    return result;
+  }
 
   if (input.empty() || input == "." || input == "$") {
     result.path.segments.push_back(MakeSeg(PathSegType::kRoot));
@@ -1468,6 +1506,10 @@ PathParseResult ParsePath(std::string_view input) {
   }
 
   while (p.HasMore()) {
+    if (result.path.segments.size() >= kMaxPathSegments) {
+      result.error = "path has too many segments";
+      return result;
+    }
     char c = p.Peek();
 
     if (c == '.') {
@@ -1577,7 +1619,7 @@ std::vector<PathMatch> EvaluatePath(const JsonPath& path, JsonValue* root) {
     return results;
   }
 
-  EvalState st{path, root, results, {}};
+  EvalState st{path, root, results, {}, 0};
   Evaluate(st, 0, root, nullptr, -1, {}, false, 0);
   return results;
 }

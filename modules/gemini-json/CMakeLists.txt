@@ -110,13 +110,33 @@ if(GTest_FOUND)
   target_compile_definitions(json_rdb_test PRIVATE REDIS_JSON_TESTING)
   target_compile_options(json_rdb_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
 
+  add_executable(json_stress_test EXCLUDE_FROM_ALL
+    tests/json_stress_test.cc
+    src/json_value.cc
+    src/json_parse.cc
+    src/json_serialize.cc
+    src/json_path.cc
+    src/json_type.cc
+  )
+  target_include_directories(json_stress_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/include
+  )
+  target_link_libraries(json_stress_test PRIVATE
+    redis_module_api
+    GTest::gtest_main
+  )
+  target_compile_definitions(json_stress_test PRIVATE REDIS_JSON_TESTING)
+  target_compile_options(json_stress_test PRIVATE -Wall -Wextra -Wpedantic -Wno-c++20-designator)
+
   add_custom_target(json_test
     COMMAND json_value_test --gtest_color=yes
     COMMAND json_parse_test --gtest_color=yes
     COMMAND json_path_test --gtest_color=yes
     COMMAND json_asan_test --gtest_color=yes
     COMMAND json_rdb_test --gtest_color=yes
-    DEPENDS json_value_test json_parse_test json_path_test json_asan_test json_rdb_test
+    COMMAND json_stress_test --gtest_color=yes
+    DEPENDS json_value_test json_parse_test json_path_test json_asan_test json_rdb_test json_stress_test
   )
 endif()
 

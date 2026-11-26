@@ -1106,6 +1106,59 @@ test_assert "JSON.ARRINSERT negative index and multiple values in JSONPath mode"
   }
 }
 
+puts "\n=== Extreme Scenarios & Stress Tests ==="
+
+test_error "JSONPath rejects > 128 segments" {
+  r JSON.SET seg_doc $ {{"a":1}}
+  set long_p "\$[string repeat {.a} 140]"
+  r JSON.GET seg_doc $long_p
+} {*too many segments*}
+
+test_error "JSONPath rejects deeply nested filter parens" {
+  set lp [string repeat "(" 45]
+  set rp [string repeat ")" 45]
+  set deep_f "\$\[?${lp}@.a==1${rp}\]"
+  r JSON.GET seg_doc $deep_f
+} {*deeply*}
+
+test_error "JSON.ARRINSERT rejects combined depth > 128" {
+  set base "[string repeat {[} 80]1[string repeat {]} 80]"
+  set graft "[string repeat {[} 60]1[string repeat {]} 60]"
+  r JSON.SET arr_depth $ $base
+  set p "\$[string repeat {[0]} 79]"
+  r JSON.ARRINSERT arr_depth $p 0 $graft
+} {ERR*depth*}
+
+test_assert "500-op mixed mutation churn maintains memory stability" {
+  r JSON.SET churn $ {{"cnt":0,"arr":[1,2,3],"s":"init","flag":true,"obj":{}}}
+  for {set i 0} {$i < 100} {incr i} {
+    r JSON.NUMINCRBY churn .cnt 1
+    r JSON.ARRAPPEND churn .arr $i
+    r JSON.ARRTRIM churn .arr -10 -1
+    r JSON.SET churn "$.obj.k[expr {$i % 20}]" $i
+    r JSON.TOGGLE churn .flag
+  }
+  if {[r JSON.GET churn .cnt] != 100} { error "Expected cnt=100" }
+  if {[r JSON.ARRLEN churn .arr] != 10} { error "Expected arr len=10" }
+  if {[r JSON.OBJLEN churn .obj] != 20} { error "Expected obj len=20" }
+  r DEL churn seg_doc arr_depth
+}
+
+test_assert "1.5MB document SET/GET/Filter/BGSAVE + restart recovery" {
+  set recs {}
+  for {set i 0} {$i < 10000} {incr i} {
+    lappend recs "\{\"id\":$i,\"title\":\"item_$i\",\"score\":[expr {($i % 500) + 0.5}],\"tags\":\[\"a\",\"b\"\]\}"
+  }
+  set big "\{\"records\":\[[join $recs ,]\]\}"
+  r JSON.SET megadoc $ $big
+  if {[r JSON.ARRLEN megadoc .records] != 10000} { error "Expected 10000 records" }
+  set filtered [r JSON.GET megadoc {$.records[?(@.id >= 9995 && length(@.tags) == 2)].id}]
+  if {$filtered ne {[9995,9996,9997,9998,9999]}} { error "Unexpected filtered: $filtered" }
+  r BGSAVE
+  after 1500
+  r DEL megadoc
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

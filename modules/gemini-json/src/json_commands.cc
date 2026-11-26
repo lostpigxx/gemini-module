@@ -279,6 +279,7 @@ static bool TryCreateAtLeafKey(const JsonPath& path, JsonValue* root,
   for (auto& c : candidates) {
     if (c.value && c.value->IsObject()) {
       auto* val = inserted ? new_val->Clone() : new_val;
+      if (!val) continue;
       c.value->ObjectSet(leaf.key.c_str(),
                          static_cast<uint32_t>(leaf.key.size()), val);
       inserted = true;
@@ -367,6 +368,7 @@ static int CmdSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       }
       for (size_t i = 0; i < matches.size(); i++) {
         auto* val_to_set = (i == matches.size() - 1) ? new_val : new_val->Clone();
+        if (!val_to_set) continue;
         if (!matches[i].parent) {
           RedisModule_ModuleTypeSetValue(key, JsonModuleType, val_to_set);
         } else {
@@ -751,11 +753,19 @@ static int CmdArrInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
   }
 
   auto matches = EvaluatePath(path, root);
+  int max_val_depth = 0;
+  for (auto* v : values) {
+    max_val_depth = std::max(max_val_depth, static_cast<int>(CalcDepth(v)));
+  }
 
   if (path.is_legacy) {
     if (matches.empty() || !matches[0].value->IsArray()) {
       for (auto* v : values) JsonValue::Destroy(v);
       return RedisModule_ReplyWithError(ctx, "ERR path does not exist or is not an array");
+    }
+    if (matches[0].depth + 1 + max_val_depth > kMaxJsonDepth) {
+      for (auto* v : values) JsonValue::Destroy(v);
+      return RedisModule_ReplyWithError(ctx, "ERR maximum nesting depth exceeded");
     }
     auto* arr = matches[0].value;
     int64_t len = static_cast<int64_t>(arr->ArrayLen());
@@ -770,6 +780,13 @@ static int CmdArrInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     NotifyJsonEvent(ctx, "json.arrinsert", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
+  }
+
+  for (const auto& m : matches) {
+    if (m.value->IsArray() && m.depth + 1 + max_val_depth > kMaxJsonDepth) {
+      for (auto* v : values) JsonValue::Destroy(v);
+      return RedisModule_ReplyWithError(ctx, "ERR maximum nesting depth exceeded");
+    }
   }
 
   RedisModule_ReplyWithArray(ctx, matches.size());
@@ -787,8 +804,9 @@ static int CmdArrInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
       continue;
     }
     for (size_t i = 0; i < values.size(); i++) {
-      arr->ArrayInsert(static_cast<uint32_t>(idx + static_cast<int64_t>(i)),
-                       values[i]->Clone());
+      auto* cloned = values[i]->Clone();
+      if (!cloned) break;
+      arr->ArrayInsert(static_cast<uint32_t>(idx + static_cast<int64_t>(i)), cloned);
     }
     RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
     changed = true;
