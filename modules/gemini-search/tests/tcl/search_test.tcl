@@ -4188,7 +4188,7 @@ puts "\n=== Phases 59-61: BQ RDB, WAND Top-K, ON JSON Arrays ==="
 
 test_assert "Phase 59: QUANTIZATION BQ + DICT + LANGUAGE_FIELD survive BGSAVE + restart" {
   r FT.DICTADD p59dict "redis" "vector"
-  r FT.CREATE p59idx DICT p59dict LANGUAGE_FIELD lang SCHEMA title TEXT lang TAG vec VECTOR HNSW 8 TYPE FLOAT32 DIM 8 DISTANCE_METRIC COSINE QUANTIZATION BQ
+  r FT.CREATE p59idx DICT p59dict LANGUAGE_FIELD lang SCHEMA title TEXT lang TAG vec VECTOR HNSW TYPE FLOAT32 DIM 8 DISTANCE_METRIC COSINE QUANTIZATION BQ
   set v1 [binary format f8 1.0 1.0 1.0 1.0 1.0 1.0 1.0 1.0]
   set v2 [binary format f8 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0]
   r FT.ADD p59idx d1 FIELDS title "redis vector" lang "english" vec $v1
@@ -4257,9 +4257,12 @@ if {[file exists $json_so_p61]} {
       after 100
     }
     set jfd [redis_connect localhost $jport]
-    redis_command $jfd FT.CREATE jarr ON JSON PREFIX 1 ja: SCHEMA \$.tags\[*\] AS tags TAG SEPARATOR | \$.items\[*\].title AS titles TEXT \$.prices\[*\] AS prices NUMERIC
+    redis_command $jfd FT.CREATE jarr ON JSON PREFIX 1 ja: SCHEMA {$.tags[*]} AS tags TAG SEPARATOR ";" {$.items[*].title} AS titles TEXT {$.prices[*]} AS prices NUMERIC
     redis_command $jfd JSON.SET ja:1 \$ {{"tags":["a,1","b"],"items":[{"title":"red fox"},{"title":"blue whale"}],"prices":[10,50,100]}}
 
+    set r_raw [redis_command $jfd JSON.GET ja:1 {$.tags[*]}]
+    set r_all [redis_command $jfd FT.SEARCH jarr "*" NOCONTENT]
+    set r_tv [redis_command $jfd FT.TAGVALS jarr tags]
     set r_tag [redis_command $jfd FT.SEARCH jarr {@tags:{a,1}} NOCONTENT]
     set r_txt [redis_command $jfd FT.SEARCH jarr {@titles:whale} NOCONTENT]
     set r_num1 [redis_command $jfd FT.SEARCH jarr {@prices:[45 55]} NOCONTENT]
@@ -4269,7 +4272,9 @@ if {[file exists $json_so_p61]} {
     catch {close $jfd}
     file delete -force /tmp/search_json_p61.log
 
-    if {[lindex $r_tag 0] != 1} { error "TAG custom separator array failed: $r_tag" }
+    if {[lindex $r_tag 0] != 1} {
+      error "TAG custom separator array failed: r_tag=$r_tag raw=$r_raw all=$r_all tagvals=$r_tv txt=$r_txt num1=$r_num1 num2=$r_num2"
+    }
     if {[lindex $r_txt 0] != 1} { error "TEXT array wildcard failed: $r_txt" }
     if {[lindex $r_num1 0] != 1 || [lindex $r_num2 0] != 1} {
       error "NUMERIC array wildcard failed: r1=$r_num1 r2=$r_num2"
