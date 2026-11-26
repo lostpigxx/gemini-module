@@ -1,6 +1,7 @@
 #include "search_internal.h"
 #include "hybrid_fusion.h"
 #include "query_parser.h"
+#include "stemmer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -80,6 +81,90 @@ static void CollectQueryTerms(const QueryNode& node,
     for (auto& t : node.text_terms) terms.insert(t);
   }
   for (auto& child : node.children) CollectQueryTerms(child, terms);
+}
+
+// Phase 60: WAND Top-K fast-path for simple single-field BM25 queries with LIMIT.
+// Returns true and fills `out` (already sorted by score DESC) when WAND is exact.
+static bool ExtractWandTerms(const QueryNode& node, std::string& field_name,
+                             bool& has_field, std::vector<std::string>& terms) {
+  if (node.type == QueryNode::Type::kOr) {
+    if (node.children.size() != 2) return false;
+    return ExtractWandTerms(node.children[0], field_name, has_field, terms) &&
+           ExtractWandTerms(node.children[1], field_name, has_field, terms);
+  }
+  if (node.type != QueryNode::Type::kTextMatch || node.is_phrase || node.text_terms.empty()) {
+    return false;
+  }
+  if (!has_field) {
+    field_name = node.field_name;
+    has_field = true;
+  } else if (field_name != node.field_name) {
+    return false;
+  }
+  for (size_t i = 0; i < node.text_terms.size(); i++) {
+    if (i < node.text_term_mods.size()) {
+      const auto& m = node.text_term_mods[i];
+      if (m.is_prefix || m.is_suffix || m.is_infix || m.fuzzy_dist > 0 || m.is_optional) {
+        return false;
+      }
+    }
+    terms.push_back(node.text_terms[i]);
+  }
+  return true;
+}
+
+static bool TryEvaluateWandTopK(const QueryNode& root, const IndexEntry& entry,
+                                const SearchOptions& opts, const QueryOptions& qopts,
+                                std::vector<ScoredResult>& out) {
+  if (!opts.withscores || opts.has_sortby || opts.has_inkeys ||
+      !opts.numeric_filters.empty() || opts.has_geofilter ||
+      qopts.scorer != ScorerType::kBm25 || !opts.has_limit || opts.limit_count <= 0) {
+    return false;
+  }
+  std::string field_name;
+  bool has_field = false;
+  std::vector<std::string> terms;
+  if (!ExtractWandTerms(root, field_name, has_field, terms) || terms.empty()) {
+    return false;
+  }
+
+  const FieldSpec* fspec = nullptr;
+  if (!field_name.empty()) {
+    fspec = entry.spec.FindField(field_name);
+    if (!fspec || fspec->type != FieldType::kText) return false;
+  } else {
+    std::unordered_set<std::string> infield_set(qopts.infields.begin(), qopts.infields.end());
+    for (const auto& f : entry.spec.fields) {
+      if (f.type != FieldType::kText) continue;
+      if (!infield_set.empty() && infield_set.find(f.name) == infield_set.end()) continue;
+      if (fspec) return false;  // More than one target TEXT field
+      fspec = &f;
+    }
+    if (!fspec) return false;
+  }
+
+  // Require exact term lookup (no stem/phonetic/synonym expansion)
+  if (!fspec->phonetic.empty()) return false;
+  if (qopts.stem && !fspec->nostem && IsSupportedStemLanguage(qopts.language)) return false;
+  if (qopts.stem) {
+    for (const auto& t : terms) {
+      if (!entry.synonyms.Expand(t).empty()) return false;
+    }
+  }
+
+  const auto* tidx = entry.text_indices.Get(fspec->name);
+  if (!tidx) {
+    out.clear();
+    return true;
+  }
+  size_t top_k = static_cast<size_t>(opts.limit_offset + opts.limit_count);
+  auto top = tidx->SearchTopK(terms, top_k);
+  out.clear();
+  out.reserve(top.size());
+  for (auto& r : top) {
+    out.push_back({std::move(r.doc_id), r.score * fspec->weight});
+  }
+  return true;
 }
 
 static std::string ApplyHighlight(const std::string& text,
@@ -1081,11 +1166,13 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                 std::vector<ScoredResult> scored_results;
                 std::vector<std::string> result_ids;
                 if (opts.withscores) {
-                  scored_results = EvaluateQueryScored(
-                      parsed.root, e.spec, e.doc_store, e.tag_indices,
-                      e.numeric_indices, e.text_indices, e.geo_indices,
-                      rep->error, qopts, &e.geoshape_indices, &params,
-                      &e.vector_indices, &e.synonyms);
+                  if (!TryEvaluateWandTopK(parsed.root, e, opts, qopts, scored_results)) {
+                    scored_results = EvaluateQueryScored(
+                        parsed.root, e.spec, e.doc_store, e.tag_indices,
+                        e.numeric_indices, e.text_indices, e.geo_indices,
+                        rep->error, qopts, &e.geoshape_indices, &params,
+                        &e.vector_indices, &e.synonyms);
+                  }
                 } else {
                   result_ids = EvaluateQuery(
                       parsed.root, e.spec, e.doc_store, e.tag_indices,
@@ -1369,11 +1456,13 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::vector<std::string> result_ids;
 
   if (opts.withscores) {
-    scored_results = EvaluateQueryScored(
-        parsed.root, entry.spec, entry.doc_store,
-        entry.tag_indices, entry.numeric_indices,
-        entry.text_indices, entry.geo_indices, eval_error, qopts,
-        &entry.geoshape_indices, &params, &entry.vector_indices, &entry.synonyms);
+    if (!TryEvaluateWandTopK(parsed.root, entry, opts, qopts, scored_results)) {
+      scored_results = EvaluateQueryScored(
+          parsed.root, entry.spec, entry.doc_store,
+          entry.tag_indices, entry.numeric_indices,
+          entry.text_indices, entry.geo_indices, eval_error, qopts,
+          &entry.geoshape_indices, &params, &entry.vector_indices, &entry.synonyms);
+    }
     if (!eval_error.empty()) {
       if (IsOnTimeoutReturn() && eval_error.find("timeout") != std::string::npos) {
         RedisModule_ReplyWithArray(ctx, 1);

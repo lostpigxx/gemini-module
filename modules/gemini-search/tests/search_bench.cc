@@ -203,6 +203,19 @@ int main() {
     BenchUs("FlatVector BQ Hamming KNN-10 (5kx768)", 500, [&]() {
       sink += bq.KnnQuery(q.data(), 10).size();
     });
+
+    HnswIndex hnsw_bq(dim, DistanceMetric::kCosine, 16, 100, VectorQuantization::kBq);
+    auto tb0 = Clock::now();
+    for (size_t i = 0; i < 2000; i++) {
+      for (size_t d = 0; d < dim; d++) vec[d] = dist(rng);
+      hnsw_bq.Add("hb" + std::to_string(i), vec.data());
+    }
+    double hnsw_bq_build_ms =
+        std::chrono::duration<double, std::milli>(Clock::now() - tb0).count();
+    std::printf("%-34s  %9.2f ms     (2000x768)\n", "HnswIndex BQ Build (2kx768)", hnsw_bq_build_ms);
+    BenchUs("HnswIndex BQ KNN-10 (2kx768)", 500, [&]() {
+      sink += hnsw_bq.KnnQueryEf(q.data(), 10, 40).size();
+    });
   }
 
   // 7. TextIndex WAND Top-10 vs Full BM25 Search (20k docs)

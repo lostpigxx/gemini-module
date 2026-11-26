@@ -29,7 +29,32 @@ int HnswIndex::RandomLevel(const std::string& doc_id) const {
   return std::min(level, 32);
 }
 
-float HnswIndex::DistanceTo(const float* query, uint32_t node_id) const {
+namespace {
+
+struct BqQueryBuf {
+  uint64_t stack_buf[32];
+  std::vector<uint64_t> heap_buf;
+  const uint64_t* ptr = nullptr;
+
+  void Init(const float* query, size_t dim, size_t bq_words, VectorQuantization q) {
+    if (q != VectorQuantization::kBq || !query) {
+      ptr = nullptr;
+      return;
+    }
+    uint64_t* dst = stack_buf;
+    if (bq_words > 32) {
+      heap_buf.resize(bq_words);
+      dst = heap_buf.data();
+    }
+    QuantizeBq(query, dim, dst);
+    ptr = dst;
+  }
+};
+
+}  // namespace
+
+float HnswIndex::DistanceTo(const float* query, const uint64_t* query_bq,
+                            uint32_t node_id) const {
   if (node_id >= alive_.size() || !alive_[node_id]) {
     return std::numeric_limits<float>::max();
   }
@@ -38,22 +63,43 @@ float HnswIndex::DistanceTo(const float* query, uint32_t node_id) const {
                        sq8_meta_[node_id], dim_, metric_);
   }
   if (quantization_ == VectorQuantization::kBq) {
-    uint64_t stack_buf[32];
-    std::vector<uint64_t> heap_buf;
-    uint64_t* qbq = stack_buf;
-    if (bq_words_ > 32) {
-      heap_buf.resize(bq_words_);
-      qbq = heap_buf.data();
+    if (query_bq) {
+      return BqHammingDistance(
+          query_bq, bq_vectors_.data() + static_cast<size_t>(node_id) * bq_words_, dim_);
     }
-    QuantizeBq(query, dim_, qbq);
+    BqQueryBuf buf;
+    buf.Init(query, dim_, bq_words_, quantization_);
     return BqHammingDistance(
-        qbq, bq_vectors_.data() + static_cast<size_t>(node_id) * bq_words_, dim_);
+        buf.ptr, bq_vectors_.data() + static_cast<size_t>(node_id) * bq_words_, dim_);
   }
   return dist_fn_(query, vectors_.data() + static_cast<size_t>(node_id) * dim_, dim_);
 }
 
-std::vector<uint32_t> HnswIndex::SearchLayer(const float* query, uint32_t entry,
-                                             size_t ef, int layer) const {
+uint32_t HnswIndex::GreedySearchLayer(const float* query, const uint64_t* query_bq,
+                                      uint32_t entry, int layer) const {
+  uint32_t cur = entry;
+  float cur_dist = DistanceTo(query, query_bq, cur);
+  while (true) {
+    bool improved = false;
+    if (layer < static_cast<int>(neighbors_[cur].size())) {
+      for (uint32_t nb_id : neighbors_[cur][static_cast<size_t>(layer)]) {
+        if (!alive_[nb_id]) continue;
+        float d = DistanceTo(query, query_bq, nb_id);
+        if (d < cur_dist) {
+          cur_dist = d;
+          cur = nb_id;
+          improved = true;
+        }
+      }
+    }
+    if (!improved) break;
+  }
+  return cur;
+}
+
+std::vector<std::pair<float, uint32_t>> HnswIndex::SearchLayer(
+    const float* query, const uint64_t* query_bq, uint32_t entry,
+    size_t ef, int layer) const {
   using Pair = std::pair<float, uint32_t>;
   auto cmp_min = [](const Pair& a, const Pair& b) { return a.first > b.first; };
   auto cmp_max = [](const Pair& a, const Pair& b) { return a.first < b.first; };
@@ -78,7 +124,7 @@ std::vector<uint32_t> HnswIndex::SearchLayer(const float* query, uint32_t entry,
   };
   thread_local ThreadVisited tv;
   const uint32_t epoch = tv.Next(alive_.size());
-  float entry_dist = DistanceTo(query, entry);
+  float entry_dist = DistanceTo(query, query_bq, entry);
   candidates.push({entry_dist, entry});
   result.push({entry_dist, entry});
   tv.epoch[entry] = epoch;
@@ -97,7 +143,7 @@ std::vector<uint32_t> HnswIndex::SearchLayer(const float* query, uint32_t entry,
       tv.epoch[nb_id] = epoch;
       if (!alive_[nb_id]) continue;
 
-      float n_dist = DistanceTo(query, nb_id);
+      float n_dist = DistanceTo(query, query_bq, nb_id);
       worst_result = result.top().first;
 
       if (n_dist < worst_result || result.size() < ef) {
@@ -108,10 +154,10 @@ std::vector<uint32_t> HnswIndex::SearchLayer(const float* query, uint32_t entry,
     }
   }
 
-  std::vector<uint32_t> out;
+  std::vector<Pair> out;
   out.reserve(result.size());
   while (!result.empty()) {
-    out.push_back(result.top().second);
+    out.push_back(result.top());
     result.pop();
   }
   std::reverse(out.begin(), out.end());
@@ -119,13 +165,13 @@ std::vector<uint32_t> HnswIndex::SearchLayer(const float* query, uint32_t entry,
 }
 
 std::vector<uint32_t> HnswIndex::SelectNeighbors(
-    const float* query, const std::vector<uint32_t>& candidates,
-    size_t max_neighbors) const {
+    const float* query, const uint64_t* query_bq,
+    const std::vector<uint32_t>& candidates, size_t max_neighbors) const {
   std::vector<std::pair<float, uint32_t>> scored;
   scored.reserve(candidates.size());
   for (uint32_t id : candidates) {
     if (id < alive_.size() && alive_[id]) {
-      scored.push_back({DistanceTo(query, id), id});
+      scored.push_back({DistanceTo(query, query_bq, id), id});
     }
   }
   size_t n = std::min(max_neighbors, scored.size());
@@ -195,17 +241,30 @@ void HnswIndex::Add(const std::string& doc_id, const float* data) {
   }
 
   uint32_t cur_entry = entry_point_;
+  const uint64_t* data_bq =
+      (quantization_ == VectorQuantization::kBq)
+          ? (bq_vectors_.data() + static_cast<size_t>(nid) * bq_words_)
+          : nullptr;
 
   for (int lc = max_level_; lc > level; lc--) {
-    auto nearest = SearchLayer(data, cur_entry, 1, lc);
-    if (!nearest.empty()) cur_entry = nearest[0];
+    cur_entry = GreedySearchLayer(data, data_bq, cur_entry, lc);
   }
 
   std::vector<float> tmp_nb_vec;
   for (int lc = std::min(level, max_level_); lc >= 0; lc--) {
-    auto candidates = SearchLayer(data, cur_entry, ef_construction_, lc);
+    auto candidates = SearchLayer(data, data_bq, cur_entry, ef_construction_, lc);
     size_t max_conn = (lc == 0) ? m_max0_ : m_;
-    auto chosen = SelectNeighbors(data, candidates, max_conn);
+
+    // candidates are already sorted ascending by distance from SearchLayer
+    std::vector<uint32_t> chosen;
+    chosen.reserve(std::min(max_conn, candidates.size()));
+    for (const auto& [dist, cid] : candidates) {
+      (void)dist;
+      if (cid != nid && cid < alive_.size() && alive_[cid]) {
+        chosen.push_back(cid);
+        if (chosen.size() >= max_conn) break;
+      }
+    }
 
     neighbors_[nid][static_cast<size_t>(lc)] = chosen;
 
@@ -216,24 +275,22 @@ void HnswIndex::Add(const std::string& doc_id, const float* data) {
 
       if (nb_list.size() > max_conn) {
         const float* nb_vec_ptr = nullptr;
+        const uint64_t* nb_bq_ptr = nullptr;
         if (quantization_ == VectorQuantization::kSq8) {
           tmp_nb_vec.resize(dim_);
           DequantizeSq8(sq8_vectors_.data() + static_cast<size_t>(nb_id) * dim_,
                         sq8_meta_[nb_id], dim_, tmp_nb_vec.data());
           nb_vec_ptr = tmp_nb_vec.data();
         } else if (quantization_ == VectorQuantization::kBq) {
-          tmp_nb_vec.resize(dim_);
-          DequantizeBq(bq_vectors_.data() + static_cast<size_t>(nb_id) * bq_words_,
-                       dim_, tmp_nb_vec.data());
-          nb_vec_ptr = tmp_nb_vec.data();
+          nb_bq_ptr = bq_vectors_.data() + static_cast<size_t>(nb_id) * bq_words_;
         } else {
           nb_vec_ptr = vectors_.data() + static_cast<size_t>(nb_id) * dim_;
         }
-        nb_list = SelectNeighbors(nb_vec_ptr, nb_list, max_conn);
+        nb_list = SelectNeighbors(nb_vec_ptr, nb_bq_ptr, nb_list, max_conn);
       }
     }
 
-    if (!candidates.empty()) cur_entry = candidates[0];
+    if (!candidates.empty()) cur_entry = candidates[0].second;
   }
 
   if (level > max_level_) {
@@ -295,36 +352,37 @@ std::vector<KnnResult> HnswIndex::KnnQueryEf(const float* query, size_t k,
                                               size_t ef_runtime) const {
   if (live_count_ == 0 || entry_point_ == kInvalidNode) return {};
 
+  BqQueryBuf qbq;
+  qbq.Init(query, dim_, bq_words_, quantization_);
+
   uint32_t cur = entry_point_;
   for (int lc = max_level_; lc > 0; lc--) {
-    auto nearest = SearchLayer(query, cur, 1, lc);
-    if (!nearest.empty()) cur = nearest[0];
+    cur = GreedySearchLayer(query, qbq.ptr, cur, lc);
   }
 
   size_t ef = std::max(ef_runtime > 0 ? ef_runtime : ef_runtime_, k);
-  auto candidates = SearchLayer(query, cur, ef, 0);
+  auto candidates = SearchLayer(query, qbq.ptr, cur, ef, 0);
 
   std::vector<KnnResult> results;
-  results.reserve(candidates.size());
-  for (uint32_t nid : candidates) {
+  results.reserve(std::min(k, candidates.size()));
+  for (const auto& [dist, nid] : candidates) {
     if (alive_[nid]) {
-      results.push_back({doc_ids_[nid], DistanceTo(query, nid)});
+      results.push_back({doc_ids_[nid], dist});
+      if (results.size() >= k) break;
     }
   }
-  std::sort(results.begin(), results.end(),
-            [](const KnnResult& a, const KnnResult& b) {
-              return a.score < b.score;
-            });
-  if (results.size() > k) results.resize(k);
   return results;
 }
 
 std::vector<KnnResult> HnswIndex::RangeQuery(const float* query,
                                               float radius) const {
+  BqQueryBuf qbq;
+  qbq.Init(query, dim_, bq_words_, quantization_);
+
   std::vector<KnnResult> results;
   for (uint32_t i = 0; i < alive_.size(); i++) {
     if (!alive_[i]) continue;
-    float score = DistanceTo(query, i);
+    float score = DistanceTo(query, qbq.ptr, i);
     if (score <= radius) {
       results.push_back({doc_ids_[i], score});
     }
@@ -340,12 +398,15 @@ std::vector<KnnResult> HnswIndex::RangeQuery(const float* query,
 std::vector<KnnResult> HnswIndex::KnnQueryFiltered(
     const float* query, size_t k,
     const std::vector<std::string>& candidates) const {
+  BqQueryBuf qbq;
+  qbq.Init(query, dim_, bq_words_, quantization_);
+
   std::vector<KnnResult> results;
   results.reserve(candidates.size());
   for (const auto& doc_id : candidates) {
     auto it = id_to_node_.find(doc_id);
     if (it == id_to_node_.end()) continue;
-    results.push_back({doc_id, DistanceTo(query, it->second)});
+    results.push_back({doc_id, DistanceTo(query, qbq.ptr, it->second)});
   }
   size_t n = std::min(k, results.size());
   std::partial_sort(results.begin(), results.begin() + static_cast<ptrdiff_t>(n),

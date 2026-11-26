@@ -25,3 +25,12 @@
 | **Phase 59** | **RDB `encver 13` 闭环、BQ 致命 Bug 修复与模糊测试** | 修复 `RdbLoadSearch` 接受 `VectorQuantization::kBq`；升级 `kSearchEncVer = 13` 持久化 `custom_dict`（兼容 `1..12`）；`AofRewriteSearch` 补齐 `DICT` / `LANGUAGE_FIELD`；`FT.INFO` 暴露 `custom_dict`；升级 Redis 7 `mem_usage2` 并修正 HNSW/SQ8/BQ 内存估算；新增 BQ/DICT RDB 往返与截断/篡改模糊测试 |
 | **Phase 60** | **HNSW 查询/构建加速与 WAND 查询路径接入** | `HnswIndex` 零分配上层贪心下沉 `GreedySearchLayer`、BQ 查询单次预量化、免重复算距；`FT.SEARCH` 默认 BM25 分页查询接入 `TextIndex::SearchTopK`（WAND）；`search_bench` 对比实测 + 差分 GTest + ASan/UBSan |
 | **Phase 61** | **`ON JSON` 多值数组 JSONPath 索引增强** | `IndexJsonKey` 完整支持 JSON 数组展开至 `TAG`（遵守 `tag_separator` + 字符串反转义）、`TEXT`（多值拼接索引）、`NUMERIC`（支持数组元素解析）；补齐 GTest 与 Tcl 集成用例 |
+
+## Phase 60 Benchmark Results (`search_bench`, macOS Apple Silicon)
+
+| Benchmark | Baseline | After Phase 60 | Note |
+|---|---|---|---|
+| `HnswIndex Build (2kx128)` | `91.06 ms` | `85.41 ms` | `-6.2%` (`GreedySearchLayer` + reuse `SearchLayer` distances) |
+| `HnswIndex BQ Build (2kx768)` | — | `91.25 ms` | Direct BQ word pruning without dequantize/requantize |
+| `HnswIndex BQ KNN-10 (2kx768)` | — | `7.47 us/op` | Query pre-quantized once per search (~73x faster than Flat FP32 `547 us/op`) |
+| `TextIndex::SearchTopK WAND-10 (20k)` | `71.17 us/op` | `71.84 us/op` | Wired into `FT.SEARCH` BM25 `LIMIT` fast-path (7.8x vs full BM25 `564 us/op`) |

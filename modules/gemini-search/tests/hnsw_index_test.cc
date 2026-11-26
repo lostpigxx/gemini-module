@@ -418,3 +418,56 @@ TEST(HnswIndexTest, ConcurrentReadSafety) {
     EXPECT_EQ(ok_counts[t], 150);
   }
 }
+
+TEST(HnswIndexTest, BqQuantizationRecallAndConsistency) {
+  constexpr size_t N = 400;
+  constexpr size_t DIM = 128;
+  std::mt19937 rng(2026);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+  HnswIndex hnsw(DIM, DistanceMetric::kCosine, 16, 120, VectorQuantization::kBq);
+  FlatVectorIndex flat(DIM, DistanceMetric::kCosine, VectorQuantization::kBq);
+
+  std::vector<float> buf(DIM);
+  std::vector<std::string> subset;
+  for (size_t i = 0; i < N; i++) {
+    for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+    std::string id = "bq" + std::to_string(i);
+    hnsw.Add(id, buf.data());
+    flat.Add(id, buf.data());
+    if (i % 5 == 0) subset.push_back(id);
+  }
+
+  hnsw.SetEfRuntime(64);
+  double total_recall = 0.0;
+  for (int q = 0; q < 15; q++) {
+    for (size_t d = 0; d < DIM; d++) buf[d] = dist(rng);
+    auto hr = hnsw.KnnQuery(buf.data(), 10);
+    auto fr = flat.KnnQuery(buf.data(), 10);
+    ASSERT_EQ(hr.size(), 10u);
+    // Verify ascending distance order
+    for (size_t i = 1; i < hr.size(); i++) {
+      EXPECT_LE(hr[i - 1].score, hr[i].score);
+    }
+    // Compare top-10 worst distance against flat BQ top-10 worst distance
+    float flat_kth = fr.back().score;
+    size_t within_kth = 0;
+    for (const auto& r : hr) {
+      if (r.score <= flat_kth + 1e-6f) within_kth++;
+    }
+    total_recall += static_cast<double>(within_kth) / 10.0;
+
+    // RangeQuery and KnnQueryFiltered must match Flat BQ exactly on scores
+    auto hrange = hnsw.RangeQuery(buf.data(), 0.45f);
+    auto frange = flat.RangeQuery(buf.data(), 0.45f);
+    EXPECT_EQ(hrange.size(), frange.size());
+
+    auto hfilt = hnsw.KnnQueryFiltered(buf.data(), 5, subset);
+    auto ffilt = flat.KnnQueryFiltered(buf.data(), 5, subset);
+    ASSERT_EQ(hfilt.size(), ffilt.size());
+    for (size_t i = 0; i < hfilt.size(); i++) {
+      EXPECT_FLOAT_EQ(hfilt[i].score, ffilt[i].score);
+    }
+  }
+  EXPECT_GT(total_recall / 15.0, 0.90);
+}

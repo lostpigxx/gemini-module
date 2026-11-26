@@ -65,11 +65,14 @@ class HnswIndex : public VectorIndexBase {
   std::unordered_map<std::string, uint32_t> id_to_node_;
 
   int RandomLevel(const std::string& doc_id) const;
-  float DistanceTo(const float* query, uint32_t node_id) const;
+  float DistanceTo(const float* query, const uint64_t* query_bq, uint32_t node_id) const;
 
-  std::vector<uint32_t> SearchLayer(const float* query, uint32_t entry,
-                                    size_t ef, int layer) const;
-  std::vector<uint32_t> SelectNeighbors(const float* query,
+  uint32_t GreedySearchLayer(const float* query, const uint64_t* query_bq,
+                             uint32_t entry, int layer) const;
+  std::vector<std::pair<float, uint32_t>> SearchLayer(
+      const float* query, const uint64_t* query_bq, uint32_t entry,
+      size_t ef, int layer) const;
+  std::vector<uint32_t> SelectNeighbors(const float* query, const uint64_t* query_bq,
                                         const std::vector<uint32_t>& candidates,
                                         size_t max_neighbors) const;
 };
