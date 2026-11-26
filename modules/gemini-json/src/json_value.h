@@ -22,10 +22,23 @@ const char* JsonTypeName(JsonType t);
 class JsonValue {
 public:
   struct ObjEntry {
-    char* key;
-    uint32_t key_len;
-    uint32_t key_hash;
+    static constexpr uint32_t kInlineKeyMaxLen = 15;  // 15 chars + '\0' inside 32B entry
+    static constexpr uint32_t kInlineKeyFlag = 0x80000000u;
+    static constexpr uint32_t kKeyLenMask = 0x7FFFFFFFu;
+
     JsonValue* value;
+    uint32_t key_hash;
+    uint32_t key_len_flags;
+    union {
+      char* heap_key;
+      char inline_key[kInlineKeyMaxLen + 1];
+    };
+
+    bool IsLive() const { return value != nullptr; }
+    bool IsInlineKey() const { return (key_len_flags & kInlineKeyFlag) != 0; }
+    uint32_t KeyLen() const { return key_len_flags & kKeyLenMask; }
+    const char* KeyData() const { return IsInlineKey() ? inline_key : heap_key; }
+    std::string_view KeyView() const { return {KeyData(), KeyLen()}; }
   };
 
   struct ObjectData {
@@ -166,3 +179,4 @@ private:
 };
 
 static_assert(sizeof(JsonValue) == 24, "JsonValue must remain compact (24 bytes)");
+static_assert(sizeof(JsonValue::ObjEntry) == 32, "ObjEntry must remain compact (32 bytes)");

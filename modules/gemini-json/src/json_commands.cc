@@ -32,15 +32,23 @@ static std::string_view ArgView(RedisModuleString* s) {
   return {data, len};
 }
 
+static const JsonPath* ParsePathFromArgCached(RedisModuleCtx* ctx,
+                                              RedisModuleString* arg) {
+  auto sv = ArgView(arg);
+  const char* err = nullptr;
+  const JsonPath* cached = ParsePathCached(sv, &err);
+  if (!cached) {
+    RedisModule_ReplyWithError(ctx, err ? err : "ERR invalid path");
+    return nullptr;
+  }
+  return cached;
+}
+
 static bool ParsePathFromArg(RedisModuleCtx* ctx, RedisModuleString* arg,
                               JsonPath& out) {
-  auto sv = ArgView(arg);
-  auto result = ParsePath(sv);
-  if (result.error) {
-    RedisModule_ReplyWithError(ctx, result.error);
-    return false;
-  }
-  out = std::move(result.path);
+  const JsonPath* cached = ParsePathFromArgCached(ctx, arg);
+  if (!cached) return false;
+  out = *cached;
   return true;
 }
 
@@ -1191,7 +1199,7 @@ static int CmdObjKeys(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     RedisModule_ReplyWithArray(ctx, obj->ObjectLen());
     auto* entries = obj->ObjectEntries();
     for (uint32_t i = 0; i < obj->ObjectLen(); i++) {
-      RedisModule_ReplyWithStringBuffer(ctx, entries[i].key, entries[i].key_len);
+      RedisModule_ReplyWithStringBuffer(ctx, entries[i].KeyData(), entries[i].KeyLen());
     }
     return REDISMODULE_OK;
   }
@@ -1203,7 +1211,7 @@ static int CmdObjKeys(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     RedisModule_ReplyWithArray(ctx, obj->ObjectLen());
     auto* entries = obj->ObjectEntries();
     for (uint32_t i = 0; i < obj->ObjectLen(); i++) {
-      RedisModule_ReplyWithStringBuffer(ctx, entries[i].key, entries[i].key_len);
+      RedisModule_ReplyWithStringBuffer(ctx, entries[i].KeyData(), entries[i].KeyLen());
     }
   }
   return REDISMODULE_OK;
@@ -1492,7 +1500,7 @@ static void MergePatch(JsonValue* target, JsonValue* patch, JsonValue* /*parent*
 
   auto* patch_entries = patch->ObjectEntries();
   for (uint32_t i = 0; i < patch->ObjectLen(); i++) {
-    auto pk = std::string_view(patch_entries[i].key, patch_entries[i].key_len);
+    auto pk = patch_entries[i].KeyView();
     auto* pv = patch_entries[i].value;
 
     if (pv->IsNull()) {
@@ -1507,7 +1515,7 @@ static void MergePatch(JsonValue* target, JsonValue* patch, JsonValue* /*parent*
         child_match.has_object_key = true;
         MergePatch(existing, pv, target, child_match, key);
       } else {
-        target->ObjectSet(patch_entries[i].key, patch_entries[i].key_len, pv->Clone());
+        target->ObjectSet(patch_entries[i].KeyData(), patch_entries[i].KeyLen(), pv->Clone());
       }
     }
   }
@@ -1552,6 +1560,15 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   auto matches = EvaluatePath(path, root);
   if (matches.empty()) {
+    if (patch->IsNull()) {
+      JsonValue::Destroy(patch);
+      return RedisModule_ReplyWithSimpleString(ctx, "OK");
+    }
+    if (TryCreateAtLeafKey(path, root, patch)) {
+      NotifyJsonEvent(ctx, "json.merge", argv[1]);
+      RedisModule_ReplicateVerbatim(ctx);
+      return RedisModule_ReplyWithSimpleString(ctx, "OK");
+    }
     JsonValue::Destroy(patch);
     return RedisModule_ReplyWithError(ctx, "ERR path does not exist");
   }
@@ -1696,7 +1713,7 @@ static void ReplyResp(RedisModuleCtx* ctx, const JsonValue* v) {
       RedisModule_ReplyWithArray(ctx, v->ObjectLen() * 2 + 1);
       RedisModule_ReplyWithSimpleString(ctx, "{");
       for (uint32_t i = 0; i < v->ObjectLen(); i++) {
-        RedisModule_ReplyWithStringBuffer(ctx, entries[i].key, entries[i].key_len);
+        RedisModule_ReplyWithStringBuffer(ctx, entries[i].KeyData(), entries[i].KeyLen());
         ReplyResp(ctx, entries[i].value);
       }
       break;

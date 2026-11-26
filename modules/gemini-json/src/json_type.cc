@@ -77,12 +77,11 @@ void DigestNode(RedisModuleDigest* digest, const JsonValue* v, int depth = 0) {
       std::vector<uint32_t> order(n);
       for (uint32_t i = 0; i < n; i++) order[i] = i;
       std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
-        return std::string_view(entries[a].key, entries[a].key_len) <
-               std::string_view(entries[b].key, entries[b].key_len);
+        return entries[a].KeyView() < entries[b].KeyView();
       });
       for (uint32_t idx : order) {
-        RedisModule_DigestAddLongLong(digest, static_cast<long long>(entries[idx].key_len));
-        RedisModule_DigestAddStringBuffer(digest, entries[idx].key, entries[idx].key_len);
+        RedisModule_DigestAddLongLong(digest, static_cast<long long>(entries[idx].KeyLen()));
+        RedisModule_DigestAddStringBuffer(digest, entries[idx].KeyData(), entries[idx].KeyLen());
         DigestNode(digest, entries[idx].value, depth + 1);
       }
       break;
@@ -145,7 +144,7 @@ static void BinarySave(RedisModuleIO* rdb, const JsonValue* v, int depth = 0) {
       RedisModule_SaveUnsigned(rdb, v->ObjectLen());
       auto* entries = v->ObjectEntries();
       for (uint32_t i = 0; i < v->ObjectLen(); i++) {
-        RedisModule_SaveStringBuffer(rdb, entries[i].key, entries[i].key_len);
+        RedisModule_SaveStringBuffer(rdb, entries[i].KeyData(), entries[i].KeyLen());
         BinarySave(rdb, entries[i].value, depth + 1);
       }
       break;

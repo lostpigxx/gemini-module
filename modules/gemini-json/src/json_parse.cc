@@ -1,4 +1,5 @@
 #include "json_parse.h"
+#include "json_simd.h"
 #include "rm_alloc.h"
 
 #include <cerrno>
@@ -192,8 +193,10 @@ static bool ParseStringView(Parser& p, SmallBuf& scratch, std::string_view& out_
   const char* cur = p.pos;
   const char* end = p.end;
 
-  // Fast path: scan unescaped string directly in input buffer
+  // Fast path: SIMD/SWAR scan unescaped string directly in input buffer
   while (cur < end) {
+    cur = json_simd::FindNextSpecialInString(cur, end);
+    if (cur >= end) break;
     auto c = static_cast<uint8_t>(*cur);
     if (c == '"') {
       out_view = std::string_view(chunk_start, static_cast<size_t>(cur - chunk_start));
@@ -208,17 +211,14 @@ static bool ParseStringView(Parser& p, SmallBuf& scratch, std::string_view& out_
       p.SetError("unescaped control character in string");
       return false;
     }
-    if (c >= 0x80) {
-      int n = ValidateUtf8Seq(cur, end);
-      if (n == 0) {
-        p.pos = cur;
-        p.SetError("invalid UTF-8 sequence in string");
-        return false;
-      }
-      cur += n;
-      continue;
+    // c >= 0x80: validate UTF-8 sequence
+    int n = ValidateUtf8Seq(cur, end);
+    if (n == 0) {
+      p.pos = cur;
+      p.SetError("invalid UTF-8 sequence in string");
+      return false;
     }
-    cur++;
+    cur += n;
   }
 
   if (cur >= end) {
@@ -236,25 +236,23 @@ static bool ParseStringView(Parser& p, SmallBuf& scratch, std::string_view& out_
   p.pos = cur;
 
   while (p.pos < end) {
-    // Scan next clean chunk
+    // Scan next clean chunk via SIMD/SWAR
     const char* run_start = p.pos;
     while (p.pos < end) {
+      p.pos = json_simd::FindNextSpecialInString(p.pos, end);
+      if (p.pos >= end) break;
       auto c = static_cast<uint8_t>(*p.pos);
       if (c == '"' || c == '\\') break;
       if (c < 0x20) {
         p.SetError("unescaped control character in string");
         return false;
       }
-      if (c >= 0x80) {
-        int n = ValidateUtf8Seq(p.pos, end);
-        if (n == 0) {
-          p.SetError("invalid UTF-8 sequence in string");
-          return false;
-        }
-        p.pos += n;
-        continue;
+      int n = ValidateUtf8Seq(p.pos, end);
+      if (n == 0) {
+        p.SetError("invalid UTF-8 sequence in string");
+        return false;
       }
-      p.pos++;
+      p.pos += n;
     }
 
     if (p.pos > run_start) {

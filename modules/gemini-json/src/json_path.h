@@ -3,9 +3,12 @@
 #include "json_value.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
+
+struct CompiledRegex;
 
 enum class PathSegType : uint8_t {
   kRoot,
@@ -48,15 +51,27 @@ struct FilterValue {
 
 struct FilterStep {
   bool is_index = false;
+  bool is_wildcard = false;
   int32_t index = 0;
   std::string key;
 };
 
+enum class FilterFuncKind : uint8_t {
+  kNone,
+  kLength,
+  kCount,
+  kMatch,
+  kSearch,
+};
+
 struct FilterOperand {
-  enum class Kind : uint8_t { kLiteral, kCurrentPath, kRootPath };
+  enum class Kind : uint8_t { kLiteral, kCurrentPath, kRootPath, kFuncCall };
   Kind kind = Kind::kLiteral;
   FilterValue literal;
   std::vector<FilterStep> steps;
+  FilterFuncKind func = FilterFuncKind::kNone;
+  std::vector<FilterOperand> func_args;
+  std::shared_ptr<const CompiledRegex> compiled_regex;
 };
 
 struct FilterNode {
@@ -68,6 +83,7 @@ struct FilterNode {
   FilterOperand lhs;
   FilterOperand rhs;
   bool regex_icase = false;
+  std::shared_ptr<const CompiledRegex> compiled_regex;
 };
 
 struct FilterCondition {

@@ -548,9 +548,9 @@ TEST(JsonRdbOrder, ObjectKeyOrderPreserved) {
     ASSERT_NE(loaded, nullptr);
 
     auto* entries = loaded->ObjectEntries();
-    EXPECT_EQ(std::string_view(entries[0].key, entries[0].key_len), "z");
-    EXPECT_EQ(std::string_view(entries[1].key, entries[1].key_len), "a");
-    EXPECT_EQ(std::string_view(entries[2].key, entries[2].key_len), "m");
+    EXPECT_EQ(entries[0].KeyView(), "z");
+    EXPECT_EQ(entries[1].KeyView(), "a");
+    EXPECT_EQ(entries[2].KeyView(), "m");
 
     JsonValue::Destroy(loaded);
   }

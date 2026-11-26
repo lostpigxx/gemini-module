@@ -481,3 +481,41 @@ TEST(JsonSerializeTest, ZeroCopyArrayAndObjectOfArrays) {
   EXPECT_EQ(JsonSerializeObjectOfArrays(lists, 2), R"({"$.a":[1],"$.c":["hi"]})");
   JsonValue::Destroy(doc);
 }
+
+TEST(JsonSimdTest, ExhaustiveLaneOffsetsParseAndSerialize) {
+  // Test every offset 0..48 (spanning multiple 16B NEON/SSE2 and 8B SWAR lanes)
+  for (size_t pos = 0; pos <= 48; pos++) {
+    // 1. Clean ASCII string of length pos
+    std::string clean(pos, 'a');
+    std::string raw_clean = "\"" + clean + "\"";
+    auto rc = JsonParse(raw_clean);
+    ASSERT_NE(rc.value, nullptr) << "clean len=" << pos;
+    EXPECT_EQ(rc.value->GetString(), clean);
+    EXPECT_EQ(JsonSerialize(rc.value), raw_clean);
+    JsonValue::Destroy(rc.value);
+
+    // 2. Escaped quote and backslash at offset pos
+    std::string with_esc = std::string(pos, 'b') + "\"\\" + std::string(17, 'c');
+    auto* v = JsonValue::CreateString(with_esc.data(), static_cast<uint32_t>(with_esc.size()));
+    std::string ser = JsonSerialize(v);
+    auto r2 = JsonParse(ser);
+    ASSERT_NE(r2.value, nullptr) << "esc pos=" << pos;
+    EXPECT_EQ(r2.value->GetString(), with_esc);
+    JsonValue::Destroy(v);
+    JsonValue::Destroy(r2.value);
+
+    // 3. Control char at offset pos rejected in parse, escaped in serialize
+    std::string with_ctl = "\"" + std::string(pos, 'd') + std::string(1, '\x07') + "z\"";
+    auto rctl = JsonParse(with_ctl);
+    EXPECT_EQ(rctl.value, nullptr) << "ctl pos=" << pos;
+
+    // 4. Multi-byte UTF-8 at offset pos accepted & round-trips
+    std::string with_utf8 = std::string(pos, 'e') + "\xE4\xB8\x96\xE7\x95\x8C" + std::string(19, 'f');
+    std::string raw_utf8 = "\"" + with_utf8 + "\"";
+    auto ru = JsonParse(raw_utf8);
+    ASSERT_NE(ru.value, nullptr) << "utf8 pos=" << pos;
+    EXPECT_EQ(ru.value->GetString(), with_utf8);
+    EXPECT_EQ(JsonSerialize(ru.value), raw_utf8);
+    JsonValue::Destroy(ru.value);
+  }
+}

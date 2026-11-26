@@ -985,6 +985,48 @@ test_assert "Large document (~300KB) SET/GET/Filter/BGSAVE/BGREWRITEAOF" {
   r DEL largedoc
 }
 
+puts "\n=== Phase 6: Precompiled Regex, MERGE Leaf Create & KeySpecs ==="
+
+test_assert "JSON.MERGE creates missing leaf key when parent exists" {
+  r JSON.SET mleaf $ {{"user":{"name":"Alice"}}}
+  r JSON.MERGE mleaf $.user.profile {{"role":"admin"}}
+  set role [r JSON.GET mleaf .user.profile.role]
+  if {$role ne {"admin"}} { error "Expected \"admin\", got $role" }
+  # Merging null onto a missing leaf key is a no-op
+  r JSON.MERGE mleaf $.user.nonexistent null
+  r DEL mleaf
+}
+
+test_assert "COMMAND INFO KeySpecs for JSON.MGET and JSON.MSET" {
+  set mget_info [lindex [r COMMAND INFO JSON.MGET] 0]
+  set mset_info [lindex [r COMMAND INFO JSON.MSET] 0]
+  # Redis COMMAND INFO fields: [name arity flags firstkey lastkey step ...]
+  if {[lindex $mget_info 3] != 1 || [lindex $mget_info 4] != -2 || [lindex $mget_info 5] != 1} {
+    error "Unexpected JSON.MGET keyspec: $mget_info"
+  }
+  if {[lindex $mset_info 3] != 1 || [lindex $mset_info 4] != -1 || [lindex $mset_info 5] != 3} {
+    error "Unexpected JSON.MSET keyspec: $mset_info"
+  }
+}
+
+puts "\n=== Phase 8: RFC 9535 JSONPath Functions ==="
+
+test "JSONPath length() on array and string" {
+  r JSON.SET fn_doc $ {{"items":[{"name":"hi","tags":["a","b","c"]},{"name":"hello redis","tags":["x"]},{"name":"redis","tags":[]}]}}
+  r JSON.GET fn_doc {$.items[?(length(@.tags) >= 2)].name}
+} {["hi"]}
+
+test "JSONPath count() with wildcard" {
+  r JSON.GET fn_doc {$.items[?(count(@.tags[*]) == 1)].name}
+} {["hello redis"]}
+
+test "JSONPath match() vs search()" {
+  set m [r JSON.GET fn_doc {$.items[?(match(@.name, 'redis'))].name}]
+  set s [r JSON.GET fn_doc {$.items[?(search(@.name, 'redis'))].name}]
+  r DEL fn_doc
+  list $m $s
+} {{["redis"]} {["hello redis","redis"]}}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

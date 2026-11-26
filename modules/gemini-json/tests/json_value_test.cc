@@ -205,9 +205,9 @@ TEST(JsonValueTest, ObjectPreservesInsertionOrder) {
   obj->ObjectSet("m", 1, JsonValue::CreateNull());
 
   auto* entries = obj->ObjectEntries();
-  EXPECT_EQ(std::string_view(entries[0].key, entries[0].key_len), "z");
-  EXPECT_EQ(std::string_view(entries[1].key, entries[1].key_len), "a");
-  EXPECT_EQ(std::string_view(entries[2].key, entries[2].key_len), "m");
+  EXPECT_EQ(entries[0].KeyView(), "z");
+  EXPECT_EQ(entries[1].KeyView(), "a");
+  EXPECT_EQ(entries[2].KeyView(), "m");
 
   JsonValue::Destroy(obj);
 }
@@ -394,7 +394,7 @@ TEST(JsonValueTest, ObjectDeleteHeavyPreservesOrder) {
   auto* entries = obj->ObjectEntries();
   for (uint32_t idx = 0; idx < 250; idx++) {
     std::string expected = "k_" + std::to_string(idx * 4);
-    EXPECT_EQ(std::string_view(entries[idx].key, entries[idx].key_len), expected);
+    EXPECT_EQ(entries[idx].KeyView(), expected);
     EXPECT_EQ(entries[idx].value->GetInteger(), static_cast<int64_t>(idx * 4));
     auto* got = obj->ObjectGet(expected);
     ASSERT_NE(got, nullptr);
@@ -461,4 +461,29 @@ TEST(JsonValueTest, StringAppendSsoAndHeapGrowth) {
   }
   EXPECT_EQ(s->GetString().size(), 47u + 2000u);
   JsonValue::Destroy(s);
+}
+
+TEST(JsonValueTest, SmallKeyOptimizationBoundaries) {
+  EXPECT_EQ(sizeof(JsonValue::ObjEntry), 32u);
+  auto* obj = JsonValue::CreateObject();
+  for (uint32_t len : {0u, 1u, 7u, 14u, 15u, 16u, 17u, 64u}) {
+    std::string k(len, static_cast<char>('a' + (len % 26)));
+    ASSERT_TRUE(obj->ObjectSet(k.data(), len, JsonValue::CreateInteger(len)));
+  }
+  auto* entries = obj->ObjectEntries();
+  ASSERT_EQ(obj->ObjectLen(), 8u);
+  for (uint32_t i = 0; i < 8; i++) {
+    uint32_t len = entries[i].KeyLen();
+    if (len <= JsonValue::ObjEntry::kInlineKeyMaxLen) {
+      EXPECT_TRUE(entries[i].IsInlineKey());
+    } else {
+      EXPECT_FALSE(entries[i].IsInlineKey());
+    }
+    EXPECT_EQ(obj->ObjectGet(entries[i].KeyView())->GetInteger(), static_cast<int64_t>(len));
+  }
+  // Delete both inline and heap keys
+  EXPECT_TRUE(obj->ObjectDelete(std::string(15, static_cast<char>('a' + 15))));
+  EXPECT_TRUE(obj->ObjectDelete(std::string(16, static_cast<char>('a' + 16))));
+  EXPECT_EQ(obj->ObjectLen(), 6u);
+  JsonValue::Destroy(obj);
 }

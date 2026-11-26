@@ -1,4 +1,5 @@
 #include "json_serialize.h"
+#include "json_simd.h"
 
 #include <charconv>
 #include <cmath>
@@ -51,26 +52,25 @@ struct Writer {
 
   void WriteString(const char* data, uint32_t len) {
     out.push_back('"');
-    uint32_t chunk_start = 0;
-    for (uint32_t i = 0; i < len; i++) {
-      uint8_t esc = kEscapeTable[static_cast<uint8_t>(data[i])];
-      if (esc == 0) continue;
-
-      if (i > chunk_start) {
-        out.append(data + chunk_start, i - chunk_start);
+    const char* cur = data;
+    const char* end = data + len;
+    while (cur < end) {
+      const char* special = json_simd::FindNextEscapeInSerialize(cur, end);
+      if (special > cur) {
+        out.append(cur, static_cast<size_t>(special - cur));
       }
+      if (special >= end) break;
+
+      auto c = static_cast<uint8_t>(*special);
+      uint8_t esc = kEscapeTable[c];
       if (esc == 1) {
-        auto c = static_cast<uint8_t>(data[i]);
         char buf[6] = {'\\', 'u', '0', '0', kHexChars[c >> 4], kHexChars[c & 0x0F]};
         out.append(buf, 6);
       } else {
         char buf[2] = {'\\', static_cast<char>(esc)};
         out.append(buf, 2);
       }
-      chunk_start = i + 1;
-    }
-    if (len > chunk_start) {
-      out.append(data + chunk_start, len - chunk_start);
+      cur = special + 1;
     }
     out.push_back('"');
   }
@@ -138,7 +138,7 @@ struct Writer {
         for (uint32_t i = 0; i < len; i++) {
           if (i > 0) out.push_back(',');
           WriteIndent();
-          WriteString(entries[i].key, entries[i].key_len);
+          WriteString(entries[i].KeyData(), entries[i].KeyLen());
           WriteColon();
           WriteValue(entries[i].value);
         }

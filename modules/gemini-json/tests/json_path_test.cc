@@ -672,3 +672,76 @@ TEST(PathEvalTest, MultiRecursiveDedupAndLruCache) {
     EXPECT_TRUE(cached->is_simple);
   }
 }
+
+TEST(PathEvalTest, FilterRegexPrecompiledLargeArray) {
+  auto* arr = JsonValue::CreateArray();
+  for (int i = 0; i < 1000; i++) {
+    auto* obj = JsonValue::CreateObject();
+    std::string name = (i % 10 == 0) ? ("TargetItem_" + std::to_string(i))
+                                     : ("other_" + std::to_string(i));
+    obj->ObjectSet("name", 4, JsonValue::CreateString(name.data(), static_cast<uint32_t>(name.size())));
+    arr->ArrayAppend(obj);
+  }
+
+  const char* err = nullptr;
+  const JsonPath* p = ParsePathCached("$[?(@.name =~ /^targetitem_[0-9]+$/i)]", &err);
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(err, nullptr);
+
+  auto m1 = EvaluatePath(*p, arr);
+  auto m2 = EvaluatePath(*p, arr);
+  EXPECT_EQ(m1.size(), 100u);
+  EXPECT_EQ(m2.size(), 100u);
+
+  JsonValue::Destroy(arr);
+}
+
+TEST(PathEvalTest, Rfc9535FilterFunctionsLengthCountMatchSearch) {
+  auto* doc = Parse(R"([
+    {"name": "世界", "tags": ["a", "b", "c"], "meta": {"x": 1, "y": 2}},
+    {"name": "hello redis", "tags": ["a"], "meta": {}},
+    {"name": "redis", "tags": [], "meta": {"x": 1}}
+  ])");
+  ASSERT_NE(doc, nullptr);
+
+  // length() on UTF-8 string (2 Unicode scalars), array, object
+  auto r_len_str = ParsePath("$[?(length(@.name) == 2)]");
+  ASSERT_EQ(r_len_str.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r_len_str.path, doc).size(), 1u);
+
+  auto r_len_arr = ParsePath("$[?(length(@.tags) >= 2)]");
+  ASSERT_EQ(r_len_arr.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r_len_arr.path, doc).size(), 1u);
+
+  auto r_len_obj = ParsePath("$[?(length(@.meta) == 0)]");
+  ASSERT_EQ(r_len_obj.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r_len_obj.path, doc).size(), 1u);
+
+  // count() with wildcard
+  auto r_cnt = ParsePath("$[?(count(@.tags[*]) == 3)]");
+  ASSERT_EQ(r_cnt.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r_cnt.path, doc).size(), 1u);
+
+  // match() full string vs search() substring
+  auto r_match = ParsePath("$[?(match(@.name, 'redis'))]");
+  ASSERT_EQ(r_match.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r_match.path, doc).size(), 1u);
+
+  auto r_search = ParsePath("$[?(search(@.name, 'redis'))]");
+  ASSERT_EQ(r_search.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r_search.path, doc).size(), 2u);
+
+  // Combined with && and !
+  auto r_combo = ParsePath("$[?(search(@.name, '(?i)REDIS') && !match(@.name, 'redis'))]");
+  ASSERT_EQ(r_combo.error, nullptr);
+  auto mc = EvaluatePath(r_combo.path, doc);
+  ASSERT_EQ(mc.size(), 1u);
+  EXPECT_EQ(mc[0].value->ObjectGet("name")->GetString(), "hello redis");
+
+  // Unknown function / invalid args rejected
+  EXPECT_NE(ParsePath("$[?(unknown_fn(@.a) == 1)]").error, nullptr);
+  EXPECT_NE(ParsePath("$[?(count(123) == 1)]").error, nullptr);
+  EXPECT_NE(ParsePath("$[?(match(@.name, 123))]").error, nullptr);
+
+  JsonValue::Destroy(doc);
+}

@@ -12,10 +12,35 @@
 #include <unordered_map>
 #include <unordered_set>
 
+constexpr size_t kMaxRegexInputLen = 65536;
+
+struct CompiledRegex {
+  regex_t re;
+  bool valid = false;
+
+  CompiledRegex() = default;
+  CompiledRegex(const CompiledRegex&) = delete;
+  CompiledRegex& operator=(const CompiledRegex&) = delete;
+  ~CompiledRegex() {
+    if (valid) regfree(&re);
+  }
+
+  bool Match(std::string_view sv) const {
+    if (!valid || sv.size() > kMaxRegexInputLen) return false;
+    char stack_buf[256];
+    if (sv.size() < sizeof(stack_buf)) {
+      std::memcpy(stack_buf, sv.data(), sv.size());
+      stack_buf[sv.size()] = '\0';
+      return regexec(&re, stack_buf, 0, nullptr, 0) == 0;
+    }
+    std::string tmp(sv);
+    return regexec(&re, tmp.c_str(), 0, nullptr, 0) == 0;
+  }
+};
+
 namespace {
 
 constexpr size_t kMaxRegexPatternLen = 512;
-constexpr size_t kMaxRegexInputLen = 65536;
 constexpr int kMaxFilterParenDepth = 32;
 
 struct PathParser {
@@ -253,6 +278,13 @@ static bool ParseFilterPathOperand(PathParser& p, FilterOperand& out) {
   while (p.HasMore()) {
     if (p.Peek() == '.') {
       p.Advance();
+      if (p.HasMore() && p.Peek() == '*') {
+        p.Advance();
+        FilterStep st;
+        st.is_wildcard = true;
+        out.steps.push_back(std::move(st));
+        continue;
+      }
       std::string key;
       if (p.HasMore() && (p.Peek() == '\'' || p.Peek() == '"')) {
         if (!ParseQuotedKey(p, key)) { p.error = "invalid quoted key in filter"; return false; }
@@ -268,7 +300,15 @@ static bool ParseFilterPathOperand(PathParser& p, FilterOperand& out) {
       p.Advance();
       p.SkipSpaces();
       if (!p.HasMore()) { p.error = "unterminated '[' in filter"; return false; }
-      if (p.Peek() == '\'' || p.Peek() == '"') {
+      if (p.Peek() == '*') {
+        p.Advance();
+        p.SkipSpaces();
+        if (!p.HasMore() || p.Peek() != ']') { p.error = "expected ']' in filter"; return false; }
+        p.Advance();
+        FilterStep st;
+        st.is_wildcard = true;
+        out.steps.push_back(std::move(st));
+      } else if (p.Peek() == '\'' || p.Peek() == '"') {
         std::string key;
         if (!ParseQuotedKey(p, key)) { p.error = "invalid quoted key in filter"; return false; }
         p.SkipSpaces();
@@ -291,6 +331,92 @@ static bool ParseFilterPathOperand(PathParser& p, FilterOperand& out) {
       }
     } else {
       break;
+    }
+  }
+  return true;
+}
+
+static bool CompileRegexFromString(std::string pat, bool anchor_full,
+                                   std::shared_ptr<const CompiledRegex>& out_re,
+                                   const char*& err) {
+  bool icase = false;
+  if (pat.size() >= 4 && pat.compare(0, 4, "(?i)") == 0) {
+    icase = true;
+    pat.erase(0, 4);
+  }
+  if (pat.size() > kMaxRegexPatternLen) {
+    err = "regex pattern too long";
+    return false;
+  }
+  std::string final_pat = anchor_full ? ("^(" + pat + ")$") : pat;
+  auto compiled = std::make_shared<CompiledRegex>();
+  int flags = REG_EXTENDED | REG_NOSUB | (icase ? REG_ICASE : 0);
+  if (regcomp(&compiled->re, final_pat.c_str(), flags) != 0) {
+    err = "invalid regex pattern";
+    return false;
+  }
+  compiled->valid = true;
+  out_re = std::move(compiled);
+  return true;
+}
+
+static bool ParseFilterOperand(PathParser& p, FilterOperand& out);
+
+static bool ParseFilterFuncCall(PathParser& p, std::string_view fname, FilterOperand& out) {
+  FilterFuncKind fk = FilterFuncKind::kNone;
+  size_t expected_args = 0;
+  if (fname == "length") { fk = FilterFuncKind::kLength; expected_args = 1; }
+  else if (fname == "count") { fk = FilterFuncKind::kCount; expected_args = 1; }
+  else if (fname == "match") { fk = FilterFuncKind::kMatch; expected_args = 2; }
+  else if (fname == "search") { fk = FilterFuncKind::kSearch; expected_args = 2; }
+  else {
+    p.error = "unknown filter function";
+    return false;
+  }
+
+  p.Advance();  // skip '('
+  out.kind = FilterOperand::Kind::kFuncCall;
+  out.func = fk;
+  out.func_args.clear();
+
+  for (size_t i = 0; i < expected_args; i++) {
+    if (i > 0) {
+      p.SkipSpaces();
+      if (!p.HasMore() || p.Peek() != ',') {
+        p.error = "expected ',' between function arguments";
+        return false;
+      }
+      p.Advance();
+    }
+    FilterOperand arg;
+    if (!ParseFilterOperand(p, arg)) return false;
+    out.func_args.push_back(std::move(arg));
+  }
+
+  p.SkipSpaces();
+  if (!p.HasMore() || p.Peek() != ')') {
+    p.error = "expected ')' after function arguments";
+    return false;
+  }
+  p.Advance();
+
+  if (fk == FilterFuncKind::kCount) {
+    if (out.func_args[0].kind != FilterOperand::Kind::kCurrentPath &&
+        out.func_args[0].kind != FilterOperand::Kind::kRootPath) {
+      p.error = "count() requires a path argument";
+      return false;
+    }
+  } else if (fk == FilterFuncKind::kMatch || fk == FilterFuncKind::kSearch) {
+    const auto& pat_arg = out.func_args[1];
+    if (pat_arg.kind != FilterOperand::Kind::kLiteral ||
+        pat_arg.literal.kind != FilterValue::Kind::kString) {
+      p.error = "match()/search() requires a string literal pattern";
+      return false;
+    }
+    if (!CompileRegexFromString(pat_arg.literal.str_val,
+                                fk == FilterFuncKind::kMatch,
+                                out.compiled_regex, p.error)) {
+      return false;
     }
   }
   return true;
@@ -332,6 +458,21 @@ static bool ParseFilterOperand(PathParser& p, FilterOperand& out) {
     out.literal.kind = FilterValue::Kind::kNull;
     return true;
   }
+  if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+    const char* fstart = p.pos;
+    while (p.HasMore() && ((p.Peek() >= 'a' && p.Peek() <= 'z') ||
+                           (p.Peek() >= 'A' && p.Peek() <= 'Z') ||
+                           p.Peek() == '_')) {
+      p.Advance();
+    }
+    std::string_view fname(fstart, static_cast<size_t>(p.pos - fstart));
+    p.SkipSpaces();
+    if (p.HasMore() && p.Peek() == '(') {
+      return ParseFilterFuncCall(p, fname, out);
+    }
+    p.error = "unexpected identifier in filter";
+    return false;
+  }
   if (c == '-' || (c >= '0' && c <= '9')) {
     if (!p.ParseNumberLiteral(out.literal)) {
       p.error = "invalid number in filter";
@@ -343,10 +484,12 @@ static bool ParseFilterOperand(PathParser& p, FilterOperand& out) {
   return false;
 }
 
-static bool ParseRegexPattern(PathParser& p, std::string& pattern, bool& icase) {
+static bool ParseRegexPattern(PathParser& p, std::string& pattern, bool& icase,
+                              std::shared_ptr<const CompiledRegex>& out_re) {
   p.SkipSpaces();
   icase = false;
   pattern.clear();
+  out_re.reset();
   if (!p.HasMore()) { p.error = "expected regex pattern after '=~'"; return false; }
 
   if (p.Peek() == '/') {
@@ -385,14 +528,15 @@ static bool ParseRegexPattern(PathParser& p, std::string& pattern, bool& icase) 
     p.error = "regex pattern too long";
     return false;
   }
-  // Validate regex syntax upfront using POSIX regcomp (exception-free)
-  regex_t re;
+  // Compile regex once upfront (exception-free POSIX NFA)
+  auto compiled = std::make_shared<CompiledRegex>();
   int flags = REG_EXTENDED | REG_NOSUB | (icase ? REG_ICASE : 0);
-  if (regcomp(&re, pattern.c_str(), flags) != 0) {
+  if (regcomp(&compiled->re, pattern.c_str(), flags) != 0) {
     p.error = "invalid regex pattern";
     return false;
   }
-  regfree(&re);
+  compiled->valid = true;
+  out_re = std::move(compiled);
   return true;
 }
 
@@ -451,8 +595,21 @@ static int32_t ParseFilterPrimary(PathParser& p, std::vector<FilterNode>& nodes,
   }
 
   if (!has_op) {
-    if (lhs.kind == FilterOperand::Kind::kLiteral) {
-      p.error = "expected comparison operator after literal in filter";
+    if (lhs.kind == FilterOperand::Kind::kFuncCall &&
+        (lhs.func == FilterFuncKind::kMatch || lhs.func == FilterFuncKind::kSearch)) {
+      FilterNode n;
+      n.kind = FilterNode::Kind::kCompare;
+      n.op = FilterOp::kEq;
+      n.lhs = std::move(lhs);
+      n.rhs.kind = FilterOperand::Kind::kLiteral;
+      n.rhs.literal.kind = FilterValue::Kind::kBool;
+      n.rhs.literal.bool_val = true;
+      nodes.push_back(std::move(n));
+      return static_cast<int32_t>(nodes.size() - 1);
+    }
+    if (lhs.kind == FilterOperand::Kind::kLiteral ||
+        lhs.kind == FilterOperand::Kind::kFuncCall) {
+      p.error = "expected comparison operator after expression in filter";
       return -1;
     }
     FilterNode n;
@@ -466,7 +623,8 @@ static int32_t ParseFilterPrimary(PathParser& p, std::vector<FilterNode>& nodes,
   if (op == FilterOp::kRegex) {
     std::string pat;
     bool icase = false;
-    if (!ParseRegexPattern(p, pat, icase)) return -1;
+    std::shared_ptr<const CompiledRegex> compiled;
+    if (!ParseRegexPattern(p, pat, icase, compiled)) return -1;
     FilterNode n;
     n.kind = FilterNode::Kind::kCompare;
     n.op = FilterOp::kRegex;
@@ -475,6 +633,7 @@ static int32_t ParseFilterPrimary(PathParser& p, std::vector<FilterNode>& nodes,
     n.rhs.literal.kind = FilterValue::Kind::kString;
     n.rhs.literal.str_val = std::move(pat);
     n.regex_icase = icase;
+    n.compiled_regex = std::move(compiled);
     nodes.push_back(std::move(n));
     return static_cast<int32_t>(nodes.size() - 1);
   }
@@ -815,6 +974,43 @@ struct EvalValue {
   const JsonValue* json_ptr = nullptr;
 };
 
+static size_t CountUtf8CodePoints(std::string_view sv) {
+  size_t count = 0;
+  for (unsigned char c : sv) {
+    if ((c & 0xC0) != 0x80) count++;
+  }
+  return count;
+}
+
+static size_t CountPathMatches(const std::vector<FilterStep>& steps, size_t idx,
+                               JsonValue* cur) {
+  if (!cur) return 0;
+  if (idx >= steps.size()) return 1;
+  const auto& step = steps[idx];
+  if (step.is_wildcard) {
+    size_t total = 0;
+    if (cur->IsArray()) {
+      for (uint32_t i = 0; i < cur->ArrayLen(); i++) {
+        total += CountPathMatches(steps, idx + 1, cur->ArrayGet(i));
+      }
+    } else if (cur->IsObject()) {
+      auto* entries = cur->ObjectEntries();
+      for (uint32_t i = 0; i < cur->ObjectLen(); i++) {
+        total += CountPathMatches(steps, idx + 1, entries[i].value);
+      }
+    }
+    return total;
+  }
+  if (step.is_index) {
+    if (!cur->IsArray()) return 0;
+    int64_t r = ResolveIndex64(step.index, cur->ArrayLen());
+    if (r < 0 || r >= static_cast<int64_t>(cur->ArrayLen())) return 0;
+    return CountPathMatches(steps, idx + 1, cur->ArrayGet(static_cast<uint32_t>(r)));
+  }
+  if (!cur->IsObject()) return 0;
+  return CountPathMatches(steps, idx + 1, cur->ObjectGet(step.key));
+}
+
 static EvalValue ResolveOperand(const FilterOperand& op, JsonValue* elem, JsonValue* root) {
   EvalValue out;
   if (op.kind == FilterOperand::Kind::kLiteral) {
@@ -824,6 +1020,46 @@ static EvalValue ResolveOperand(const FilterOperand& op, JsonValue* elem, JsonVa
       case FilterValue::Kind::kInteger: out.kind = EvalValue::Kind::kInteger; out.int_val = op.literal.int_val; break;
       case FilterValue::Kind::kNumber:  out.kind = EvalValue::Kind::kNumber; out.num_val = op.literal.num_val; break;
       case FilterValue::Kind::kString:  out.kind = EvalValue::Kind::kString; out.str_val = op.literal.str_val; break;
+    }
+    return out;
+  }
+
+  if (op.kind == FilterOperand::Kind::kFuncCall) {
+    switch (op.func) {
+      case FilterFuncKind::kLength: {
+        EvalValue arg = ResolveOperand(op.func_args[0], elem, root);
+        if (arg.kind == EvalValue::Kind::kString) {
+          out.kind = EvalValue::Kind::kInteger;
+          out.int_val = static_cast<int64_t>(CountUtf8CodePoints(arg.str_val));
+        } else if (arg.kind == EvalValue::Kind::kContainer && arg.json_ptr) {
+          if (arg.json_ptr->IsArray()) {
+            out.kind = EvalValue::Kind::kInteger;
+            out.int_val = static_cast<int64_t>(arg.json_ptr->ArrayLen());
+          } else if (arg.json_ptr->IsObject()) {
+            out.kind = EvalValue::Kind::kInteger;
+            out.int_val = static_cast<int64_t>(arg.json_ptr->ObjectLen());
+          }
+        }
+        return out;
+      }
+      case FilterFuncKind::kCount: {
+        const auto& path_arg = op.func_args[0];
+        JsonValue* base = (path_arg.kind == FilterOperand::Kind::kCurrentPath) ? elem : root;
+        out.kind = EvalValue::Kind::kInteger;
+        out.int_val = static_cast<int64_t>(CountPathMatches(path_arg.steps, 0, base));
+        return out;
+      }
+      case FilterFuncKind::kMatch:
+      case FilterFuncKind::kSearch: {
+        EvalValue arg = ResolveOperand(op.func_args[0], elem, root);
+        out.kind = EvalValue::Kind::kBool;
+        out.bool_val = (arg.kind == EvalValue::Kind::kString && op.compiled_regex)
+                           ? op.compiled_regex->Match(arg.str_val)
+                           : false;
+        return out;
+      }
+      case FilterFuncKind::kNone:
+        return out;
     }
     return out;
   }
@@ -870,24 +1106,17 @@ static int CompareIntDouble(int64_t i, double d) {
 }
 
 static bool CompareEvalValues(const EvalValue& lhs, FilterOp op,
-                              const EvalValue& rhs, bool regex_icase) {
+                              const EvalValue& rhs,
+                              const std::shared_ptr<const CompiledRegex>& compiled_re) {
   if (lhs.kind == EvalValue::Kind::kMissing || rhs.kind == EvalValue::Kind::kMissing) {
     return false;
   }
 
   if (op == FilterOp::kRegex) {
-    if (lhs.kind != EvalValue::Kind::kString || rhs.kind != EvalValue::Kind::kString) {
+    if (lhs.kind != EvalValue::Kind::kString || !compiled_re) {
       return false;
     }
-    if (lhs.str_val.size() > kMaxRegexInputLen) return false;
-    regex_t re;
-    int flags = REG_EXTENDED | REG_NOSUB | (regex_icase ? REG_ICASE : 0);
-    std::string pat(rhs.str_val);
-    if (regcomp(&re, pat.c_str(), flags) != 0) return false;
-    std::string target(lhs.str_val);
-    bool matched = (regexec(&re, target.c_str(), 0, nullptr, 0) == 0);
-    regfree(&re);
-    return matched;
+    return compiled_re->Match(lhs.str_val);
   }
 
   bool lhs_num = (lhs.kind == EvalValue::Kind::kInteger || lhs.kind == EvalValue::Kind::kNumber);
@@ -967,7 +1196,7 @@ static bool EvalFilterNode(const FilterCondition& cond, int32_t node_idx,
     case FilterNode::Kind::kCompare: {
       EvalValue lv = ResolveOperand(n.lhs, elem, root);
       EvalValue rv = ResolveOperand(n.rhs, elem, root);
-      return CompareEvalValues(lv, n.op, rv, n.regex_icase);
+      return CompareEvalValues(lv, n.op, rv, n.compiled_regex);
     }
   }
   return false;
@@ -1012,7 +1241,7 @@ static void EvalRecursive(EvalState& st, size_t seg_idx,
     auto* entries = current->ObjectEntries();
     for (uint32_t i = 0; i < n; i++) {
       EvalRecursive(st, seg_idx, entries[i].value, current, -1,
-                    std::string_view(entries[i].key, entries[i].key_len), true,
+                    entries[i].KeyView(), true,
                     depth + 1);
     }
   }
@@ -1099,7 +1328,7 @@ static void Evaluate(EvalState& st, size_t seg_idx,
         auto* entries = current->ObjectEntries();
         for (uint32_t i = 0; i < n; i++) {
           Evaluate(st, seg_idx + 1, entries[i].value, current, -1,
-                   std::string_view(entries[i].key, entries[i].key_len), true, depth + 1);
+                   entries[i].KeyView(), true, depth + 1);
         }
       }
       break;
@@ -1124,7 +1353,7 @@ static void Evaluate(EvalState& st, size_t seg_idx,
         for (uint32_t i = 0; i < n; i++) {
           if (EvalFilterNode(cond, cond.root, entries[i].value, st.root)) {
             Evaluate(st, seg_idx + 1, entries[i].value, current, -1,
-                     std::string_view(entries[i].key, entries[i].key_len), true, depth + 1);
+                     entries[i].KeyView(), true, depth + 1);
           }
         }
       }

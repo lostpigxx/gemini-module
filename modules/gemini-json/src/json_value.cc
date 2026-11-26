@@ -137,6 +137,29 @@ JsonValue* JsonValue::CreateObject() {
   return v;
 }
 
+static inline void FreeEntryKey(JsonValue::ObjEntry& e) {
+  if (!e.IsInlineKey()) {
+    RMFree(e.heap_key);
+    e.heap_key = nullptr;
+  }
+}
+
+static inline bool InitEntryKey(JsonValue::ObjEntry& e, const char* key, uint32_t key_len) {
+  if (key_len <= JsonValue::ObjEntry::kInlineKeyMaxLen) {
+    e.key_len_flags = key_len | JsonValue::ObjEntry::kInlineKeyFlag;
+    if (key_len > 0) std::memcpy(e.inline_key, key, key_len);
+    e.inline_key[key_len] = '\0';
+    return true;
+  }
+  auto* k = static_cast<char*>(RMAlloc(static_cast<size_t>(key_len) + 1));
+  if (!k) return false;
+  std::memcpy(k, key, key_len);
+  k[key_len] = '\0';
+  e.heap_key = k;
+  e.key_len_flags = key_len;
+  return true;
+}
+
 static inline void FreeLeaf(JsonValue* v) {
   if (v->IsString() && !v->IsInlineString()) {
     RMFree(const_cast<char*>(v->GetString().data()));
@@ -184,8 +207,8 @@ void JsonValue::Destroy(JsonValue* v) {
         ObjectData* od = cur->gen_.payload.obj;
         if (od) {
           for (uint32_t i = 0; i < od->entries_len; i++) {
-            if (!od->entries[i].key) continue;
-            RMFree(od->entries[i].key);
+            if (!od->entries[i].IsLive()) continue;
+            FreeEntryKey(od->entries[i]);
             JsonValue* child = od->entries[i].value;
             if (child) {
               if (child->IsArray() || child->IsObject()) {
@@ -252,7 +275,7 @@ static JsonValue* CloneDepth(const JsonValue* v, int depth) {
       auto* entries = v->ObjectEntries();
       for (uint32_t i = 0; i < n; i++) {
         auto* child = CloneDepth(entries[i].value, depth + 1);
-        if (!child || !o->ObjectSet(entries[i].key, entries[i].key_len, child)) {
+        if (!child || !o->ObjectSet(entries[i].KeyData(), entries[i].KeyLen(), child)) {
           JsonValue::Destroy(child);
           JsonValue::Destroy(o);
           return nullptr;
@@ -499,7 +522,7 @@ void JsonValue::ObjHashRebuild(uint32_t target_cap) const {
 
   uint32_t mask = od->hash_cap - 1;
   for (uint32_t i = 0; i < od->entries_len; i++) {
-    if (!od->entries[i].key) continue;
+    if (!od->entries[i].IsLive()) continue;
     uint32_t h = od->entries[i].key_hash & mask;
     while (od->hash_idx[h] != -1) {
       h = (h + 1) & mask;
@@ -514,7 +537,7 @@ void JsonValue::ObjectCompact() const {
 
   uint32_t write = 0;
   for (uint32_t read = 0; read < od->entries_len; read++) {
-    if (od->entries[read].key) {
+    if (od->entries[read].IsLive()) {
       if (write != read) {
         od->entries[write] = od->entries[read];
       }
@@ -539,8 +562,8 @@ int32_t JsonValue::ObjHashProbe(const char* key, uint32_t key_len, uint32_t hash
   while (od->hash_idx[h] != -1) {
     auto slot = static_cast<uint32_t>(od->hash_idx[h]);
     const ObjEntry& e = od->entries[slot];
-    if (e.key && e.key_hash == hash && e.key_len == key_len &&
-        (key_len == 0 || std::memcmp(e.key, key, key_len) == 0)) {
+    if (e.IsLive() && e.key_hash == hash && e.KeyLen() == key_len &&
+        (key_len == 0 || std::memcmp(e.KeyData(), key, key_len) == 0)) {
       return od->hash_idx[h];
     }
     h = (h + 1) & mask;
@@ -599,8 +622,8 @@ JsonValue* JsonValue::ObjectGet(std::string_view key) const {
 
   for (uint32_t i = 0; i < od->entries_len; i++) {
     const ObjEntry& e = od->entries[i];
-    if (e.key && key.size() == e.key_len &&
-        (key.size() == 0 || std::memcmp(key.data(), e.key, key.size()) == 0)) {
+    if (e.IsLive() && key.size() == e.KeyLen() &&
+        (key.size() == 0 || std::memcmp(key.data(), e.KeyData(), key.size()) == 0)) {
       return e.value;
     }
   }
@@ -627,8 +650,8 @@ bool JsonValue::ObjectSet(const char* key, uint32_t key_len, JsonValue* child) {
   } else {
     for (uint32_t i = 0; i < od->entries_len; i++) {
       ObjEntry& e = od->entries[i];
-      if (e.key && key_len == e.key_len &&
-          (key_len == 0 || std::memcmp(key, e.key, key_len) == 0)) {
+      if (e.IsLive() && key_len == e.KeyLen() &&
+          (key_len == 0 || std::memcmp(key, e.KeyData(), key_len) == 0)) {
         Destroy(e.value);
         e.value = child;
         return true;
@@ -637,7 +660,6 @@ bool JsonValue::ObjectSet(const char* key, uint32_t key_len, JsonValue* child) {
   }
 
   if (od->entries_len == od->cap) {
-    // Reclaim tombstones first if plenty exist
     if (od->entries_len > od->len && (od->entries_len - od->len) * 2 >= od->cap) {
       ObjectCompact();
     } else if (!ObjectGrow(od->cap + 1)) {
@@ -645,15 +667,14 @@ bool JsonValue::ObjectSet(const char* key, uint32_t key_len, JsonValue* child) {
     }
   }
 
-  auto* k = static_cast<char*>(RMAlloc(static_cast<size_t>(key_len) + 1));
-  if (!k) return false;
-  if (key_len > 0) std::memcpy(k, key, key_len);
-  k[key_len] = '\0';
+  uint32_t slot = od->entries_len;
+  ObjEntry& entry = od->entries[slot];
+  if (!InitEntryKey(entry, key, key_len)) return false;
 
-  if (!hashed) hash = HashBytes(k, key_len);
-
-  uint32_t slot = od->entries_len++;
-  od->entries[slot] = {k, key_len, hash, child};
+  if (!hashed) hash = HashBytes(entry.KeyData(), key_len);
+  entry.key_hash = hash;
+  entry.value = child;
+  od->entries_len++;
   od->len++;
 
   if (od->hash_idx) {
@@ -682,8 +703,8 @@ bool JsonValue::ObjectDelete(std::string_view key) {
   } else {
     for (uint32_t i = 0; i < od->entries_len; i++) {
       const ObjEntry& e = od->entries[i];
-      if (e.key && key.size() == e.key_len &&
-          (key.size() == 0 || std::memcmp(key.data(), e.key, key.size()) == 0)) {
+      if (e.IsLive() && key.size() == e.KeyLen() &&
+          (key.size() == 0 || std::memcmp(key.data(), e.KeyData(), key.size()) == 0)) {
         found = static_cast<int32_t>(i);
         break;
       }
@@ -693,11 +714,10 @@ bool JsonValue::ObjectDelete(std::string_view key) {
   if (found < 0) return false;
 
   auto slot = static_cast<uint32_t>(found);
-  RMFree(od->entries[slot].key);
+  FreeEntryKey(od->entries[slot]);
   Destroy(od->entries[slot].value);
-  od->entries[slot].key = nullptr;
-  od->entries[slot].key_len = 0;
   od->entries[slot].value = nullptr;
+  od->entries[slot].key_len_flags = 0;
   od->len--;
 
   if (od->hash_idx) {
@@ -745,8 +765,8 @@ void JsonValue::Clear() {
       ObjectData* od = gen_.payload.obj;
       if (od) {
         for (uint32_t i = 0; i < od->entries_len; i++) {
-          if (!od->entries[i].key) continue;
-          RMFree(od->entries[i].key);
+          if (!od->entries[i].IsLive()) continue;
+          FreeEntryKey(od->entries[i]);
           Destroy(od->entries[i].value);
         }
         od->len = 0;
@@ -801,8 +821,10 @@ size_t JsonValue::MemoryUsage() const {
           total += static_cast<size_t>(od->cap) * sizeof(ObjEntry);
           total += static_cast<size_t>(od->hash_cap) * sizeof(int32_t);
           for (uint32_t i = 0; i < od->entries_len; i++) {
-            if (!od->entries[i].key) continue;
-            total += static_cast<size_t>(od->entries[i].key_len) + 1;
+            if (!od->entries[i].IsLive()) continue;
+            if (!od->entries[i].IsInlineKey()) {
+              total += static_cast<size_t>(od->entries[i].KeyLen()) + 1;
+            }
             stack.push_back(od->entries[i].value);
           }
         }
@@ -866,8 +888,7 @@ static bool DeepEqualDepth(const JsonValue* a, const JsonValue* b, int depth) {
       if (a->ObjectLen() != b->ObjectLen()) return false;
       auto* entries = a->ObjectEntries();
       for (uint32_t i = 0; i < a->ObjectLen(); i++) {
-        auto* other_val = b->ObjectGet(
-            std::string_view(entries[i].key, entries[i].key_len));
+        auto* other_val = b->ObjectGet(entries[i].KeyView());
         if (!other_val || !DeepEqualDepth(entries[i].value, other_val, depth + 1)) return false;
       }
       return true;
@@ -921,8 +942,10 @@ JsonValue* JsonValue::DefragTree(JsonValue* root, DefragAllocFn defrag_fn, void*
           Reloc(od->entries);
           Reloc(od->hash_idx);
           for (uint32_t i = 0; i < od->entries_len; i++) {
-            if (!od->entries[i].key) continue;
-            Reloc(od->entries[i].key);
+            if (!od->entries[i].IsLive()) continue;
+            if (!od->entries[i].IsInlineKey()) {
+              Reloc(od->entries[i].heap_key);
+            }
             Reloc(od->entries[i].value);
             if (od->entries[i].value) stack.push_back(od->entries[i].value);
           }

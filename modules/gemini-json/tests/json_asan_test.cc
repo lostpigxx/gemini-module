@@ -493,7 +493,7 @@ TEST(AsanMergeTest, MergePatchMemorySafety) {
   auto* p = patch.value;
   auto* p_entries = p->ObjectEntries();
   for (uint32_t i = 0; i < p->ObjectLen(); i++) {
-    auto pk = std::string_view(p_entries[i].key, p_entries[i].key_len);
+    auto pk = p_entries[i].KeyView();
     if (p_entries[i].value->IsNull()) {
       target->ObjectDelete(pk);
     } else if (p_entries[i].value->IsObject()) {
@@ -501,15 +501,15 @@ TEST(AsanMergeTest, MergePatchMemorySafety) {
       if (existing && existing->IsObject()) {
         auto* sub_entries = p_entries[i].value->ObjectEntries();
         for (uint32_t j = 0; j < p_entries[i].value->ObjectLen(); j++) {
-          existing->ObjectSet(sub_entries[j].key, sub_entries[j].key_len,
+          existing->ObjectSet(sub_entries[j].KeyData(), sub_entries[j].KeyLen(),
                               sub_entries[j].value->Clone());
         }
       } else {
-        target->ObjectSet(p_entries[i].key, p_entries[i].key_len,
+        target->ObjectSet(p_entries[i].KeyData(), p_entries[i].KeyLen(),
                           p_entries[i].value->Clone());
       }
     } else {
-      target->ObjectSet(p_entries[i].key, p_entries[i].key_len,
+      target->ObjectSet(p_entries[i].KeyData(), p_entries[i].KeyLen(),
                         p_entries[i].value->Clone());
     }
   }

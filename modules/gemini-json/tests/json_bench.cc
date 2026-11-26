@@ -137,6 +137,7 @@ int main() {
   std::string med_json = GenerateRecordsJson(300);
   std::string big_json = GenerateRecordsJson(6000);
   std::string esc_json = GenerateEscapedJson(4000);
+  std::string longstr_json = "\"" + std::string(262144, 'x') + "\"";  // 256KB clean string
 
   BenchThroughput("Parse small (~110B)", small_json.size(), 50000, [&]() {
     auto r = JsonParse(small_json);
@@ -158,11 +159,17 @@ int main() {
     sink += r.value ? 1 : 0;
     JsonValue::Destroy(r.value);
   });
+  BenchThroughput("Parse 256KB clean string (SIMD)", longstr_json.size(), 500, [&]() {
+    auto r = JsonParse(longstr_json);
+    sink += r.value ? 1 : 0;
+    JsonValue::Destroy(r.value);
+  });
 
   auto* small_doc = JsonParse(small_json).value;
   auto* med_doc = JsonParse(med_json).value;
   auto* big_doc = JsonParse(big_json).value;
   auto* esc_doc = JsonParse(esc_json).value;
+  auto* longstr_doc = JsonParse(longstr_json).value;
 
   BenchThroughput("Serialize small (~110B)", small_json.size(), 50000, [&]() {
     auto s = JsonSerialize(small_doc);
@@ -180,6 +187,11 @@ int main() {
     auto s = JsonSerialize(esc_doc);
     sink += s.size();
   });
+  BenchThroughput("Serialize 256KB clean string (SIMD)", longstr_json.size(), 500, [&]() {
+    auto s = JsonSerialize(longstr_doc);
+    sink += s.size();
+  });
+  JsonValue::Destroy(longstr_doc);
   std::printf("\n");
 
   // 3. DOM Operations
@@ -241,6 +253,8 @@ int main() {
     auto p_rec = ParsePath("$..price").path;
     auto p_flt = ParsePath("$.records[?(@.price > 50)]").path;
     auto p_cflt = ParsePath("$.records[?(@.category == 'books' && @.price > 50)]").path;
+    auto p_reg = ParsePath("$.records[?(@.name =~ /^item_1[0-9]{2}$/)]").path;
+    auto p_fn = ParsePath("$.records[?(length(@.tags) >= 3 && search(@.name, 'item_1'))]").path;
 
     BenchUs("Path parse + eval $.records[150].name", 50000, [&]() {
       auto pr = ParsePath("$.records[150].name");
@@ -271,6 +285,14 @@ int main() {
     });
     BenchUs("Eval compound filter (&&)", 5000, [&]() {
       auto m = EvaluatePath(p_cflt, med_doc);
+      sink += m.size();
+    });
+    BenchUs("Eval precompiled regex filter", 1000, [&]() {
+      auto m = EvaluatePath(p_reg, med_doc);
+      sink += m.size();
+    });
+    BenchUs("Eval RFC9535 length()+search()", 1000, [&]() {
+      auto m = EvaluatePath(p_fn, med_doc);
       sink += m.size();
     });
   }
