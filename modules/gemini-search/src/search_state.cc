@@ -210,6 +210,24 @@ bool MatchArg(std::string_view arg, const char* target) {
   return strncasecmp(arg.data(), target, arg.size()) == 0;
 }
 
+template <typename Fn>
+static void ForEachNumericValue(const std::string& fval, Fn&& fn) {
+  double num = 0;
+  if (TryParseDouble(fval, num)) {
+    fn(num);
+    return;
+  }
+  if (fval.find(',') == std::string::npos) return;
+  size_t pos = 0;
+  while (pos < fval.size()) {
+    size_t comma = fval.find(',', pos);
+    if (comma == std::string::npos) comma = fval.size();
+    std::string tok = fval.substr(pos, comma - pos);
+    if (TryParseDouble(tok, num)) fn(num);
+    pos = comma + 1;
+  }
+}
+
 void RemoveDocFromIndices(IndexEntry& entry,
                                  const std::string& doc_id) {
   const auto* doc = entry.doc_store.Get(doc_id);
@@ -224,10 +242,8 @@ void RemoveDocFromIndices(IndexEntry& entry,
       entry.tag_indices.GetOrCreate(fname).RemoveMulti(
           fval, doc_id, fspec->tag_separator, fspec->case_sensitive);
     } else if (fspec->type == FieldType::kNumeric) {
-      double num;
-      if (TryParseDouble(fval, num)) {
-        entry.numeric_indices.GetOrCreate(fname).Remove(num, doc_id);
-      }
+      auto& nidx = entry.numeric_indices.GetOrCreate(fname);
+      ForEachNumericValue(fval, [&](double num) { nidx.Remove(num, doc_id); });
     } else if (fspec->type == FieldType::kVector) {
       entry.vector_indices.GetOrCreate(fname, fspec->vector_params).Remove(doc_id);
     } else if (fspec->type == FieldType::kText) {
@@ -247,13 +263,15 @@ void AddDocToIndices(
     const auto* fspec = entry.spec.FindField(fname);
     if (!fspec || fspec->noindex) continue;
     if (fspec->type == FieldType::kNumeric) {
-      double num;
-      if (TryParseDouble(fval, num)) {
-        entry.numeric_indices.GetOrCreate(fname).Add(num, doc_id);
-        if (fspec->sortable) {
+      auto& nidx = entry.numeric_indices.GetOrCreate(fname);
+      bool sort_set = false;
+      ForEachNumericValue(fval, [&](double num) {
+        nidx.Add(num, doc_id);
+        if (fspec->sortable && !sort_set) {
           entry.sort_indices.GetOrCreate(fname).SetNumeric(doc_id, num);
+          sort_set = true;
         }
-      }
+      });
     } else if (fspec->sortable && fspec->type != FieldType::kVector) {
       entry.sort_indices.GetOrCreate(fname).SetString(doc_id, fval);
     }

@@ -10,6 +10,7 @@ extern "C" {
 #include "index_spec.h"
 #include "query_parser.h"
 #include "search_commands.h"
+#include "search_internal.h"
 #include "search_rdb.h"
 
 #include <cmath>
@@ -789,4 +790,52 @@ TEST_F(SearchRdbTest, RdbByteByByteTruncationAndBitFlipFuzz) {
       delete s;
     }
   }
+}
+
+TEST_F(SearchRdbTest, MultiValueNumericIndexingAndRdbRoundTrip) {
+  IndexSpec spec;
+  spec.name = "mvnum";
+  FieldSpec f;
+  f.name = "prices";
+  f.type = FieldType::kNumeric;
+  f.sortable = true;
+  spec.fields = {f};
+
+  CreateIndexFromRdb("mvnum", spec, {
+      {"d1", {{"prices", "10,50,100"}}},
+      {"d2", {{"prices", "25"}}},
+  });
+
+  auto* entry = GetIndexEntry("mvnum");
+  ASSERT_NE(entry, nullptr);
+  auto* nidx = entry->numeric_indices.Get("prices");
+  ASSERT_NE(nidx, nullptr);
+  EXPECT_EQ(nidx->RangeQuery(9, false, 11, false), (std::vector<std::string>{"d1"}));
+  EXPECT_EQ(nidx->RangeQuery(49, false, 51, false), (std::vector<std::string>{"d1"}));
+  EXPECT_EQ(nidx->RangeQuery(99, false, 101, false), (std::vector<std::string>{"d1"}));
+  EXPECT_EQ(nidx->RangeQuery(0, false, 200, false), (std::vector<std::string>{"d1", "d2"}));
+
+  // RDB round-trip preserves all multi-value numeric entries
+  MockRdbStream stream;
+  SaveIndex(stream, "mvnum");
+  stream.Rewind();
+  EraseIndexEntry("mvnum");
+
+  auto* loaded_name = static_cast<std::string*>(RdbLoadSearch(stream.IO(), kSearchEncVer));
+  ASSERT_NE(loaded_name, nullptr);
+  auto* loaded = GetIndexEntry("mvnum");
+  ASSERT_NE(loaded, nullptr);
+  auto* nidx2 = loaded->numeric_indices.Get("prices");
+  ASSERT_NE(nidx2, nullptr);
+  EXPECT_EQ(nidx2->RangeQuery(99, false, 101, false), (std::vector<std::string>{"d1"}));
+
+  // Removing doc cleans up all multi-value numeric entries
+  RemoveDocFromIndices(*loaded, "d1");
+  loaded->doc_store.Remove("d1");
+  EXPECT_TRUE(nidx2->RangeQuery(9, false, 11, false).empty());
+  EXPECT_TRUE(nidx2->RangeQuery(49, false, 51, false).empty());
+  EXPECT_TRUE(nidx2->RangeQuery(99, false, 101, false).empty());
+  EXPECT_EQ(nidx2->RangeQuery(0, false, 200, false), (std::vector<std::string>{"d2"}));
+
+  delete loaded_name;
 }

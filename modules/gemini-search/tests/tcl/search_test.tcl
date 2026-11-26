@@ -4182,6 +4182,102 @@ test_assert "FT.SEARCH async non-KNN (BM25 WITHSCORES, SORTBY, HIGHLIGHT, SUMMAR
 }
 
 # ============================================================
+# Phases 59-61: BQ RDB encver 13, WAND Top-K, ON JSON Arrays
+# ============================================================
+puts "\n=== Phases 59-61: BQ RDB, WAND Top-K, ON JSON Arrays ==="
+
+test_assert "Phase 59: QUANTIZATION BQ + DICT + LANGUAGE_FIELD survive BGSAVE + restart" {
+  r FT.DICTADD p59dict "redis" "vector"
+  r FT.CREATE p59idx DICT p59dict LANGUAGE_FIELD lang SCHEMA title TEXT lang TAG vec VECTOR HNSW 8 TYPE FLOAT32 DIM 8 DISTANCE_METRIC COSINE QUANTIZATION BQ
+  set v1 [binary format f8 1.0 1.0 1.0 1.0 1.0 1.0 1.0 1.0]
+  set v2 [binary format f8 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0]
+  r FT.ADD p59idx d1 FIELDS title "redis vector" lang "english" vec $v1
+  r FT.ADD p59idx d2 FIELDS title "other doc" lang "english" vec $v2
+
+  set info0 [r FT.INFO p59idx]
+  if {[lsearch $info0 "custom_dict"] < 0} {
+    error "Expected custom_dict in FT.INFO, got $info0"
+  }
+
+  r BGSAVE
+  after 500
+  global redis_fd port module_path
+  catch {redis_command $redis_fd SHUTDOWN SAVE}
+  catch {close $redis_fd}
+  after 500
+
+  start_redis $module_path $port
+  set redis_fd [redis_connect localhost $port]
+
+  set info1 [r FT.INFO p59idx]
+  if {[lsearch $info1 "custom_dict"] < 0} {
+    error "custom_dict lost after RDB restart: $info1"
+  }
+  set knn [r FT.SEARCH p59idx "*=>\[KNN 1 @vec \$q\]" PARAMS 2 q $v1 NOCONTENT]
+  if {[lindex $knn 0] != 1 || [lindex $knn 1] ne "d1"} {
+    error "BQ KNN failed after RDB restart: $knn"
+  }
+  r FT.DROPINDEX p59idx
+}
+
+test_assert "Phase 60: WAND Top-K fast-path matches full BM25 ordering" {
+  r FT.CREATE p60wand SCHEMA body TEXT NOSTEM
+  r FT.ADD p60wand w1 FIELDS body "alpha"
+  r FT.ADD p60wand w2 FIELDS body "alpha beta"
+  r FT.ADD p60wand w3 FIELDS body "alpha beta gamma alpha"
+  r FT.ADD p60wand w4 FIELDS body "gamma"
+
+  set top2 [r FT.SEARCH p60wand "alpha | beta | gamma" WITHSCORES VERBATIM LIMIT 0 2 NOCONTENT]
+  if {[lindex $top2 0] != 2 || [lindex $top2 1] ne "w3"} {
+    error "Expected w3 ranked first by WAND Top-2, got $top2"
+  }
+  r FT.DROPINDEX p60wand
+}
+
+set json_so_p61 [file join [file dirname $module_path] "redis_json.so"]
+if {[file exists $json_so_p61]} {
+  test_assert "Phase 61: ON JSON multi-value array wildcards (TAG custom sep, TEXT, NUMERIC)" {
+    set jport [find_free_port]
+    catch {
+      exec redis-server \
+        --port $jport \
+        --daemonize yes \
+        --loglevel warning \
+        --logfile /tmp/search_json_p61.log \
+        --dbfilename "" \
+        --save "" \
+        --loadmodule $json_so_p61 \
+        --loadmodule $module_path
+    }
+    for {set i 0} {$i < 50} {incr i} {
+      if {![catch {socket localhost $jport} fd]} {
+        close $fd
+        break
+      }
+      after 100
+    }
+    set jfd [redis_connect localhost $jport]
+    redis_command $jfd FT.CREATE jarr ON JSON PREFIX 1 ja: SCHEMA \$.tags\[*\] AS tags TAG SEPARATOR | \$.items\[*\].title AS titles TEXT \$.prices\[*\] AS prices NUMERIC
+    redis_command $jfd JSON.SET ja:1 \$ {{"tags":["a,1","b"],"items":[{"title":"red fox"},{"title":"blue whale"}],"prices":[10,50,100]}}
+
+    set r_tag [redis_command $jfd FT.SEARCH jarr {@tags:{a,1}} NOCONTENT]
+    set r_txt [redis_command $jfd FT.SEARCH jarr {@titles:whale} NOCONTENT]
+    set r_num1 [redis_command $jfd FT.SEARCH jarr {@prices:[45 55]} NOCONTENT]
+    set r_num2 [redis_command $jfd FT.SEARCH jarr {@prices:[95 105]} NOCONTENT]
+
+    catch {redis_command $jfd SHUTDOWN NOSAVE}
+    catch {close $jfd}
+    file delete -force /tmp/search_json_p61.log
+
+    if {[lindex $r_tag 0] != 1} { error "TAG custom separator array failed: $r_tag" }
+    if {[lindex $r_txt 0] != 1} { error "TEXT array wildcard failed: $r_txt" }
+    if {[lindex $r_num1 0] != 1 || [lindex $r_num2 0] != 1} {
+      error "NUMERIC array wildcard failed: r1=$r_num1 r2=$r_num2"
+    }
+  }
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

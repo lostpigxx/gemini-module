@@ -56,56 +56,106 @@ void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry,
   }
 }
 
-static std::string StripJsonQuotes(const std::string& s) {
-  if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
-    return s.substr(1, s.size() - 2);
-  return s;
+static bool IsJsonWs(char c) {
+  return c == ' ' || c == '\t' || c == '\r' || c == '\n';
 }
 
-static std::string ExtractJsonScalar(const std::string& raw) {
-  std::string trimmed = raw;
-  while (!trimmed.empty() && (trimmed.front() == ' ' || trimmed.front() == '\t'))
-    trimmed.erase(trimmed.begin());
-  while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t'))
-    trimmed.pop_back();
-  if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']')
-    trimmed = trimmed.substr(1, trimmed.size() - 2);
-  while (!trimmed.empty() && (trimmed.front() == ' ' || trimmed.front() == '\t'))
-    trimmed.erase(trimmed.begin());
-  while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t'))
-    trimmed.pop_back();
-  return StripJsonQuotes(trimmed);
+static std::string TrimJsonWs(const std::string& s) {
+  size_t b = 0;
+  while (b < s.size() && IsJsonWs(s[b])) b++;
+  size_t e = s.size();
+  while (e > b && IsJsonWs(s[e - 1])) e--;
+  return s.substr(b, e - b);
+}
+
+static std::string ParseJsonStringToken(const std::string& s, size_t& i) {
+  std::string out;
+  if (i >= s.size() || s[i] != '"') return out;
+  i++;  // skip opening '"'
+  while (i < s.size()) {
+    char c = s[i++];
+    if (c == '\\' && i < s.size()) {
+      char esc = s[i++];
+      switch (esc) {
+        case '"': out.push_back('"'); break;
+        case '\\': out.push_back('\\'); break;
+        case '/': out.push_back('/'); break;
+        case 'n': out.push_back('\n'); break;
+        case 'r': out.push_back('\r'); break;
+        case 't': out.push_back('\t'); break;
+        default: out.push_back(esc); break;
+      }
+    } else if (c == '"') {
+      break;
+    } else {
+      out.push_back(c);
+    }
+  }
+  return out;
+}
+
+static void ExtractJsonValuesRec(const std::string& s, size_t& i,
+                                 std::vector<std::string>& out) {
+  while (i < s.size() && IsJsonWs(s[i])) i++;
+  if (i >= s.size()) return;
+
+  if (s[i] == '[') {
+    i++;  // skip '['
+    while (i < s.size()) {
+      while (i < s.size() && (IsJsonWs(s[i]) || s[i] == ',')) i++;
+      if (i >= s.size() || s[i] == ']') {
+        if (i < s.size()) i++;
+        break;
+      }
+      ExtractJsonValuesRec(s, i, out);
+    }
+    return;
+  }
+
+  if (s[i] == '"') {
+    out.push_back(ParseJsonStringToken(s, i));
+    return;
+  }
+
+  if (s[i] == '{') {
+    // Skip nested JSON object
+    int depth = 0;
+    bool in_str = false;
+    while (i < s.size()) {
+      char c = s[i++];
+      if (in_str) {
+        if (c == '\\' && i < s.size()) i++;
+        else if (c == '"') in_str = false;
+      } else if (c == '"') {
+        in_str = true;
+      } else if (c == '{') {
+        depth++;
+      } else if (c == '}') {
+        depth--;
+        if (depth == 0) break;
+      }
+    }
+    return;
+  }
+
+  size_t start = i;
+  while (i < s.size() && s[i] != ',' && s[i] != ']' && s[i] != '}') i++;
+  std::string val = TrimJsonWs(s.substr(start, i - start));
+  if (!val.empty() && val != "null") out.push_back(std::move(val));
 }
 
 static std::vector<std::string> ExtractJsonArray(const std::string& raw) {
-  std::string trimmed = raw;
-  while (!trimmed.empty() && (trimmed.front() == ' ' || trimmed.front() == '\t'))
-    trimmed.erase(trimmed.begin());
-  while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t'))
-    trimmed.pop_back();
-  if (trimmed.size() < 2 || trimmed.front() != '[' || trimmed.back() != ']')
-    return {StripJsonQuotes(trimmed)};
-
+  std::string trimmed = TrimJsonWs(raw);
   std::vector<std::string> results;
-  size_t i = 1;
-  while (i < trimmed.size() - 1) {
-    while (i < trimmed.size() - 1 && (trimmed[i] == ' ' || trimmed[i] == ',')) i++;
-    if (i >= trimmed.size() - 1) break;
-    if (trimmed[i] == '"') {
-      i++;
-      size_t start = i;
-      while (i < trimmed.size() - 1 && trimmed[i] != '"') i++;
-      results.push_back(trimmed.substr(start, i - start));
-      if (i < trimmed.size() - 1) i++;
-    } else {
-      size_t start = i;
-      while (i < trimmed.size() - 1 && trimmed[i] != ',' && trimmed[i] != ']') i++;
-      std::string val = trimmed.substr(start, i - start);
-      while (!val.empty() && val.back() == ' ') val.pop_back();
-      if (val != "null") results.push_back(std::move(val));
-    }
-  }
+  if (trimmed.empty()) return results;
+  size_t i = 0;
+  ExtractJsonValuesRec(trimmed, i, results);
   return results;
+}
+
+static std::string ExtractJsonScalar(const std::string& raw) {
+  auto vals = ExtractJsonArray(raw);
+  return vals.empty() ? std::string() : vals.front();
 }
 
 void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry,
@@ -140,8 +190,30 @@ void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry,
 
     if (fspec.type == FieldType::kTag) {
       auto vals = ExtractJsonArray(raw);
+      std::string sep(1, fspec.tag_separator);
       for (auto& v : vals) {
         if (!v.empty()) {
+          if (doc_fields.find(fspec.name) == doc_fields.end())
+            doc_fields[fspec.name] = v;
+          else
+            doc_fields[fspec.name] += sep + v;
+        }
+      }
+    } else if (fspec.type == FieldType::kText) {
+      auto vals = ExtractJsonArray(raw);
+      for (auto& v : vals) {
+        if (!v.empty()) {
+          if (doc_fields.find(fspec.name) == doc_fields.end())
+            doc_fields[fspec.name] = v;
+          else
+            doc_fields[fspec.name] += " " + v;
+        }
+      }
+    } else if (fspec.type == FieldType::kNumeric) {
+      auto vals = ExtractJsonArray(raw);
+      for (auto& v : vals) {
+        double num = 0;
+        if (TryParseDouble(v, num)) {
           if (doc_fields.find(fspec.name) == doc_fields.end())
             doc_fields[fspec.name] = v;
           else
