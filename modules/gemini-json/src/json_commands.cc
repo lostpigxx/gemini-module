@@ -208,11 +208,51 @@ static void PruneAndSortMatchesForMutation(std::vector<PathMatch>& matches) {
   });
 }
 
+static size_t CalcDepth(const JsonValue* v, int depth = 0) {
+  if (!v || depth > kMaxJsonDepth) return 0;
+  size_t max_child = 0;
+  if (v->IsArray()) {
+    for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+      max_child = std::max(max_child, CalcDepth(v->ArrayGet(i), depth + 1));
+    }
+    return 1 + max_child;
+  }
+  if (v->IsObject()) {
+    auto* entries = v->ObjectEntries();
+    for (uint32_t i = 0; i < v->ObjectLen(); i++) {
+      max_child = std::max(max_child, CalcDepth(entries[i].value, depth + 1));
+    }
+    return 1 + max_child;
+  }
+  return 0;
+}
+
+// RFC 7396: when applying a merge patch onto a non-existent target, any
+// null-valued object members in the patch must be stripped recursively.
+static void StripNullKeys(JsonValue* v, int depth = 0) {
+  if (!v || depth > kMaxJsonDepth || !v->IsObject()) return;
+  auto* entries = v->ObjectEntries();
+  std::vector<std::string> to_delete;
+  for (uint32_t i = 0; i < v->ObjectLen(); i++) {
+    if (entries[i].value->IsNull()) {
+      to_delete.emplace_back(entries[i].KeyView());
+    } else if (entries[i].value->IsObject()) {
+      StripNullKeys(entries[i].value, depth + 1);
+    }
+  }
+  for (const auto& k : to_delete) {
+    v->ObjectDelete(k);
+  }
+}
+
 // Single-pass helper: try to insert new_val into an object parent at the
 // leaf key of the given path. Walks the path minus the last segment to find
 // candidate parent objects, then inserts the key directly.
 // Returns true if at least one insertion happened.
-static bool TryCreateAtLeafKey(const JsonPath& path, JsonValue* root, JsonValue* new_val) {
+// Sets *depth_exceeded = true if insertion would exceed kMaxJsonDepth.
+static bool TryCreateAtLeafKey(const JsonPath& path, JsonValue* root,
+                               JsonValue* new_val, bool* depth_exceeded = nullptr) {
+  if (depth_exceeded) *depth_exceeded = false;
   auto& segs = path.segments;
   if (segs.size() < 2) return false;
 
@@ -223,8 +263,18 @@ static bool TryCreateAtLeafKey(const JsonPath& path, JsonValue* root, JsonValue*
   JsonPath ancestor_path;
   ancestor_path.segments.assign(segs.begin(), segs.end() - 1);
   ancestor_path.is_legacy = path.is_legacy;
+  ancestor_path.is_simple = path.is_simple;
+  ancestor_path.has_multi_recursive = path.has_multi_recursive;
 
   auto candidates = EvaluatePath(ancestor_path, root);
+  int val_depth = static_cast<int>(CalcDepth(new_val));
+  for (const auto& c : candidates) {
+    if (c.value && c.value->IsObject() && c.depth + 1 + val_depth > kMaxJsonDepth) {
+      if (depth_exceeded) *depth_exceeded = true;
+      return false;
+    }
+  }
+
   bool inserted = false;
   for (auto& c : candidates) {
     if (c.value && c.value->IsObject()) {
@@ -308,6 +358,13 @@ static int CmdSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
     if (!matches.empty()) {
       PruneAndSortMatchesForMutation(matches);
+      int val_depth = static_cast<int>(CalcDepth(new_val));
+      for (const auto& m : matches) {
+        if (m.depth + val_depth > kMaxJsonDepth) {
+          JsonValue::Destroy(new_val);
+          return RedisModule_ReplyWithError(ctx, "ERR maximum nesting depth exceeded");
+        }
+      }
       for (size_t i = 0; i < matches.size(); i++) {
         auto* val_to_set = (i == matches.size() - 1) ? new_val : new_val->Clone();
         if (!matches[i].parent) {
@@ -317,8 +374,12 @@ static int CmdSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
         }
       }
     } else {
-      if (!TryCreateAtLeafKey(path, existing, new_val)) {
+      bool depth_exceeded = false;
+      if (!TryCreateAtLeafKey(path, existing, new_val, &depth_exceeded)) {
         JsonValue::Destroy(new_val);
+        if (depth_exceeded) {
+          return RedisModule_ReplyWithError(ctx, "ERR maximum nesting depth exceeded");
+        }
         return RedisModule_ReplyWithNull(ctx);
       }
     }
@@ -528,17 +589,32 @@ static int CmdArrAppend(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
   }
 
   auto matches = EvaluatePath(path, root);
+  int max_val_depth = 0;
+  for (auto* v : values) {
+    max_val_depth = std::max(max_val_depth, static_cast<int>(CalcDepth(v)));
+  }
 
   if (path.is_legacy) {
     if (matches.empty() || !matches[0].value->IsArray()) {
       for (auto* v : values) JsonValue::Destroy(v);
       return RedisModule_ReplyWithError(ctx, "ERR path does not exist or is not an array");
     }
+    if (matches[0].depth + 1 + max_val_depth > kMaxJsonDepth) {
+      for (auto* v : values) JsonValue::Destroy(v);
+      return RedisModule_ReplyWithError(ctx, "ERR maximum nesting depth exceeded");
+    }
     auto* arr = matches[0].value;
     for (auto* v : values) arr->ArrayAppend(v);
     NotifyJsonEvent(ctx, "json.arrappend", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
+  }
+
+  for (const auto& m : matches) {
+    if (m.value->IsArray() && m.depth + 1 + max_val_depth > kMaxJsonDepth) {
+      for (auto* v : values) JsonValue::Destroy(v);
+      return RedisModule_ReplyWithError(ctx, "ERR maximum nesting depth exceeded");
+    }
   }
 
   // Find last matching array index so we can move `values` directly without Clone
@@ -808,18 +884,31 @@ static int CmdArrPop(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     return REDISMODULE_OK;
   }
 
-  RedisModule_ReplyWithArray(ctx, matches.size());
+  // Process deepest arrays first to avoid UAF if an outer array pops an inner matched array.
+  std::vector<size_t> order(matches.size());
+  for (size_t i = 0; i < matches.size(); i++) order[i] = i;
+  std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+    return matches[a].depth > matches[b].depth;
+  });
+
+  std::vector<std::string> replies(matches.size());
+  std::vector<bool> has_reply(matches.size(), false);
   bool changed = false;
-  for (auto& m : matches) {
-    if (!m.value->IsArray() || m.value->ArrayLen() == 0) {
-      RedisModule_ReplyWithNull(ctx);
-      continue;
-    }
+  for (size_t idx : order) {
+    auto& m = matches[idx];
+    if (!m.value->IsArray() || m.value->ArrayLen() == 0) continue;
     auto* popped = PopResolved(m.value);
-    if (!popped) { RedisModule_ReplyWithNull(ctx); continue; }
-    ReplyWithJsonValue(ctx, popped);
+    if (!popped) continue;
+    replies[idx] = JsonSerialize(popped);
+    has_reply[idx] = true;
     JsonValue::Destroy(popped);
     changed = true;
+  }
+
+  RedisModule_ReplyWithArray(ctx, matches.size());
+  for (size_t i = 0; i < matches.size(); i++) {
+    if (!has_reply[i]) RedisModule_ReplyWithNull(ctx);
+    else RedisModule_ReplyWithStringBuffer(ctx, replies[i].data(), replies[i].size());
   }
   if (changed) {
     NotifyJsonEvent(ctx, "json.arrpop", argv[1]);
@@ -873,14 +962,27 @@ static int CmdArrTrim(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     return RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
   }
 
-  RedisModule_ReplyWithArray(ctx, matches.size());
+  // Process deepest arrays first to avoid UAF if an outer trim destroys inner matched arrays.
+  std::vector<size_t> order(matches.size());
+  for (size_t i = 0; i < matches.size(); i++) order[i] = i;
+  std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+    return matches[a].depth > matches[b].depth;
+  });
+
+  std::vector<long long> new_lens(matches.size(), -1);
   bool changed = false;
-  for (auto& m : matches) {
-    if (!m.value->IsArray()) { RedisModule_ReplyWithNull(ctx); continue; }
-    auto* arr = m.value;
-    TrimResolved(arr);
-    RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
+  for (size_t idx : order) {
+    auto& m = matches[idx];
+    if (!m.value->IsArray()) continue;
+    TrimResolved(m.value);
+    new_lens[idx] = static_cast<long long>(m.value->ArrayLen());
     changed = true;
+  }
+
+  RedisModule_ReplyWithArray(ctx, matches.size());
+  for (size_t i = 0; i < matches.size(); i++) {
+    if (new_lens[i] < 0) RedisModule_ReplyWithNull(ctx);
+    else RedisModule_ReplyWithLongLong(ctx, new_lens[i]);
   }
   if (changed) {
     NotifyJsonEvent(ctx, "json.arrtrim", argv[1]);
@@ -1270,6 +1372,7 @@ static int CmdClear(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   }
 
   auto matches = EvaluatePath(path, root);
+  PruneAndSortMatchesForMutation(matches);
   int cleared = 0;
   for (auto& m : matches) {
     auto* v = m.value;
@@ -1319,15 +1422,23 @@ static int CmdToggle(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     return RedisModule_ReplyWithSimpleString(ctx, !old_val ? "true" : "false");
   }
 
+  // Pre-snapshot booleans before mutating to prevent UAF on duplicate union matches (e.g. $['a','a']).
+  std::vector<int8_t> target_vals(matches.size(), -1);  // -1 = non-bool, 0 = false, 1 = true
+  for (size_t i = 0; i < matches.size(); i++) {
+    if (matches[i].value->IsBool()) {
+      target_vals[i] = matches[i].value->GetBool() ? 0 : 1;
+    }
+  }
+
   RedisModule_ReplyWithArray(ctx, matches.size());
   bool changed = false;
-  for (auto& m : matches) {
-    if (!m.value->IsBool()) { RedisModule_ReplyWithNull(ctx); continue; }
-    bool old_val = m.value->GetBool();
-    auto* new_val = JsonValue::CreateBool(!old_val);
-    if (m.parent) SetAtMatch(m, new_val);
+  for (size_t i = 0; i < matches.size(); i++) {
+    if (target_vals[i] < 0) { RedisModule_ReplyWithNull(ctx); continue; }
+    bool toggled = (target_vals[i] == 1);
+    auto* new_val = JsonValue::CreateBool(toggled);
+    if (matches[i].parent) SetAtMatch(matches[i], new_val);
     else RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_val);
-    RedisModule_ReplyWithLongLong(ctx, !old_val ? 1 : 0);
+    RedisModule_ReplyWithLongLong(ctx, toggled ? 1 : 0);
     changed = true;
   }
   if (changed) {
@@ -1538,6 +1649,7 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   if (key_type == REDISMODULE_KEYTYPE_EMPTY) {
     if (IsRootOnlyPath(path)) {
+      StripNullKeys(patch);
       RedisModule_ModuleTypeSetValue(key, JsonModuleType, patch);
       NotifyJsonEvent(ctx, "json.merge", argv[1]);
       RedisModule_ReplicateVerbatim(ctx);
@@ -1564,16 +1676,28 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       JsonValue::Destroy(patch);
       return RedisModule_ReplyWithSimpleString(ctx, "OK");
     }
-    if (TryCreateAtLeafKey(path, root, patch)) {
+    StripNullKeys(patch);
+    bool depth_exceeded = false;
+    if (TryCreateAtLeafKey(path, root, patch, &depth_exceeded)) {
       NotifyJsonEvent(ctx, "json.merge", argv[1]);
       RedisModule_ReplicateVerbatim(ctx);
       return RedisModule_ReplyWithSimpleString(ctx, "OK");
     }
     JsonValue::Destroy(patch);
+    if (depth_exceeded) {
+      return RedisModule_ReplyWithError(ctx, "ERR maximum nesting depth exceeded");
+    }
     return RedisModule_ReplyWithError(ctx, "ERR path does not exist");
   }
 
   PruneAndSortMatchesForMutation(matches);
+  int patch_depth = static_cast<int>(CalcDepth(patch));
+  for (const auto& m : matches) {
+    if (m.depth + patch_depth > kMaxJsonDepth) {
+      JsonValue::Destroy(patch);
+      return RedisModule_ReplyWithError(ctx, "ERR maximum nesting depth exceeded");
+    }
+  }
   for (auto& m : matches) {
     MergePatch(m.value, patch, m.parent, m, key);
   }
@@ -1585,25 +1709,6 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 }
 
 // --- JSON.DEBUG ---
-static size_t CalcDepth(const JsonValue* v, int depth = 0) {
-  if (!v || depth > kMaxJsonDepth) return 0;
-  size_t max_child = 0;
-  if (v->IsArray()) {
-    for (uint32_t i = 0; i < v->ArrayLen(); i++) {
-      max_child = std::max(max_child, CalcDepth(v->ArrayGet(i), depth + 1));
-    }
-    return 1 + max_child;
-  }
-  if (v->IsObject()) {
-    auto* entries = v->ObjectEntries();
-    for (uint32_t i = 0; i < v->ObjectLen(); i++) {
-      max_child = std::max(max_child, CalcDepth(entries[i].value, depth + 1));
-    }
-    return 1 + max_child;
-  }
-  return 0;
-}
-
 static size_t CalcFields(const JsonValue* v, int depth = 0) {
   if (!v || depth > kMaxJsonDepth) return 0;
   if (v->IsArray()) {
@@ -1679,7 +1784,11 @@ static int CmdDebug(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 }
 
 // --- JSON.RESP ---
-static void ReplyResp(RedisModuleCtx* ctx, const JsonValue* v) {
+static void ReplyResp(RedisModuleCtx* ctx, const JsonValue* v, int depth = 0) {
+  if (!v || depth > kMaxJsonDepth) {
+    RedisModule_ReplyWithNull(ctx);
+    return;
+  }
   switch (v->Type()) {
     case JsonType::kNull:
       RedisModule_ReplyWithNull(ctx);
@@ -1704,7 +1813,7 @@ static void ReplyResp(RedisModuleCtx* ctx, const JsonValue* v) {
       RedisModule_ReplyWithArray(ctx, v->ArrayLen() + 1);
       RedisModule_ReplyWithSimpleString(ctx, "[");
       for (uint32_t i = 0; i < v->ArrayLen(); i++) {
-        ReplyResp(ctx, v->ArrayGet(i));
+        ReplyResp(ctx, v->ArrayGet(i), depth + 1);
       }
       break;
     }
@@ -1714,7 +1823,7 @@ static void ReplyResp(RedisModuleCtx* ctx, const JsonValue* v) {
       RedisModule_ReplyWithSimpleString(ctx, "{");
       for (uint32_t i = 0; i < v->ObjectLen(); i++) {
         RedisModule_ReplyWithStringBuffer(ctx, entries[i].KeyData(), entries[i].KeyLen());
-        ReplyResp(ctx, entries[i].value);
+        ReplyResp(ctx, entries[i].value, depth + 1);
       }
       break;
     }

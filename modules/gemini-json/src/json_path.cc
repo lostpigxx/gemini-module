@@ -494,9 +494,11 @@ static bool ParseRegexPattern(PathParser& p, std::string& pattern, bool& icase,
 
   if (p.Peek() == '/') {
     p.Advance();
+    bool closed = false;
     while (p.HasMore()) {
       char c = p.Advance();
       if (c == '/') {
+        closed = true;
         while (p.HasMore() && (p.Peek() == 'i' || p.Peek() == 'm' || p.Peek() == 's')) {
           if (p.Advance() == 'i') icase = true;
         }
@@ -509,6 +511,10 @@ static bool ParseRegexPattern(PathParser& p, std::string& pattern, bool& icase,
       } else {
         pattern.push_back(c);
       }
+    }
+    if (!closed) {
+      p.error = "unterminated regex literal";
+      return false;
     }
   } else if (p.Peek() == '\'' || p.Peek() == '"') {
     if (!ParseQuotedKey(p, pattern)) {
@@ -698,26 +704,12 @@ static int32_t ParseFilterOr(PathParser& p, std::vector<FilterNode>& nodes, int 
 
 static bool ParseFilterExpression(PathParser& p, FilterCondition& cond) {
   p.SkipSpaces();
-  bool has_outer_paren = false;
-  if (p.HasMore() && p.Peek() == '(') {
-    has_outer_paren = true;
-    p.Advance();
-  }
 
   cond.nodes.clear();
   int32_t root = ParseFilterOr(p, cond.nodes, 0);
   if (root < 0) return false;
 
   p.SkipSpaces();
-  if (has_outer_paren) {
-    if (!p.HasMore() || p.Peek() != ')') {
-      p.error = "expected ')' to close filter";
-      return false;
-    }
-    p.Advance();
-    p.SkipSpaces();
-  }
-
   cond.root = root;
 
   // Populate legacy summary fields for single-node filters (backward compat)
@@ -1282,7 +1274,7 @@ static void Evaluate(EvalState& st, size_t seg_idx,
   if (seg_idx >= st.path.segments.size()) {
     st.results.push_back({current, parent, arr_idx,
                           has_obj_key ? std::string(obj_key) : std::string(),
-                          has_obj_key});
+                          has_obj_key, depth});
     return;
   }
 
@@ -1551,11 +1543,13 @@ std::vector<PathMatch> EvaluatePath(const JsonPath& path, JsonValue* root) {
     std::string_view obj_key;
     bool has_obj_key = false;
 
+    int depth = 0;
     for (const auto& seg : path.segments) {
       if (seg.type == PathSegType::kRoot) {
         parent = nullptr;
         arr_idx = -1;
         has_obj_key = false;
+        depth = 0;
       } else if (seg.type == PathSegType::kKey) {
         if (!cur->IsObject()) return results;
         JsonValue* child = cur->ObjectGet(seg.key);
@@ -1565,6 +1559,7 @@ std::vector<PathMatch> EvaluatePath(const JsonPath& path, JsonValue* root) {
         arr_idx = -1;
         obj_key = seg.key;
         has_obj_key = true;
+        depth++;
       } else if (seg.type == PathSegType::kIndex) {
         if (!cur->IsArray()) return results;
         int64_t r = ResolveIndex64(seg.index, cur->ArrayLen());
@@ -1573,11 +1568,12 @@ std::vector<PathMatch> EvaluatePath(const JsonPath& path, JsonValue* root) {
         cur = cur->ArrayGet(static_cast<uint32_t>(r));
         arr_idx = static_cast<int32_t>(r);
         has_obj_key = false;
+        depth++;
       }
     }
     results.push_back({cur, parent, arr_idx,
                        has_obj_key ? std::string(obj_key) : std::string(),
-                       has_obj_key});
+                       has_obj_key, depth});
     return results;
   }
 

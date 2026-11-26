@@ -487,3 +487,25 @@ TEST(JsonValueTest, SmallKeyOptimizationBoundaries) {
   EXPECT_EQ(obj->ObjectLen(), 6u);
   JsonValue::Destroy(obj);
 }
+
+TEST(JsonValueTest, EmbeddedNullBytesInStringsAndKeys) {
+  std::string key_with_nul("k\0a", 3);
+  std::string val_with_nul("v\0b", 3);
+  auto* obj = JsonValue::CreateObject();
+  ASSERT_TRUE(obj->ObjectSet(key_with_nul.data(), static_cast<uint32_t>(key_with_nul.size()),
+                             JsonValue::CreateString(val_with_nul.data(),
+                                                     static_cast<uint32_t>(val_with_nul.size()))));
+  auto* got = obj->ObjectGet(key_with_nul);
+  ASSERT_NE(got, nullptr);
+  EXPECT_EQ(got->GetString(), val_with_nul);
+  EXPECT_EQ(obj->ObjectGet(std::string_view("k", 1)), nullptr);
+
+  auto* clone = obj->Clone();
+  ASSERT_NE(clone, nullptr);
+  EXPECT_TRUE(obj->DeepEqual(clone));
+  EXPECT_TRUE(clone->ObjectDelete(key_with_nul));
+  EXPECT_EQ(clone->ObjectLen(), 0u);
+
+  JsonValue::Destroy(clone);
+  JsonValue::Destroy(obj);
+}

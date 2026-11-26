@@ -745,3 +745,52 @@ TEST(PathEvalTest, Rfc9535FilterFunctionsLengthCountMatchSearch) {
 
   JsonValue::Destroy(doc);
 }
+
+TEST(PathEvalTest, FilterGroupedOrBareAndUnterminatedRegex) {
+  auto* doc = Parse(R"([{"a":1,"b":0},{"a":0,"b":2},{"a":0,"b":0}])");
+  ASSERT_NE(doc, nullptr);
+
+  // Grouped OR without outer parens (RFC 9535)
+  auto r1 = ParsePath("$[?(@.a == 1) || (@.b == 2)]");
+  ASSERT_EQ(r1.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r1.path, doc).size(), 2u);
+
+  // Bare filter without outer parens
+  auto r2 = ParsePath("$[?@.a == 1]");
+  ASSERT_EQ(r2.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r2.path, doc).size(), 1u);
+
+  // Double negation and missing field comparison
+  auto r3 = ParsePath("$[?(!!(@.a == 1))]");
+  ASSERT_EQ(r3.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r3.path, doc).size(), 1u);
+
+  auto r4 = ParsePath("$[?(@.missing != 1)]");
+  ASSERT_EQ(r4.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r4.path, doc).size(), 0u);
+
+  // Unterminated regex literal must be rejected
+  auto rbad = ParsePath("$[?(@.a =~ /unterminated)]");
+  EXPECT_NE(rbad.error, nullptr);
+
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, MatchDepthTrackingSimpleAndRecursive) {
+  auto* doc = Parse(R"({"a":{"b":[{"c":42}]}})");
+  ASSERT_NE(doc, nullptr);
+
+  auto rs = ParsePath("$.a.b[0].c");
+  ASSERT_EQ(rs.error, nullptr);
+  auto ms = EvaluatePath(rs.path, doc);
+  ASSERT_EQ(ms.size(), 1u);
+  EXPECT_EQ(ms[0].depth, 4);
+
+  auto rr = ParsePath("$..c");
+  ASSERT_EQ(rr.error, nullptr);
+  auto mr = EvaluatePath(rr.path, doc);
+  ASSERT_EQ(mr.size(), 1u);
+  EXPECT_EQ(mr[0].depth, 4);
+
+  JsonValue::Destroy(doc);
+}

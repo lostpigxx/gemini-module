@@ -695,3 +695,32 @@ TEST(JsonRdbBinary, VeryLargeArrayAndObjectReserveRoundTrip) {
   JsonValue::Destroy(obj);
   JsonValue::Destroy(loaded_obj);
 }
+
+TEST(JsonRdbBinary, EmbeddedNullAndHeapKeysDefragRoundTrip) {
+  auto* obj = JsonValue::CreateObject();
+  std::string nul_key("a\0b", 3);
+  std::string nul_val("x\0y", 3);
+  std::string long_key("this_is_a_heap_allocated_object_key_longer_than_15_bytes");
+  obj->ObjectSet(nul_key.data(), static_cast<uint32_t>(nul_key.size()),
+                 JsonValue::CreateString(nul_val.data(), static_cast<uint32_t>(nul_val.size())));
+  obj->ObjectSet(long_key.data(), static_cast<uint32_t>(long_key.size()),
+                 JsonValue::CreateInteger(12345));
+
+  auto* loaded_bin = BinaryRoundTrip(obj);
+  ASSERT_NE(loaded_bin, nullptr);
+  EXPECT_TRUE(obj->DeepEqual(loaded_bin));
+
+  auto* loaded_txt = TextRoundTrip(obj);
+  ASSERT_NE(loaded_txt, nullptr);
+  EXPECT_TRUE(obj->DeepEqual(loaded_txt));
+
+  // Defrag relocated mixed inline + heap keys cleanly
+  void* ptr = loaded_bin;
+  EXPECT_EQ(DefragJson(nullptr, nullptr, &ptr), 0);
+  loaded_bin = static_cast<JsonValue*>(ptr);
+  EXPECT_TRUE(obj->DeepEqual(loaded_bin));
+
+  JsonValue::Destroy(obj);
+  JsonValue::Destroy(loaded_bin);
+  JsonValue::Destroy(loaded_txt);
+}

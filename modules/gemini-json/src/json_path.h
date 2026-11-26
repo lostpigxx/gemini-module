@@ -132,6 +132,7 @@ struct PathMatch {
   int32_t array_index = -1;
   std::string object_key;
   bool has_object_key = false;
+  int depth = 0;
 };
 
 struct PathParseResult {

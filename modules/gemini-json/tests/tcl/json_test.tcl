@@ -1027,6 +1027,84 @@ test "JSONPath match() vs search()" {
   list $m $s
 } {{["redis"]} {["hello redis","redis"]}}
 
+puts "\n=== Code Review Hardening & Extended Edge Cases ==="
+
+test_assert "JSON.CLEAR overlapping recursive path does not crash" {
+  r JSON.SET clr_ov $ {{"a":[1,2,{"b":[3,4]}],"c":{"d":5}}}
+  set n [r JSON.CLEAR clr_ov {$..*}]
+  if {$n < 2} { error "Expected >= 2 cleared, got $n" }
+  set res [r JSON.GET clr_ov $]
+  if {$res ne {[{"a":[],"c":{}}]}} { error "Unexpected after clear: $res" }
+  r DEL clr_ov
+}
+
+test_assert "JSON.ARRTRIM and JSON.ARRPOP on nested arrays recursive path" {
+  r JSON.SET nest_arr $ {[[1,2,3],[4,5,6]]}
+  r JSON.ARRPOP nest_arr {$..*}
+  set after_pop [r JSON.GET nest_arr $]
+  if {$after_pop ne {[[[1,2],[4,5]]]}} { error "Unexpected after recursive pop: $after_pop" }
+  r JSON.SET nest_arr $ {[[1,2,3],[4,5,6]]}
+  r JSON.ARRTRIM nest_arr {$..*} 1 0
+  set after_trim [r JSON.GET nest_arr $]
+  if {$after_trim ne {[[[],[]]]}} { error "Unexpected after recursive trim: $after_trim" }
+  r DEL nest_arr
+}
+
+test_assert "JSON.TOGGLE on duplicate union path does not crash" {
+  r JSON.SET dup_tog $ {{"flag":true}}
+  set res [r JSON.TOGGLE dup_tog {$['flag','flag']}]
+  if {$res ne {0 0}} { error "Expected {0 0}, got $res" }
+  r DEL dup_tog
+}
+
+test_assert "JSON.MERGE strips null keys on new root and new leaf (RFC 7396)" {
+  r DEL rfc_root
+  r JSON.MERGE rfc_root $ {{"a":1,"b":null,"nested":{"x":2,"y":null}}}
+  set r1 [r JSON.GET rfc_root $]
+  if {$r1 ne {[{"a":1,"nested":{"x":2}}]}} { error "Null not stripped on new root: $r1" }
+  r JSON.MERGE rfc_root $.new_leaf {{"k":10,"drop":null}}
+  set r2 [r JSON.GET rfc_root $.new_leaf]
+  if {$r2 ne {[{"k":10}]}} { error "Null not stripped on new leaf: $r2" }
+  r DEL rfc_root
+}
+
+test_error "JSON.SET rejects combined depth > 128" {
+  set open_obj "{\"a\":"
+  set base "[string repeat $open_obj 80]1[string repeat \} 80]"
+  set graft "[string repeat {[} 60]1[string repeat {]} 60]"
+  r JSON.SET depth_guard $ $base
+  set p "\$[string repeat {.a} 80]"
+  r JSON.SET depth_guard $p $graft
+} {ERR*depth*}
+
+test "JSONPath grouped OR without outer parens and bare filter" {
+  r JSON.SET grp_flt $ {[{"a":1,"b":0},{"a":0,"b":2},{"a":0,"b":0}]}
+  set r1 [r JSON.GET grp_flt {$[?(@.a == 1) || (@.b == 2)]}]
+  set r2 [r JSON.GET grp_flt {$[?@.a == 1]}]
+  r DEL grp_flt
+  list $r1 $r2
+} {{[{"a":1,"b":0},{"a":0,"b":2}]} {[{"a":1,"b":0}]}}
+
+test_assert "JSON.MGET mixed existing, missing, and wrong-type keys" {
+  r JSON.SET mg_ok $ {{"v":42}}
+  r SET mg_str "plain"
+  r DEL mg_missing
+  set res [r JSON.MGET mg_ok mg_missing mg_str $.v]
+  r DEL mg_ok mg_str
+  if {$res ne [list {[42]} (nil) (nil)]} { error "Unexpected MGET mixed: $res" }
+}
+
+test_assert "JSON.ARRINSERT negative index and multiple values in JSONPath mode" {
+  r JSON.SET ains $ {{"a":[1,4],"b":[10,40]}}
+  set res [r JSON.ARRINSERT ains {$.*} -1 2 3]
+  set ga [r JSON.GET ains .a]
+  set gb [r JSON.GET ains .b]
+  r DEL ains
+  if {$res ne {4 4} || $ga ne {[1,2,3,4]} || $gb ne {[10,2,3,40]}} {
+    error "Unexpected ARRINSERT: res=$res a=$ga b=$gb"
+  }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

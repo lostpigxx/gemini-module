@@ -519,3 +519,41 @@ TEST(JsonSimdTest, ExhaustiveLaneOffsetsParseAndSerialize) {
     JsonValue::Destroy(ru.value);
   }
 }
+
+TEST(JsonParseTest, NumberSyntaxEdgeCases) {
+  // Valid edge numbers
+  for (const char* good : {"-0", "-0.0", "0e0", "1E+0", "1e-308", "1.7976931348623157e+308"}) {
+    auto r = JsonParse(good);
+    ASSERT_NE(r.value, nullptr) << "Should accept: " << good;
+    JsonValue::Destroy(r.value);
+  }
+  // Invalid numbers per RFC 8259
+  for (const char* bad : {"+1", ".5", "1.", "1e", "1e+", "-", "--1", "00", "-01", "NaN", "Infinity", "-Infinity"}) {
+    auto r = JsonParse(bad);
+    EXPECT_EQ(r.value, nullptr) << "Should reject: " << bad;
+  }
+}
+
+TEST(JsonParseTest, UnicodeAndSurrogateEdgeCases) {
+  // Embedded NUL via \u0000 round-trips cleanly
+  auto rnul = JsonParse(R"("a\u0000b")");
+  ASSERT_NE(rnul.value, nullptr);
+  EXPECT_EQ(rnul.value->GetString().size(), 3u);
+  EXPECT_EQ(rnul.value->GetString()[1], '\0');
+  EXPECT_EQ(JsonSerialize(rnul.value), R"("a\u0000b")");
+  JsonValue::Destroy(rnul.value);
+
+  // Invalid surrogate / hex escapes rejected
+  const char* bad_esc[] = {
+    R"("\uD800")",
+    R"("\uDC00")",
+    R"("\uD800\u0041")",
+    R"("\u123G")",
+    R"("\u12")",
+    R"("\x41")",
+  };
+  for (const char* s : bad_esc) {
+    auto r = JsonParse(s);
+    EXPECT_EQ(r.value, nullptr) << "Should reject: " << s;
+  }
+}
