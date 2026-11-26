@@ -393,11 +393,18 @@ int FtConfigCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (MatchArg(val, "FAIL")) val = "FAIL";
       else if (MatchArg(val, "RETURN")) val = "RETURN";
       else return RedisModule_ReplyWithError(ctx, "ERR ON_TIMEOUT must be FAIL or RETURN");
-    } else if (param == "MAXSEARCHRESULTS" || param == "ASYNC_MIN_DOCS") {
+    } else if (param == "MAXSEARCHRESULTS" || param == "ASYNC_MIN_DOCS" ||
+               param == "BG_INDEX_MIN_KEYS" || param == "BG_INDEX_TICK_MS") {
       char* ep = nullptr;
       long long v = std::strtoll(val.c_str(), &ep, 10);
       if (*ep != '\0' || v < 0) {
         return RedisModule_ReplyWithError(ctx, "ERR parameter must be a non-negative integer");
+      }
+    } else if (param == "BG_INDEX_BATCH_KEYS") {
+      char* ep = nullptr;
+      long long v = std::strtoll(val.c_str(), &ep, 10);
+      if (*ep != '\0' || v <= 0) {
+        return RedisModule_ReplyWithError(ctx, "ERR BG_INDEX_BATCH_KEYS must be a positive integer");
       }
     }
     it->second = std::move(val);

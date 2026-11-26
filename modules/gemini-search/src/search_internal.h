@@ -35,6 +35,10 @@ size_t GetMaxExpansions();
 size_t GetMinStemLen();
 size_t GetMaxSearchResults();
 size_t GetAsyncMinDocs();
+size_t GetBgIndexMinKeys();
+size_t GetBgIndexBatchKeys();
+uint64_t GetBgIndexTickMs();
+uint64_t NextIndexGeneration();
 bool IsOnTimeoutReturn();
 uint64_t GetTotalCursorsCreated();
 uint64_t GetTotalCursorsExpired();
@@ -53,6 +57,9 @@ bool PassesIndexFilter(const IndexSpec& spec,
 
 // Keyspace & server event helpers (defined in search_keyspace.cc)
 void ScanExistingKeys(RedisModuleCtx* ctx, IndexEntry& entry);
+void StartOrRunInitialScan(RedisModuleCtx* ctx, IndexEntry& entry);
+void StopBackgroundIndexing(RedisModuleCtx* ctx, const std::string& index_name);
+void StopAllBackgroundIndexing(RedisModuleCtx* ctx);
 void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry, const std::string& key_name);
 void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry, const std::string& key_name);
 int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event, RedisModuleString* key);

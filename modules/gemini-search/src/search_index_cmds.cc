@@ -445,7 +445,7 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   if (it->second.spec.HasPrefixes() && !it->second.spec.skip_initial_scan) {
-    ScanExistingKeys(ctx, it->second);
+    StartOrRunInitialScan(ctx, it->second);
   }
 
   RedisModule_ReplicateVerbatim(ctx);
@@ -476,6 +476,7 @@ int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (delete_docs) {
     doc_ids = it->second.doc_store.AllIds();
   }
+  StopBackgroundIndexing(ctx, idx_str);
   GetIndices().erase(it);
   // Remove any aliases pointing to this index
   for (auto ait = GetAliases().begin(); ait != GetAliases().end(); ) {
@@ -514,7 +515,7 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   auto& entry = it->second;
 
-  long info_len = (entry.spec.HasPrefixes() ? 10 : 8) + 8 +
+  long info_len = (entry.spec.HasPrefixes() ? 10 : 8) + 12 +
                   (!entry.spec.custom_dict.empty() ? 2 : 0);
   RedisModule_ReplyWithArray(ctx, info_len);
 
@@ -661,6 +662,14 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(GetTotalCursorsCreated()));
   RedisModule_ReplyWithSimpleString(ctx, "total_expired");
   RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(GetTotalCursorsExpired()));
+
+  RedisModule_ReplyWithSimpleString(ctx, "indexing");
+  RedisModule_ReplyWithLongLong(ctx, entry.bg_indexing ? 1 : 0);
+
+  char pct_buf[32];
+  std::snprintf(pct_buf, sizeof(pct_buf), "%.2f", entry.percent_indexed);
+  RedisModule_ReplyWithSimpleString(ctx, "percent_indexed");
+  RedisModule_ReplyWithCString(ctx, pct_buf);
 
   return REDISMODULE_OK;
 }

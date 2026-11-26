@@ -242,11 +242,13 @@ void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry,
 struct ScanPrivdata {
   RedisModuleCtx* ctx;
   IndexEntry* entry;
+  size_t keys_seen = 0;
 };
 
 static void ScanCallback(RedisModuleCtx* /*ctx*/, RedisModuleString* keyname,
                          RedisModuleKey* /*key*/, void* privdata) {
   auto* pd = static_cast<ScanPrivdata*>(privdata);
+  pd->keys_seen++;
   size_t len = 0;
   const char* data = RedisModule_StringPtrLen(keyname, &len);
   std::string key_str(data, len);
@@ -260,9 +262,134 @@ static void ScanCallback(RedisModuleCtx* /*ctx*/, RedisModuleString* keyname,
 
 void ScanExistingKeys(RedisModuleCtx* ctx, IndexEntry& entry) {
   auto* cursor = RedisModule_ScanCursorCreate();
-  ScanPrivdata pd{ctx, &entry};
+  ScanPrivdata pd{ctx, &entry, 0};
   while (RedisModule_Scan(ctx, cursor, ScanCallback, &pd)) {}
   RedisModule_ScanCursorDestroy(cursor);
+  entry.bg_indexing = false;
+  entry.percent_indexed = 1.0;
+}
+
+namespace {
+
+struct BgScanState {
+  uint64_t generation = 0;
+  int db_id = 0;
+  RedisModuleScanCursor* cursor = nullptr;
+  RedisModuleTimerID timer_id = 0;
+};
+
+struct BgTimerToken {
+  std::string index_name;
+  uint64_t generation = 0;
+};
+
+static std::unordered_map<std::string, BgScanState> g_bg_scans;
+
+void BgScanTimerCallback(RedisModuleCtx* ctx, void* data) {
+  std::unique_ptr<BgTimerToken> tok(static_cast<BgTimerToken*>(data));
+  auto sit = g_bg_scans.find(tok->index_name);
+  if (sit == g_bg_scans.end() || sit->second.generation != tok->generation) {
+    return;
+  }
+
+  auto iit = GetIndices().find(tok->index_name);
+  if (iit == GetIndices().end() || iit->second.generation != tok->generation) {
+    if (sit->second.cursor) RedisModule_ScanCursorDestroy(sit->second.cursor);
+    g_bg_scans.erase(sit);
+    return;
+  }
+
+  auto& state = sit->second;
+  auto& entry = iit->second;
+  RedisModule_SelectDb(ctx, state.db_id);
+
+  const size_t batch_limit = GetBgIndexBatchKeys();
+  const int64_t start_ms = NowMs();
+  ScanPrivdata pd{ctx, &entry, 0};
+  bool more = true;
+  while (pd.keys_seen < batch_limit) {
+    more = (RedisModule_Scan(ctx, state.cursor, ScanCallback, &pd) != 0);
+    if (!more) break;
+    if (NowMs() - start_ms >= 2) break;
+  }
+
+  entry.bg_scanned_keys += pd.keys_seen;
+  if (!more) {
+    entry.bg_indexing = false;
+    entry.percent_indexed = 1.0;
+    if (state.cursor) RedisModule_ScanCursorDestroy(state.cursor);
+    g_bg_scans.erase(sit);
+    return;
+  }
+
+  double denom = static_cast<double>(
+      entry.bg_total_keys > 0 ? entry.bg_total_keys : 1);
+  double pct = static_cast<double>(entry.bg_scanned_keys) / denom;
+  if (pct > 0.99) pct = 0.99;
+  entry.percent_indexed = pct;
+
+  auto* next_tok = new BgTimerToken{tok->index_name, tok->generation};
+  state.timer_id = RedisModule_CreateTimer(
+      ctx, static_cast<mstime_t>(GetBgIndexTickMs()), BgScanTimerCallback, next_tok);
+}
+
+}  // namespace
+
+void StopBackgroundIndexing(RedisModuleCtx* ctx, const std::string& index_name) {
+  auto sit = g_bg_scans.find(index_name);
+  if (sit == g_bg_scans.end()) return;
+  if (ctx && sit->second.timer_id != 0) {
+    void* timer_data = nullptr;
+    if (RedisModule_StopTimer(ctx, sit->second.timer_id, &timer_data) == REDISMODULE_OK &&
+        timer_data != nullptr) {
+      delete static_cast<BgTimerToken*>(timer_data);
+    }
+  }
+  if (sit->second.cursor) {
+    RedisModule_ScanCursorDestroy(sit->second.cursor);
+  }
+  g_bg_scans.erase(sit);
+}
+
+void StopAllBackgroundIndexing(RedisModuleCtx* ctx) {
+  for (auto& [name, state] : g_bg_scans) {
+    if (ctx && state.timer_id != 0) {
+      void* timer_data = nullptr;
+      if (RedisModule_StopTimer(ctx, state.timer_id, &timer_data) == REDISMODULE_OK &&
+          timer_data != nullptr) {
+        delete static_cast<BgTimerToken*>(timer_data);
+      }
+    }
+    if (state.cursor) {
+      RedisModule_ScanCursorDestroy(state.cursor);
+    }
+  }
+  g_bg_scans.clear();
+}
+
+void StartOrRunInitialScan(RedisModuleCtx* ctx, IndexEntry& entry) {
+  unsigned long long db_size = RedisModule_DbSize(ctx);
+  size_t min_keys = GetBgIndexMinKeys();
+  if (db_size == 0 || db_size < min_keys) {
+    ScanExistingKeys(ctx, entry);
+    return;
+  }
+
+  StopBackgroundIndexing(ctx, entry.spec.name);
+  entry.generation = NextIndexGeneration();
+  entry.bg_indexing = true;
+  entry.bg_scanned_keys = 0;
+  entry.bg_total_keys = static_cast<uint64_t>(db_size);
+  entry.percent_indexed = 0.0;
+
+  BgScanState state;
+  state.generation = entry.generation;
+  state.db_id = RedisModule_GetSelectedDb(ctx);
+  state.cursor = RedisModule_ScanCursorCreate();
+  auto* tok = new BgTimerToken{entry.spec.name, entry.generation};
+  state.timer_id = RedisModule_CreateTimer(
+      ctx, static_cast<mstime_t>(GetBgIndexTickMs()), BgScanTimerCallback, tok);
+  g_bg_scans[entry.spec.name] = state;
 }
 
 int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event,
@@ -315,9 +442,12 @@ int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event,
   return REDISMODULE_OK;
 }
 
-void OnFlushDbEvent(RedisModuleCtx* /*ctx*/, RedisModuleEvent /*eid*/,
+void OnFlushDbEvent(RedisModuleCtx* ctx, RedisModuleEvent /*eid*/,
                     uint64_t subevent, void* /*data*/) {
-  if (subevent == REDISMODULE_SUBEVENT_FLUSHDB_END) {
+  if (subevent == REDISMODULE_SUBEVENT_FLUSHDB_START) {
+    StopAllBackgroundIndexing(ctx);
+  } else if (subevent == REDISMODULE_SUBEVENT_FLUSHDB_END) {
+    StopAllBackgroundIndexing(ctx);
     GetCursors().clear();
     GetAliases().clear();
     GetSuggestDicts().clear();

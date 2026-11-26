@@ -23,6 +23,7 @@ static uint64_t g_cursors_created = 0;
 static uint64_t g_cursors_expired = 0;
 static std::unordered_map<std::string, SuggestDict> g_suggest_dicts;
 static std::unordered_map<std::string, TermDict> g_term_dicts;
+static uint64_t g_next_index_generation = 1;
 static std::unordered_map<std::string, std::string> g_config = {
     {"DEFAULT_DIALECT", "2"},
     {"TIMEOUT", "500"},
@@ -31,6 +32,9 @@ static std::unordered_map<std::string, std::string> g_config = {
     {"ON_TIMEOUT", "FAIL"},
     {"MAXSEARCHRESULTS", "1000000"},
     {"ASYNC_MIN_DOCS", "0"},
+    {"BG_INDEX_MIN_KEYS", "1000"},
+    {"BG_INDEX_BATCH_KEYS", "128"},
+    {"BG_INDEX_TICK_MS", "1"},
 };
 
 std::unordered_map<std::string, IndexEntry>& GetIndices() { return g_indices; }
@@ -103,6 +107,38 @@ size_t GetAsyncMinDocs() {
   return 0;
 }
 
+size_t GetBgIndexMinKeys() {
+  auto it = g_config.find("BG_INDEX_MIN_KEYS");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long long v = std::strtoll(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v >= 0) return static_cast<size_t>(v);
+  }
+  return 1000;
+}
+
+size_t GetBgIndexBatchKeys() {
+  auto it = g_config.find("BG_INDEX_BATCH_KEYS");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long long v = std::strtoll(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v >= 1) return static_cast<size_t>(v);
+  }
+  return 128;
+}
+
+uint64_t GetBgIndexTickMs() {
+  auto it = g_config.find("BG_INDEX_TICK_MS");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long long v = std::strtoll(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v >= 0 && v <= 10000) return static_cast<uint64_t>(v);
+  }
+  return 1;
+}
+
+uint64_t NextIndexGeneration() { return g_next_index_generation++; }
+
 bool IsOnTimeoutReturn() {
   auto it = g_config.find("ON_TIMEOUT");
   if (it != g_config.end()) {
@@ -165,6 +201,9 @@ void ClearAllGlobalState() {
       {"ON_TIMEOUT", "FAIL"},
       {"MAXSEARCHRESULTS", "1000000"},
       {"ASYNC_MIN_DOCS", "0"},
+      {"BG_INDEX_MIN_KEYS", "1000"},
+      {"BG_INDEX_BATCH_KEYS", "128"},
+      {"BG_INDEX_TICK_MS", "1"},
   };
 }
 

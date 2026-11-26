@@ -45,6 +45,11 @@ struct IndexEntry {
   SortFieldIndices sort_indices;
   SynonymMap synonyms;
   int64_t last_access_ms = 0;
+  uint64_t generation = 0;
+  bool bg_indexing = false;
+  uint64_t bg_scanned_keys = 0;
+  uint64_t bg_total_keys = 0;
+  double percent_indexed = 1.0;
   std::unique_ptr<std::shared_mutex> rw_mutex = std::make_unique<std::shared_mutex>();
 
   std::shared_mutex& Mutex() const { return *rw_mutex; }

@@ -4433,6 +4433,84 @@ test_assert "Phase 63: QUANTIZATION BQ RERANK FP16/SQ8 + OVERSAMPLE + validation
 }
 
 # ============================================================
+# Phase 64: Background Incremental Async Indexing (FT.CREATE)
+# ============================================================
+
+puts "\n=== Phase 64: Background Incremental Indexing ==="
+
+test_assert "Phase 64: FT.CREATE background timer indexing + FT.INFO progress + live writes + mid-scan drop" {
+  # Populate 600 hash keys
+  for {set i 0} {$i < 600} {incr i} {
+    r HSET "bg64:$i" title "item number $i" num $i
+  }
+
+  # Configure aggressive time-sliced background indexing
+  r FT.CONFIG SET BG_INDEX_MIN_KEYS 0
+  r FT.CONFIG SET BG_INDEX_BATCH_KEYS 50
+  r FT.CONFIG SET BG_INDEX_TICK_MS 2
+
+  r FT.CREATE p64_bg ON HASH PREFIX 1 bg64: SCHEMA title TEXT num NUMERIC
+
+  # Immediately after FT.CREATE, indexing should be in progress (1)
+  set info0 [r FT.INFO p64_bg]
+  set idx_pos [lsearch -exact $info0 "indexing"]
+  set pct_pos [lsearch -exact $info0 "percent_indexed"]
+  if {$idx_pos < 0 || $pct_pos < 0} {
+    error "FT.INFO missing indexing/percent_indexed fields: $info0"
+  }
+  set is_indexing0 [lindex $info0 [expr {$idx_pos + 1}]]
+  if {$is_indexing0 != 1} {
+    error "Expected indexing=1 immediately after FT.CREATE, got $is_indexing0"
+  }
+
+  # Concurrent live mutations and queries while background scan is active
+  r HSET bg64:600 title "live added doc" num 600
+  r DEL bg64:0
+  if {[r PING] ne "PONG"} { error "Server unresponsive during background indexing" }
+
+  # Wait for background indexing to complete (up to 5s)
+  set done 0
+  for {set w 0} {$w < 250} {incr w} {
+    set info [r FT.INFO p64_bg]
+    set ip [lsearch -exact $info "indexing"]
+    set pp [lsearch -exact $info "percent_indexed"]
+    if {[lindex $info [expr {$ip + 1}]] == 0 && [lindex $info [expr {$pp + 1}]] eq "1.00"} {
+      set done 1
+      break
+    }
+    after 20
+  }
+  if {!$done} {
+    error "Background indexing did not finish in time: [r FT.INFO p64_bg]"
+  }
+
+  set cnt [lindex [r FT.SEARCH p64_bg "*" LIMIT 0 0] 0]
+  if {$cnt != 600} {
+    error "Expected 600 indexed docs (600 - 1 deleted + 1 live added), got $cnt"
+  }
+  set live_res [r FT.SEARCH p64_bg "live" NOCONTENT]
+  if {[lindex $live_res 0] != 1 || [lindex $live_res 1] ne "bg64:600"} {
+    error "Live-added doc missing after background scan: $live_res"
+  }
+  set del_res [r FT.SEARCH p64_bg {@num:[0 0]} NOCONTENT]
+  if {[lindex $del_res 0] != 0} {
+    error "Deleted doc bg64:0 still present after background scan: $del_res"
+  }
+
+  # Mid-scan FT.DROPINDEX safety: create & immediately drop while indexing=1
+  r FT.CREATE p64_drop ON HASH PREFIX 1 bg64: SCHEMA title TEXT
+  r FT.DROPINDEX p64_drop
+  after 50
+  if {[r PING] ne "PONG"} { error "Server unhealthy after mid-scan FT.DROPINDEX" }
+
+  # Cleanup & restore defaults
+  r FT.DROPINDEX p64_bg DD
+  r FT.CONFIG SET BG_INDEX_MIN_KEYS 1000
+  r FT.CONFIG SET BG_INDEX_BATCH_KEYS 128
+  r FT.CONFIG SET BG_INDEX_TICK_MS 1
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 
