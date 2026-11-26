@@ -13,13 +13,16 @@ class HnswIndex : public VectorIndexBase {
  public:
   HnswIndex(size_t dim, DistanceMetric metric,
             size_t m = 16, size_t ef_construction = 200,
-            VectorQuantization quantization = VectorQuantization::kNone);
+            VectorQuantization quantization = VectorQuantization::kNone,
+            VectorRerankType rerank = VectorRerankType::kNone,
+            size_t bq_oversample = 4);
 
   void Add(const std::string& doc_id, const float* data) override;
   bool Remove(const std::string& doc_id) override;
   std::vector<KnnResult> KnnQuery(const float* query, size_t k) const override;
   std::vector<KnnResult> KnnQueryEf(const float* query, size_t k,
-                                    size_t ef_runtime) const override;
+                                    size_t ef_runtime,
+                                    size_t oversample = 0) const override;
   std::vector<KnnResult> KnnQueryFiltered(
       const float* query, size_t k,
       const std::vector<std::string>& candidates) const override;
@@ -34,6 +37,8 @@ class HnswIndex : public VectorIndexBase {
   size_t EfRuntime() const;
   void SetEfRuntime(size_t ef);
   VectorQuantization Quantization() const { return quantization_; }
+  VectorRerankType Rerank() const { return rerank_; }
+  size_t BqOversample() const { return bq_oversample_; }
 
   // Direct binary serialization/deserialization of the compacted HNSW graph
   // (avoids O(N log N) graph reconstruction on RDB reload).
@@ -46,6 +51,8 @@ class HnswIndex : public VectorIndexBase {
   size_t dim_;
   DistanceMetric metric_;
   VectorQuantization quantization_;
+  VectorRerankType rerank_;
+  size_t bq_oversample_;
   DistFn dist_fn_;
   size_t m_;
   size_t m_max0_;
@@ -61,6 +68,7 @@ class HnswIndex : public VectorIndexBase {
   std::vector<float> vectors_;
   std::vector<uint8_t> sq8_vectors_;
   std::vector<Sq8Meta> sq8_meta_;
+  std::vector<uint16_t> fp16_vectors_;
   size_t bq_words_ = 0;
   std::vector<uint64_t> bq_vectors_;
   std::vector<std::string> doc_ids_;
@@ -72,6 +80,7 @@ class HnswIndex : public VectorIndexBase {
 
   int RandomLevel(const std::string& doc_id) const;
   float DistanceTo(const float* query, const uint64_t* query_bq, uint32_t node_id) const;
+  float RerankDistanceTo(const float* query, uint32_t node_id) const;
 
   uint32_t GreedySearchLayer(const float* query, const uint64_t* query_bq,
                              uint32_t entry, int layer) const;

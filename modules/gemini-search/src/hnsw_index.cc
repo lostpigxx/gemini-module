@@ -7,10 +7,13 @@
 #include <random>
 
 HnswIndex::HnswIndex(size_t dim, DistanceMetric metric, size_t m,
-                     size_t ef_construction, VectorQuantization quantization)
+                     size_t ef_construction, VectorQuantization quantization,
+                     VectorRerankType rerank, size_t bq_oversample)
     : dim_(dim),
       metric_(metric),
       quantization_(quantization),
+      rerank_(quantization == VectorQuantization::kBq ? rerank : VectorRerankType::kNone),
+      bq_oversample_(bq_oversample > 0 ? bq_oversample : 4),
       dist_fn_(GetDistanceFunction(metric)),
       m_(m),
       m_max0_(m * 2),
@@ -52,6 +55,21 @@ struct BqQueryBuf {
 };
 
 }  // namespace
+
+float HnswIndex::RerankDistanceTo(const float* query, uint32_t node_id) const {
+  if (node_id >= alive_.size() || !alive_[node_id]) {
+    return std::numeric_limits<float>::max();
+  }
+  if (rerank_ == VectorRerankType::kFp16) {
+    return Fp16Distance(query, fp16_vectors_.data() + static_cast<size_t>(node_id) * dim_,
+                        dim_, metric_);
+  }
+  if (rerank_ == VectorRerankType::kSq8) {
+    return Sq8Distance(query, sq8_vectors_.data() + static_cast<size_t>(node_id) * dim_,
+                       sq8_meta_[node_id], dim_, metric_);
+  }
+  return DistanceTo(query, nullptr, node_id);
+}
 
 float HnswIndex::DistanceTo(const float* query, const uint64_t* query_bq,
                             uint32_t node_id) const {
@@ -209,6 +227,13 @@ void HnswIndex::Add(const std::string& doc_id, const float* data) {
                   sq8_meta_[nid]);
     } else if (quantization_ == VectorQuantization::kBq) {
       QuantizeBq(data, dim_, bq_vectors_.data() + static_cast<size_t>(nid) * bq_words_);
+      if (rerank_ == VectorRerankType::kFp16) {
+        uint16_t* dst = fp16_vectors_.data() + static_cast<size_t>(nid) * dim_;
+        for (size_t d = 0; d < dim_; d++) dst[d] = Float32ToFloat16(data[d]);
+      } else if (rerank_ == VectorRerankType::kSq8) {
+        QuantizeSq8(data, dim_, sq8_vectors_.data() + static_cast<size_t>(nid) * dim_,
+                    sq8_meta_[nid]);
+      }
     } else {
       std::memcpy(vectors_.data() + static_cast<size_t>(nid) * dim_, data,
                   dim_ * sizeof(float));
@@ -227,6 +252,16 @@ void HnswIndex::Add(const std::string& doc_id, const float* data) {
     } else if (quantization_ == VectorQuantization::kBq) {
       bq_vectors_.resize(static_cast<size_t>(nid + 1) * bq_words_);
       QuantizeBq(data, dim_, bq_vectors_.data() + static_cast<size_t>(nid) * bq_words_);
+      if (rerank_ == VectorRerankType::kFp16) {
+        fp16_vectors_.resize(static_cast<size_t>(nid + 1) * dim_);
+        uint16_t* dst = fp16_vectors_.data() + static_cast<size_t>(nid) * dim_;
+        for (size_t d = 0; d < dim_; d++) dst[d] = Float32ToFloat16(data[d]);
+      } else if (rerank_ == VectorRerankType::kSq8) {
+        sq8_vectors_.resize(static_cast<size_t>(nid + 1) * dim_);
+        sq8_meta_.emplace_back();
+        QuantizeSq8(data, dim_, sq8_vectors_.data() + static_cast<size_t>(nid) * dim_,
+                    sq8_meta_[nid]);
+      }
     } else {
       vectors_.insert(vectors_.end(), data, data + dim_);
     }
@@ -345,12 +380,13 @@ bool HnswIndex::Remove(const std::string& doc_id) {
 }
 
 std::vector<KnnResult> HnswIndex::KnnQuery(const float* query, size_t k) const {
-  return KnnQueryEf(query, k, ef_runtime_);
+  return KnnQueryEf(query, k, ef_runtime_, 0);
 }
 
 std::vector<KnnResult> HnswIndex::KnnQueryEf(const float* query, size_t k,
-                                              size_t ef_runtime) const {
-  if (live_count_ == 0 || entry_point_ == kInvalidNode) return {};
+                                              size_t ef_runtime,
+                                              size_t oversample) const {
+  if (live_count_ == 0 || entry_point_ == kInvalidNode || k == 0) return {};
 
   BqQueryBuf qbq;
   qbq.Init(query, dim_, bq_words_, quantization_);
@@ -360,8 +396,37 @@ std::vector<KnnResult> HnswIndex::KnnQueryEf(const float* query, size_t k,
     cur = GreedySearchLayer(query, qbq.ptr, cur, lc);
   }
 
-  size_t ef = std::max(ef_runtime > 0 ? ef_runtime : ef_runtime_, k);
+  const bool do_rerank =
+      (quantization_ == VectorQuantization::kBq && rerank_ != VectorRerankType::kNone);
+  size_t cand_k = k;
+  if (do_rerank) {
+    size_t os = (oversample > 0) ? oversample : bq_oversample_;
+    cand_k = std::min(live_count_, std::max(k, k * os));
+  }
+
+  size_t ef = std::max(ef_runtime > 0 ? ef_runtime : ef_runtime_, cand_k);
   auto candidates = SearchLayer(query, qbq.ptr, cur, ef, 0);
+
+  if (do_rerank) {
+    std::vector<KnnResult> reranked;
+    reranked.reserve(std::min(cand_k, candidates.size()));
+    for (const auto& [dist, nid] : candidates) {
+      (void)dist;
+      if (alive_[nid]) {
+        reranked.push_back({doc_ids_[nid], RerankDistanceTo(query, nid)});
+        if (reranked.size() >= cand_k) break;
+      }
+    }
+    size_t n = std::min(k, reranked.size());
+    std::partial_sort(reranked.begin(),
+                      reranked.begin() + static_cast<ptrdiff_t>(n),
+                      reranked.end(),
+                      [](const KnnResult& a, const KnnResult& b) {
+                        return a.score < b.score;
+                      });
+    reranked.resize(n);
+    return reranked;
+  }
 
   std::vector<KnnResult> results;
   results.reserve(std::min(k, candidates.size()));
@@ -398,15 +463,19 @@ std::vector<KnnResult> HnswIndex::RangeQuery(const float* query,
 std::vector<KnnResult> HnswIndex::KnnQueryFiltered(
     const float* query, size_t k,
     const std::vector<std::string>& candidates) const {
+  const bool do_rerank =
+      (quantization_ == VectorQuantization::kBq && rerank_ != VectorRerankType::kNone);
   BqQueryBuf qbq;
-  qbq.Init(query, dim_, bq_words_, quantization_);
+  if (!do_rerank) qbq.Init(query, dim_, bq_words_, quantization_);
 
   std::vector<KnnResult> results;
   results.reserve(candidates.size());
   for (const auto& doc_id : candidates) {
     auto it = id_to_node_.find(doc_id);
     if (it == id_to_node_.end()) continue;
-    results.push_back({doc_id, DistanceTo(query, qbq.ptr, it->second)});
+    float d = do_rerank ? RerankDistanceTo(query, it->second)
+                        : DistanceTo(query, qbq.ptr, it->second);
+    results.push_back({doc_id, d});
   }
   size_t n = std::min(k, results.size());
   std::partial_sort(results.begin(), results.begin() + static_cast<ptrdiff_t>(n),
@@ -430,6 +499,7 @@ void HnswIndex::Clear() {
   vectors_.clear();
   sq8_vectors_.clear();
   sq8_meta_.clear();
+  fp16_vectors_.clear();
   bq_vectors_.clear();
   doc_ids_.clear();
   alive_.clear();
@@ -445,7 +515,7 @@ void HnswIndex::Clear() {
 namespace {
 
 constexpr uint32_t kHnswGraphMagic = 0x57534E48u;  // "HNSW"
-constexpr uint32_t kHnswGraphVersion = 1u;
+constexpr uint32_t kHnswGraphVersion = 2u;
 constexpr uint32_t kMaxHnswRdbNodes = 100000000u;
 constexpr int32_t kMaxHnswRdbLevel = 32;
 
@@ -506,6 +576,11 @@ std::string HnswIndex::SerializeGraph() const {
     vec_bytes_per_node = sizeof(Sq8Meta) + dim_ * sizeof(uint8_t);
   } else if (quantization_ == VectorQuantization::kBq) {
     vec_bytes_per_node = bq_words_ * sizeof(uint64_t);
+    if (rerank_ == VectorRerankType::kFp16) {
+      vec_bytes_per_node += dim_ * sizeof(uint16_t);
+    } else if (rerank_ == VectorRerankType::kSq8) {
+      vec_bytes_per_node += sizeof(Sq8Meta) + dim_ * sizeof(uint8_t);
+    }
   } else {
     vec_bytes_per_node = dim_ * sizeof(float);
   }
@@ -518,6 +593,8 @@ std::string HnswIndex::SerializeGraph() const {
   AppendPod<uint32_t>(out, static_cast<uint32_t>(dim_));
   AppendPod<uint8_t>(out, static_cast<uint8_t>(metric_));
   AppendPod<uint8_t>(out, static_cast<uint8_t>(quantization_));
+  AppendPod<uint8_t>(out, static_cast<uint8_t>(rerank_));
+  AppendPod<uint32_t>(out, static_cast<uint32_t>(bq_oversample_));
   AppendPod<uint32_t>(out, static_cast<uint32_t>(m_));
   AppendPod<uint32_t>(out, static_cast<uint32_t>(m_max0_));
   AppendPod<uint32_t>(out, static_cast<uint32_t>(ef_construction_));
@@ -547,6 +624,15 @@ std::string HnswIndex::SerializeGraph() const {
     } else if (quantization_ == VectorQuantization::kBq) {
       const uint64_t* ptr = bq_vectors_.data() + static_cast<size_t>(old_id) * bq_words_;
       out.append(reinterpret_cast<const char*>(ptr), bq_words_ * sizeof(uint64_t));
+      if (rerank_ == VectorRerankType::kFp16) {
+        const uint16_t* fptr = fp16_vectors_.data() + static_cast<size_t>(old_id) * dim_;
+        out.append(reinterpret_cast<const char*>(fptr), dim_ * sizeof(uint16_t));
+      } else if (rerank_ == VectorRerankType::kSq8) {
+        AppendPod<float>(out, sq8_meta_[old_id].min_val);
+        AppendPod<float>(out, sq8_meta_[old_id].scale);
+        const uint8_t* sptr = sq8_vectors_.data() + static_cast<size_t>(old_id) * dim_;
+        out.append(reinterpret_cast<const char*>(sptr), dim_ * sizeof(uint8_t));
+      }
     } else {
       const float* ptr = vectors_.data() + static_cast<size_t>(old_id) * dim_;
       out.append(reinterpret_cast<const char*>(ptr), dim_ * sizeof(float));
@@ -578,13 +664,16 @@ bool HnswIndex::DeserializeGraph(const char* data, size_t len) {
   size_t pos = 0;
 
   uint32_t magic = 0, version = 0, dim = 0;
-  uint8_t raw_metric = 0, raw_quant = 0;
+  uint8_t raw_metric = 0, raw_quant = 0, raw_rerank = 0;
+  uint32_t bq_os = static_cast<uint32_t>(bq_oversample_);
   uint32_t m = 0, m_max0 = 0, ef_c = 0, ef_r = 0;
   uint32_t num_nodes = 0, entry_point = kInvalidNode;
   int32_t max_level = -1;
 
   if (!ReadPod(data, len, pos, magic) || magic != kHnswGraphMagic) return false;
-  if (!ReadPod(data, len, pos, version) || version != kHnswGraphVersion) return false;
+  if (!ReadPod(data, len, pos, version) || (version != 1u && version != kHnswGraphVersion)) {
+    return false;
+  }
   if (!ReadPod(data, len, pos, dim) || dim != dim_) return false;
   if (!ReadPod(data, len, pos, raw_metric) ||
       raw_metric != static_cast<uint8_t>(metric_)) {
@@ -593,6 +682,15 @@ bool HnswIndex::DeserializeGraph(const char* data, size_t len) {
   if (!ReadPod(data, len, pos, raw_quant) ||
       raw_quant != static_cast<uint8_t>(quantization_)) {
     return false;
+  }
+  if (version >= 2u) {
+    if (!ReadPod(data, len, pos, raw_rerank) ||
+        raw_rerank != static_cast<uint8_t>(rerank_)) {
+      return false;
+    }
+    if (!ReadPod(data, len, pos, bq_os) || bq_os == 0 || bq_os > 1024) return false;
+  } else {
+    if (rerank_ != VectorRerankType::kNone) return false;
   }
   if (!ReadPod(data, len, pos, m) || m == 0 || m > 1024) return false;
   if (!ReadPod(data, len, pos, m_max0) || m_max0 < m || m_max0 > 4096) return false;
@@ -605,6 +703,7 @@ bool HnswIndex::DeserializeGraph(const char* data, size_t len) {
   if (num_nodes == 0) {
     if (entry_point != kInvalidNode || max_level != -1 || pos != len) return false;
     Clear();
+    bq_oversample_ = bq_os;
     m_ = m;
     m_max0_ = m_max0;
     ef_construction_ = ef_c;
@@ -622,6 +721,11 @@ bool HnswIndex::DeserializeGraph(const char* data, size_t len) {
     vec_bytes_per_node = sizeof(float) * 2 + dim_ * sizeof(uint8_t);
   } else if (quantization_ == VectorQuantization::kBq) {
     vec_bytes_per_node = bq_words_ * sizeof(uint64_t);
+    if (rerank_ == VectorRerankType::kFp16) {
+      vec_bytes_per_node += dim_ * sizeof(uint16_t);
+    } else if (rerank_ == VectorRerankType::kSq8) {
+      vec_bytes_per_node += sizeof(float) * 2 + dim_ * sizeof(uint8_t);
+    }
   } else {
     vec_bytes_per_node = dim_ * sizeof(float);
   }
@@ -632,12 +736,19 @@ bool HnswIndex::DeserializeGraph(const char* data, size_t len) {
   std::vector<float> new_vectors;
   std::vector<uint8_t> new_sq8_vectors;
   std::vector<Sq8Meta> new_sq8_meta;
+  std::vector<uint16_t> new_fp16_vectors;
   std::vector<uint64_t> new_bq_vectors;
   if (quantization_ == VectorQuantization::kSq8) {
     new_sq8_vectors.resize(static_cast<size_t>(num_nodes) * dim_);
     new_sq8_meta.resize(num_nodes);
   } else if (quantization_ == VectorQuantization::kBq) {
     new_bq_vectors.resize(static_cast<size_t>(num_nodes) * bq_words_);
+    if (rerank_ == VectorRerankType::kFp16) {
+      new_fp16_vectors.resize(static_cast<size_t>(num_nodes) * dim_);
+    } else if (rerank_ == VectorRerankType::kSq8) {
+      new_sq8_vectors.resize(static_cast<size_t>(num_nodes) * dim_);
+      new_sq8_meta.resize(num_nodes);
+    }
   } else {
     new_vectors.resize(static_cast<size_t>(num_nodes) * dim_);
   }
@@ -682,6 +793,23 @@ bool HnswIndex::DeserializeGraph(const char* data, size_t len) {
                      bq_words_ * sizeof(uint64_t))) {
         return false;
       }
+      if (rerank_ == VectorRerankType::kFp16) {
+        if (!ReadBytes(data, len, pos,
+                       new_fp16_vectors.data() + static_cast<size_t>(nid) * dim_,
+                       dim_ * sizeof(uint16_t))) {
+          return false;
+        }
+      } else if (rerank_ == VectorRerankType::kSq8) {
+        float mv = 0.0f, sc = 0.0f;
+        if (!ReadPod(data, len, pos, mv) || !ReadPod(data, len, pos, sc)) return false;
+        if (!std::isfinite(mv) || !std::isfinite(sc) || sc < 0.0f) return false;
+        new_sq8_meta[nid] = Sq8Meta{mv, sc};
+        if (!ReadBytes(data, len, pos,
+                       new_sq8_vectors.data() + static_cast<size_t>(nid) * dim_,
+                       dim_ * sizeof(uint8_t))) {
+          return false;
+        }
+      }
     } else {
       if (!ReadBytes(data, len, pos,
                      new_vectors.data() + static_cast<size_t>(nid) * dim_,
@@ -713,6 +841,7 @@ bool HnswIndex::DeserializeGraph(const char* data, size_t len) {
   if (pos != len) return false;
 
   // Commit atomically after full validation
+  bq_oversample_ = bq_os;
   m_ = m;
   m_max0_ = m_max0;
   ef_construction_ = ef_c;
@@ -724,6 +853,7 @@ bool HnswIndex::DeserializeGraph(const char* data, size_t len) {
   vectors_ = std::move(new_vectors);
   sq8_vectors_ = std::move(new_sq8_vectors);
   sq8_meta_ = std::move(new_sq8_meta);
+  fp16_vectors_ = std::move(new_fp16_vectors);
   bq_vectors_ = std::move(new_bq_vectors);
   doc_ids_ = std::move(new_doc_ids);
   alive_ = std::move(new_alive);

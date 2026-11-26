@@ -236,6 +236,16 @@ int main() {
     BenchUs("HnswIndex BQ KNN-10 (2kx768)", 500, [&]() {
       sink += hnsw_bq.KnnQueryEf(q.data(), 10, 40).size();
     });
+
+    HnswIndex hnsw_bq_fp16(dim, DistanceMetric::kCosine, 16, 100, VectorQuantization::kBq,
+                           VectorRerankType::kFp16, 4);
+    for (size_t i = 0; i < 2000; i++) {
+      for (size_t d = 0; d < dim; d++) vec[d] = dist(rng);
+      hnsw_bq_fp16.Add("hbf" + std::to_string(i), vec.data());
+    }
+    BenchUs("HnswIndex BQ+FP16 OS4 (2kx768)", 500, [&]() {
+      sink += hnsw_bq_fp16.KnnQueryEf(q.data(), 10, 40, 4).size();
+    });
   }
 
   // 7. TextIndex WAND Top-10 vs Full BM25 Search (20k docs)

@@ -74,6 +74,7 @@ struct ParsedQuery {
   std::string knn_field;
   std::string knn_param_name;
   size_t knn_ef_runtime = 0;
+  size_t knn_oversample = 0;
   std::string knn_score_alias;
 };
 

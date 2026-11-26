@@ -48,6 +48,10 @@ void QuantizeBq(const float* src, size_t dim, uint64_t* dst);
 void DequantizeBq(const uint64_t* src, size_t dim, float* dst);
 float BqHammingDistance(const uint64_t* a, const uint64_t* b, size_t dim);
 
+// FP16 exact distance helper (used for BQ two-stage reranking)
+float Fp16Distance(const float* query, const uint16_t* fp16_vec,
+                   size_t dim, DistanceMetric metric);
+
 class VectorIndexBase {
  public:
   virtual ~VectorIndexBase() = default;
@@ -55,7 +59,8 @@ class VectorIndexBase {
   virtual bool Remove(const std::string& doc_id) = 0;
   virtual std::vector<KnnResult> KnnQuery(const float* query, size_t k) const = 0;
   virtual std::vector<KnnResult> KnnQueryEf(const float* query, size_t k,
-                                            size_t /*ef_runtime*/) const {
+                                            size_t /*ef_runtime*/,
+                                            size_t /*oversample*/ = 0) const {
     return KnnQuery(query, k);
   }
   virtual std::vector<KnnResult> KnnQueryFiltered(const float* query, size_t k,
@@ -71,22 +76,31 @@ class FlatVectorIndex : public VectorIndexBase {
   size_t dim_;
   DistanceMetric metric_;
   VectorQuantization quantization_;
+  VectorRerankType rerank_;
+  size_t bq_oversample_;
   std::vector<float> data_;
   std::vector<uint8_t> sq8_data_;
   std::vector<Sq8Meta> sq8_meta_;
+  std::vector<uint16_t> fp16_data_;
   size_t bq_words_ = 0;
   std::vector<uint64_t> bq_data_;
   std::vector<std::string> ids_;
   std::unordered_map<std::string, size_t> id_to_idx_;
 
   float DistanceAt(const float* query, size_t idx, DistFn dist_fn) const;
+  float RerankDistanceAt(const float* query, size_t idx) const;
 
  public:
   FlatVectorIndex(size_t dim, DistanceMetric metric,
-                  VectorQuantization quantization = VectorQuantization::kNone);
+                  VectorQuantization quantization = VectorQuantization::kNone,
+                  VectorRerankType rerank = VectorRerankType::kNone,
+                  size_t bq_oversample = 4);
   void Add(const std::string& doc_id, const float* data) override;
   bool Remove(const std::string& doc_id) override;
   std::vector<KnnResult> KnnQuery(const float* query, size_t k) const override;
+  std::vector<KnnResult> KnnQueryEf(const float* query, size_t k,
+                                    size_t ef_runtime,
+                                    size_t oversample = 0) const override;
   std::vector<KnnResult> KnnQueryFiltered(const float* query, size_t k,
                                            const std::vector<std::string>& candidates) const override;
   std::vector<KnnResult> RangeQuery(const float* query, float radius) const override;

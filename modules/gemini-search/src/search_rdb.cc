@@ -116,8 +116,11 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
       RedisModule_SaveUnsigned(rdb, f.vector_params.ef_construction);
       // encver >= 8: vector data type (FLOAT32 / FLOAT64 / FLOAT16 / BFLOAT16)
       RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(f.vector_params.data_type));
-      // encver >= 12: vector quantization (NONE / SQ8)
+      // encver >= 12: vector quantization (NONE / SQ8 / BQ)
       RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(f.vector_params.quantization));
+      // encver >= 15: BQ two-stage rerank mode and default oversample factor
+      RedisModule_SaveUnsigned(rdb, static_cast<uint64_t>(f.vector_params.rerank));
+      RedisModule_SaveUnsigned(rdb, f.vector_params.bq_oversample);
     }
     RedisModule_SaveStringBuffer(rdb, f.json_path.c_str(), f.json_path.size());
     RedisModule_SaveUnsigned(rdb, f.sortable ? 1 : 0);
@@ -276,6 +279,18 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
           return nullptr;
         }
         f.vector_params.quantization = static_cast<VectorQuantization>(raw_q);
+      }
+      if (encver >= 15) {
+        uint64_t raw_r = 0, raw_os = 4;
+        if (!SafeLoadUnsigned(rdb, raw_r) ||
+            raw_r > static_cast<uint64_t>(VectorRerankType::kSq8)) {
+          return nullptr;
+        }
+        if (!SafeLoadUnsigned(rdb, raw_os) || raw_os == 0 || raw_os > 1024) {
+          return nullptr;
+        }
+        f.vector_params.rerank = static_cast<VectorRerankType>(raw_r);
+        f.vector_params.bq_oversample = static_cast<size_t>(raw_os);
       }
     }
     if (encver >= 5) {
@@ -524,6 +539,12 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value) {
         create_args.push_back("QUANTIZATION");
         create_args.push_back(VectorQuantizationName(f.vector_params.quantization));
       }
+      if (f.vector_params.rerank != VectorRerankType::kNone) {
+        create_args.push_back("RERANK");
+        create_args.push_back(VectorRerankTypeName(f.vector_params.rerank));
+        create_args.push_back("OVERSAMPLE");
+        create_args.push_back(std::to_string(f.vector_params.bq_oversample));
+      }
       create_args.push_back("DIM");
       create_args.push_back(std::to_string(f.vector_params.dim));
       create_args.push_back("DISTANCE_METRIC");
@@ -631,6 +652,11 @@ size_t SearchMemUsage(const void* value) {
           size_t vec_bytes = 0;
           if (f.vector_params.quantization == VectorQuantization::kBq) {
             vec_bytes = BqWords(idx->Dim()) * sizeof(uint64_t);
+            if (f.vector_params.rerank == VectorRerankType::kFp16) {
+              vec_bytes += idx->Dim() * sizeof(uint16_t);
+            } else if (f.vector_params.rerank == VectorRerankType::kSq8) {
+              vec_bytes += idx->Dim() * sizeof(uint8_t) + 2 * sizeof(float);
+            }
           } else if (f.vector_params.quantization == VectorQuantization::kSq8) {
             vec_bytes = idx->Dim() * sizeof(uint8_t) + 2 * sizeof(float);
           } else {

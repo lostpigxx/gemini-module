@@ -935,3 +935,85 @@ TEST_F(SearchRdbTest, RoundTripEncver14HnswDirectPersistence) {
 
   delete loaded_name;
 }
+
+TEST_F(SearchRdbTest, RoundTripEncver15BqRerankAndAof) {
+  constexpr size_t kDim = 16;
+  IndexSpec spec;
+  spec.name = "bqrr";
+
+  VectorFieldParams vp_fp16;
+  vp_fp16.algorithm = VectorAlgorithm::kHnsw;
+  vp_fp16.dim = kDim;
+  vp_fp16.metric = DistanceMetric::kCosine;
+  vp_fp16.quantization = VectorQuantization::kBq;
+  vp_fp16.rerank = VectorRerankType::kFp16;
+  vp_fp16.bq_oversample = 6;
+
+  VectorFieldParams vp_sq8 = vp_fp16;
+  vp_sq8.algorithm = VectorAlgorithm::kFlat;
+  vp_sq8.rerank = VectorRerankType::kSq8;
+  vp_sq8.bq_oversample = 8;
+
+  spec.fields = {
+      {"v_hnsw", FieldType::kVector, vp_fp16},
+      {"v_flat", FieldType::kVector, vp_sq8},
+  };
+
+  std::vector<std::pair<std::string, std::unordered_map<std::string, std::string>>> docs;
+  std::vector<float> vec(kDim);
+  for (size_t i = 0; i < 24; i++) {
+    for (size_t d = 0; d < kDim; d++) vec[d] = std::sin(static_cast<float>(i * 5 + d));
+    std::string blob(reinterpret_cast<const char*>(vec.data()), kDim * sizeof(float));
+    docs.push_back({"r" + std::to_string(i), {{"v_hnsw", blob}, {"v_flat", blob}}});
+  }
+
+  ASSERT_TRUE(CreateIndexFromRdb("bqrr", spec, docs));
+
+  // Verify AOF rewrite emits RERANK and OVERSAMPLE
+  MockRdbStream dummy_aof;
+  MockRmString key{"bqrr"};
+  std::string val("bqrr");
+  AofRewriteSearch(dummy_aof.IO(), reinterpret_cast<RedisModuleString*>(&key), &val);
+  ASSERT_GE(g_emitted_aof.size(), 1u);
+  const auto& cargs = g_emitted_aof[0].second;
+  auto has_pair = [&](const std::string& k, const std::string& v) {
+    for (size_t i = 0; i + 1 < cargs.size(); i++) {
+      if (cargs[i] == k && cargs[i + 1] == v) return true;
+    }
+    return false;
+  };
+  EXPECT_TRUE(has_pair("RERANK", "FP16"));
+  EXPECT_TRUE(has_pair("OVERSAMPLE", "6"));
+  EXPECT_TRUE(has_pair("RERANK", "SQ8"));
+  EXPECT_TRUE(has_pair("OVERSAMPLE", "8"));
+
+  std::vector<float> q(kDim, 0.5f);
+  auto orig_h = GetIndexEntry("bqrr")->vector_indices.Get("v_hnsw")->KnnQueryEf(q.data(), 5, 32, 6);
+  auto orig_f = GetIndexEntry("bqrr")->vector_indices.Get("v_flat")->KnnQueryEf(q.data(), 5, 0, 8);
+
+  MockRdbStream stream;
+  SaveIndex(stream, "bqrr");
+  stream.Rewind();
+  EraseIndexEntry("bqrr");
+
+  auto* loaded_name = static_cast<std::string*>(RdbLoadSearch(stream.IO(), kSearchEncVer));
+  ASSERT_NE(loaded_name, nullptr);
+  auto* loaded = GetIndexEntry("bqrr");
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->spec.fields[0].vector_params.rerank, VectorRerankType::kFp16);
+  EXPECT_EQ(loaded->spec.fields[0].vector_params.bq_oversample, 6u);
+  EXPECT_EQ(loaded->spec.fields[1].vector_params.rerank, VectorRerankType::kSq8);
+  EXPECT_EQ(loaded->spec.fields[1].vector_params.bq_oversample, 8u);
+
+  auto post_h = loaded->vector_indices.Get("v_hnsw")->KnnQueryEf(q.data(), 5, 32, 6);
+  auto post_f = loaded->vector_indices.Get("v_flat")->KnnQueryEf(q.data(), 5, 0, 8);
+  ASSERT_EQ(post_h.size(), orig_h.size());
+  ASSERT_EQ(post_f.size(), orig_f.size());
+  for (size_t i = 0; i < 5; i++) {
+    EXPECT_EQ(post_h[i].doc_id, orig_h[i].doc_id);
+    EXPECT_FLOAT_EQ(post_h[i].score, orig_h[i].score);
+    EXPECT_EQ(post_f[i].doc_id, orig_f[i].doc_id);
+    EXPECT_FLOAT_EQ(post_f[i].score, orig_f[i].score);
+  }
+  delete loaded_name;
+}

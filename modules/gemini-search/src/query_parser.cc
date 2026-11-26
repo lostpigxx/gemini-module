@@ -1373,6 +1373,7 @@ static bool ParseKnnSuffix(const std::string& knn_str, ParsedQuery& out,
   }
 
   size_t ef_runtime = 0;
+  size_t oversample = 0;
   std::string score_alias;
   for (size_t ti = 4; ti < tokens.size(); ) {
     std::string kw = tokens[ti];
@@ -1385,6 +1386,15 @@ static bool ParseKnnSuffix(const std::string& knn_str, ParsedQuery& out,
         return false;
       }
       ef_runtime = static_cast<size_t>(ef);
+      ti += 2;
+    } else if (kw == "OVERSAMPLE" && ti + 1 < tokens.size()) {
+      char* ep = nullptr;
+      long os = std::strtol(tokens[ti + 1].c_str(), &ep, 10);
+      if (*ep != '\0' || os <= 0 || os > 1024) {
+        error_msg = "ERR syntax error: OVERSAMPLE must be a positive integer (<= 1024)";
+        return false;
+      }
+      oversample = static_cast<size_t>(os);
       ti += 2;
     } else if (kw == "AS" && ti + 1 < tokens.size()) {
       score_alias = tokens[ti + 1];
@@ -1400,6 +1410,7 @@ static bool ParseKnnSuffix(const std::string& knn_str, ParsedQuery& out,
   out.knn_field = std::move(knn_field);
   out.knn_param_name = std::move(knn_param);
   out.knn_ef_runtime = ef_runtime;
+  out.knn_oversample = oversample;
   out.knn_score_alias = std::move(score_alias);
   return true;
 }

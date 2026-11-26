@@ -455,12 +455,58 @@ float BqHammingDistance(const uint64_t* a, const uint64_t* b, size_t dim) {
   return static_cast<float>(diff) / static_cast<float>(dim);
 }
 
+float Fp16Distance(const float* query, const uint16_t* fp16_vec,
+                   size_t dim, DistanceMetric metric) {
+  if (metric == DistanceMetric::kL2) {
+    float sum = 0.0f;
+    for (size_t i = 0; i < dim; i++) {
+      float d = query[i] - Float16ToFloat32(fp16_vec[i]);
+      sum += d * d;
+    }
+    return sum;
+  }
+  if (metric == DistanceMetric::kIP) {
+    float dot = 0.0f;
+    for (size_t i = 0; i < dim; i++) {
+      dot += query[i] * Float16ToFloat32(fp16_vec[i]);
+    }
+    return 1.0f - dot;
+  }
+  // Cosine distance
+  float dot = 0.0f, na = 0.0f, nb = 0.0f;
+  for (size_t i = 0; i < dim; i++) {
+    float a = query[i];
+    float b = Float16ToFloat32(fp16_vec[i]);
+    dot += a * b;
+    na += a * a;
+    nb += b * b;
+  }
+  float denom = std::sqrt(na * nb);
+  if (denom == 0.0f) return 1.0f;
+  return 1.0f - dot / denom;
+}
+
 FlatVectorIndex::FlatVectorIndex(size_t dim, DistanceMetric metric,
-                                 VectorQuantization quantization)
+                                 VectorQuantization quantization,
+                                 VectorRerankType rerank,
+                                 size_t bq_oversample)
     : dim_(dim),
       metric_(metric),
       quantization_(quantization),
+      rerank_(quantization == VectorQuantization::kBq ? rerank : VectorRerankType::kNone),
+      bq_oversample_(bq_oversample > 0 ? bq_oversample : 4),
       bq_words_(BqWords(dim)) {}
+
+float FlatVectorIndex::RerankDistanceAt(const float* query, size_t idx) const {
+  if (rerank_ == VectorRerankType::kFp16) {
+    return Fp16Distance(query, fp16_data_.data() + idx * dim_, dim_, metric_);
+  }
+  if (rerank_ == VectorRerankType::kSq8) {
+    return Sq8Distance(query, sq8_data_.data() + idx * dim_, sq8_meta_[idx],
+                       dim_, metric_);
+  }
+  return DistanceAt(query, idx, GetDistanceFunction(metric_));
+}
 
 float FlatVectorIndex::DistanceAt(const float* query, size_t idx, DistFn dist_fn) const {
   if (quantization_ == VectorQuantization::kSq8) {
@@ -483,6 +529,12 @@ void FlatVectorIndex::Add(const std::string& doc_id, const float* data) {
       QuantizeSq8(data, dim_, sq8_data_.data() + idx * dim_, sq8_meta_[idx]);
     } else if (quantization_ == VectorQuantization::kBq) {
       QuantizeBq(data, dim_, bq_data_.data() + idx * bq_words_);
+      if (rerank_ == VectorRerankType::kFp16) {
+        uint16_t* dst = fp16_data_.data() + idx * dim_;
+        for (size_t d = 0; d < dim_; d++) dst[d] = Float32ToFloat16(data[d]);
+      } else if (rerank_ == VectorRerankType::kSq8) {
+        QuantizeSq8(data, dim_, sq8_data_.data() + idx * dim_, sq8_meta_[idx]);
+      }
     } else {
       std::memcpy(data_.data() + idx * dim_, data, dim_ * sizeof(float));
     }
@@ -498,6 +550,15 @@ void FlatVectorIndex::Add(const std::string& doc_id, const float* data) {
   } else if (quantization_ == VectorQuantization::kBq) {
     bq_data_.resize((idx + 1) * bq_words_);
     QuantizeBq(data, dim_, bq_data_.data() + idx * bq_words_);
+    if (rerank_ == VectorRerankType::kFp16) {
+      fp16_data_.resize((idx + 1) * dim_);
+      uint16_t* dst = fp16_data_.data() + idx * dim_;
+      for (size_t d = 0; d < dim_; d++) dst[d] = Float32ToFloat16(data[d]);
+    } else if (rerank_ == VectorRerankType::kSq8) {
+      sq8_data_.resize((idx + 1) * dim_);
+      sq8_meta_.emplace_back();
+      QuantizeSq8(data, dim_, sq8_data_.data() + idx * dim_, sq8_meta_[idx]);
+    }
   } else {
     data_.insert(data_.end(), data, data + dim_);
   }
@@ -516,6 +577,15 @@ bool FlatVectorIndex::Remove(const std::string& doc_id) {
       std::memcpy(bq_data_.data() + idx * bq_words_,
                   bq_data_.data() + last * bq_words_,
                   bq_words_ * sizeof(uint64_t));
+      if (rerank_ == VectorRerankType::kFp16) {
+        std::memcpy(fp16_data_.data() + idx * dim_,
+                    fp16_data_.data() + last * dim_,
+                    dim_ * sizeof(uint16_t));
+      } else if (rerank_ == VectorRerankType::kSq8) {
+        std::memcpy(sq8_data_.data() + idx * dim_,
+                    sq8_data_.data() + last * dim_, dim_);
+        sq8_meta_[idx] = sq8_meta_[last];
+      }
     } else {
       std::memcpy(data_.data() + idx * dim_, data_.data() + last * dim_,
                   dim_ * sizeof(float));
@@ -529,6 +599,12 @@ bool FlatVectorIndex::Remove(const std::string& doc_id) {
     sq8_meta_.pop_back();
   } else if (quantization_ == VectorQuantization::kBq) {
     bq_data_.resize(ids_.size() * bq_words_);
+    if (rerank_ == VectorRerankType::kFp16) {
+      fp16_data_.resize(ids_.size() * dim_);
+    } else if (rerank_ == VectorRerankType::kSq8) {
+      sq8_data_.resize(ids_.size() * dim_);
+      sq8_meta_.pop_back();
+    }
   } else {
     data_.resize(ids_.size() * dim_);
   }
@@ -538,8 +614,53 @@ bool FlatVectorIndex::Remove(const std::string& doc_id) {
 
 std::vector<KnnResult> FlatVectorIndex::KnnQuery(const float* query,
                                                   size_t k) const {
-  DistFn dist_fn = GetDistanceFunction(metric_);
+  return KnnQueryEf(query, k, 0, 0);
+}
+
+std::vector<KnnResult> FlatVectorIndex::KnnQueryEf(const float* query, size_t k,
+                                                    size_t /*ef_runtime*/,
+                                                    size_t oversample) const {
   const size_t total = ids_.size();
+  if (total == 0 || k == 0) return {};
+
+  if (quantization_ == VectorQuantization::kBq &&
+      rerank_ != VectorRerankType::kNone) {
+    // Stage 1: ultra-fast BQ Hamming coarse scan
+    std::vector<uint64_t> qbq(bq_words_);
+    QuantizeBq(query, dim_, qbq.data());
+    std::vector<std::pair<float, size_t>> coarse;
+    coarse.reserve(total);
+    for (size_t idx = 0; idx < total; idx++) {
+      coarse.emplace_back(
+          BqHammingDistance(qbq.data(), bq_data_.data() + idx * bq_words_, dim_),
+          idx);
+    }
+    size_t os = (oversample > 0) ? oversample : bq_oversample_;
+    size_t cand_k = std::min(total, std::max(k, k * os));
+    std::partial_sort(coarse.begin(),
+                      coarse.begin() + static_cast<ptrdiff_t>(cand_k),
+                      coarse.end(),
+                      [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    // Stage 2: exact FP16/SQ8 rerank on top cand_k candidates
+    std::vector<KnnResult> reranked;
+    reranked.reserve(cand_k);
+    for (size_t i = 0; i < cand_k; i++) {
+      size_t idx = coarse[i].second;
+      reranked.push_back({ids_[idx], RerankDistanceAt(query, idx)});
+    }
+    size_t n = std::min(k, reranked.size());
+    std::partial_sort(reranked.begin(),
+                      reranked.begin() + static_cast<ptrdiff_t>(n),
+                      reranked.end(),
+                      [](const KnnResult& a, const KnnResult& b) {
+                        return a.score < b.score;
+                      });
+    reranked.resize(n);
+    return reranked;
+  }
+
+  DistFn dist_fn = GetDistanceFunction(metric_);
   std::vector<KnnResult> results;
   results.reserve(total);
   if (quantization_ == VectorQuantization::kBq) {
@@ -571,7 +692,14 @@ std::vector<KnnResult> FlatVectorIndex::KnnQueryFiltered(
     const std::vector<std::string>& candidates) const {
   DistFn dist_fn = GetDistanceFunction(metric_);
   std::vector<KnnResult> results;
-  if (quantization_ == VectorQuantization::kBq) {
+  if (quantization_ == VectorQuantization::kBq &&
+      rerank_ != VectorRerankType::kNone) {
+    for (const auto& doc_id : candidates) {
+      auto it = id_to_idx_.find(doc_id);
+      if (it == id_to_idx_.end()) continue;
+      results.push_back({doc_id, RerankDistanceAt(query, it->second)});
+    }
+  } else if (quantization_ == VectorQuantization::kBq) {
     std::vector<uint64_t> qbq(bq_words_);
     QuantizeBq(query, dim_, qbq.data());
     for (const auto& doc_id : candidates) {
@@ -635,6 +763,7 @@ void FlatVectorIndex::Clear() {
   data_.clear();
   sq8_data_.clear();
   sq8_meta_.clear();
+  fp16_data_.clear();
   bq_data_.clear();
   ids_.clear();
   id_to_idx_.clear();
@@ -697,10 +826,12 @@ VectorIndexBase& VectorFieldIndices::GetOrCreate(
   if (params.algorithm == VectorAlgorithm::kHnsw) {
     idx = std::make_unique<HnswIndex>(params.dim, params.metric,
                                       params.m, params.ef_construction,
-                                      params.quantization);
+                                      params.quantization,
+                                      params.rerank, params.bq_oversample);
   } else {
     idx = std::make_unique<FlatVectorIndex>(params.dim, params.metric,
-                                            params.quantization);
+                                            params.quantization,
+                                            params.rerank, params.bq_oversample);
   }
   auto [new_it, inserted] = field_indices_.emplace(field_name, std::move(idx));
   return *new_it->second;

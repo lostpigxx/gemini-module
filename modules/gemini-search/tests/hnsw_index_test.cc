@@ -573,3 +573,107 @@ TEST(HnswIndexTest, DeserializeGraphCorruptionAndFuzz) {
     (void)dst.DeserializeGraph(bad.data(), bad.size());
   }
 }
+
+TEST(HnswIndexTest, BqTwoStageOversampleAndRerankBoostsRecall) {
+  constexpr size_t N = 1200;
+  constexpr size_t DIM = 768;
+  constexpr size_t K = 10;
+  std::mt19937 rng(6301);
+  std::normal_distribution<float> ndist(0.0f, 1.0f);
+
+  FlatVectorIndex gt_fp32(DIM, DistanceMetric::kCosine, VectorQuantization::kNone);
+  FlatVectorIndex flat_bq(DIM, DistanceMetric::kCosine, VectorQuantization::kBq);
+  FlatVectorIndex flat_bq_fp16(DIM, DistanceMetric::kCosine, VectorQuantization::kBq,
+                               VectorRerankType::kFp16, 8);
+  FlatVectorIndex flat_bq_sq8(DIM, DistanceMetric::kCosine, VectorQuantization::kBq,
+                              VectorRerankType::kSq8, 8);
+  HnswIndex hnsw_bq_fp16(DIM, DistanceMetric::kCosine, 16, 150, VectorQuantization::kBq,
+                         VectorRerankType::kFp16, 8);
+  HnswIndex hnsw_bq_sq8(DIM, DistanceMetric::kCosine, 16, 150, VectorQuantization::kBq,
+                        VectorRerankType::kSq8, 8);
+
+  // Generate clustered high-dimensional vectors (realistic embedding structure)
+  constexpr size_t kClusters = 24;
+  std::vector<std::vector<float>> centers(kClusters, std::vector<float>(DIM));
+  for (size_t c = 0; c < kClusters; c++) {
+    for (size_t d = 0; d < DIM; d++) centers[c][d] = ndist(rng);
+  }
+  std::vector<float> buf(DIM);
+  for (size_t i = 0; i < N; i++) {
+    const auto& ctr = centers[i % kClusters];
+    for (size_t d = 0; d < DIM; d++) buf[d] = ctr[d] + 0.35f * ndist(rng);
+    std::string id = "e" + std::to_string(i);
+    gt_fp32.Add(id, buf.data());
+    flat_bq.Add(id, buf.data());
+    flat_bq_fp16.Add(id, buf.data());
+    flat_bq_sq8.Add(id, buf.data());
+    hnsw_bq_fp16.Add(id, buf.data());
+    hnsw_bq_sq8.Add(id, buf.data());
+  }
+
+  auto measure_recall = [](const std::vector<KnnResult>& gt,
+                           const std::vector<KnnResult>& got) {
+    std::unordered_set<std::string> gt_set;
+    for (const auto& r : gt) gt_set.insert(r.doc_id);
+    size_t hits = 0;
+    for (const auto& r : got) {
+      if (gt_set.count(r.doc_id)) hits++;
+    }
+    return static_cast<double>(hits) / static_cast<double>(gt.size());
+  };
+
+  double r_bq = 0, r_flat_fp16 = 0, r_flat_sq8 = 0, r_hnsw_fp16 = 0, r_hnsw_sq8 = 0;
+  constexpr int kQueries = 15;
+  for (int q = 0; q < kQueries; q++) {
+    const auto& ctr = centers[static_cast<size_t>(q) % kClusters];
+    for (size_t d = 0; d < DIM; d++) buf[d] = ctr[d] + 0.35f * ndist(rng);
+    auto gt = gt_fp32.KnnQuery(buf.data(), K);
+    r_bq += measure_recall(gt, flat_bq.KnnQuery(buf.data(), K));
+    r_flat_fp16 += measure_recall(gt, flat_bq_fp16.KnnQuery(buf.data(), K));
+    r_flat_sq8 += measure_recall(gt, flat_bq_sq8.KnnQuery(buf.data(), K));
+    r_hnsw_fp16 += measure_recall(gt, hnsw_bq_fp16.KnnQueryEf(buf.data(), K, 160, 8));
+    r_hnsw_sq8 += measure_recall(gt, hnsw_bq_sq8.KnnQueryEf(buf.data(), K, 160, 8));
+  }
+  r_bq /= kQueries;
+  r_flat_fp16 /= kQueries;
+  r_flat_sq8 /= kQueries;
+  r_hnsw_fp16 /= kQueries;
+  r_hnsw_sq8 /= kQueries;
+
+  EXPECT_GT(r_flat_fp16, r_bq);
+  EXPECT_GT(r_flat_sq8, r_bq);
+  EXPECT_GT(r_hnsw_fp16, r_bq);
+  EXPECT_GT(r_hnsw_sq8, r_bq);
+  EXPECT_GE(r_flat_fp16, 0.90) << "flat BQ+FP16 recall=" << r_flat_fp16 << " vs BQ=" << r_bq;
+  EXPECT_GE(r_flat_sq8, 0.85) << "flat BQ+SQ8 recall=" << r_flat_sq8 << " vs BQ=" << r_bq;
+  EXPECT_GE(r_hnsw_fp16, 0.80) << "hnsw BQ+FP16 recall=" << r_hnsw_fp16 << " vs BQ=" << r_bq;
+  EXPECT_GE(r_hnsw_sq8, 0.80) << "hnsw BQ+SQ8 recall=" << r_hnsw_sq8 << " vs BQ=" << r_bq;
+
+  // Serialize & deserialize round-trip for BQ+FP16 and BQ+SQ8 HNSW graphs
+  {
+    std::string b_fp16 = hnsw_bq_fp16.SerializeGraph();
+    HnswIndex restored_fp16(DIM, DistanceMetric::kCosine, 16, 100, VectorQuantization::kBq,
+                            VectorRerankType::kFp16, 8);
+    ASSERT_TRUE(restored_fp16.DeserializeGraph(b_fp16.data(), b_fp16.size()));
+    auto orig = hnsw_bq_fp16.KnnQueryEf(buf.data(), K, 64, 8);
+    auto post = restored_fp16.KnnQueryEf(buf.data(), K, 64, 8);
+    ASSERT_EQ(orig.size(), post.size());
+    for (size_t i = 0; i < orig.size(); i++) {
+      EXPECT_EQ(orig[i].doc_id, post[i].doc_id);
+      EXPECT_FLOAT_EQ(orig[i].score, post[i].score);
+    }
+  }
+  {
+    std::string b_sq8 = hnsw_bq_sq8.SerializeGraph();
+    HnswIndex restored_sq8(DIM, DistanceMetric::kCosine, 16, 100, VectorQuantization::kBq,
+                           VectorRerankType::kSq8, 8);
+    ASSERT_TRUE(restored_sq8.DeserializeGraph(b_sq8.data(), b_sq8.size()));
+    auto orig = hnsw_bq_sq8.KnnQueryEf(buf.data(), K, 64, 8);
+    auto post = restored_sq8.KnnQueryEf(buf.data(), K, 64, 8);
+    ASSERT_EQ(orig.size(), post.size());
+    for (size_t i = 0; i < orig.size(); i++) {
+      EXPECT_EQ(orig[i].doc_id, post[i].doc_id);
+      EXPECT_FLOAT_EQ(orig[i].score, post[i].score);
+    }
+  }
+}

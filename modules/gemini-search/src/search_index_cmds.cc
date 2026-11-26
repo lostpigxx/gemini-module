@@ -234,6 +234,35 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                 ctx, "ERR unknown QUANTIZATION, expected NONE, SQ8, or BQ");
           }
           i += 2;
+        } else if (MatchArg(param, "RERANK")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR RERANK requires a value");
+          }
+          auto rstr = ArgView(argv[i + 1]);
+          if (MatchArg(rstr, "NONE")) {
+            fspec.vector_params.rerank = VectorRerankType::kNone;
+          } else if (MatchArg(rstr, "FP16")) {
+            fspec.vector_params.rerank = VectorRerankType::kFp16;
+          } else if (MatchArg(rstr, "SQ8")) {
+            fspec.vector_params.rerank = VectorRerankType::kSq8;
+          } else {
+            return RedisModule_ReplyWithError(
+                ctx, "ERR unknown RERANK, expected NONE, FP16, or SQ8");
+          }
+          i += 2;
+        } else if (MatchArg(param, "OVERSAMPLE")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR OVERSAMPLE requires a value");
+          }
+          auto os_str = ArgView(argv[i + 1]);
+          char* endptr = nullptr;
+          long os_val = std::strtol(std::string(os_str).c_str(), &endptr, 10);
+          if (*endptr != '\0' || os_val <= 0 || os_val > 1024) {
+            return RedisModule_ReplyWithError(
+                ctx, "ERR OVERSAMPLE must be a positive integer (<= 1024)");
+          }
+          fspec.vector_params.bq_oversample = static_cast<size_t>(os_val);
+          i += 2;
         } else if (MatchArg(param, "DIM")) {
           if (i + 1 >= argc) {
             return RedisModule_ReplyWithError(ctx, "ERR DIM requires a value");
@@ -303,6 +332,11 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (!has_metric) {
         return RedisModule_ReplyWithError(
             ctx, "ERR VECTOR field requires DISTANCE_METRIC parameter");
+      }
+      if (fspec.vector_params.rerank != VectorRerankType::kNone &&
+          fspec.vector_params.quantization != VectorQuantization::kBq) {
+        return RedisModule_ReplyWithError(
+            ctx, "ERR RERANK requires QUANTIZATION BQ");
       }
     } else if (MatchArg(ftype_str, "TEXT")) {
       fspec.type = FieldType::kText;
@@ -517,6 +551,7 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   for (auto& f : entry.spec.fields) {
     if (f.type == FieldType::kVector) {
       long vec_info_len = (f.vector_params.algorithm == VectorAlgorithm::kHnsw) ? 12 : 8;
+      if (f.vector_params.rerank != VectorRerankType::kNone) vec_info_len += 4;
       RedisModule_ReplyWithArray(ctx, vec_info_len);
       RedisModule_ReplyWithCString(ctx, f.name.c_str());
       RedisModule_ReplyWithSimpleString(ctx, "VECTOR");
@@ -534,6 +569,14 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(f.vector_params.m));
         RedisModule_ReplyWithSimpleString(ctx, "ef_construction");
         RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(f.vector_params.ef_construction));
+      }
+      if (f.vector_params.rerank != VectorRerankType::kNone) {
+        RedisModule_ReplyWithSimpleString(ctx, "rerank");
+        RedisModule_ReplyWithSimpleString(
+            ctx, VectorRerankTypeName(f.vector_params.rerank));
+        RedisModule_ReplyWithSimpleString(ctx, "oversample");
+        RedisModule_ReplyWithLongLong(
+            ctx, static_cast<long long>(f.vector_params.bq_oversample));
       }
     } else {
       long attr_count = 2;
@@ -576,7 +619,13 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     } else if (f.type == FieldType::kVector) {
       if (const auto* vidx = entry.vector_indices.Get(f.name)) {
         if (f.vector_params.quantization == VectorQuantization::kBq) {
-          vector_bytes += vidx->Size() * BqWords(vidx->Dim()) * sizeof(uint64_t);
+          size_t per_vec = BqWords(vidx->Dim()) * sizeof(uint64_t);
+          if (f.vector_params.rerank == VectorRerankType::kFp16) {
+            per_vec += vidx->Dim() * sizeof(uint16_t);
+          } else if (f.vector_params.rerank == VectorRerankType::kSq8) {
+            per_vec += vidx->Dim() * sizeof(uint8_t) + 2 * sizeof(float);
+          }
+          vector_bytes += vidx->Size() * per_vec;
         } else {
           size_t elem_b = (f.vector_params.quantization == VectorQuantization::kSq8)
                               ? 1

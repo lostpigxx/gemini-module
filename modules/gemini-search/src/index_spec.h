@@ -55,6 +55,17 @@ inline const char* VectorQuantizationName(VectorQuantization q) {
   return "NONE";
 }
 
+enum class VectorRerankType { kNone, kFp16, kSq8 };
+
+inline const char* VectorRerankTypeName(VectorRerankType r) {
+  switch (r) {
+    case VectorRerankType::kNone: return "NONE";
+    case VectorRerankType::kFp16: return "FP16";
+    case VectorRerankType::kSq8: return "SQ8";
+  }
+  return "NONE";
+}
+
 enum class DistanceMetric { kL2, kCosine, kIP };
 
 inline const char* DistanceMetricName(DistanceMetric m) {
@@ -86,6 +97,8 @@ struct VectorFieldParams {
   size_t ef_construction = 200;
   VectorDataType data_type = VectorDataType::kFloat32;
   VectorQuantization quantization = VectorQuantization::kNone;
+  VectorRerankType rerank = VectorRerankType::kNone;
+  size_t bq_oversample = 4;
 };
 
 struct FieldSpec {

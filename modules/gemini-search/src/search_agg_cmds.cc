@@ -887,7 +887,8 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                       knn_hits = vi->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands);
                     }
                   } else {
-                    knn_hits = vi->KnnQueryEf(qvec.data(), parsed.knn_k, parsed.knn_ef_runtime);
+                    knn_hits = vi->KnnQueryEf(qvec.data(), parsed.knn_k,
+                                              parsed.knn_ef_runtime, parsed.knn_oversample);
                   }
                   if (rep->error.empty()) {
                     result_ids.reserve(knn_hits.size());
@@ -943,7 +944,8 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         if (!ferr.empty()) return RedisModule_ReplyWithError(ctx, ferr.c_str());
         knn_hits = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands);
       } else {
-        knn_hits = vidx->KnnQueryEf(qvec.data(), parsed.knn_k, parsed.knn_ef_runtime);
+        knn_hits = vidx->KnnQueryEf(qvec.data(), parsed.knn_k,
+                                    parsed.knn_ef_runtime, parsed.knn_oversample);
       }
       result_ids.reserve(knn_hits.size());
       for (const auto& h : knn_hits) {

@@ -897,7 +897,7 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                     }
                   } else {
                     knn_res = vi->KnnQueryEf(qvec.data(), parsed.knn_k,
-                                             parsed.knn_ef_runtime);
+                                             parsed.knn_ef_runtime, parsed.knn_oversample);
                   }
                 }
                 if (rep->error.empty()) {
@@ -983,7 +983,7 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         knn_results = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, candidates);
       } else {
         knn_results = vidx->KnnQueryEf(qvec.data(), parsed.knn_k,
-                                       parsed.knn_ef_runtime);
+                                       parsed.knn_ef_runtime, parsed.knn_oversample);
       }
     }
 
@@ -2195,6 +2195,7 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   std::string vec_param;
   size_t knn_k = 10;
   size_t ef_runtime = 0;
+  size_t oversample = 0;
   std::string vec_filter_query;
 
   HybridConfig hcfg;
@@ -2287,6 +2288,18 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
             return RedisModule_ReplyWithError(ctx, "ERR EF_RUNTIME must be a positive integer");
           }
           ef_runtime = static_cast<size_t>(ef);
+          i += 2;
+        } else if (MatchArg(sub, "OVERSAMPLE")) {
+          if (i + 1 >= argc) {
+            return RedisModule_ReplyWithError(ctx, "ERR OVERSAMPLE requires a value");
+          }
+          char* ep = nullptr;
+          long os = std::strtol(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10);
+          if (*ep != '\0' || os <= 0 || os > 1024) {
+            return RedisModule_ReplyWithError(
+                ctx, "ERR OVERSAMPLE must be a positive integer (<= 1024)");
+          }
+          oversample = static_cast<size_t>(os);
           i += 2;
         } else if (MatchArg(sub, "FILTER")) {
           if (i + 1 >= argc) {
@@ -2576,7 +2589,7 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
     GetSearchExecutor().Submit(
         [bc, idx_str, vec_field = std::move(vec_field), qvec = std::move(qvec),
-         knn_k, ef_runtime, has_vec_filter, fpq = std::move(fpq),
+         knn_k, ef_runtime, oversample, has_vec_filter, fpq = std::move(fpq),
          tpq = std::move(tpq), text_limit, hcfg, opts = std::move(opts),
          params = std::move(params), qopts = std::move(qopts)]() {
           auto* rep = new AsyncHybridReply();
@@ -2604,7 +2617,7 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
                     vec_hits = vi->KnnQueryFiltered(qvec.data(), knn_k, cands);
                   }
                 } else {
-                  vec_hits = vi->KnnQueryEf(qvec.data(), knn_k, ef_runtime);
+                  vec_hits = vi->KnnQueryEf(qvec.data(), knn_k, ef_runtime, oversample);
                 }
               }
               std::vector<ScoredResult> text_hits;
@@ -2708,7 +2721,7 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       if (!ferr.empty()) return RedisModule_ReplyWithError(ctx, ferr.c_str());
       vec_hits = vidx->KnnQueryFiltered(qvec.data(), knn_k, candidates);
     } else {
-      vec_hits = vidx->KnnQueryEf(qvec.data(), knn_k, ef_runtime);
+      vec_hits = vidx->KnnQueryEf(qvec.data(), knn_k, ef_runtime, oversample);
     }
   }
 

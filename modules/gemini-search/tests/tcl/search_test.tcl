@@ -4381,6 +4381,58 @@ test_assert "Phase 62: HNSW FP32/SQ8/BQ direct RDB save/load preserves KNN acros
 }
 
 # ============================================================
+# Phase 63: BQ Oversample & Rerank (FP16 / SQ8)
+# ============================================================
+
+puts "\n=== Phase 63: BQ Oversample & Rerank ==="
+
+test_assert "Phase 63: QUANTIZATION BQ RERANK FP16/SQ8 + OVERSAMPLE + validation + FT.HYBRID" {
+  # Validation: RERANK without QUANTIZATION BQ must fail
+  set err_caught 0
+  if {[catch {r FT.CREATE p63_bad SCHEMA v VECTOR FLAT TYPE FLOAT32 DIM 4 DISTANCE_METRIC COSINE RERANK FP16}]} {
+    set err_caught 1
+  }
+  if {!$err_caught} { error "Expected error when RERANK used without QUANTIZATION BQ" }
+
+  r FT.CREATE p63_rr SCHEMA \
+    title TEXT \
+    vf VECTOR FLAT TYPE FLOAT32 QUANTIZATION BQ RERANK FP16 OVERSAMPLE 4 DIM 4 DISTANCE_METRIC COSINE \
+    vh VECTOR HNSW TYPE FLOAT32 QUANTIZATION BQ RERANK SQ8 OVERSAMPLE 4 DIM 4 DISTANCE_METRIC COSINE
+
+  set info [r FT.INFO p63_rr]
+  if {[string first "FP16" $info] < 0 || [string first "SQ8" $info] < 0} {
+    error "FT.INFO missing rerank info: $info"
+  }
+
+  # All 3 vectors share the exact same sign bits (+,+,+,+), so pure BQ gives identical 0.0 Hamming
+  # distance for all 3; two-stage FP16/SQ8 rerank must distinguish them accurately!
+  set v_exact [binary format f4 {1.0 0.01 0.01 0.01}]
+  set v_mid   [binary format f4 {1.0 1.0  0.01 0.01}]
+  set v_far   [binary format f4 {0.01 0.01 0.01 1.0}]
+
+  r FT.ADD p63_rr d_exact FIELDS title "alpha doc" vf $v_exact vh $v_exact
+  r FT.ADD p63_rr d_mid   FIELDS title "beta doc"  vf $v_mid   vh $v_mid
+  r FT.ADD p63_rr d_far   FIELDS title "gamma doc" vf $v_far   vh $v_far
+
+  set rf [r FT.SEARCH p63_rr "*=>\[KNN 2 @vf \$qv OVERSAMPLE 3\]" PARAMS 2 qv $v_exact NOCONTENT DIALECT 2]
+  if {[lindex $rf 0] != 2 || [lindex $rf 1] ne "d_exact" || [lindex $rf 2] ne "d_mid"} {
+    error "FLAT BQ+FP16 rerank ordering failed: $rf"
+  }
+  set rh [r FT.SEARCH p63_rr "*=>\[KNN 2 @vh \$qv EF_RUNTIME 16 OVERSAMPLE 3\]" PARAMS 2 qv $v_exact NOCONTENT DIALECT 2]
+  if {[lindex $rh 0] != 2 || [lindex $rh 1] ne "d_exact" || [lindex $rh 2] ne "d_mid"} {
+    error "HNSW BQ+SQ8 rerank ordering failed: $rh"
+  }
+
+  # FT.HYBRID with VSIM OVERSAMPLE
+  set rhyb [r FT.HYBRID p63_rr SEARCH "doc" VSIM @vh \$qv KNN 2 OVERSAMPLE 3 PARAMS 2 qv $v_exact]
+  if {[string first "d_exact" $rhyb] < 0} {
+    error "FT.HYBRID with VSIM OVERSAMPLE failed: $rhyb"
+  }
+
+  r FT.DROPINDEX p63_rr
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 
