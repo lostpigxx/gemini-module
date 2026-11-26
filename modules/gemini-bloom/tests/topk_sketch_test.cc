@@ -202,3 +202,26 @@ TEST(TopkSketchTest, AppendEntryForLoadRespectsCapacity) {
   EXPECT_TRUE(sketch->AppendEntryForLoad(ToSpan(std::string("b")), 5));
   EXPECT_FALSE(sketch->AppendEntryForLoad(ToSpan(std::string("c")), 1));
 }
+
+TEST(TopkSketchTest, LargeKHashIndexConsistencyUnderChurn) {
+  auto sketch = TopkSketch::Create(256, 2000, 5, 0.9);
+  ASSERT_TRUE(sketch.has_value());
+  for (int i = 0; i < 2000; i++) {
+    std::string key = "churn_" + std::to_string(i);
+    uint32_t inc = (i % 7 == 0) ? 50 : 1;
+    (void)sketch->IncrBy(ToSpan(key), inc);
+  }
+  auto list = sketch->List();
+  ASSERT_EQ(list.size(), 256u);
+  for (size_t i = 0; i < list.size(); i++) {
+    EXPECT_TRUE(sketch->Query(ToSpan(list[i].first))) << "Missing from hash index: " << list[i].first;
+    EXPECT_EQ(sketch->Count(ToSpan(list[i].first)), list[i].second);
+    if (i > 0) EXPECT_GE(list[i - 1].second, list[i].second);
+  }
+  auto clone = sketch->Clone();
+  ASSERT_TRUE(clone.has_value());
+  for (const auto& [name, cnt] : list) {
+    EXPECT_TRUE(clone->Query(ToSpan(name)));
+    EXPECT_EQ(clone->Count(ToSpan(name)), cnt);
+  }
+}

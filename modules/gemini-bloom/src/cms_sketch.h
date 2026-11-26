@@ -90,6 +90,7 @@ private:
 
   uint32_t width_ = 0;
   uint32_t depth_ = 0;
+  uint64_t widthFastModM_ = 0;
   uint32_t* counters_ = nullptr;
   uint64_t totalCount_ = 0;
 };

@@ -255,9 +255,13 @@ void FreeTopk(void* value) {
 size_t TopkMemUsage(const void* value) {
   if (!value) return 0;
   auto* sketch = static_cast<const TopkSketch*>(value);
-  size_t size = sizeof(TopkSketch) + sketch->GetCellDataSize() + sketch->K() * sizeof(TopkSketch::Entry);
+  size_t size = sizeof(TopkSketch) + sketch->GetCellDataSize() +
+                static_cast<size_t>(sketch->K()) * sizeof(TopkSketch::Entry) +
+                static_cast<size_t>(sketch->IndexCapacity()) * sizeof(uint32_t);
   const auto* entries = sketch->GetEntries();
-  for (uint32_t i = 0; i < sketch->NumActive(); i++) size += entries[i].nameLen;
+  for (uint32_t i = 0; i < sketch->NumActive(); i++) {
+    size += entries[i].nameLen == 0 ? 1 : entries[i].nameLen;
+  }
   return size;
 }
 
@@ -291,8 +295,8 @@ void* CopyTopk2(RedisModuleKeyOptCtx* ctx, const void* value) {
 
 size_t FreeEffortTopk2(RedisModuleKeyOptCtx* ctx, const void* value) {
   (void)ctx;
-  (void)value;
-  return 3;  // sketch object + cell table + entry table
+  auto* sketch = static_cast<const TopkSketch*>(value);
+  return 4 + sketch->NumActive();  // sketch + cells + entries + indexTable + per-entry names
 }
 
 int DefragTopk(RedisModuleDefragCtx* ctx, RedisModuleString* key, void** value) {
@@ -312,6 +316,20 @@ int DefragTopk(RedisModuleDefragCtx* ctx, RedisModuleString* key, void** value) 
   if (auto* relocatedEntries =
         static_cast<TopkSketch::Entry*>(RedisModule_DefragAlloc(ctx, sketch->GetEntries()))) {
     sketch->AdoptEntryArray(relocatedEntries);
+  }
+
+  if (auto* relocatedIndex =
+        static_cast<uint32_t*>(RedisModule_DefragAlloc(ctx, sketch->GetIndexTable()))) {
+    sketch->AdoptIndexTable(relocatedIndex);
+  }
+
+  auto* entries = sketch->GetEntries();
+  for (uint32_t i = 0; i < sketch->NumActive(); i++) {
+    if (entries[i].name) {
+      if (auto* relocatedName = static_cast<char*>(RedisModule_DefragAlloc(ctx, entries[i].name))) {
+        entries[i].name = relocatedName;
+      }
+    }
   }
 
   return 0;

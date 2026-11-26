@@ -12,6 +12,17 @@ namespace {
 // cuckoo_filter.cc) — this is a private wire format with no compatibility
 // requirement with any external sketch's internal hashing.
 constexpr uint32_t kCmsRowSeedBase = 0xc3157a5eu;
+
+inline uint64_t ComputeFastMod32M(uint32_t d) {
+  return (d <= 1) ? 0 : (UINT64_MAX / d + 1);
+}
+
+inline uint32_t FastMod32(uint32_t a, uint64_t M, uint32_t d) {
+  if (d <= 1) return 0;
+  __extension__ using u128 = unsigned __int128;
+  uint64_t lowbits = M * a;
+  return static_cast<uint32_t>((static_cast<u128>(lowbits) * d) >> 64);
+}
 }  // namespace
 
 CmsSketch::~CmsSketch() {
@@ -24,11 +35,13 @@ CmsSketch::~CmsSketch() {
 CmsSketch::CmsSketch(CmsSketch&& other) noexcept
     : width_(other.width_),
       depth_(other.depth_),
+      widthFastModM_(other.widthFastModM_),
       counters_(other.counters_),
       totalCount_(other.totalCount_) {
   other.counters_ = nullptr;
   other.width_ = 0;
   other.depth_ = 0;
+  other.widthFastModM_ = 0;
   other.totalCount_ = 0;
 }
 
@@ -37,11 +50,13 @@ CmsSketch& CmsSketch::operator=(CmsSketch&& other) noexcept {
     if (counters_) RMFree(counters_);
     width_ = other.width_;
     depth_ = other.depth_;
+    widthFastModM_ = other.widthFastModM_;
     counters_ = other.counters_;
     totalCount_ = other.totalCount_;
     other.counters_ = nullptr;
     other.width_ = 0;
     other.depth_ = 0;
+    other.widthFastModM_ = 0;
     other.totalCount_ = 0;
   }
   return *this;
@@ -55,6 +70,7 @@ std::optional<CmsSketch> CmsSketch::Create(uint32_t width, uint32_t depth) {
   CmsSketch sketch;
   sketch.width_ = width;
   sketch.depth_ = depth;
+  sketch.widthFastModM_ = ComputeFastMod32M(width);
   sketch.counters_ = static_cast<uint32_t*>(RMCalloc(static_cast<size_t>(width) * depth, sizeof(uint32_t)));
   if (!sketch.counters_) return std::nullopt;
   return sketch;
@@ -77,7 +93,7 @@ uint32_t CmsSketch::ColumnOf(std::span<const std::byte> item, uint32_t row) cons
   auto* ptr = reinterpret_cast<const void*>(item.data());
   auto len = static_cast<int>(std::min(item.size(), static_cast<size_t>(INT_MAX)));
   uint32_t h = MurmurHash2(ptr, len, kCmsRowSeedBase + row);
-  return h % width_;
+  return FastMod32(h, widthFastModM_, width_);
 }
 
 std::optional<uint64_t> CmsSketch::IncrBy(std::span<const std::byte> item, int64_t delta) {
@@ -187,23 +203,49 @@ bool CmsSketch::Merge(std::span<const CmsSketch* const> sources, std::span<const
 
   for (size_t i = 0; i < sources.size(); i++) {
     const auto* src = sources[i];
+    const uint32_t* srcArr = src->counters_;
     double weight = weights[i];
-    for (uint64_t idx = 0; idx < numCounters; idx++) {
-      double sum = static_cast<double>(target[idx]) + static_cast<double>(src->counters_[idx]) * weight;
-      if (!std::isfinite(sum) || sum >= kMaxU32) {
-        target[idx] = UINT32_MAX;
-      } else if (sum <= 0.0) {
-        target[idx] = 0;
-      } else {
-        target[idx] = static_cast<uint32_t>(sum);
+    bool isExactInt = (weight <= static_cast<double>(UINT32_MAX)) &&
+                      (static_cast<double>(static_cast<uint32_t>(weight)) == weight);
+    if (isExactInt) {
+      uint64_t wInt = static_cast<uint64_t>(weight);
+      if (wInt == 1) {
+        for (uint64_t idx = 0; idx < numCounters; idx++) {
+          uint64_t s = static_cast<uint64_t>(target[idx]) + srcArr[idx];
+          target[idx] = (s > UINT32_MAX) ? UINT32_MAX : static_cast<uint32_t>(s);
+        }
+      } else if (wInt > 0) {
+        for (uint64_t idx = 0; idx < numCounters; idx++) {
+          uint64_t s = static_cast<uint64_t>(target[idx]) + static_cast<uint64_t>(srcArr[idx]) * wInt;
+          target[idx] = (s > UINT32_MAX) ? UINT32_MAX : static_cast<uint32_t>(s);
+        }
       }
-    }
-    double weightedTotal = static_cast<double>(src->totalCount_) * weight;
-    if (!std::isfinite(weightedTotal) || weightedTotal >= kMaxU64) {
-      newTotal = UINT64_MAX;
-    } else if (weightedTotal > 0.0) {
-      uint64_t add = static_cast<uint64_t>(weightedTotal);
-      newTotal = (add > UINT64_MAX - newTotal) ? UINT64_MAX : newTotal + add;
+      if (wInt > 0 && src->totalCount_ > 0) {
+        if (src->totalCount_ > UINT64_MAX / wInt) {
+          newTotal = UINT64_MAX;
+        } else {
+          uint64_t add = src->totalCount_ * wInt;
+          newTotal = (add > UINT64_MAX - newTotal) ? UINT64_MAX : newTotal + add;
+        }
+      }
+    } else {
+      for (uint64_t idx = 0; idx < numCounters; idx++) {
+        double sum = static_cast<double>(target[idx]) + static_cast<double>(srcArr[idx]) * weight;
+        if (!std::isfinite(sum) || sum >= kMaxU32) {
+          target[idx] = UINT32_MAX;
+        } else if (sum <= 0.0) {
+          target[idx] = 0;
+        } else {
+          target[idx] = static_cast<uint32_t>(sum);
+        }
+      }
+      double weightedTotal = static_cast<double>(src->totalCount_) * weight;
+      if (!std::isfinite(weightedTotal) || weightedTotal >= kMaxU64) {
+        newTotal = UINT64_MAX;
+      } else if (weightedTotal > 0.0) {
+        uint64_t add = static_cast<uint64_t>(weightedTotal);
+        newTotal = (add > UINT64_MAX - newTotal) ? UINT64_MAX : newTotal + add;
+      }
     }
   }
 
@@ -219,6 +261,7 @@ std::optional<CmsSketch> CmsSketch::Clone() const {
   CmsSketch copy;
   copy.width_ = width_;
   copy.depth_ = depth_;
+  copy.widthFastModM_ = widthFastModM_;
   copy.totalCount_ = totalCount_;
 
   uint64_t dataSize = GetDataSize();

@@ -419,9 +419,12 @@ TEST(TopkModuleType, DigestTopkDeterministicAndContentSensitive) {
   DestroySketch(sketch);
 }
 
-TEST(TopkModuleType, FreeEffortTopk2ReturnsConstant) {
+TEST(TopkModuleType, FreeEffortTopk2ScalesWithActiveEntries) {
   auto* sketch = CreateSketch(5, 32, 4, 0.9);
-  EXPECT_EQ(FreeEffortTopk2(nullptr, sketch), 3u);
+  EXPECT_EQ(FreeEffortTopk2(nullptr, sketch), 4u);
+  sketch->Add(ToSpan("a"));
+  sketch->Add(ToSpan("b"));
+  EXPECT_EQ(FreeEffortTopk2(nullptr, sketch), 6u);
   DestroySketch(sketch);
 }
 

@@ -240,3 +240,26 @@ TEST(CmsSketchTest, MergeRejectsNonFiniteOrNegativeWeights) {
   EXPECT_FALSE(dst->Merge(sources, infW));
   EXPECT_FALSE(dst->Merge(sources, negW));
 }
+
+TEST(CmsSketchTest, MergeIntegerFastPathMatchesFloatWeights) {
+  auto dstInt = CmsSketch::Create(257, 5);
+  auto dstFlt = CmsSketch::Create(257, 5);
+  auto s1 = CmsSketch::Create(257, 5);
+  auto s2 = CmsSketch::Create(257, 5);
+  ASSERT_TRUE(dstInt && dstFlt && s1 && s2);
+  for (int i = 0; i < 100; i++) {
+    std::string k = "m_" + std::to_string(i);
+    ASSERT_TRUE(s1->IncrBy(ToSpan(k), i + 1).has_value());
+    ASSERT_TRUE(s2->IncrBy(ToSpan(k), (i + 1) * 3).has_value());
+  }
+  const CmsSketch* srcs[] = {&*s1, &*s2};
+  double wInt[] = {1.0, 2.0};
+  double wFlt[] = {1.0, 2.5};
+  ASSERT_TRUE(dstInt->Merge(srcs, wInt));
+  ASSERT_TRUE(dstFlt->Merge(srcs, wFlt));
+  for (int i = 0; i < 100; i++) {
+    std::string k = "m_" + std::to_string(i);
+    EXPECT_GE(dstInt->Query(ToSpan(k)), static_cast<uint64_t>((i + 1) + 2 * (i + 1) * 3));
+    EXPECT_GE(dstFlt->Query(ToSpan(k)), dstInt->Query(ToSpan(k)));
+  }
+}

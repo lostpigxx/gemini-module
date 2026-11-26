@@ -262,11 +262,12 @@ static int CmdList(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   auto* sketch = GetSketch(key);
   if (!sketch) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
 
-  auto list = sketch->List();
-  RedisModule_ReplyWithArray(ctx, withCount ? static_cast<long>(list.size()) * 2 : static_cast<long>(list.size()));
-  for (const auto& [name, itemCount] : list) {
-    RedisModule_ReplyWithStringBuffer(ctx, name.data(), name.size());
-    if (withCount) RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(itemCount));
+  uint32_t n = sketch->NumActive();
+  const auto* entries = sketch->GetEntries();
+  RedisModule_ReplyWithArray(ctx, withCount ? static_cast<long>(n) * 2 : static_cast<long>(n));
+  for (uint32_t i = 0; i < n; i++) {
+    RedisModule_ReplyWithStringBuffer(ctx, entries[i].name, entries[i].nameLen);
+    if (withCount) RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(entries[i].count));
   }
   return REDISMODULE_OK;
 }

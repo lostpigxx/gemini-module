@@ -44,6 +44,7 @@ public:
   struct Entry {
     char* name = nullptr;
     uint32_t nameLen = 0;
+    uint32_t nameHash = 0;
     uint64_t count = 0;
   };
 
@@ -97,28 +98,46 @@ public:
   // For defrag: adopt a relocated entry-table buffer (holds k_ slots).
   void AdoptEntryArray(Entry* relocated) { entries_ = relocated; }
 
+  uint32_t* GetIndexTable() { return indexTable_; }
+  uint32_t IndexCapacity() const { return indexCap_; }
+  void AdoptIndexTable(uint32_t* relocated) { indexTable_ = relocated; }
+
   // For RDB/wire load: append an owned copy of `name` with `count` as the
   // next active entry. Caller must append in descending-count order (as
   // this class always persists them) and never exceed k_ entries.
   bool AppendEntryForLoad(std::span<const std::byte> name, uint64_t count);
 
 private:
+  static constexpr uint32_t kDecayLutSize = 256;
+
+  void InitTables();
   uint32_t FingerprintOf(std::span<const std::byte> item) const;
+  uint32_t NameHashOf(std::span<const std::byte> item) const;
   uint32_t BucketOf(std::span<const std::byte> item, uint32_t row) const;
+  double DecayProb(uint32_t count) const;
   double NextRandom();
 
-  uint64_t ApplyOneIncrement(std::span<const std::byte> item);
-  std::optional<std::string> UpdateTopK(std::span<const std::byte> item, uint64_t newCount);
-  int FindEntryIndex(std::span<const std::byte> item) const;
-  bool SetEntryName(uint32_t idx, std::span<const std::byte> name);
+  uint64_t ApplyIncrements(std::span<const std::byte> item, uint32_t increment, uint32_t fp);
+  std::optional<std::string> UpdateTopK(std::span<const std::byte> item, uint64_t newCount,
+                                         uint32_t increment, uint32_t nameHash);
+  int FindEntryIndex(std::span<const std::byte> item, uint32_t nameHash) const;
+  void IndexInsert(uint32_t entryIdx);
+  void IndexRemove(uint32_t entryIdx, uint32_t nameHash);
+  void SwapEntries(uint32_t a, uint32_t b);
+  bool SetEntryName(uint32_t idx, std::span<const std::byte> name, uint32_t nameHash);
   void FreeEntryName(uint32_t idx);
 
   uint32_t k_ = 0;
   uint32_t width_ = 0;
   uint32_t depth_ = 0;
+  uint64_t widthFastModM_ = 0;
   double decay_ = 0.0;
+  uint32_t maxDecayCount_ = 0;
+  double decayTable_[kDecayLutSize] = {};
   Cell* cells_ = nullptr;
   Entry* entries_ = nullptr;
+  uint32_t* indexTable_ = nullptr;
+  uint32_t indexCap_ = 0;
   uint32_t numActive_ = 0;
   uint64_t rngState_ = 0x9e3779b97f4a7c15ULL;
 };
