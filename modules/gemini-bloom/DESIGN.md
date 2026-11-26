@@ -727,4 +727,32 @@ tclsh modules/gemini-bloom/tests/tcl/bloom_test.tcl ./build/redis_bloom.so
 
 7. **command-AOF rewrite 分配失败时 key 会被跳过**：`AofRewriteBloom()` 中 header buffer 分配失败时，模块记录 warning 日志并跳过该 key（`return`）。Redis Module API 没有提供显式 abort AOF rewrite 的接口，`RedisModule_LogIOError` 是模块层能发出的最强信号。实际风险极低：默认 `aof-use-rdb-preamble yes` 时此代码路径不执行；即使执行，header 只有几百字节，能触发 OOM 意味着 Redis 整体已在极端内存压力下。
 
-8. **RedisBloom / Redis 8 同实例共存冲突**：gemini-bloom 复用了 `BF.*` 命令名和 `MBbloom--` data type name。在同一 Redis 实例中，如果已加载 RedisBloom module，加载 gemini-bloom 将产生命令名和 data type name 的注册冲突（`RedisModule_CreateCommand` / `RedisModule_CreateDataType` 返回错误），模块加载会失败。同样，Redis 8 内置 Bloom 使用相同的命令名和类型名，在 Redis 8 环境中加载 gemini-bloom 也会产生冲突。gemini-bloom 与 RedisBloom / Redis 8 Bloom 是**互斥部署**关系，不能同时加载在同一 Redis 实例上。当前目标环境为 Redis 6.x / 7.x 且不加载 RedisBloom module。
+8. **RedisBloom / Redis 8 同实例共存冲突**：gemini-bloom 复用了 `BF.*` 命令名和 `MBbloom--` data type name。在同一 Redis 实例中，如果已加载 RedisBloom module，加载 gemini-bloom 将产生命令名和 data type name 的注册冲突（`RedisModule_CreateCommand` / `RedisModule_CreateDataType` 返回错误），模块加载会失败。同样，Redis 8 内置 Bloom 使用相同的命令名和类型名，在 Redis 8 环境中加载 gemini-bloom 也会产生冲突。gemini-bloom 与 RedisBloom / Redis 8 Bloom 是**互斥部署**关系，不能同时加载在同一 Redis 实例上。当前目标环境为 **Redis 7.x（基线 7.2.11）**且不加载 RedisBloom module。
+
+---
+
+## 10. 其余 4 个子模块架构与 Redis 7 优化总览
+
+除 `BF.*`（`MBbloom--`）外，`redis_bloom.so` 在同一模块中提供了以下 4 种概率数据结构（均面向 **Redis 7**，命令级兼容 RedisBloom，使用私有 RDB 格式，均支持 `mem_usage2` / `copy2` / `free_effort2` / `defrag` / 零拷贝 RDB 加载）：
+
+### 10.1 Cuckoo Filter（`CF.*` / `MBcuckoo-`）
+- **结构**：可扩展链 `CuckooChain` 管理多层 2 的幂桶数组 `CuckooFilter`，每槽 1 字节非零指纹（0 表示空槽），支持 `CF.DEL` 与 `CF.COUNT`。
+- **内存与扩容保护**：单层上限 `1 GiB`（`kCfMaxLayerDataSize`）、总上限 `2 GiB`（`kCfMaxTotalDataSize`）；非 2 的幂 `EXPANSION` 通过 `std::bit_ceil` 对齐保证扩容必成功。
+- **性能优化**：链级单次哈希（`CfHashItem`）+ 倒序查层；`CfAltIndex` 编译期 256 项 `constexpr` LUT 消除单字节哈希；64 槽栈上踢出历史消除踢出循环热路径堆分配；无借位 64-bit SWAR 并行桶匹配与计数。
+
+### 10.2 Count-Min Sketch（`CMS.*` / `MBcms----`）
+- **结构**：`width × depth` 扁平 `uint32_t` 计数表，上限 `2^28` 计数器（1 GiB）。
+- **安全与原子性**：`CMS.INCRBY` 支持多元素原子回滚（无有符号溢出 UB）；`CMS.MERGE` 支持自别名安全合并、禁止 `NaN`/负权重，并通过 Redis 7 `RedisModule_SetCommandInfo` 注册 `REDISMODULE_KSPEC_FK_KEYNUM` 动态 KeySpecs。
+- **性能优化**：`IncrBy` 栈缓存列号单次哈希；32-bit Lemire FastMod 消除每行 `% width_`；`Merge` 整数权重快路径。
+- **大对象 AOF 分片**：超过 32 MiB 时 `AofRewriteCms` 自动以 `CMS.LOADCHUNK key 0 <header>` + 32 MiB 切片流式写出，规避 `proto-max-bulk-len` 限制与 1 GiB 临时缓冲。
+
+### 10.3 Top-K（`TOPK.*` / `MBtopk---`，HeavyKeeper）
+- **结构**：`width × depth` 的 `{fingerprint, count}` 单元表 + 有序 `Entry[k]` + 开放寻址 $O(1)$ 哈希索引（后向移位无墓碑删除）。
+- **性能优化**：预计算 256 项 `decay^c` 查找表与下溢截断（消除热路径 `std::pow`）；`IncrBy` 真批处理（单次哈希、批量累加/饱和、单次更新 Top-K）；`TOPK.LIST` 零拷贝流式回复；`DefragTopk` 覆盖全部分配（含每条 entry 字符串）且 `FreeEffortTopk2` 随 `NumActive()` 线性缩放。
+- **大对象 AOF 分片**：超过 32 MiB 时 `AofRewriteTopk` 以 `TOPK.LOADCHUNK key 0 <meta+entries>` + 32 MiB cell 切片流式写出；RDB/Wire 加载校验条目唯一性与非递增顺序。
+
+### 10.4 T-Digest（`TDIGEST.*` / `MBtdigest`）
+- **算法**：标准 Dunning-Ertl $k_1$（arcsin）缩放函数 + 奇偶交替合并扫描，配合仅排序新缓冲再有序归并，在长尾分布（Exp(1)）上将 p99 / p99.9 相对误差分别降至 ~0.02% / ~0.85%。
+- **查询与只读副本**：维护 `prefixWeights_` 累计中点权重前缀和，使 `Quantile` / `Cdf` / `Rank` / `RevRank` / `ByRank` / `ByRevRank` 均为 $O(\log C)$ 零堆分配二分查找；7 个查询命令以 `"readonly"` 注册，完整支持 Redis 7 只读副本（`REPLICAOF`）直接查询。
+- **安全与 KeySpecs**：`TDIGEST.ADD` 全量预检 `std::isfinite` 保证原子性；`TDIGEST.MERGE ... OVERRIDE` 支持自别名合并并注册 Redis 7 动态 KeySpecs；RDB/Wire 加载严格校验 centroids 有序性与权重和一致性。
+

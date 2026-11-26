@@ -3,6 +3,7 @@
 #include "cms_sketch.h"
 #include "rm_alloc.h"
 
+#include <algorithm>
 #include <cstring>
 
 // --- Field validation ---
@@ -114,6 +115,39 @@ CmsSketch* CmsDeserializeChunk(const void* data, size_t length) {
   return sketch;
 }
 
+size_t CmsSerializeHeaderOnly(const CmsSketch& sketch, void* output) {
+  CmsWireHeader hdr{};
+  hdr.width = sketch.Width();
+  hdr.depth = sketch.Depth();
+  hdr.totalCount = sketch.TotalCount();
+  std::memcpy(output, &hdr, sizeof(hdr));
+  return sizeof(hdr);
+}
+
+CmsSketch* CmsDeserializeHeaderOnly(const void* data, size_t length) {
+  if (length != sizeof(CmsWireHeader)) return nullptr;
+  CmsWireHeader hdr{};
+  std::memcpy(&hdr, data, sizeof(hdr));
+  uint64_t expectedData = static_cast<uint64_t>(hdr.width) * hdr.depth * sizeof(uint32_t);
+  if (!ValidateCmsFields(hdr.width, hdr.depth, expectedData)) return nullptr;
+  auto maybeSketch = CmsSketch::Create(hdr.width, hdr.depth);
+  if (!maybeSketch) return nullptr;
+  maybeSketch->SetTotalCount(hdr.totalCount);
+  auto* sketch = static_cast<CmsSketch*>(RMAlloc(sizeof(CmsSketch)));
+  if (!sketch) return nullptr;
+  new (sketch) CmsSketch(std::move(*maybeSketch));
+  return sketch;
+}
+
+bool CmsApplyCounterSlice(CmsSketch& sketch, size_t byteOffset, const void* data, size_t length) {
+  uint64_t totalBytes = sketch.GetDataSize();
+  if (byteOffset > totalBytes || length > totalBytes - byteOffset) return false;
+  if (length > 0) {
+    std::memcpy(reinterpret_cast<char*>(sketch.GetCounterArray()) + byteOffset, data, length);
+  }
+  return true;
+}
+
 // --- Module type callbacks ---
 
 RedisModuleType* CmsType = nullptr;
@@ -133,15 +167,32 @@ void AofRewriteCms(RedisModuleIO* aof, RedisModuleString* key, void* value) {
   auto* sketch = static_cast<CmsSketch*>(value);
 
   size_t chunkBytes = CmsComputeChunkSize(*sketch);
-  auto* buf = static_cast<char*>(RMAlloc(chunkBytes));
-  if (!buf) {
-    RedisModule_LogIOError(aof, "warning",
-      "GeminiBloom: CMS AOF rewrite allocation failure, key omitted");
+  if (chunkBytes <= kCmsAofChunkBytes) {
+    auto* buf = static_cast<char*>(RMAlloc(chunkBytes));
+    if (!buf) {
+      RedisModule_LogIOError(aof, "warning",
+        "GeminiBloom: CMS AOF rewrite allocation failure, key omitted");
+      return;
+    }
+    CmsSerializeChunk(*sketch, buf);
+    RedisModule_EmitAOF(aof, "CMS.LOADCHUNK", "sb", key, buf, chunkBytes);
+    RMFree(buf);
     return;
   }
-  CmsSerializeChunk(*sketch, buf);
-  RedisModule_EmitAOF(aof, "CMS.LOADCHUNK", "sb", key, buf, chunkBytes);
-  RMFree(buf);
+
+  // Large sketch (> 32 MiB): stream header + counter slices without allocating
+  // a full copy and staying well under Redis proto-max-bulk-len (512 MiB).
+  char hdrBuf[sizeof(CmsWireHeader)];
+  size_t hdrLen = CmsSerializeHeaderOnly(*sketch, hdrBuf);
+  RedisModule_EmitAOF(aof, "CMS.LOADCHUNK", "slb", key, (long long)0, hdrBuf, hdrLen);
+
+  const char* raw = reinterpret_cast<const char*>(sketch->GetCounterArray());
+  uint64_t totalBytes = sketch->GetDataSize();
+  for (uint64_t off = 0; off < totalBytes; off += kCmsAofChunkBytes) {
+    size_t sliceLen = static_cast<size_t>(std::min<uint64_t>(kCmsAofChunkBytes, totalBytes - off));
+    RedisModule_EmitAOF(aof, "CMS.LOADCHUNK", "slb", key, static_cast<long long>(off + 1),
+                        raw + off, sliceLen);
+  }
 }
 
 void FreeCms(void* value) {

@@ -300,27 +300,65 @@ static int CmdInfo(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 }
 
 // --- CMS.LOADCHUNK (private, AOF-only) ---
+// Single-shot form: CMS.LOADCHUNK key payload
+// Chunked form (for large sketches > 32 MiB):
+//   CMS.LOADCHUNK key 0 <header>
+//   CMS.LOADCHUNK key <byteOffset+1> <counterSlice>
 static int CmdLoadchunk(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
-  if (argc != 3) return RedisModule_WrongArity(ctx);
+  if (argc != 3 && argc != 4) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
-
-  size_t dataLen;
-  const char* data = RedisModule_StringPtrLen(argv[2], &dataLen);
 
   auto* key = static_cast<RedisModuleKey*>(
     RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
-  if (RedisModule_KeyType(key) != REDISMODULE_KEYTYPE_EMPTY) {
-    return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+
+  if (argc == 3) {
+    size_t dataLen;
+    const char* data = RedisModule_StringPtrLen(argv[2], &dataLen);
+    if (RedisModule_KeyType(key) != REDISMODULE_KEYTYPE_EMPTY) {
+      return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    }
+    auto* sketch = CmsDeserializeChunk(data, dataLen);
+    if (!sketch) {
+      return RedisModule_ReplyWithError(ctx, "ERR corrupted payload");
+    }
+    if (RedisModule_ModuleTypeSetValue(key, CmsType, sketch) != REDISMODULE_OK) {
+      sketch->~CmsSketch();
+      RMFree(sketch);
+      return RedisModule_ReplyWithError(ctx, "ERR failed to set key value");
+    }
+    RedisModule_ReplicateVerbatim(ctx);
+    return RedisModule_ReplyWithSimpleString(ctx, "OK");
   }
 
-  auto* sketch = CmsDeserializeChunk(data, dataLen);
-  if (!sketch) {
-    return RedisModule_ReplyWithError(ctx, "ERR corrupted payload");
+  long long cursor;
+  if (RedisModule_StringToLongLong(argv[2], &cursor) != REDISMODULE_OK || cursor < 0) {
+    return RedisModule_ReplyWithError(ctx, "ERR invalid offset");
   }
-  if (RedisModule_ModuleTypeSetValue(key, CmsType, sketch) != REDISMODULE_OK) {
-    sketch->~CmsSketch();
-    RMFree(sketch);
-    return RedisModule_ReplyWithError(ctx, "ERR failed to set key value");
+  size_t dataLen;
+  const char* data = RedisModule_StringPtrLen(argv[3], &dataLen);
+
+  if (cursor == 0) {
+    if (RedisModule_KeyType(key) != REDISMODULE_KEYTYPE_EMPTY) {
+      return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    }
+    auto* sketch = CmsDeserializeHeaderOnly(data, dataLen);
+    if (!sketch) {
+      return RedisModule_ReplyWithError(ctx, "ERR corrupted header payload");
+    }
+    if (RedisModule_ModuleTypeSetValue(key, CmsType, sketch) != REDISMODULE_OK) {
+      sketch->~CmsSketch();
+      RMFree(sketch);
+      return RedisModule_ReplyWithError(ctx, "ERR failed to set key value");
+    }
+  } else {
+    if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
+      return RedisModule_ReplyWithError(ctx, "ERR key does not exist");
+    }
+    auto* sketch = GetSketch(key);
+    if (!sketch) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    if (!CmsApplyCounterSlice(*sketch, static_cast<size_t>(cursor - 1), data, dataLen)) {
+      return RedisModule_ReplyWithError(ctx, "ERR counter slice out of bounds");
+    }
   }
 
   RedisModule_ReplicateVerbatim(ctx);

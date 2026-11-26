@@ -43,3 +43,10 @@ int DefragTopk(RedisModuleDefragCtx* ctx, RedisModuleString* key, void** value);
 size_t TopkComputeChunkSize(const class TopkSketch& sketch);
 size_t TopkSerializeChunk(const TopkSketch& sketch, void* output);
 TopkSketch* TopkDeserializeChunk(const void* data, size_t length);
+
+// Multi-chunk AOF wire helpers for large Top-K sketches (> 32 MiB).
+constexpr size_t kTopkAofChunkBytes = 32u * 1024u * 1024u;
+size_t TopkComputeMetaSize(const TopkSketch& sketch);
+size_t TopkSerializeMeta(const TopkSketch& sketch, void* output);
+TopkSketch* TopkDeserializeMeta(const void* data, size_t length);
+bool TopkApplyCellSlice(TopkSketch& sketch, size_t byteOffset, const void* data, size_t length);

@@ -299,27 +299,65 @@ static int CmdInfo(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 }
 
 // --- TOPK.LOADCHUNK (private, AOF-only) ---
+// Single-shot form: TOPK.LOADCHUNK key payload
+// Chunked form (for large sketches > 32 MiB):
+//   TOPK.LOADCHUNK key 0 <meta+entries>
+//   TOPK.LOADCHUNK key <byteOffset+1> <cellSlice>
 static int CmdLoadchunk(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
-  if (argc != 3) return RedisModule_WrongArity(ctx);
+  if (argc != 3 && argc != 4) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
-
-  size_t dataLen;
-  const char* data = RedisModule_StringPtrLen(argv[2], &dataLen);
 
   auto* key = static_cast<RedisModuleKey*>(
     RedisModule_OpenKey(ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
-  if (RedisModule_KeyType(key) != REDISMODULE_KEYTYPE_EMPTY) {
-    return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+
+  if (argc == 3) {
+    size_t dataLen;
+    const char* data = RedisModule_StringPtrLen(argv[2], &dataLen);
+    if (RedisModule_KeyType(key) != REDISMODULE_KEYTYPE_EMPTY) {
+      return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    }
+    auto* sketch = TopkDeserializeChunk(data, dataLen);
+    if (!sketch) {
+      return RedisModule_ReplyWithError(ctx, "ERR corrupted payload");
+    }
+    if (RedisModule_ModuleTypeSetValue(key, TopkType, sketch) != REDISMODULE_OK) {
+      sketch->~TopkSketch();
+      RMFree(sketch);
+      return RedisModule_ReplyWithError(ctx, "ERR failed to set key value");
+    }
+    RedisModule_ReplicateVerbatim(ctx);
+    return RedisModule_ReplyWithSimpleString(ctx, "OK");
   }
 
-  auto* sketch = TopkDeserializeChunk(data, dataLen);
-  if (!sketch) {
-    return RedisModule_ReplyWithError(ctx, "ERR corrupted payload");
+  long long cursor;
+  if (RedisModule_StringToLongLong(argv[2], &cursor) != REDISMODULE_OK || cursor < 0) {
+    return RedisModule_ReplyWithError(ctx, "ERR invalid offset");
   }
-  if (RedisModule_ModuleTypeSetValue(key, TopkType, sketch) != REDISMODULE_OK) {
-    sketch->~TopkSketch();
-    RMFree(sketch);
-    return RedisModule_ReplyWithError(ctx, "ERR failed to set key value");
+  size_t dataLen;
+  const char* data = RedisModule_StringPtrLen(argv[3], &dataLen);
+
+  if (cursor == 0) {
+    if (RedisModule_KeyType(key) != REDISMODULE_KEYTYPE_EMPTY) {
+      return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    }
+    auto* sketch = TopkDeserializeMeta(data, dataLen);
+    if (!sketch) {
+      return RedisModule_ReplyWithError(ctx, "ERR corrupted meta payload");
+    }
+    if (RedisModule_ModuleTypeSetValue(key, TopkType, sketch) != REDISMODULE_OK) {
+      sketch->~TopkSketch();
+      RMFree(sketch);
+      return RedisModule_ReplyWithError(ctx, "ERR failed to set key value");
+    }
+  } else {
+    if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_EMPTY) {
+      return RedisModule_ReplyWithError(ctx, "ERR key does not exist");
+    }
+    auto* sketch = GetSketch(key);
+    if (!sketch) return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    if (!TopkApplyCellSlice(*sketch, static_cast<size_t>(cursor - 1), data, dataLen)) {
+      return RedisModule_ReplyWithError(ctx, "ERR cell slice out of bounds");
+    }
   }
 
   RedisModule_ReplicateVerbatim(ctx);

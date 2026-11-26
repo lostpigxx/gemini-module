@@ -449,3 +449,36 @@ TEST(TopkModuleType, DefragTopkRelocatesBuffersAndPreservesData) {
 
   DestroySketch(relocated);
 }
+
+TEST(TopkWire, MultiChunkMetaAndCellSliceRoundTrip) {
+  auto* src = CreateSketch(5, 64, 4, 0.9);
+  for (int i = 0; i < 30; i++) {
+    src->IncrBy(ToSpan("tk_chunk_" + std::to_string(i)), (i % 7) + 1);
+  }
+
+  std::vector<char> metaBuf(TopkComputeMetaSize(*src));
+  size_t metaLen = TopkSerializeMeta(*src, metaBuf.data());
+  auto* dst = TopkDeserializeMeta(metaBuf.data(), metaLen);
+  ASSERT_NE(dst, nullptr);
+  EXPECT_EQ(dst->NumActive(), src->NumActive());
+
+  const char* raw = reinterpret_cast<const char*>(src->GetCellArray());
+  size_t totalBytes = static_cast<size_t>(src->GetCellDataSize());
+  constexpr size_t kStep = 211;
+  for (size_t off = 0; off < totalBytes; off += kStep) {
+    size_t len = std::min(kStep, totalBytes - off);
+    ASSERT_TRUE(TopkApplyCellSlice(*dst, off, raw + off, len));
+  }
+  EXPECT_FALSE(TopkApplyCellSlice(*dst, totalBytes, raw, 1));
+
+  auto srcList = src->List();
+  auto dstList = dst->List();
+  EXPECT_EQ(dstList, srcList);
+  for (const auto& [name, cnt] : srcList) {
+    EXPECT_TRUE(dst->Query(ToSpan(name)));
+    EXPECT_EQ(dst->Count(ToSpan(name)), cnt);
+  }
+
+  DestroySketch(src);
+  DestroySketch(dst);
+}

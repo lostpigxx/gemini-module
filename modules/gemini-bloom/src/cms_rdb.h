@@ -43,3 +43,10 @@ int DefragCms(RedisModuleDefragCtx* ctx, RedisModuleString* key, void** value);
 size_t CmsComputeChunkSize(const class CmsSketch& sketch);
 size_t CmsSerializeChunk(const CmsSketch& sketch, void* output);
 CmsSketch* CmsDeserializeChunk(const void* data, size_t length);
+
+// Multi-chunk AOF wire helpers for large CMS (> kCmsAofChunkSize, avoiding
+// proto-max-bulk-len limits and large temporary allocations during AOF rewrite).
+constexpr size_t kCmsAofChunkBytes = 32u * 1024u * 1024u;
+size_t CmsSerializeHeaderOnly(const CmsSketch& sketch, void* output);
+CmsSketch* CmsDeserializeHeaderOnly(const void* data, size_t length);
+bool CmsApplyCounterSlice(CmsSketch& sketch, size_t byteOffset, const void* data, size_t length);

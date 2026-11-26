@@ -4,6 +4,7 @@
 #include "topk_sketch.h"
 #include "rm_alloc.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -216,6 +217,93 @@ TopkSketch* TopkDeserializeChunk(const void* data, size_t length) {
   return sketch;
 }
 
+size_t TopkComputeMetaSize(const TopkSketch& sketch) {
+  size_t size = sizeof(TopkWireHeader);
+  const auto* entries = sketch.GetEntries();
+  for (uint32_t i = 0; i < sketch.NumActive(); i++) {
+    size += sizeof(TopkWireEntryHeader) + entries[i].nameLen;
+  }
+  return size;
+}
+
+size_t TopkSerializeMeta(const TopkSketch& sketch, void* output) {
+  auto* cursor = static_cast<char*>(output);
+
+  TopkWireHeader hdr{};
+  hdr.k = sketch.K();
+  hdr.width = sketch.Width();
+  hdr.depth = sketch.Depth();
+  hdr.decay = sketch.Decay();
+  hdr.numActive = sketch.NumActive();
+  std::memcpy(cursor, &hdr, sizeof(hdr));
+  cursor += sizeof(TopkWireHeader);
+
+  const auto* entries = sketch.GetEntries();
+  for (uint32_t i = 0; i < sketch.NumActive(); i++) {
+    TopkWireEntryHeader entryHdr{};
+    entryHdr.count = entries[i].count;
+    entryHdr.nameLen = entries[i].nameLen;
+    std::memcpy(cursor, &entryHdr, sizeof(entryHdr));
+    cursor += sizeof(TopkWireEntryHeader);
+    if (entries[i].nameLen > 0) {
+      std::memcpy(cursor, entries[i].name, entries[i].nameLen);
+      cursor += entries[i].nameLen;
+    }
+  }
+  return static_cast<size_t>(cursor - static_cast<char*>(output));
+}
+
+TopkSketch* TopkDeserializeMeta(const void* data, size_t length) {
+  if (length < sizeof(TopkWireHeader)) return nullptr;
+
+  TopkWireHeader hdr{};
+  std::memcpy(&hdr, data, sizeof(hdr));
+  const char* cursor = static_cast<const char*>(data) + sizeof(TopkWireHeader);
+  size_t remaining = length - sizeof(TopkWireHeader);
+
+  uint64_t cellDataSize = static_cast<uint64_t>(hdr.width) * hdr.depth * sizeof(TopkSketch::Cell);
+  if (!ValidateTopkFields(hdr.k, hdr.width, hdr.depth, hdr.decay, cellDataSize, hdr.numActive)) {
+    return nullptr;
+  }
+
+  auto maybeSketch = TopkSketch::Create(hdr.k, hdr.width, hdr.depth, hdr.decay);
+  if (!maybeSketch) return nullptr;
+
+  uint64_t prevCount = UINT64_MAX;
+  for (uint32_t i = 0; i < hdr.numActive; i++) {
+    if (remaining < sizeof(TopkWireEntryHeader)) return nullptr;
+    TopkWireEntryHeader entryHdr{};
+    std::memcpy(&entryHdr, cursor, sizeof(entryHdr));
+    cursor += sizeof(TopkWireEntryHeader);
+    remaining -= sizeof(TopkWireEntryHeader);
+
+    auto nameSpan = AsBytes(cursor, entryHdr.nameLen);
+    if (entryHdr.nameLen > kTopkMaxNameLen || entryHdr.count > prevCount ||
+        remaining < entryHdr.nameLen || maybeSketch->Query(nameSpan)) {
+      return nullptr;
+    }
+    prevCount = entryHdr.count;
+    if (!maybeSketch->AppendEntryForLoad(nameSpan, entryHdr.count)) return nullptr;
+    cursor += entryHdr.nameLen;
+    remaining -= entryHdr.nameLen;
+  }
+  if (remaining != 0) return nullptr;
+
+  auto* sketch = static_cast<TopkSketch*>(RMAlloc(sizeof(TopkSketch)));
+  if (!sketch) return nullptr;
+  new (sketch) TopkSketch(std::move(*maybeSketch));
+  return sketch;
+}
+
+bool TopkApplyCellSlice(TopkSketch& sketch, size_t byteOffset, const void* data, size_t length) {
+  uint64_t totalBytes = sketch.GetCellDataSize();
+  if (byteOffset > totalBytes || length > totalBytes - byteOffset) return false;
+  if (length > 0) {
+    std::memcpy(reinterpret_cast<char*>(sketch.GetCellArray()) + byteOffset, data, length);
+  }
+  return true;
+}
+
 // --- Module type callbacks ---
 
 RedisModuleType* TopkType = nullptr;
@@ -235,15 +323,38 @@ void AofRewriteTopk(RedisModuleIO* aof, RedisModuleString* key, void* value) {
   auto* sketch = static_cast<TopkSketch*>(value);
 
   size_t chunkBytes = TopkComputeChunkSize(*sketch);
-  auto* buf = static_cast<char*>(RMAlloc(chunkBytes));
-  if (!buf) {
-    RedisModule_LogIOError(aof, "warning",
-      "GeminiBloom: TopK AOF rewrite allocation failure, key omitted");
+  if (chunkBytes <= kTopkAofChunkBytes) {
+    auto* buf = static_cast<char*>(RMAlloc(chunkBytes));
+    if (!buf) {
+      RedisModule_LogIOError(aof, "warning",
+        "GeminiBloom: TopK AOF rewrite allocation failure, key omitted");
+      return;
+    }
+    TopkSerializeChunk(*sketch, buf);
+    RedisModule_EmitAOF(aof, "TOPK.LOADCHUNK", "sb", key, buf, chunkBytes);
+    RMFree(buf);
     return;
   }
-  TopkSerializeChunk(*sketch, buf);
-  RedisModule_EmitAOF(aof, "TOPK.LOADCHUNK", "sb", key, buf, chunkBytes);
-  RMFree(buf);
+
+  // Large sketch (> 32 MiB): stream metadata+entries then 32 MiB cell slices.
+  size_t metaBytes = TopkComputeMetaSize(*sketch);
+  auto* metaBuf = static_cast<char*>(RMAlloc(metaBytes));
+  if (!metaBuf) {
+    RedisModule_LogIOError(aof, "warning",
+      "GeminiBloom: TopK AOF rewrite meta allocation failure, key omitted");
+    return;
+  }
+  TopkSerializeMeta(*sketch, metaBuf);
+  RedisModule_EmitAOF(aof, "TOPK.LOADCHUNK", "slb", key, (long long)0, metaBuf, metaBytes);
+  RMFree(metaBuf);
+
+  const char* raw = reinterpret_cast<const char*>(sketch->GetCellArray());
+  uint64_t totalBytes = sketch->GetCellDataSize();
+  for (uint64_t off = 0; off < totalBytes; off += kTopkAofChunkBytes) {
+    size_t sliceLen = static_cast<size_t>(std::min<uint64_t>(kTopkAofChunkBytes, totalBytes - off));
+    RedisModule_EmitAOF(aof, "TOPK.LOADCHUNK", "slb", key, static_cast<long long>(off + 1),
+                        raw + off, sliceLen);
+  }
 }
 
 void FreeTopk(void* value) {

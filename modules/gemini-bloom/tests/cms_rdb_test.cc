@@ -373,3 +373,36 @@ TEST(CmsModuleType, DefragCmsRelocatesBuffersAndPreservesData) {
 
   DestroySketch(relocated);
 }
+
+TEST(CmsWire, MultiChunkHeaderAndSliceRoundTrip) {
+  auto* src = CreateSketch(256, 4);
+  for (int i = 0; i < 40; i++) {
+    src->IncrBy(ToSpan("chunk_" + std::to_string(i)), i + 1);
+  }
+
+  char hdrBuf[64];
+  size_t hdrLen = CmsSerializeHeaderOnly(*src, hdrBuf);
+  auto* dst = CmsDeserializeHeaderOnly(hdrBuf, hdrLen);
+  ASSERT_NE(dst, nullptr);
+  EXPECT_EQ(dst->Width(), src->Width());
+  EXPECT_EQ(dst->Depth(), src->Depth());
+  EXPECT_EQ(dst->TotalCount(), src->TotalCount());
+
+  const char* raw = reinterpret_cast<const char*>(src->GetCounterArray());
+  size_t totalBytes = static_cast<size_t>(src->GetDataSize());
+  constexpr size_t kStep = 137;
+  for (size_t off = 0; off < totalBytes; off += kStep) {
+    size_t len = std::min(kStep, totalBytes - off);
+    ASSERT_TRUE(CmsApplyCounterSlice(*dst, off, raw + off, len));
+  }
+  // Out-of-bounds slice must be rejected.
+  EXPECT_FALSE(CmsApplyCounterSlice(*dst, totalBytes, raw, 1));
+
+  for (int i = 0; i < 40; i++) {
+    EXPECT_EQ(dst->Query(ToSpan("chunk_" + std::to_string(i))),
+              src->Query(ToSpan("chunk_" + std::to_string(i))));
+  }
+
+  DestroySketch(src);
+  DestroySketch(dst);
+}
