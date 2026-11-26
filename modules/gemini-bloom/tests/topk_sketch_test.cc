@@ -216,7 +216,9 @@ TEST(TopkSketchTest, LargeKHashIndexConsistencyUnderChurn) {
   for (size_t i = 0; i < list.size(); i++) {
     EXPECT_TRUE(sketch->Query(ToSpan(list[i].first))) << "Missing from hash index: " << list[i].first;
     EXPECT_EQ(sketch->Count(ToSpan(list[i].first)), list[i].second);
-    if (i > 0) EXPECT_GE(list[i - 1].second, list[i].second);
+    if (i > 0) {
+      EXPECT_GE(list[i - 1].second, list[i].second);
+    }
   }
   auto clone = sketch->Clone();
   ASSERT_TRUE(clone.has_value());
