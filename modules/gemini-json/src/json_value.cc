@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 const char* JsonTypeName(JsonType t) {
   switch (t) {
@@ -21,141 +22,239 @@ static JsonValue* AllocValue() {
   return static_cast<JsonValue*>(RMCalloc(1, sizeof(JsonValue)));
 }
 
-// FNV-1a hash for key lookup acceleration
-static uint32_t FnvHash(const char* data, uint32_t len) {
-  uint32_t h = 0x811c9dc5u;
-  for (uint32_t i = 0; i < len; i++) {
-    h ^= static_cast<uint8_t>(data[i]);
-    h *= 0x01000193u;
+static inline uint32_t NextPow2(uint32_t v) {
+  if (v <= 16) return 16;
+  v--;
+  v |= v >> 1;
+  v |= v >> 2;
+  v |= v >> 4;
+  v |= v >> 8;
+  v |= v >> 16;
+  return v + 1;
+}
+
+// Fast 64-bit mixing hash with process-unique seed (HashDoS resistant).
+static uint64_t HashSeed() {
+  static const uint64_t seed = []() -> uint64_t {
+    uint64_t x = reinterpret_cast<uintptr_t>(&HashSeed) ^ 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+  }();
+  return seed;
+}
+
+static uint32_t HashBytes(const char* data, uint32_t len) {
+  uint64_t h = HashSeed() ^ (static_cast<uint64_t>(len) * 0x9e3779b97f4a7c15ULL);
+  const auto* p = reinterpret_cast<const uint8_t*>(data);
+  uint32_t i = 0;
+  while (i + 8 <= len) {
+    uint64_t k;
+    std::memcpy(&k, p + i, 8);
+    k *= 0xbf58476d1ce4e5b9ULL;
+    k ^= k >> 31;
+    h ^= k;
+    h = (h * 0x94d049bb133111ebULL) + 0x52dce729ULL;
+    i += 8;
   }
-  return h;
+  uint64_t tail = 0;
+  for (uint32_t rem = len - i, shift = 0; rem > 0; rem--, i++, shift += 8) {
+    tail |= static_cast<uint64_t>(p[i]) << shift;
+  }
+  h ^= tail * 0xbf58476d1ce4e5b9ULL;
+  h ^= h >> 33;
+  h *= 0xff51afd7ed558ccdULL;
+  h ^= h >> 33;
+  return static_cast<uint32_t>(h);
+}
+
+static inline uint8_t MakeTag(JsonType t, uint8_t flags = 0) {
+  return static_cast<uint8_t>(static_cast<uint8_t>(t) | flags);
 }
 
 JsonValue* JsonValue::CreateNull() {
   auto* v = AllocValue();
   if (!v) return nullptr;
-  v->type_ = JsonType::kNull;
+  v->gen_.tag = MakeTag(JsonType::kNull);
   return v;
 }
 
 JsonValue* JsonValue::CreateBool(bool b) {
   auto* v = AllocValue();
   if (!v) return nullptr;
-  v->type_ = JsonType::kBool;
-  v->bool_val_ = b;
+  v->gen_.tag = MakeTag(JsonType::kBool);
+  v->gen_.payload.bool_val = b;
   return v;
 }
 
 JsonValue* JsonValue::CreateInteger(int64_t n) {
   auto* v = AllocValue();
   if (!v) return nullptr;
-  v->type_ = JsonType::kInteger;
-  v->int_val_ = n;
+  v->gen_.tag = MakeTag(JsonType::kInteger);
+  v->gen_.payload.int_val = n;
   return v;
 }
 
 JsonValue* JsonValue::CreateNumber(double n) {
   auto* v = AllocValue();
   if (!v) return nullptr;
-  v->type_ = JsonType::kNumber;
-  v->num_val_ = n;
+  v->gen_.tag = MakeTag(JsonType::kNumber);
+  v->gen_.payload.num_val = n;
   return v;
 }
 
 JsonValue* JsonValue::CreateString(const char* data, uint32_t len) {
   auto* v = AllocValue();
   if (!v) return nullptr;
-  v->type_ = JsonType::kString;
-  v->str_.data = static_cast<char*>(RMAlloc(len + 1));
-  if (!v->str_.data) { RMFree(v); return nullptr; }
-  if (len > 0) std::memcpy(v->str_.data, data, len);
-  v->str_.data[len] = '\0';
-  v->str_.len = len;
+  if (len <= kInlineStrMaxLen) {
+    v->sso_.tag = MakeTag(JsonType::kString, kFlagInlineStr);
+    v->sso_.len = static_cast<uint8_t>(len);
+    if (len > 0) std::memcpy(v->sso_.data, data, len);
+    v->sso_.data[len] = '\0';
+    return v;
+  }
+  v->gen_.tag = MakeTag(JsonType::kString);
+  v->gen_.payload.str.data = static_cast<char*>(RMAlloc(len + 1));
+  if (!v->gen_.payload.str.data) { RMFree(v); return nullptr; }
+  std::memcpy(v->gen_.payload.str.data, data, len);
+  v->gen_.payload.str.data[len] = '\0';
+  v->gen_.payload.str.len = len;
+  v->gen_.payload.str.cap = len;
   return v;
 }
 
 JsonValue* JsonValue::CreateArray() {
   auto* v = AllocValue();
   if (!v) return nullptr;
-  v->type_ = JsonType::kArray;
-  v->arr_.items = nullptr;
-  v->arr_.len = 0;
-  v->arr_.cap = 0;
+  v->gen_.tag = MakeTag(JsonType::kArray);
   return v;
 }
 
 JsonValue* JsonValue::CreateObject() {
   auto* v = AllocValue();
   if (!v) return nullptr;
-  v->type_ = JsonType::kObject;
-  v->obj_.entries = nullptr;
-  v->obj_.len = 0;
-  v->obj_.cap = 0;
-  v->obj_.hash_idx = nullptr;
-  v->obj_.hash_cap = 0;
+  v->gen_.tag = MakeTag(JsonType::kObject);
   return v;
+}
+
+static inline void FreeLeaf(JsonValue* v) {
+  if (v->IsString() && !v->IsInlineString()) {
+    RMFree(const_cast<char*>(v->GetString().data()));
+  }
+  RMFree(v);
 }
 
 void JsonValue::Destroy(JsonValue* v) {
   if (!v) return;
 
-  switch (v->type_) {
-    case JsonType::kString:
-      RMFree(v->str_.data);
-      break;
-    case JsonType::kArray:
-      for (uint32_t i = 0; i < v->arr_.len; i++) {
-        Destroy(v->arr_.items[i]);
-      }
-      RMFree(v->arr_.items);
-      break;
-    case JsonType::kObject:
-      for (uint32_t i = 0; i < v->obj_.len; i++) {
-        RMFree(v->obj_.entries[i].key);
-        Destroy(v->obj_.entries[i].value);
-      }
-      RMFree(v->obj_.entries);
-      RMFree(v->obj_.hash_idx);
-      break;
-    default:
-      break;
+  JsonType root_type = v->Type();
+  if (root_type != JsonType::kArray && root_type != JsonType::kObject) {
+    FreeLeaf(v);
+    return;
   }
-  RMFree(v);
+
+  std::vector<JsonValue*> stack;
+  stack.push_back(v);
+
+  while (!stack.empty()) {
+    JsonValue* cur = stack.back();
+    stack.pop_back();
+    if (!cur) continue;
+
+    switch (cur->Type()) {
+      case JsonType::kString:
+        if (!cur->IsInlineString()) RMFree(cur->gen_.payload.str.data);
+        break;
+      case JsonType::kArray: {
+        auto& arr = cur->gen_.payload.arr;
+        for (uint32_t i = 0; i < arr.len; i++) {
+          JsonValue* child = arr.items[i];
+          if (child) {
+            if (child->IsArray() || child->IsObject()) {
+              stack.push_back(child);
+            } else {
+              FreeLeaf(child);
+            }
+          }
+        }
+        RMFree(arr.items);
+        break;
+      }
+      case JsonType::kObject: {
+        ObjectData* od = cur->gen_.payload.obj;
+        if (od) {
+          for (uint32_t i = 0; i < od->entries_len; i++) {
+            if (!od->entries[i].key) continue;
+            RMFree(od->entries[i].key);
+            JsonValue* child = od->entries[i].value;
+            if (child) {
+              if (child->IsArray() || child->IsObject()) {
+                stack.push_back(child);
+              } else {
+                FreeLeaf(child);
+              }
+            }
+          }
+          RMFree(od->entries);
+          RMFree(od->hash_idx);
+          RMFree(od);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    RMFree(cur);
+  }
 }
 
-JsonValue* JsonValue::Clone() const {
-  switch (type_) {
+static JsonValue* CloneDepth(const JsonValue* v, int depth) {
+  if (!v || depth > kMaxJsonDepth) return nullptr;
+  switch (v->Type()) {
     case JsonType::kNull:
-      return CreateNull();
+      return JsonValue::CreateNull();
     case JsonType::kBool:
-      return CreateBool(bool_val_);
+      return JsonValue::CreateBool(v->GetBool());
     case JsonType::kInteger:
-      return CreateInteger(int_val_);
+      return JsonValue::CreateInteger(v->GetInteger());
     case JsonType::kNumber:
-      return CreateNumber(num_val_);
-    case JsonType::kString:
-      return CreateString(str_.data, str_.len);
+      return JsonValue::CreateNumber(v->GetNumber());
+    case JsonType::kString: {
+      auto sv = v->GetString();
+      return JsonValue::CreateString(sv.data(), static_cast<uint32_t>(sv.size()));
+    }
     case JsonType::kArray: {
-      auto* a = CreateArray();
+      auto* a = JsonValue::CreateArray();
       if (!a) return nullptr;
-      for (uint32_t i = 0; i < arr_.len; i++) {
-        auto* child = arr_.items[i]->Clone();
+      uint32_t n = v->ArrayLen();
+      if (n > 0 && !a->ArrayReserve(n)) {
+        JsonValue::Destroy(a);
+        return nullptr;
+      }
+      for (uint32_t i = 0; i < n; i++) {
+        auto* child = CloneDepth(v->ArrayGet(i), depth + 1);
         if (!child || !a->ArrayAppend(child)) {
-          Destroy(child);
-          Destroy(a);
+          JsonValue::Destroy(child);
+          JsonValue::Destroy(a);
           return nullptr;
         }
       }
       return a;
     }
     case JsonType::kObject: {
-      auto* o = CreateObject();
+      auto* o = JsonValue::CreateObject();
       if (!o) return nullptr;
-      for (uint32_t i = 0; i < obj_.len; i++) {
-        auto* child = obj_.entries[i].value->Clone();
-        if (!child || !o->ObjectSet(obj_.entries[i].key, obj_.entries[i].key_len, child)) {
-          Destroy(child);
-          Destroy(o);
+      uint32_t n = v->ObjectLen();
+      if (n > 0 && !o->ObjectReserve(n)) {
+        JsonValue::Destroy(o);
+        return nullptr;
+      }
+      auto* entries = v->ObjectEntries();
+      for (uint32_t i = 0; i < n; i++) {
+        auto* child = CloneDepth(entries[i].value, depth + 1);
+        if (!child || !o->ObjectSet(entries[i].key, entries[i].key_len, child)) {
+          JsonValue::Destroy(child);
+          JsonValue::Destroy(o);
           return nullptr;
         }
       }
@@ -165,236 +264,507 @@ JsonValue* JsonValue::Clone() const {
   return nullptr;
 }
 
-double JsonValue::GetNumber() const {
-  if (type_ == JsonType::kInteger) return static_cast<double>(int_val_);
-  return num_val_;
+JsonValue* JsonValue::Clone() const {
+  return CloneDepth(this, 0);
 }
 
-bool JsonValue::ArrayGrow() {
-  uint32_t new_cap = arr_.cap == 0 ? 4 : arr_.cap * 2;
-  if (new_cap <= arr_.cap) return false;
-  auto* new_items = static_cast<JsonValue**>(
-    RMRealloc(arr_.items, new_cap * sizeof(JsonValue*)));
-  if (!new_items) return false;
-  arr_.items = new_items;
-  arr_.cap = new_cap;
+double JsonValue::GetNumber() const {
+  if (Type() == JsonType::kInteger) return static_cast<double>(gen_.payload.int_val);
+  return gen_.payload.num_val;
+}
+
+bool JsonValue::StringAppend(std::string_view suffix) {
+  if (!IsString()) return false;
+  if (suffix.empty()) return true;
+
+  if (IsInlineString()) {
+    uint32_t cur_len = sso_.len;
+    if (suffix.size() > static_cast<size_t>(UINT32_MAX - cur_len)) return false;
+    uint32_t new_len = cur_len + static_cast<uint32_t>(suffix.size());
+    if (new_len <= kInlineStrMaxLen) {
+      std::memcpy(sso_.data + cur_len, suffix.data(), suffix.size());
+      sso_.data[new_len] = '\0';
+      sso_.len = static_cast<uint8_t>(new_len);
+      return true;
+    }
+    uint32_t new_cap = new_len;
+    if (new_cap < 64) new_cap = 64;
+    auto* buf = static_cast<char*>(RMAlloc(static_cast<size_t>(new_cap) + 1));
+    if (!buf) return false;
+    if (cur_len > 0) std::memcpy(buf, sso_.data, cur_len);
+    std::memcpy(buf + cur_len, suffix.data(), suffix.size());
+    buf[new_len] = '\0';
+    gen_.tag = MakeTag(JsonType::kString);
+    gen_.payload.str.data = buf;
+    gen_.payload.str.len = new_len;
+    gen_.payload.str.cap = new_cap;
+    return true;
+  }
+
+  auto& s = gen_.payload.str;
+  if (suffix.size() > static_cast<size_t>(UINT32_MAX - s.len)) return false;
+  uint32_t new_len = s.len + static_cast<uint32_t>(suffix.size());
+  if (new_len > s.cap) {
+    uint64_t grown = static_cast<uint64_t>(s.cap) * 2;
+    if (grown < new_len) grown = new_len;
+    if (grown > UINT32_MAX) grown = new_len;
+    auto* nd = static_cast<char*>(RMRealloc(s.data, static_cast<size_t>(grown) + 1));
+    if (!nd) return false;
+    s.data = nd;
+    s.cap = static_cast<uint32_t>(grown);
+  }
+  std::memcpy(s.data + s.len, suffix.data(), suffix.size());
+  s.len = new_len;
+  s.data[new_len] = '\0';
   return true;
 }
 
+// --- Array operations ---
+
+bool JsonValue::ArrayReserve(uint32_t new_cap) {
+  auto& arr = gen_.payload.arr;
+  if (new_cap <= arr.cap) return true;
+  auto* new_items = static_cast<JsonValue**>(
+      RMRealloc(arr.items, static_cast<size_t>(new_cap) * sizeof(JsonValue*)));
+  if (!new_items) return false;
+  arr.items = new_items;
+  arr.cap = new_cap;
+  return true;
+}
+
+bool JsonValue::ArrayGrow() {
+  auto& arr = gen_.payload.arr;
+  uint32_t new_cap = arr.cap == 0 ? 4 : arr.cap * 2;
+  if (new_cap <= arr.cap) return false;
+  return ArrayReserve(new_cap);
+}
+
+void JsonValue::ArrayShrinkIfNeeded() {
+  auto& arr = gen_.payload.arr;
+  if (arr.cap <= 64) return;
+  if (arr.len == 0) {
+    RMFree(arr.items);
+    arr.items = nullptr;
+    arr.cap = 0;
+    return;
+  }
+  if (arr.len * 4 < arr.cap) {
+    uint32_t new_cap = arr.len * 2;
+    if (new_cap < 16) new_cap = 16;
+    auto* shrunk = static_cast<JsonValue**>(
+        RMRealloc(arr.items, static_cast<size_t>(new_cap) * sizeof(JsonValue*)));
+    if (shrunk) {
+      arr.items = shrunk;
+      arr.cap = new_cap;
+    }
+  }
+}
+
 bool JsonValue::ArrayAppend(JsonValue* child) {
-  if (arr_.len == arr_.cap && !ArrayGrow()) return false;
-  arr_.items[arr_.len++] = child;
+  auto& arr = gen_.payload.arr;
+  if (arr.len == arr.cap && !ArrayGrow()) return false;
+  arr.items[arr.len++] = child;
   return true;
 }
 
 bool JsonValue::ArrayInsert(uint32_t index, JsonValue* child) {
-  if (index > arr_.len) return false;
-  if (arr_.len == arr_.cap && !ArrayGrow()) return false;
-  if (index < arr_.len) {
-    std::memmove(&arr_.items[index + 1], &arr_.items[index],
-                 (arr_.len - index) * sizeof(JsonValue*));
+  auto& arr = gen_.payload.arr;
+  if (index > arr.len) return false;
+  if (arr.len == arr.cap && !ArrayGrow()) return false;
+  if (index < arr.len) {
+    std::memmove(&arr.items[index + 1], &arr.items[index],
+                 static_cast<size_t>(arr.len - index) * sizeof(JsonValue*));
   }
-  arr_.items[index] = child;
-  arr_.len++;
+  arr.items[index] = child;
+  arr.len++;
   return true;
 }
 
 JsonValue* JsonValue::ArrayPop(int32_t index) {
-  if (arr_.len == 0) return nullptr;
+  auto& arr = gen_.payload.arr;
+  if (arr.len == 0) return nullptr;
   int32_t resolved = index;
-  if (resolved < 0) resolved += static_cast<int32_t>(arr_.len);
-  if (resolved < 0 || static_cast<uint32_t>(resolved) >= arr_.len) return nullptr;
+  if (resolved < 0) resolved += static_cast<int32_t>(arr.len);
+  if (resolved < 0 || static_cast<uint32_t>(resolved) >= arr.len) return nullptr;
   auto idx = static_cast<uint32_t>(resolved);
 
-  JsonValue* popped = arr_.items[idx];
-  if (idx < arr_.len - 1) {
-    std::memmove(&arr_.items[idx], &arr_.items[idx + 1],
-                 (arr_.len - idx - 1) * sizeof(JsonValue*));
+  JsonValue* popped = arr.items[idx];
+  if (idx < arr.len - 1) {
+    std::memmove(&arr.items[idx], &arr.items[idx + 1],
+                 static_cast<size_t>(arr.len - idx - 1) * sizeof(JsonValue*));
   }
-  arr_.len--;
+  arr.len--;
+  ArrayShrinkIfNeeded();
   return popped;
 }
 
 void JsonValue::ArrayTrim(uint32_t start, uint32_t stop) {
-  if (start >= arr_.len || start > stop) {
-    for (uint32_t i = 0; i < arr_.len; i++) Destroy(arr_.items[i]);
-    arr_.len = 0;
+  auto& arr = gen_.payload.arr;
+  if (start >= arr.len || start > stop) {
+    for (uint32_t i = 0; i < arr.len; i++) Destroy(arr.items[i]);
+    arr.len = 0;
+    ArrayShrinkIfNeeded();
     return;
   }
-  if (stop >= arr_.len) stop = arr_.len - 1;
+  if (stop >= arr.len) stop = arr.len - 1;
 
-  for (uint32_t i = 0; i < start; i++) Destroy(arr_.items[i]);
-  for (uint32_t i = stop + 1; i < arr_.len; i++) Destroy(arr_.items[i]);
+  for (uint32_t i = 0; i < start; i++) Destroy(arr.items[i]);
+  for (uint32_t i = stop + 1; i < arr.len; i++) Destroy(arr.items[i]);
 
   uint32_t new_len = stop - start + 1;
   if (start > 0) {
-    std::memmove(&arr_.items[0], &arr_.items[start], new_len * sizeof(JsonValue*));
+    std::memmove(&arr.items[0], &arr.items[start],
+                 static_cast<size_t>(new_len) * sizeof(JsonValue*));
   }
-  arr_.len = new_len;
+  arr.len = new_len;
+  ArrayShrinkIfNeeded();
 }
 
-// --- Hash-accelerated object operations ---
+// --- Hash-accelerated object operations (power-of-2 mask + cached hash + tombstones) ---
 
-void JsonValue::ObjHashRebuild() {
-  if (obj_.hash_idx) {
-    for (uint32_t i = 0; i < obj_.hash_cap; i++) obj_.hash_idx[i] = -1;
+JsonValue::ObjectData* JsonValue::EnsureObjectData() {
+  if (!gen_.payload.obj) {
+    gen_.payload.obj = static_cast<ObjectData*>(RMCalloc(1, sizeof(ObjectData)));
+  }
+  return gen_.payload.obj;
+}
+
+void JsonValue::ObjHashClear() const {
+  ObjectData* od = gen_.payload.obj;
+  if (!od) return;
+  RMFree(od->hash_idx);
+  od->hash_idx = nullptr;
+  od->hash_cap = 0;
+}
+
+void JsonValue::ObjHashInsertSlot(uint32_t slot, uint32_t hash) const {
+  ObjectData* od = gen_.payload.obj;
+  uint32_t mask = od->hash_cap - 1;
+  uint32_t h = hash & mask;
+  while (od->hash_idx[h] != -1) {
+    h = (h + 1) & mask;
+  }
+  od->hash_idx[h] = static_cast<int32_t>(slot);
+}
+
+// Backward-shift deletion in open-addressed linear probing table (O(1) average).
+void JsonValue::ObjHashRemoveSlot(uint32_t slot, uint32_t hash) const {
+  ObjectData* od = gen_.payload.obj;
+  if (!od || !od->hash_idx) return;
+  uint32_t mask = od->hash_cap - 1;
+  uint32_t h = hash & mask;
+  while (od->hash_idx[h] != -1) {
+    if (static_cast<uint32_t>(od->hash_idx[h]) == slot) {
+      // Shift subsequent elements back to fill the hole
+      uint32_t hole = h;
+      uint32_t cur = (hole + 1) & mask;
+      while (od->hash_idx[cur] != -1) {
+        uint32_t cur_slot = static_cast<uint32_t>(od->hash_idx[cur]);
+        uint32_t ideal = od->entries[cur_slot].key_hash & mask;
+        // Check if `hole` lies cyclically in [ideal, cur)
+        uint32_t dist_cur = (cur - ideal) & mask;
+        uint32_t dist_hole = (hole - ideal) & mask;
+        if (dist_hole < dist_cur) {
+          od->hash_idx[hole] = od->hash_idx[cur];
+          hole = cur;
+        }
+        cur = (cur + 1) & mask;
+      }
+      od->hash_idx[hole] = -1;
+      return;
+    }
+    h = (h + 1) & mask;
+  }
+}
+
+void JsonValue::ObjHashRebuild(uint32_t target_cap) const {
+  ObjectData* od = gen_.payload.obj;
+  if (!od) return;
+
+  uint32_t new_cap = NextPow2(target_cap);
+  if (od->hash_idx && od->hash_cap == new_cap) {
+    std::memset(od->hash_idx, 0xFF, static_cast<size_t>(new_cap) * sizeof(int32_t));
   } else {
-    obj_.hash_cap = obj_.cap * 2;
-    if (obj_.hash_cap < 16) obj_.hash_cap = 16;
-    obj_.hash_idx = static_cast<int32_t*>(RMAlloc(obj_.hash_cap * sizeof(int32_t)));
-    if (!obj_.hash_idx) { obj_.hash_cap = 0; return; }
-    for (uint32_t i = 0; i < obj_.hash_cap; i++) obj_.hash_idx[i] = -1;
+    auto* new_tbl = static_cast<int32_t*>(
+        RMAlloc(static_cast<size_t>(new_cap) * sizeof(int32_t)));
+    if (!new_tbl) {
+      ObjHashClear();
+      return;
+    }
+    RMFree(od->hash_idx);
+    od->hash_idx = new_tbl;
+    od->hash_cap = new_cap;
+    std::memset(od->hash_idx, 0xFF, static_cast<size_t>(new_cap) * sizeof(int32_t));
   }
 
-  for (uint32_t i = 0; i < obj_.len; i++) {
-    uint32_t h = FnvHash(obj_.entries[i].key, obj_.entries[i].key_len) % obj_.hash_cap;
-    while (obj_.hash_idx[h] != -1) {
-      h = (h + 1) % obj_.hash_cap;
+  uint32_t mask = od->hash_cap - 1;
+  for (uint32_t i = 0; i < od->entries_len; i++) {
+    if (!od->entries[i].key) continue;
+    uint32_t h = od->entries[i].key_hash & mask;
+    while (od->hash_idx[h] != -1) {
+      h = (h + 1) & mask;
     }
-    obj_.hash_idx[h] = static_cast<int32_t>(i);
+    od->hash_idx[h] = static_cast<int32_t>(i);
   }
 }
 
-void JsonValue::ObjHashClear() {
-  RMFree(obj_.hash_idx);
-  obj_.hash_idx = nullptr;
-  obj_.hash_cap = 0;
+void JsonValue::ObjectCompact() const {
+  ObjectData* od = gen_.payload.obj;
+  if (!od || od->len == od->entries_len) return;
+
+  uint32_t write = 0;
+  for (uint32_t read = 0; read < od->entries_len; read++) {
+    if (od->entries[read].key) {
+      if (write != read) {
+        od->entries[write] = od->entries[read];
+      }
+      write++;
+    }
+  }
+  od->entries_len = write;
+
+  if (od->len > kObjHashThreshold) {
+    ObjHashRebuild(od->len * 2);
+  } else {
+    ObjHashClear();
+  }
 }
 
-int32_t JsonValue::ObjHashProbe(const char* key, uint32_t key_len) const {
-  if (!obj_.hash_idx) return -1;
+int32_t JsonValue::ObjHashProbe(const char* key, uint32_t key_len, uint32_t hash) const {
+  ObjectData* od = gen_.payload.obj;
+  if (!od || !od->hash_idx) return -1;
 
-  uint32_t h = FnvHash(key, key_len) % obj_.hash_cap;
-  while (obj_.hash_idx[h] != -1) {
-    auto slot = static_cast<uint32_t>(obj_.hash_idx[h]);
-    if (slot < obj_.len &&
-        obj_.entries[slot].key_len == key_len &&
-        std::memcmp(obj_.entries[slot].key, key, key_len) == 0) {
-      return obj_.hash_idx[h];
+  uint32_t mask = od->hash_cap - 1;
+  uint32_t h = hash & mask;
+  while (od->hash_idx[h] != -1) {
+    auto slot = static_cast<uint32_t>(od->hash_idx[h]);
+    const ObjEntry& e = od->entries[slot];
+    if (e.key && e.key_hash == hash && e.key_len == key_len &&
+        (key_len == 0 || std::memcmp(e.key, key, key_len) == 0)) {
+      return od->hash_idx[h];
     }
-    h = (h + 1) % obj_.hash_cap;
+    h = (h + 1) & mask;
   }
   return -1;
 }
 
+JsonValue::ObjEntry* JsonValue::ObjectEntries() const {
+  ObjectData* od = gen_.payload.obj;
+  if (!od) return nullptr;
+  if (od->len != od->entries_len) {
+    ObjectCompact();
+  }
+  return od->entries;
+}
+
+bool JsonValue::ObjectReserve(uint32_t new_cap) {
+  ObjectData* od = EnsureObjectData();
+  if (!od) return false;
+  if (new_cap <= od->cap) return true;
+  auto* new_entries = static_cast<ObjEntry*>(
+      RMRealloc(od->entries, static_cast<size_t>(new_cap) * sizeof(ObjEntry)));
+  if (!new_entries) return false;
+  od->entries = new_entries;
+  od->cap = new_cap;
+  if (new_cap > kObjHashThreshold && (!od->hash_idx || od->hash_cap < new_cap * 2)) {
+    ObjHashRebuild(new_cap * 2);
+  }
+  return true;
+}
+
+bool JsonValue::ObjectGrow(uint32_t min_cap) {
+  ObjectData* od = EnsureObjectData();
+  if (!od) return false;
+  uint32_t new_cap = od->cap == 0 ? 4 : od->cap * 2;
+  if (new_cap < min_cap) new_cap = min_cap;
+  if (new_cap <= od->cap) return false;
+  auto* new_entries = static_cast<ObjEntry*>(
+      RMRealloc(od->entries, static_cast<size_t>(new_cap) * sizeof(ObjEntry)));
+  if (!new_entries) return false;
+  od->entries = new_entries;
+  od->cap = new_cap;
+  return true;
+}
+
 JsonValue* JsonValue::ObjectGet(std::string_view key) const {
-  if (obj_.len > kObjHashThreshold && obj_.hash_idx) {
-    int32_t slot = ObjHashProbe(key.data(), static_cast<uint32_t>(key.size()));
-    if (slot >= 0) return obj_.entries[slot].value;
+  ObjectData* od = gen_.payload.obj;
+  if (!od || od->len == 0) return nullptr;
+
+  if (od->hash_idx) {
+    uint32_t h = HashBytes(key.data(), static_cast<uint32_t>(key.size()));
+    int32_t slot = ObjHashProbe(key.data(), static_cast<uint32_t>(key.size()), h);
+    if (slot >= 0) return od->entries[slot].value;
     return nullptr;
   }
 
-  for (uint32_t i = 0; i < obj_.len; i++) {
-    if (key.size() == obj_.entries[i].key_len &&
-        std::memcmp(key.data(), obj_.entries[i].key, key.size()) == 0) {
-      return obj_.entries[i].value;
+  for (uint32_t i = 0; i < od->entries_len; i++) {
+    const ObjEntry& e = od->entries[i];
+    if (e.key && key.size() == e.key_len &&
+        (key.size() == 0 || std::memcmp(key.data(), e.key, key.size()) == 0)) {
+      return e.value;
     }
   }
   return nullptr;
 }
 
-bool JsonValue::ObjectGrow() {
-  uint32_t new_cap = obj_.cap == 0 ? 4 : obj_.cap * 2;
-  if (new_cap <= obj_.cap) return false;
-  auto* new_entries = static_cast<ObjEntry*>(
-    RMRealloc(obj_.entries, new_cap * sizeof(ObjEntry)));
-  if (!new_entries) return false;
-  obj_.entries = new_entries;
-  obj_.cap = new_cap;
-
-  if (obj_.len >= kObjHashThreshold) {
-    ObjHashClear();
-    ObjHashRebuild();
-  }
-  return true;
-}
-
 bool JsonValue::ObjectSet(const char* key, uint32_t key_len, JsonValue* child) {
+  ObjectData* od = EnsureObjectData();
+  if (!od) return false;
+
+  uint32_t hash = 0;
+  bool hashed = false;
+
   // Check for existing key
-  if (obj_.len > kObjHashThreshold && obj_.hash_idx) {
-    int32_t slot = ObjHashProbe(key, key_len);
+  if (od->hash_idx) {
+    hash = HashBytes(key, key_len);
+    hashed = true;
+    int32_t slot = ObjHashProbe(key, key_len, hash);
     if (slot >= 0) {
-      Destroy(obj_.entries[slot].value);
-      obj_.entries[slot].value = child;
+      Destroy(od->entries[slot].value);
+      od->entries[slot].value = child;
       return true;
     }
   } else {
-    for (uint32_t i = 0; i < obj_.len; i++) {
-      if (key_len == obj_.entries[i].key_len &&
-          std::memcmp(key, obj_.entries[i].key, key_len) == 0) {
-        Destroy(obj_.entries[i].value);
-        obj_.entries[i].value = child;
+    for (uint32_t i = 0; i < od->entries_len; i++) {
+      ObjEntry& e = od->entries[i];
+      if (e.key && key_len == e.key_len &&
+          (key_len == 0 || std::memcmp(key, e.key, key_len) == 0)) {
+        Destroy(e.value);
+        e.value = child;
         return true;
       }
     }
   }
 
-  if (obj_.len == obj_.cap && !ObjectGrow()) return false;
+  if (od->entries_len == od->cap) {
+    // Reclaim tombstones first if plenty exist
+    if (od->entries_len > od->len && (od->entries_len - od->len) * 2 >= od->cap) {
+      ObjectCompact();
+    } else if (!ObjectGrow(od->cap + 1)) {
+      return false;
+    }
+  }
 
-  auto* k = static_cast<char*>(RMAlloc(key_len + 1));
+  auto* k = static_cast<char*>(RMAlloc(static_cast<size_t>(key_len) + 1));
   if (!k) return false;
-  std::memcpy(k, key, key_len);
+  if (key_len > 0) std::memcpy(k, key, key_len);
   k[key_len] = '\0';
 
-  obj_.entries[obj_.len] = {k, key_len, child};
-  obj_.len++;
+  if (!hashed) hash = HashBytes(k, key_len);
 
-  if (obj_.len > kObjHashThreshold) {
-    if (!obj_.hash_idx || obj_.len * 2 > obj_.hash_cap) {
-      ObjHashClear();
-      ObjHashRebuild();
+  uint32_t slot = od->entries_len++;
+  od->entries[slot] = {k, key_len, hash, child};
+  od->len++;
+
+  if (od->hash_idx) {
+    if (od->len * 2 > od->hash_cap) {
+      ObjHashRebuild(od->len * 2);
     } else {
-      uint32_t h = FnvHash(k, key_len) % obj_.hash_cap;
-      while (obj_.hash_idx[h] != -1) h = (h + 1) % obj_.hash_cap;
-      obj_.hash_idx[h] = static_cast<int32_t>(obj_.len - 1);
+      ObjHashInsertSlot(slot, hash);
     }
+  } else if (od->len > kObjHashThreshold) {
+    ObjHashRebuild(od->len * 2);
   }
 
   return true;
 }
 
 bool JsonValue::ObjectDelete(std::string_view key) {
-  for (uint32_t i = 0; i < obj_.len; i++) {
-    if (key.size() == obj_.entries[i].key_len &&
-        std::memcmp(key.data(), obj_.entries[i].key, key.size()) == 0) {
-      RMFree(obj_.entries[i].key);
-      Destroy(obj_.entries[i].value);
-      if (i < obj_.len - 1) {
-        std::memmove(&obj_.entries[i], &obj_.entries[i + 1],
-                     (obj_.len - i - 1) * sizeof(ObjEntry));
-      }
-      obj_.len--;
+  ObjectData* od = gen_.payload.obj;
+  if (!od || od->len == 0) return false;
 
-      if (obj_.len > kObjHashThreshold) {
-        ObjHashRebuild();
-      } else {
-        ObjHashClear();
+  int32_t found = -1;
+  uint32_t hash = 0;
+
+  if (od->hash_idx) {
+    hash = HashBytes(key.data(), static_cast<uint32_t>(key.size()));
+    found = ObjHashProbe(key.data(), static_cast<uint32_t>(key.size()), hash);
+  } else {
+    for (uint32_t i = 0; i < od->entries_len; i++) {
+      const ObjEntry& e = od->entries[i];
+      if (e.key && key.size() == e.key_len &&
+          (key.size() == 0 || std::memcmp(key.data(), e.key, key.size()) == 0)) {
+        found = static_cast<int32_t>(i);
+        break;
       }
-      return true;
     }
   }
-  return false;
+
+  if (found < 0) return false;
+
+  auto slot = static_cast<uint32_t>(found);
+  RMFree(od->entries[slot].key);
+  Destroy(od->entries[slot].value);
+  od->entries[slot].key = nullptr;
+  od->entries[slot].key_len = 0;
+  od->entries[slot].value = nullptr;
+  od->len--;
+
+  if (od->hash_idx) {
+    ObjHashRemoveSlot(slot, hash);
+  }
+
+  // Compact when tombstones dominate or object shrinks below hash threshold
+  if (od->len == 0) {
+    od->entries_len = 0;
+    ObjHashClear();
+    if (od->cap > 64) {
+      RMFree(od->entries);
+      od->entries = nullptr;
+      od->cap = 0;
+    }
+  } else if (od->len <= kObjHashThreshold && od->hash_idx) {
+    ObjectCompact();
+  } else if (od->entries_len > 64 && od->len * 4 < od->entries_len) {
+    ObjectCompact();
+    if (od->cap > 64 && od->len * 4 < od->cap) {
+      uint32_t new_cap = od->len * 2;
+      if (new_cap < 16) new_cap = 16;
+      auto* shrunk = static_cast<ObjEntry*>(
+          RMRealloc(od->entries, static_cast<size_t>(new_cap) * sizeof(ObjEntry)));
+      if (shrunk) {
+        od->entries = shrunk;
+        od->cap = new_cap;
+      }
+    }
+  }
+
+  return true;
 }
 
 void JsonValue::Clear() {
-  switch (type_) {
-    case JsonType::kArray:
-      for (uint32_t i = 0; i < arr_.len; i++) Destroy(arr_.items[i]);
-      arr_.len = 0;
+  switch (Type()) {
+    case JsonType::kArray: {
+      auto& arr = gen_.payload.arr;
+      for (uint32_t i = 0; i < arr.len; i++) Destroy(arr.items[i]);
+      arr.len = 0;
+      ArrayShrinkIfNeeded();
       break;
-    case JsonType::kObject:
-      for (uint32_t i = 0; i < obj_.len; i++) {
-        RMFree(obj_.entries[i].key);
-        Destroy(obj_.entries[i].value);
+    }
+    case JsonType::kObject: {
+      ObjectData* od = gen_.payload.obj;
+      if (od) {
+        for (uint32_t i = 0; i < od->entries_len; i++) {
+          if (!od->entries[i].key) continue;
+          RMFree(od->entries[i].key);
+          Destroy(od->entries[i].value);
+        }
+        od->len = 0;
+        od->entries_len = 0;
+        ObjHashClear();
+        if (od->cap > 64) {
+          RMFree(od->entries);
+          od->entries = nullptr;
+          od->cap = 0;
+        }
       }
-      obj_.len = 0;
-      ObjHashClear();
       break;
+    }
     case JsonType::kInteger:
-      int_val_ = 0;
+      gen_.payload.int_val = 0;
       break;
     case JsonType::kNumber:
-      num_val_ = 0.0;
+      gen_.payload.num_val = 0.0;
       break;
     default:
       break;
@@ -402,27 +772,45 @@ void JsonValue::Clear() {
 }
 
 size_t JsonValue::MemoryUsage() const {
-  size_t total = sizeof(JsonValue);
-  switch (type_) {
-    case JsonType::kString:
-      total += str_.len + 1;
-      break;
-    case JsonType::kArray:
-      total += arr_.cap * sizeof(JsonValue*);
-      for (uint32_t i = 0; i < arr_.len; i++) {
-        total += arr_.items[i]->MemoryUsage();
+  size_t total = 0;
+  std::vector<const JsonValue*> stack;
+  stack.push_back(this);
+  while (!stack.empty()) {
+    const JsonValue* cur = stack.back();
+    stack.pop_back();
+    if (!cur) continue;
+    total += sizeof(JsonValue);
+    switch (cur->Type()) {
+      case JsonType::kString:
+        if (!cur->IsInlineString()) {
+          total += static_cast<size_t>(cur->gen_.payload.str.cap) + 1;
+        }
+        break;
+      case JsonType::kArray: {
+        const auto& arr = cur->gen_.payload.arr;
+        total += static_cast<size_t>(arr.cap) * sizeof(JsonValue*);
+        for (uint32_t i = 0; i < arr.len; i++) {
+          stack.push_back(arr.items[i]);
+        }
+        break;
       }
-      break;
-    case JsonType::kObject:
-      total += obj_.cap * sizeof(ObjEntry);
-      total += obj_.hash_cap * sizeof(int32_t);
-      for (uint32_t i = 0; i < obj_.len; i++) {
-        total += obj_.entries[i].key_len + 1;
-        total += obj_.entries[i].value->MemoryUsage();
+      case JsonType::kObject: {
+        const ObjectData* od = cur->gen_.payload.obj;
+        if (od) {
+          total += sizeof(ObjectData);
+          total += static_cast<size_t>(od->cap) * sizeof(ObjEntry);
+          total += static_cast<size_t>(od->hash_cap) * sizeof(int32_t);
+          for (uint32_t i = 0; i < od->entries_len; i++) {
+            if (!od->entries[i].key) continue;
+            total += static_cast<size_t>(od->entries[i].key_len) + 1;
+            stack.push_back(od->entries[i].value);
+          }
+        }
+        break;
       }
-      break;
-    default:
-      break;
+      default:
+        break;
+    }
   }
   return total;
 }
@@ -432,41 +820,119 @@ static bool NumbersEqual(double a, double b) {
   return a == b;
 }
 
-bool JsonValue::DeepEqual(const JsonValue* other) const {
-  if (!other) return false;
+static bool IntEqualsDouble(int64_t i, double d) {
+  if (!std::isfinite(d)) return false;
+  if (std::trunc(d) != d) return false;
+  constexpr double kMinInt64D = -9223372036854775808.0;
+  constexpr double kMaxInt64ExclusiveD = 9223372036854775808.0;
+  if (d < kMinInt64D || d >= kMaxInt64ExclusiveD) return false;
+  return static_cast<int64_t>(d) == i;
+}
 
-  if (IsNumber() && other->IsNumber()) {
-    return NumbersEqual(GetNumber(), other->GetNumber());
+static bool DeepEqualDepth(const JsonValue* a, const JsonValue* b, int depth) {
+  if (!a || !b || depth > kMaxJsonDepth) return false;
+  if (a == b) return true;
+
+  if (a->Type() == JsonType::kInteger && b->Type() == JsonType::kInteger) {
+    return a->GetInteger() == b->GetInteger();
+  }
+  if (a->Type() == JsonType::kInteger && b->Type() == JsonType::kNumber) {
+    return IntEqualsDouble(a->GetInteger(), b->GetNumber());
+  }
+  if (a->Type() == JsonType::kNumber && b->Type() == JsonType::kInteger) {
+    return IntEqualsDouble(b->GetInteger(), a->GetNumber());
   }
 
-  if (type_ != other->type_) return false;
+  if (a->Type() != b->Type()) return false;
 
-  switch (type_) {
+  switch (a->Type()) {
     case JsonType::kNull:
       return true;
     case JsonType::kBool:
-      return bool_val_ == other->bool_val_;
+      return a->GetBool() == b->GetBool();
     case JsonType::kInteger:
-      return int_val_ == other->int_val_;
+      return a->GetInteger() == b->GetInteger();
     case JsonType::kNumber:
-      return NumbersEqual(num_val_, other->num_val_);
+      return NumbersEqual(a->GetNumber(), b->GetNumber());
     case JsonType::kString:
-      return str_.len == other->str_.len &&
-             std::memcmp(str_.data, other->str_.data, str_.len) == 0;
+      return a->GetString() == b->GetString();
     case JsonType::kArray:
-      if (arr_.len != other->arr_.len) return false;
-      for (uint32_t i = 0; i < arr_.len; i++) {
-        if (!arr_.items[i]->DeepEqual(other->arr_.items[i])) return false;
+      if (a->ArrayLen() != b->ArrayLen()) return false;
+      for (uint32_t i = 0; i < a->ArrayLen(); i++) {
+        if (!DeepEqualDepth(a->ArrayGet(i), b->ArrayGet(i), depth + 1)) return false;
       }
       return true;
-    case JsonType::kObject:
-      if (obj_.len != other->obj_.len) return false;
-      for (uint32_t i = 0; i < obj_.len; i++) {
-        auto* other_val = other->ObjectGet(
-          std::string_view(obj_.entries[i].key, obj_.entries[i].key_len));
-        if (!other_val || !obj_.entries[i].value->DeepEqual(other_val)) return false;
+    case JsonType::kObject: {
+      if (a->ObjectLen() != b->ObjectLen()) return false;
+      auto* entries = a->ObjectEntries();
+      for (uint32_t i = 0; i < a->ObjectLen(); i++) {
+        auto* other_val = b->ObjectGet(
+            std::string_view(entries[i].key, entries[i].key_len));
+        if (!other_val || !DeepEqualDepth(entries[i].value, other_val, depth + 1)) return false;
       }
       return true;
+    }
   }
   return false;
+}
+
+bool JsonValue::DeepEqual(const JsonValue* other) const {
+  return DeepEqualDepth(this, other, 0);
+}
+
+JsonValue* JsonValue::DefragTree(JsonValue* root, DefragAllocFn defrag_fn, void* ctx) {
+  if (!root || !defrag_fn) return root;
+
+  auto Reloc = [&](auto*& ptr) {
+    if (!ptr) return;
+    void* moved = defrag_fn(ctx, ptr);
+    if (moved) ptr = static_cast<std::remove_reference_t<decltype(ptr)>>(moved);
+  };
+
+  Reloc(root);
+
+  std::vector<JsonValue*> stack;
+  stack.push_back(root);
+
+  while (!stack.empty()) {
+    JsonValue* cur = stack.back();
+    stack.pop_back();
+    if (!cur) continue;
+
+    switch (cur->Type()) {
+      case JsonType::kString:
+        if (!cur->IsInlineString()) {
+          Reloc(cur->gen_.payload.str.data);
+        }
+        break;
+      case JsonType::kArray: {
+        auto& arr = cur->gen_.payload.arr;
+        Reloc(arr.items);
+        for (uint32_t i = 0; i < arr.len; i++) {
+          Reloc(arr.items[i]);
+          if (arr.items[i]) stack.push_back(arr.items[i]);
+        }
+        break;
+      }
+      case JsonType::kObject: {
+        Reloc(cur->gen_.payload.obj);
+        ObjectData* od = cur->gen_.payload.obj;
+        if (od) {
+          Reloc(od->entries);
+          Reloc(od->hash_idx);
+          for (uint32_t i = 0; i < od->entries_len; i++) {
+            if (!od->entries[i].key) continue;
+            Reloc(od->entries[i].key);
+            Reloc(od->entries[i].value);
+            if (od->entries[i].value) stack.push_back(od->entries[i].value);
+          }
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return root;
 }

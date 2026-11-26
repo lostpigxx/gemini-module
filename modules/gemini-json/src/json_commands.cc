@@ -7,9 +7,11 @@
 #include "rm_alloc.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 // --- Helpers ---
@@ -91,7 +93,7 @@ static void ReplyWithJsonValue(RedisModuleCtx* ctx, const JsonValue* val,
 static bool SetAtMatch(PathMatch& m, JsonValue* new_val) {
   if (!m.parent) return false;
 
-  if (m.parent->IsObject() && !m.object_key.empty()) {
+  if (m.parent->IsObject() && m.has_object_key) {
     m.parent->ObjectSet(m.object_key.c_str(),
                         static_cast<uint32_t>(m.object_key.size()), new_val);
     return true;
@@ -111,7 +113,7 @@ static bool SetAtMatch(PathMatch& m, JsonValue* new_val) {
 static bool DeleteAtMatch(PathMatch& m) {
   if (!m.parent) return false;
 
-  if (m.parent->IsObject() && !m.object_key.empty()) {
+  if (m.parent->IsObject() && m.has_object_key) {
     return m.parent->ObjectDelete(m.object_key);
   }
   if (m.parent->IsArray() && m.array_index >= 0) {
@@ -119,6 +121,83 @@ static bool DeleteAtMatch(PathMatch& m) {
     if (popped) { JsonValue::Destroy(popped); return true; }
   }
   return false;
+}
+
+// Deduplicate matches, prune descendants of already-matched containers (which
+// prevents Use-After-Free when mutating/deleting overlapping recursive paths
+// such as $..*), and sort with a valid strict weak ordering so that array
+// mutations within the same parent proceed from highest index to lowest.
+static void PruneAndSortMatchesForMutation(std::vector<PathMatch>& matches) {
+  if (matches.size() <= 1) return;
+
+  // Step 1: Collect matched container values and mark all their descendants.
+  std::unordered_set<const JsonValue*> descendants;
+  bool any_container = false;
+  for (const auto& m : matches) {
+    if (m.value && (m.value->IsArray() || m.value->IsObject())) {
+      any_container = true;
+      break;
+    }
+  }
+
+  if (any_container) {
+    std::vector<const JsonValue*> stack;
+    for (const auto& m : matches) {
+      const JsonValue* v = m.value;
+      if (!v || (!v->IsArray() && !v->IsObject())) continue;
+      if (descendants.count(v)) continue;
+
+      // Push direct children of v (not v itself)
+      if (v->IsArray()) {
+        for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+          if (v->ArrayGet(i)) stack.push_back(v->ArrayGet(i));
+        }
+      } else {
+        auto* entries = v->ObjectEntries();
+        for (uint32_t i = 0; i < v->ObjectLen(); i++) {
+          if (entries[i].value) stack.push_back(entries[i].value);
+        }
+      }
+
+      while (!stack.empty()) {
+        const JsonValue* cur = stack.back();
+        stack.pop_back();
+        if (!descendants.insert(cur).second) continue;
+        if (cur->IsArray()) {
+          for (uint32_t i = 0; i < cur->ArrayLen(); i++) {
+            if (cur->ArrayGet(i)) stack.push_back(cur->ArrayGet(i));
+          }
+        } else if (cur->IsObject()) {
+          auto* entries = cur->ObjectEntries();
+          for (uint32_t i = 0; i < cur->ObjectLen(); i++) {
+            if (entries[i].value) stack.push_back(entries[i].value);
+          }
+        }
+      }
+    }
+  }
+
+  // Step 2: Filter out descendants and exact duplicate value pointers.
+  std::unordered_set<const JsonValue*> seen;
+  seen.reserve(matches.size());
+  std::vector<PathMatch> filtered;
+  filtered.reserve(matches.size());
+  for (auto& m : matches) {
+    if (!m.value) continue;
+    if (any_container && descendants.count(m.value)) continue;
+    if (!seen.insert(m.value).second) continue;
+    filtered.push_back(std::move(m));
+  }
+  matches.swap(filtered);
+
+  // Step 3: Strict weak ordering: group by parent pointer, then descending
+  // array_index for arrays, then object_key for objects.
+  std::sort(matches.begin(), matches.end(), [](const PathMatch& a, const PathMatch& b) {
+    if (a.parent != b.parent) return a.parent < b.parent;
+    if (a.parent && a.parent->IsArray()) return a.array_index > b.array_index;
+    if (a.has_object_key != b.has_object_key) return a.has_object_key < b.has_object_key;
+    return a.object_key < b.object_key;
+  });
 }
 
 // Single-pass helper: try to insert new_val into an object parent at the
@@ -220,9 +299,14 @@ static int CmdSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     }
 
     if (!matches.empty()) {
+      PruneAndSortMatchesForMutation(matches);
       for (size_t i = 0; i < matches.size(); i++) {
         auto* val_to_set = (i == matches.size() - 1) ? new_val : new_val->Clone();
-        SetAtMatch(matches[i], val_to_set);
+        if (!matches[i].parent) {
+          RedisModule_ModuleTypeSetValue(key, JsonModuleType, val_to_set);
+        } else {
+          SetAtMatch(matches[i], val_to_set);
+        }
       }
     } else {
       if (!TryCreateAtLeafKey(path, existing, new_val)) {
@@ -275,6 +359,8 @@ static int CmdGet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     } else if (MatchArg(sv, "SPACE") && i + 1 < argc) {
       space_store = std::string(ArgView(argv[++i]));
       opts.space = space_store.c_str();
+    } else if (MatchArg(sv, "NOESCAPE")) {
+      opts.noescape = true;
     } else {
       path_args.push_back(sv);
     }
@@ -286,38 +372,41 @@ static int CmdGet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   }
 
   if (path_args.size() == 1) {
-    auto pr = ParsePath(path_args[0]);
-    if (pr.error) return RedisModule_ReplyWithError(ctx, pr.error);
+    const char* err = nullptr;
+    const JsonPath* path = ParsePathCached(path_args[0], &err);
+    if (!path) return RedisModule_ReplyWithError(ctx, err);
 
-    auto matches = EvaluatePath(pr.path, root);
+    auto matches = EvaluatePath(*path, root);
 
-    if (pr.path.is_legacy) {
+    if (path->is_legacy) {
       if (matches.empty()) return RedisModule_ReplyWithNull(ctx);
       ReplyWithJsonValue(ctx, matches[0].value, opts);
     } else {
-      auto* arr = JsonValue::CreateArray();
-      for (auto& m : matches) arr->ArrayAppend(m.value->Clone());
-      ReplyWithJsonValue(ctx, arr, opts);
-      JsonValue::Destroy(arr);
+      std::vector<const JsonValue*> ptrs;
+      ptrs.reserve(matches.size());
+      for (const auto& m : matches) ptrs.push_back(m.value);
+      auto json = JsonSerializeArray(ptrs.data(), ptrs.size(), opts);
+      RedisModule_ReplyWithStringBuffer(ctx, json.data(), json.size());
     }
     return REDISMODULE_OK;
   }
 
-  // Multiple paths: return object { path: [results] }
-  auto* result_obj = JsonValue::CreateObject();
-  for (auto& pa : path_args) {
-    auto pr = ParsePath(pa);
-    if (pr.error) {
-      JsonValue::Destroy(result_obj);
-      return RedisModule_ReplyWithError(ctx, pr.error);
+  // Multiple paths: zero-copy streaming { path: [results] }
+  std::vector<std::vector<const JsonValue*>> all_ptrs(path_args.size());
+  std::vector<NamedMatchList> lists(path_args.size());
+  for (size_t idx = 0; idx < path_args.size(); idx++) {
+    const char* err = nullptr;
+    const JsonPath* path = ParsePathCached(path_args[idx], &err);
+    if (!path) {
+      return RedisModule_ReplyWithError(ctx, err);
     }
-    auto matches = EvaluatePath(pr.path, root);
-    auto* arr = JsonValue::CreateArray();
-    for (auto& m : matches) arr->ArrayAppend(m.value->Clone());
-    result_obj->ObjectSet(pa.data(), static_cast<uint32_t>(pa.size()), arr);
+    auto matches = EvaluatePath(*path, root);
+    all_ptrs[idx].reserve(matches.size());
+    for (const auto& m : matches) all_ptrs[idx].push_back(m.value);
+    lists[idx] = {path_args[idx], all_ptrs[idx].data(), all_ptrs[idx].size()};
   }
-  ReplyWithJsonValue(ctx, result_obj, opts);
-  JsonValue::Destroy(result_obj);
+  auto json = JsonSerializeObjectOfArrays(lists.data(), lists.size(), opts);
+  RedisModule_ReplyWithStringBuffer(ctx, json.data(), json.size());
   return REDISMODULE_OK;
 }
 
@@ -356,14 +445,15 @@ static int CmdDel(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   auto matches = EvaluatePath(path, root);
   if (matches.empty()) return RedisModule_ReplyWithLongLong(ctx, 0);
 
-  std::sort(matches.begin(), matches.end(), [](const PathMatch& a, const PathMatch& b) {
-    if (a.parent == b.parent && a.parent && a.parent->IsArray())
-      return a.array_index > b.array_index;
-    return false;
-  });
+  PruneAndSortMatchesForMutation(matches);
 
   int deleted = 0;
   for (auto& m : matches) {
+    if (!m.parent) {
+      RedisModule_DeleteKey(key);
+      deleted++;
+      break;
+    }
     if (DeleteAtMatch(m)) deleted++;
   }
 
@@ -443,14 +533,26 @@ static int CmdArrAppend(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     return RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
   }
 
+  // Find last matching array index so we can move `values` directly without Clone
+  size_t last_arr_idx = matches.size();
+  for (size_t i = 0; i < matches.size(); i++) {
+    if (matches[i].value->IsArray()) last_arr_idx = i;
+  }
+
   RedisModule_ReplyWithArray(ctx, matches.size());
   bool changed = false;
-  for (auto& m : matches) {
+  for (size_t i = 0; i < matches.size(); i++) {
+    auto& m = matches[i];
     if (!m.value->IsArray()) {
       RedisModule_ReplyWithNull(ctx);
       continue;
     }
-    for (auto* v : values) m.value->ArrayAppend(v->Clone());
+    if (i == last_arr_idx) {
+      for (auto* v : values) m.value->ArrayAppend(v);
+      values.clear();
+    } else {
+      for (auto* v : values) m.value->ArrayAppend(v->Clone());
+    }
     RedisModule_ReplyWithLongLong(ctx, m.value->ArrayLen());
     changed = true;
   }
@@ -495,17 +597,15 @@ static int CmdArrIndex(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) 
   auto matches = EvaluatePath(path, root);
 
   auto FindIndex = [&](JsonValue* arr_val) -> long long {
-    int32_t len = static_cast<int32_t>(arr_val->ArrayLen());
-    int32_t s = static_cast<int32_t>(start_arg);
-    int32_t e = stop_set ? static_cast<int32_t>(stop_arg) : len;
-    if (s < 0) s += len;
-    if (e < 0) e += len;
+    int64_t len = static_cast<int64_t>(arr_val->ArrayLen());
+    int64_t s = start_arg < 0 ? start_arg + len : start_arg;
+    int64_t e = stop_set ? (stop_arg < 0 ? stop_arg + len : stop_arg) : len;
     if (s < 0) s = 0;
     if (e > len) e = len;
-    for (int32_t i = s; i < e; i++) {
+    for (int64_t i = s; i < e; i++) {
       if (i >= 0 && i < len &&
           arr_val->ArrayGet(static_cast<uint32_t>(i))->DeepEqual(search_val)) {
-        return i;
+        return static_cast<long long>(i);
       }
     }
     return -1;
@@ -574,14 +674,14 @@ static int CmdArrInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
       return RedisModule_ReplyWithError(ctx, "ERR path does not exist or is not an array");
     }
     auto* arr = matches[0].value;
-    int32_t idx = static_cast<int32_t>(index_arg);
-    if (idx < 0) idx += static_cast<int32_t>(arr->ArrayLen());
-    if (idx < 0 || static_cast<uint32_t>(idx) > arr->ArrayLen()) {
+    int64_t len = static_cast<int64_t>(arr->ArrayLen());
+    int64_t idx = index_arg < 0 ? index_arg + len : index_arg;
+    if (idx < 0 || idx > len) {
       for (auto* v : values) JsonValue::Destroy(v);
       return RedisModule_ReplyWithError(ctx, "ERR index out of range");
     }
     for (size_t i = 0; i < values.size(); i++) {
-      arr->ArrayInsert(static_cast<uint32_t>(idx + static_cast<int32_t>(i)), values[i]);
+      arr->ArrayInsert(static_cast<uint32_t>(idx + static_cast<int64_t>(i)), values[i]);
     }
     NotifyJsonEvent(ctx, "json.arrinsert", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
@@ -596,14 +696,14 @@ static int CmdArrInsert(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
       continue;
     }
     auto* arr = m.value;
-    int32_t idx = static_cast<int32_t>(index_arg);
-    if (idx < 0) idx += static_cast<int32_t>(arr->ArrayLen());
-    if (idx < 0 || static_cast<uint32_t>(idx) > arr->ArrayLen()) {
+    int64_t len = static_cast<int64_t>(arr->ArrayLen());
+    int64_t idx = index_arg < 0 ? index_arg + len : index_arg;
+    if (idx < 0 || idx > len) {
       RedisModule_ReplyWithError(ctx, "ERR index out of range");
       continue;
     }
     for (size_t i = 0; i < values.size(); i++) {
-      arr->ArrayInsert(static_cast<uint32_t>(idx + static_cast<int32_t>(i)),
+      arr->ArrayInsert(static_cast<uint32_t>(idx + static_cast<int64_t>(i)),
                        values[i]->Clone());
     }
     RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
@@ -669,13 +769,20 @@ static int CmdArrPop(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     path.is_legacy = true;
   }
 
-  int32_t pop_index = -1;
+  long long pop_index_arg = -1;
   if (argc == 4) {
-    long long idx;
-    if (RedisModule_StringToLongLong(argv[3], &idx) != REDISMODULE_OK)
+    if (RedisModule_StringToLongLong(argv[3], &pop_index_arg) != REDISMODULE_OK)
       return RedisModule_ReplyWithError(ctx, "ERR invalid index");
-    pop_index = static_cast<int32_t>(idx);
   }
+
+  auto PopResolved = [&](JsonValue* arr) -> JsonValue* {
+    int64_t len = static_cast<int64_t>(arr->ArrayLen());
+    if (len == 0) return nullptr;
+    int64_t idx = pop_index_arg < 0 ? pop_index_arg + len : pop_index_arg;
+    if (idx < 0) idx = 0;
+    if (idx >= len) idx = len - 1;
+    return arr->ArrayPop(static_cast<int32_t>(idx));
+  };
 
   auto matches = EvaluatePath(path, root);
 
@@ -684,7 +791,7 @@ static int CmdArrPop(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       return RedisModule_ReplyWithNull(ctx);
     auto* arr = matches[0].value;
     if (arr->ArrayLen() == 0) return RedisModule_ReplyWithNull(ctx);
-    auto* popped = arr->ArrayPop(pop_index);
+    auto* popped = PopResolved(arr);
     if (!popped) return RedisModule_ReplyWithNull(ctx);
     ReplyWithJsonValue(ctx, popped);
     JsonValue::Destroy(popped);
@@ -700,7 +807,7 @@ static int CmdArrPop(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       RedisModule_ReplyWithNull(ctx);
       continue;
     }
-    auto* popped = m.value->ArrayPop(pop_index);
+    auto* popped = PopResolved(m.value);
     if (!popped) { RedisModule_ReplyWithNull(ctx); continue; }
     ReplyWithJsonValue(ctx, popped);
     JsonValue::Destroy(popped);
@@ -735,16 +842,24 @@ static int CmdArrTrim(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 
   auto matches = EvaluatePath(path, root);
 
+  auto TrimResolved = [&](JsonValue* arr) {
+    int64_t len = static_cast<int64_t>(arr->ArrayLen());
+    int64_t s = start_arg < 0 ? start_arg + len : start_arg;
+    int64_t e = stop_arg < 0 ? stop_arg + len : stop_arg;
+    if (s < 0) s = 0;
+    if (e < 0 || s >= len || s > e) {
+      arr->Clear();
+    } else {
+      if (e >= len) e = len - 1;
+      arr->ArrayTrim(static_cast<uint32_t>(s), static_cast<uint32_t>(e));
+    }
+  };
+
   if (path.is_legacy) {
     if (matches.empty() || !matches[0].value->IsArray())
       return RedisModule_ReplyWithNull(ctx);
     auto* arr = matches[0].value;
-    int32_t s = static_cast<int32_t>(start_arg);
-    int32_t e = static_cast<int32_t>(stop_arg);
-    if (s < 0) s += static_cast<int32_t>(arr->ArrayLen());
-    if (e < 0) e += static_cast<int32_t>(arr->ArrayLen());
-    arr->ArrayTrim(s < 0 ? 0 : static_cast<uint32_t>(s),
-                   e < 0 ? 0 : static_cast<uint32_t>(e));
+    TrimResolved(arr);
     NotifyJsonEvent(ctx, "json.arrtrim", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
     return RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
@@ -755,12 +870,7 @@ static int CmdArrTrim(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   for (auto& m : matches) {
     if (!m.value->IsArray()) { RedisModule_ReplyWithNull(ctx); continue; }
     auto* arr = m.value;
-    int32_t s = static_cast<int32_t>(start_arg);
-    int32_t e = static_cast<int32_t>(stop_arg);
-    if (s < 0) s += static_cast<int32_t>(arr->ArrayLen());
-    if (e < 0) e += static_cast<int32_t>(arr->ArrayLen());
-    arr->ArrayTrim(s < 0 ? 0 : static_cast<uint32_t>(s),
-                   e < 0 ? 0 : static_cast<uint32_t>(e));
+    TrimResolved(arr);
     RedisModule_ReplyWithLongLong(ctx, arr->ArrayLen());
     changed = true;
   }
@@ -811,41 +921,26 @@ static int CmdStrAppend(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
       return RedisModule_ReplyWithNull(ctx);
     }
     auto* str_val = matches[0].value;
-    auto existing = str_val->GetString();
-    uint32_t new_len = static_cast<uint32_t>(existing.size() + append_sv.size());
-    auto* buf = static_cast<char*>(RMAlloc(new_len + 1));
-    std::memcpy(buf, existing.data(), existing.size());
-    std::memcpy(buf + existing.size(), append_sv.data(), append_sv.size());
-    buf[new_len] = '\0';
-    auto* new_str = JsonValue::CreateString(buf, new_len);
-    RMFree(buf);
-
-    if (matches[0].parent) {
-      SetAtMatch(matches[0], new_str);
-    } else {
-      RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_str);
+    if (!str_val->StringAppend(append_sv)) {
+      JsonValue::Destroy(append_val);
+      return RedisModule_ReplyWithError(ctx, "ERR string append failed or overflow");
     }
+    size_t new_len = str_val->GetString().size();
     JsonValue::Destroy(append_val);
     NotifyJsonEvent(ctx, "json.strappend", argv[1]);
     RedisModule_ReplicateVerbatim(ctx);
-    return RedisModule_ReplyWithLongLong(ctx, new_len);
+    return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(new_len));
   }
 
   RedisModule_ReplyWithArray(ctx, matches.size());
   bool changed = false;
   for (auto& m : matches) {
     if (!m.value->IsString()) { RedisModule_ReplyWithNull(ctx); continue; }
-    auto existing = m.value->GetString();
-    uint32_t new_len = static_cast<uint32_t>(existing.size() + append_sv.size());
-    auto* buf = static_cast<char*>(RMAlloc(new_len + 1));
-    std::memcpy(buf, existing.data(), existing.size());
-    std::memcpy(buf + existing.size(), append_sv.data(), append_sv.size());
-    buf[new_len] = '\0';
-    auto* new_str = JsonValue::CreateString(buf, new_len);
-    RMFree(buf);
-    if (m.parent) SetAtMatch(m, new_str);
-    else RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_str);
-    RedisModule_ReplyWithLongLong(ctx, new_len);
+    if (!m.value->StringAppend(append_sv)) {
+      RedisModule_ReplyWithNull(ctx);
+      continue;
+    }
+    RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(m.value->GetString().size()));
     changed = true;
   }
   JsonValue::Destroy(append_val);
@@ -916,23 +1011,31 @@ static int CmdNumIncrBy(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
 
   auto matches = EvaluatePath(path, root);
 
-  auto IncrementValue = [&](JsonValue* v) -> JsonValue* {
+  auto IncrementValue = [&](JsonValue* v, bool& overflow) -> JsonValue* {
+    overflow = false;
     if (v->IsInteger() && incr_is_int) {
       int64_t old_val = v->GetInteger();
       if ((incr_int > 0 && old_val > INT64_MAX - incr_int) ||
           (incr_int < 0 && old_val < INT64_MIN - incr_int)) {
-        return JsonValue::CreateNumber(static_cast<double>(old_val) + incr);
+        double res = static_cast<double>(old_val) + incr;
+        if (!std::isfinite(res)) { overflow = true; return nullptr; }
+        return JsonValue::CreateNumber(res);
       }
       return JsonValue::CreateInteger(old_val + incr_int);
     }
-    return JsonValue::CreateNumber(v->GetNumber() + incr);
+    double res = v->GetNumber() + incr;
+    if (!std::isfinite(res)) { overflow = true; return nullptr; }
+    return JsonValue::CreateNumber(res);
   };
 
   if (path.is_legacy) {
     if (matches.empty() || !matches[0].value->IsNumber())
       return RedisModule_ReplyWithError(ctx, "ERR path does not exist or is not a number");
 
-    auto* new_val = IncrementValue(matches[0].value);
+    bool overflow = false;
+    auto* new_val = IncrementValue(matches[0].value, overflow);
+    if (overflow || !new_val)
+      return RedisModule_ReplyWithError(ctx, "ERR result is not a finite number");
     if (matches[0].parent) SetAtMatch(matches[0], new_val);
     else RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_val);
 
@@ -942,19 +1045,30 @@ static int CmdNumIncrBy(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     return RedisModule_ReplyWithStringBuffer(ctx, result.data(), result.size());
   }
 
+  // Pre-check overflow before mutating any match in JSONPath mode
+  std::vector<JsonValue*> computed(matches.size(), nullptr);
+  for (size_t i = 0; i < matches.size(); i++) {
+    auto* v = matches[i].value;
+    if (!v->IsNumber()) continue;
+    bool overflow = false;
+    computed[i] = IncrementValue(v, overflow);
+    if (overflow || !computed[i]) {
+      for (auto* c : computed) JsonValue::Destroy(c);
+      return RedisModule_ReplyWithError(ctx, "ERR result is not a finite number");
+    }
+  }
+
   std::string reply = "[";
   bool changed = false;
   for (size_t i = 0; i < matches.size(); i++) {
     if (i > 0) reply += ",";
-    auto* v = matches[i].value;
-    if (!v->IsNumber()) {
+    if (!computed[i]) {
       reply += "null";
       continue;
     }
-    auto* new_val = IncrementValue(v);
-    reply += JsonSerialize(new_val);
-    if (matches[i].parent) SetAtMatch(matches[i], new_val);
-    else RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_val);
+    reply += JsonSerialize(computed[i]);
+    if (matches[i].parent) SetAtMatch(matches[i], computed[i]);
+    else RedisModule_ModuleTypeSetValue(key, JsonModuleType, computed[i]);
     changed = true;
   }
   reply += "]";
@@ -987,16 +1101,33 @@ static int CmdNumMultBy(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     return RedisModule_ReplyWithError(ctx, "ERR value must be a number");
   }
   double mult = mult_val->GetNumber();
+  bool mult_is_int = mult_val->IsInteger();
+  int64_t mult_int = mult_is_int ? mult_val->GetInteger() : 0;
   JsonValue::Destroy(mult_val);
 
   auto matches = EvaluatePath(path, root);
+
+  auto MultiplyValue = [&](JsonValue* v, bool& overflow) -> JsonValue* {
+    overflow = false;
+    if (v->IsInteger() && mult_is_int) {
+      int64_t prod = 0;
+      if (!__builtin_mul_overflow(v->GetInteger(), mult_int, &prod)) {
+        return JsonValue::CreateInteger(prod);
+      }
+    }
+    double res = v->GetNumber() * mult;
+    if (!std::isfinite(res)) { overflow = true; return nullptr; }
+    return JsonValue::CreateNumber(res);
+  };
 
   if (path.is_legacy) {
     if (matches.empty() || !matches[0].value->IsNumber())
       return RedisModule_ReplyWithError(ctx, "ERR path does not exist or is not a number");
 
-    double result = matches[0].value->GetNumber() * mult;
-    auto* new_val = JsonValue::CreateNumber(result);
+    bool overflow = false;
+    auto* new_val = MultiplyValue(matches[0].value, overflow);
+    if (overflow || !new_val)
+      return RedisModule_ReplyWithError(ctx, "ERR result is not a finite number");
     if (matches[0].parent) SetAtMatch(matches[0], new_val);
     else RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_val);
     auto reply = JsonSerialize(new_val);
@@ -1005,17 +1136,26 @@ static int CmdNumMultBy(RedisModuleCtx* ctx, RedisModuleString** argv, int argc)
     return RedisModule_ReplyWithStringBuffer(ctx, reply.data(), reply.size());
   }
 
+  std::vector<JsonValue*> computed(matches.size(), nullptr);
+  for (size_t i = 0; i < matches.size(); i++) {
+    auto* v = matches[i].value;
+    if (!v->IsNumber()) continue;
+    bool overflow = false;
+    computed[i] = MultiplyValue(v, overflow);
+    if (overflow || !computed[i]) {
+      for (auto* c : computed) JsonValue::Destroy(c);
+      return RedisModule_ReplyWithError(ctx, "ERR result is not a finite number");
+    }
+  }
+
   std::string reply = "[";
   bool changed = false;
   for (size_t i = 0; i < matches.size(); i++) {
     if (i > 0) reply += ",";
-    auto* v = matches[i].value;
-    if (!v->IsNumber()) { reply += "null"; continue; }
-    double result = v->GetNumber() * mult;
-    auto* new_val = JsonValue::CreateNumber(result);
-    reply += JsonSerialize(new_val);
-    if (matches[i].parent) SetAtMatch(matches[i], new_val);
-    else RedisModule_ModuleTypeSetValue(key, JsonModuleType, new_val);
+    if (!computed[i]) { reply += "null"; continue; }
+    reply += JsonSerialize(computed[i]);
+    if (matches[i].parent) SetAtMatch(matches[i], computed[i]);
+    else RedisModule_ModuleTypeSetValue(key, JsonModuleType, computed[i]);
     changed = true;
   }
   reply += "]";
@@ -1217,10 +1357,11 @@ static int CmdMGet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     } else if (path.is_legacy) {
       ReplyWithJsonValue(ctx, matches[0].value);
     } else {
-      auto* arr = JsonValue::CreateArray();
-      for (auto& m : matches) arr->ArrayAppend(m.value->Clone());
-      ReplyWithJsonValue(ctx, arr);
-      JsonValue::Destroy(arr);
+      std::vector<const JsonValue*> ptrs;
+      ptrs.reserve(matches.size());
+      for (const auto& m : matches) ptrs.push_back(m.value);
+      auto json = JsonSerializeArray(ptrs.data(), ptrs.size());
+      RedisModule_ReplyWithStringBuffer(ctx, json.data(), json.size());
     }
   }
   return REDISMODULE_OK;
@@ -1257,45 +1398,60 @@ static int CmdMSet(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     ops.push_back(std::move(op));
   }
 
+  // Phase 1: Validate all keys and paths before applying any mutation (atomic MSET).
+  std::unordered_set<std::string_view> will_exist;
+  for (auto& op : ops) {
+    auto key_sv = ArgView(argv[op.key_idx]);
+    auto* key = static_cast<RedisModuleKey*>(
+      RedisModule_OpenKey(ctx, argv[op.key_idx], REDISMODULE_READ));
+    int key_type = RedisModule_KeyType(key);
+
+    if (key_type == REDISMODULE_KEYTYPE_EMPTY) {
+      if (IsRootOnlyPath(op.path)) {
+        will_exist.insert(key_sv);
+      } else if (!will_exist.count(key_sv)) {
+        for (auto& rem : ops) JsonValue::Destroy(rem.value);
+        return RedisModule_ReplyWithError(ctx, "ERR new objects must be created at the root");
+      }
+    } else if (key_type == REDISMODULE_KEYTYPE_MODULE) {
+      if (!GetJsonValue(key)) {
+        for (auto& rem : ops) JsonValue::Destroy(rem.value);
+        return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+      }
+    } else {
+      for (auto& rem : ops) JsonValue::Destroy(rem.value);
+      return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    }
+  }
+
+  // Phase 2: All checks passed — apply mutations.
   for (auto& op : ops) {
     auto* key = static_cast<RedisModuleKey*>(
       RedisModule_OpenKey(ctx, argv[op.key_idx], REDISMODULE_READ | REDISMODULE_WRITE));
     int key_type = RedisModule_KeyType(key);
 
-    if (key_type == REDISMODULE_KEYTYPE_EMPTY) {
-      if (IsRootOnlyPath(op.path)) {
-        RedisModule_ModuleTypeSetValue(key, JsonModuleType, op.value);
-        op.value = nullptr;
-      } else {
-        for (auto& rem : ops) JsonValue::Destroy(rem.value);
-        return RedisModule_ReplyWithError(ctx, "ERR new objects must be created at the root");
-      }
-    } else if (key_type == REDISMODULE_KEYTYPE_MODULE) {
+    if (key_type == REDISMODULE_KEYTYPE_EMPTY || IsRootOnlyPath(op.path)) {
+      RedisModule_ModuleTypeSetValue(key, JsonModuleType, op.value);
+      op.value = nullptr;
+    } else {
       auto* existing = GetJsonValue(key);
-      if (!existing) {
-        for (auto& rem : ops) JsonValue::Destroy(rem.value);
-        return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
-      }
-      if (IsRootOnlyPath(op.path)) {
-        RedisModule_ModuleTypeSetValue(key, JsonModuleType, op.value);
-        op.value = nullptr;
-      } else {
-        auto matches = EvaluatePath(op.path, existing);
-        if (!matches.empty()) {
-          for (size_t j = 0; j < matches.size(); j++) {
-            auto* val = (j == matches.size() - 1) ? op.value : op.value->Clone();
+      auto matches = EvaluatePath(op.path, existing);
+      if (!matches.empty()) {
+        PruneAndSortMatchesForMutation(matches);
+        for (size_t j = 0; j < matches.size(); j++) {
+          auto* val = (j == matches.size() - 1) ? op.value : op.value->Clone();
+          if (!matches[j].parent) {
+            RedisModule_ModuleTypeSetValue(key, JsonModuleType, val);
+          } else {
             SetAtMatch(matches[j], val);
           }
+        }
+        op.value = nullptr;
+      } else {
+        if (TryCreateAtLeafKey(op.path, existing, op.value)) {
           op.value = nullptr;
-        } else {
-          if (TryCreateAtLeafKey(op.path, existing, op.value)) {
-            op.value = nullptr;
-          }
         }
       }
-    } else {
-      for (auto& rem : ops) JsonValue::Destroy(rem.value);
-      return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
     }
   }
 
@@ -1348,6 +1504,7 @@ static void MergePatch(JsonValue* target, JsonValue* patch, JsonValue* /*parent*
         child_match.value = existing;
         child_match.parent = target;
         child_match.object_key = std::string(pk);
+        child_match.has_object_key = true;
         MergePatch(existing, pv, target, child_match, key);
       } else {
         target->ObjectSet(patch_entries[i].key, patch_entries[i].key_len, pv->Clone());
@@ -1399,6 +1556,7 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     return RedisModule_ReplyWithError(ctx, "ERR path does not exist");
   }
 
+  PruneAndSortMatchesForMutation(matches);
   for (auto& m : matches) {
     MergePatch(m.value, patch, m.parent, m, key);
   }
@@ -1410,13 +1568,52 @@ static int CmdMerge(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
 }
 
 // --- JSON.DEBUG ---
+static size_t CalcDepth(const JsonValue* v, int depth = 0) {
+  if (!v || depth > kMaxJsonDepth) return 0;
+  size_t max_child = 0;
+  if (v->IsArray()) {
+    for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+      max_child = std::max(max_child, CalcDepth(v->ArrayGet(i), depth + 1));
+    }
+    return 1 + max_child;
+  }
+  if (v->IsObject()) {
+    auto* entries = v->ObjectEntries();
+    for (uint32_t i = 0; i < v->ObjectLen(); i++) {
+      max_child = std::max(max_child, CalcDepth(entries[i].value, depth + 1));
+    }
+    return 1 + max_child;
+  }
+  return 0;
+}
+
+static size_t CalcFields(const JsonValue* v, int depth = 0) {
+  if (!v || depth > kMaxJsonDepth) return 0;
+  if (v->IsArray()) {
+    size_t total = v->ArrayLen();
+    for (uint32_t i = 0; i < v->ArrayLen(); i++) {
+      total += CalcFields(v->ArrayGet(i), depth + 1);
+    }
+    return total;
+  }
+  if (v->IsObject()) {
+    size_t total = v->ObjectLen();
+    auto* entries = v->ObjectEntries();
+    for (uint32_t i = 0; i < v->ObjectLen(); i++) {
+      total += CalcFields(entries[i].value, depth + 1);
+    }
+    return total;
+  }
+  return 0;
+}
+
 static int CmdDebug(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (argc < 2) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
   auto subcmd = ArgView(argv[1]);
 
-  if (MatchArg(subcmd, "MEMORY")) {
+  if (MatchArg(subcmd, "MEMORY") || MatchArg(subcmd, "DEPTH") || MatchArg(subcmd, "FIELDS")) {
     if (argc < 3 || argc > 4) return RedisModule_WrongArity(ctx);
 
     auto* root = OpenReadOnly(ctx, argv[2], nullptr);
@@ -1426,20 +1623,37 @@ static int CmdDebug(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     if (argc == 4) {
       if (!ParsePathFromArg(ctx, argv[3], path)) return REDISMODULE_OK;
     } else {
-      path.segments.push_back({PathSegType::kRoot, {}, 0, {}});
+      path.segments.push_back({PathSegType::kRoot, {}, 0, {}, {}, {}});
       path.is_legacy = true;
     }
 
     auto matches = EvaluatePath(path, root);
-    if (matches.empty()) return RedisModule_ReplyWithLongLong(ctx, 0);
-    size_t total = 0;
-    for (auto& m : matches) total += m.value->MemoryUsage();
-    return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(total));
+    bool is_mem = MatchArg(subcmd, "MEMORY");
+    bool is_depth = MatchArg(subcmd, "DEPTH");
+
+    auto MetricOf = [&](const JsonValue* v) -> long long {
+      if (is_mem) return static_cast<long long>(v->MemoryUsage());
+      if (is_depth) return static_cast<long long>(CalcDepth(v));
+      return static_cast<long long>(CalcFields(v));
+    };
+
+    if (path.is_legacy) {
+      if (matches.empty()) return RedisModule_ReplyWithLongLong(ctx, 0);
+      return RedisModule_ReplyWithLongLong(ctx, MetricOf(matches[0].value));
+    }
+
+    RedisModule_ReplyWithArray(ctx, matches.size());
+    for (auto& m : matches) {
+      RedisModule_ReplyWithLongLong(ctx, MetricOf(m.value));
+    }
+    return REDISMODULE_OK;
   }
 
   if (MatchArg(subcmd, "HELP")) {
-    RedisModule_ReplyWithArray(ctx, 2);
+    RedisModule_ReplyWithArray(ctx, 4);
     RedisModule_ReplyWithSimpleString(ctx, "JSON.DEBUG MEMORY <key> [path] - report memory usage");
+    RedisModule_ReplyWithSimpleString(ctx, "JSON.DEBUG DEPTH <key> [path] - report nesting depth");
+    RedisModule_ReplyWithSimpleString(ctx, "JSON.DEBUG FIELDS <key> [path] - report total field/element count");
     RedisModule_ReplyWithSimpleString(ctx, "JSON.DEBUG HELP - show help");
     return REDISMODULE_OK;
   }
@@ -1526,37 +1740,41 @@ int RegisterJsonCommands(RedisModuleCtx* ctx) {
     const char* name;
     RedisModuleCmdFunc handler;
     const char* flags;
+    int firstkey;
+    int lastkey;
+    int keystep;
   };
 
   CmdEntry commands[] = {
-    {"JSON.SET",       CmdSet,       "write deny-oom"},
-    {"JSON.GET",       CmdGet,       "readonly"},
-    {"JSON.DEL",       CmdDel,       "write"},
-    {"JSON.FORGET",    CmdDel,       "write"},
-    {"JSON.TYPE",      CmdType,      "readonly"},
-    {"JSON.ARRAPPEND", CmdArrAppend, "write deny-oom"},
-    {"JSON.ARRINDEX",  CmdArrIndex,  "readonly"},
-    {"JSON.ARRINSERT", CmdArrInsert, "write deny-oom"},
-    {"JSON.ARRLEN",    CmdArrLen,    "readonly"},
-    {"JSON.ARRPOP",    CmdArrPop,    "write"},
-    {"JSON.ARRTRIM",   CmdArrTrim,   "write"},
-    {"JSON.STRAPPEND", CmdStrAppend, "write deny-oom"},
-    {"JSON.STRLEN",    CmdStrLen,    "readonly"},
-    {"JSON.NUMINCRBY", CmdNumIncrBy, "write deny-oom"},
-    {"JSON.NUMMULTBY", CmdNumMultBy, "write deny-oom"},
-    {"JSON.OBJKEYS",   CmdObjKeys,   "readonly"},
-    {"JSON.OBJLEN",    CmdObjLen,    "readonly"},
-    {"JSON.CLEAR",     CmdClear,     "write"},
-    {"JSON.TOGGLE",    CmdToggle,    "write"},
-    {"JSON.MGET",      CmdMGet,      "readonly"},
-    {"JSON.MSET",      CmdMSet,      "write deny-oom"},
-    {"JSON.MERGE",     CmdMerge,     "write deny-oom"},
-    {"JSON.DEBUG",     CmdDebug,     "readonly"},
-    {"JSON.RESP",      CmdResp,      "readonly"},
+    {"JSON.SET",       CmdSet,       "write deny-oom", 1,  1, 1},
+    {"JSON.GET",       CmdGet,       "readonly",       1,  1, 1},
+    {"JSON.DEL",       CmdDel,       "write",          1,  1, 1},
+    {"JSON.FORGET",    CmdDel,       "write",          1,  1, 1},
+    {"JSON.TYPE",      CmdType,      "readonly",       1,  1, 1},
+    {"JSON.ARRAPPEND", CmdArrAppend, "write deny-oom", 1,  1, 1},
+    {"JSON.ARRINDEX",  CmdArrIndex,  "readonly",       1,  1, 1},
+    {"JSON.ARRINSERT", CmdArrInsert, "write deny-oom", 1,  1, 1},
+    {"JSON.ARRLEN",    CmdArrLen,    "readonly",       1,  1, 1},
+    {"JSON.ARRPOP",    CmdArrPop,    "write",          1,  1, 1},
+    {"JSON.ARRTRIM",   CmdArrTrim,   "write",          1,  1, 1},
+    {"JSON.STRAPPEND", CmdStrAppend, "write deny-oom", 1,  1, 1},
+    {"JSON.STRLEN",    CmdStrLen,    "readonly",       1,  1, 1},
+    {"JSON.NUMINCRBY", CmdNumIncrBy, "write deny-oom", 1,  1, 1},
+    {"JSON.NUMMULTBY", CmdNumMultBy, "write deny-oom", 1,  1, 1},
+    {"JSON.OBJKEYS",   CmdObjKeys,   "readonly",       1,  1, 1},
+    {"JSON.OBJLEN",    CmdObjLen,    "readonly",       1,  1, 1},
+    {"JSON.CLEAR",     CmdClear,     "write",          1,  1, 1},
+    {"JSON.TOGGLE",    CmdToggle,    "write",          1,  1, 1},
+    {"JSON.MGET",      CmdMGet,      "readonly",       1, -2, 1},
+    {"JSON.MSET",      CmdMSet,      "write deny-oom", 1, -1, 3},
+    {"JSON.MERGE",     CmdMerge,     "write deny-oom", 1,  1, 1},
+    {"JSON.DEBUG",     CmdDebug,     "readonly",       0,  0, 0},
+    {"JSON.RESP",      CmdResp,      "readonly",       1,  1, 1},
   };
 
   for (auto& cmd : commands) {
-    if (RedisModule_CreateCommand(ctx, cmd.name, cmd.handler, cmd.flags, 1, 1, 1) ==
+    if (RedisModule_CreateCommand(ctx, cmd.name, cmd.handler, cmd.flags,
+                                  cmd.firstkey, cmd.lastkey, cmd.keystep) ==
         REDISMODULE_ERR) {
       return REDISMODULE_ERR;
     }

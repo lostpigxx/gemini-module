@@ -278,7 +278,11 @@ TEST(JsonValueTest, Clear) {
 }
 
 TEST(JsonValueTest, MemoryUsage) {
-  auto* v = JsonValue::CreateString("hello world", 11);
+  auto* sso = JsonValue::CreateString("hello world", 11);
+  EXPECT_EQ(sso->MemoryUsage(), sizeof(JsonValue));
+  JsonValue::Destroy(sso);
+
+  auto* v = JsonValue::CreateString("hello world this is a heap string!", 34);
   EXPECT_GT(v->MemoryUsage(), sizeof(JsonValue));
   JsonValue::Destroy(v);
 
@@ -303,4 +307,158 @@ TEST(JsonValueTest, NullOperations) {
   auto* v = JsonValue::CreateNull();
   EXPECT_FALSE(v->DeepEqual(nullptr));
   JsonValue::Destroy(v);
+}
+
+TEST(JsonValueTest, DeepEqualLargeIntPrecision) {
+  auto* a = JsonValue::CreateInteger(9007199254740992LL);  // 2^53
+  auto* b = JsonValue::CreateInteger(9007199254740993LL);  // 2^53 + 1
+  auto* c = JsonValue::CreateInteger(9007199254740993LL);
+  EXPECT_FALSE(a->DeepEqual(b));
+  EXPECT_TRUE(b->DeepEqual(c));
+
+  auto* max_i = JsonValue::CreateInteger(INT64_MAX);
+  auto* max_i_minus_1 = JsonValue::CreateInteger(INT64_MAX - 1);
+  auto* max_d = JsonValue::CreateNumber(static_cast<double>(INT64_MAX)); // rounds to 2^63
+  EXPECT_FALSE(max_i->DeepEqual(max_i_minus_1));
+  EXPECT_FALSE(max_i->DeepEqual(max_d));
+
+  auto* min_i = JsonValue::CreateInteger(INT64_MIN);
+  auto* min_d = JsonValue::CreateNumber(-9223372036854775808.0); // exact -2^63
+  EXPECT_TRUE(min_i->DeepEqual(min_d));
+
+  JsonValue::Destroy(a);
+  JsonValue::Destroy(b);
+  JsonValue::Destroy(c);
+  JsonValue::Destroy(max_i);
+  JsonValue::Destroy(max_i_minus_1);
+  JsonValue::Destroy(max_d);
+  JsonValue::Destroy(min_i);
+  JsonValue::Destroy(min_d);
+}
+
+TEST(JsonValueTest, EmptyStringObjectKey) {
+  auto* obj = JsonValue::CreateObject();
+  ASSERT_TRUE(obj->ObjectSet("", 0, JsonValue::CreateInteger(7)));
+  EXPECT_EQ(obj->ObjectLen(), 1u);
+  auto* got = obj->ObjectGet("");
+  ASSERT_NE(got, nullptr);
+  EXPECT_EQ(got->GetInteger(), 7);
+  EXPECT_TRUE(obj->ObjectDelete(""));
+  EXPECT_EQ(obj->ObjectLen(), 0u);
+  JsonValue::Destroy(obj);
+}
+
+TEST(JsonValueTest, CompactNodeSizeAndSsoBoundaries) {
+  EXPECT_EQ(sizeof(JsonValue), 24u);
+
+  for (uint32_t len : {0u, 1u, 10u, 20u, 21u, 22u, 23u, 100u, 4096u}) {
+    std::string s(len, static_cast<char>('a' + (len % 26)));
+    auto* v = JsonValue::CreateString(s.data(), len);
+    ASSERT_NE(v, nullptr);
+    EXPECT_EQ(v->GetString(), s);
+    if (len <= JsonValue::kInlineStrMaxLen) {
+      EXPECT_TRUE(v->IsInlineString());
+      EXPECT_EQ(v->MemoryUsage(), sizeof(JsonValue));
+    } else {
+      EXPECT_FALSE(v->IsInlineString());
+      EXPECT_GT(v->MemoryUsage(), sizeof(JsonValue));
+    }
+    auto* c = v->Clone();
+    EXPECT_TRUE(v->DeepEqual(c));
+    EXPECT_EQ(c->IsInlineString(), v->IsInlineString());
+    JsonValue::Destroy(c);
+    JsonValue::Destroy(v);
+  }
+}
+
+TEST(JsonValueTest, ObjectDeleteHeavyPreservesOrder) {
+  auto* obj = JsonValue::CreateObject();
+  ASSERT_TRUE(obj->ObjectReserve(1000));
+  for (int i = 0; i < 1000; i++) {
+    std::string k = "k_" + std::to_string(i);
+    ASSERT_TRUE(obj->ObjectSet(k.data(), static_cast<uint32_t>(k.size()),
+                               JsonValue::CreateInteger(i)));
+  }
+  EXPECT_EQ(obj->ObjectLen(), 1000u);
+
+  // Delete 750 keys (keep multiples of 4)
+  for (int i = 0; i < 1000; i++) {
+    if (i % 4 != 0) {
+      std::string k = "k_" + std::to_string(i);
+      EXPECT_TRUE(obj->ObjectDelete(k));
+    }
+  }
+  EXPECT_EQ(obj->ObjectLen(), 250u);
+
+  // Verify remaining lookups and exact insertion order
+  auto* entries = obj->ObjectEntries();
+  for (uint32_t idx = 0; idx < 250; idx++) {
+    std::string expected = "k_" + std::to_string(idx * 4);
+    EXPECT_EQ(std::string_view(entries[idx].key, entries[idx].key_len), expected);
+    EXPECT_EQ(entries[idx].value->GetInteger(), static_cast<int64_t>(idx * 4));
+    auto* got = obj->ObjectGet(expected);
+    ASSERT_NE(got, nullptr);
+    EXPECT_EQ(got->GetInteger(), static_cast<int64_t>(idx * 4));
+  }
+
+  // Re-insert some deleted keys and verify
+  for (int i = 1; i < 200; i += 4) {
+    std::string k = "k_" + std::to_string(i);
+    ASSERT_TRUE(obj->ObjectSet(k.data(), static_cast<uint32_t>(k.size()),
+                               JsonValue::CreateInteger(i + 10000)));
+  }
+  EXPECT_EQ(obj->ObjectLen(), 300u);
+  EXPECT_EQ(obj->ObjectGet("k_1")->GetInteger(), 10001);
+  EXPECT_EQ(obj->ObjectGet("k_2"), nullptr);
+
+  JsonValue::Destroy(obj);
+}
+
+TEST(JsonValueTest, ArrayAndObjectShrinkOnTrimAndClear) {
+  auto* arr = JsonValue::CreateArray();
+  ASSERT_TRUE(arr->ArrayReserve(1024));
+  for (int i = 0; i < 1024; i++) {
+    arr->ArrayAppend(JsonValue::CreateInteger(i));
+  }
+  size_t mem_full = arr->MemoryUsage();
+  arr->ArrayTrim(0, 3);
+  EXPECT_EQ(arr->ArrayLen(), 4u);
+  EXPECT_LT(arr->ArrayCap(), 1024u);
+  EXPECT_LT(arr->MemoryUsage(), mem_full / 10);
+  JsonValue::Destroy(arr);
+
+  auto* obj = JsonValue::CreateObject();
+  ASSERT_TRUE(obj->ObjectReserve(500));
+  for (int i = 0; i < 500; i++) {
+    std::string k = "key_" + std::to_string(i);
+    obj->ObjectSet(k.data(), static_cast<uint32_t>(k.size()),
+                   JsonValue::CreateInteger(i));
+  }
+  size_t obj_full = obj->MemoryUsage();
+  obj->Clear();
+  EXPECT_EQ(obj->ObjectLen(), 0u);
+  EXPECT_LT(obj->MemoryUsage(), obj_full / 10);
+  JsonValue::Destroy(obj);
+}
+
+TEST(JsonValueTest, StringAppendSsoAndHeapGrowth) {
+  auto* s = JsonValue::CreateString("hi", 2);
+  EXPECT_TRUE(s->IsInlineString());
+
+  // Append within SSO limit (2 + 5 = 7 <= 21)
+  EXPECT_TRUE(s->StringAppend(" there"));
+  EXPECT_TRUE(s->IsInlineString());
+  EXPECT_EQ(s->GetString(), "hi there");
+
+  // Append crossing SSO boundary -> heap promotion
+  EXPECT_TRUE(s->StringAppend(" — crossing the 21-byte SSO boundary!"));
+  EXPECT_FALSE(s->IsInlineString());
+  EXPECT_EQ(s->GetString(), "hi there — crossing the 21-byte SSO boundary!");
+
+  // Repeated geometric heap appends
+  for (int i = 0; i < 200; i++) {
+    ASSERT_TRUE(s->StringAppend("0123456789"));
+  }
+  EXPECT_EQ(s->GetString().size(), 47u + 2000u);
+  JsonValue::Destroy(s);
 }

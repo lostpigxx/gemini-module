@@ -628,9 +628,70 @@ TEST(JsonModuleTypeTest, CopyFreeEffortDigestAndDefrag) {
 
   void* ptr = v1;
   EXPECT_EQ(DefragJson(nullptr, nullptr, &ptr), 0);
+  v1 = static_cast<JsonValue*>(ptr);
+  EXPECT_TRUE(v1->DeepEqual(v2));
 
   JsonValue::Destroy(cloned);
   JsonValue::Destroy(v1);
   JsonValue::Destroy(v2);
   JsonValue::Destroy(v3);
+}
+
+TEST(JsonModuleTypeTest, FreeEffortBoundedCutoffAndDefragLargeTree) {
+  auto* root = JsonValue::CreateObject();
+  auto* arr = JsonValue::CreateArray();
+  for (int i = 0; i < 500; i++) {
+    auto* item = JsonValue::CreateObject();
+    item->ObjectSet("short", 5, JsonValue::CreateString("sso", 3));
+    item->ObjectSet("long_field", 10,
+                    JsonValue::CreateString("this_string_exceeds_21_bytes_for_heap", 37));
+    item->ObjectSet("id", 2, JsonValue::CreateInteger(i));
+    arr->ArrayAppend(item);
+  }
+  root->ObjectSet("items", 5, arr);
+  for (int i = 0; i < 30; i++) {
+    std::string k = "extra_" + std::to_string(i);
+    root->ObjectSet(k.data(), static_cast<uint32_t>(k.size()),
+                    JsonValue::CreateInteger(i));
+  }
+
+  // FreeEffort must cut off at 64 instead of traversing all ~2000 nodes
+  EXPECT_EQ(FreeEffortJson2(nullptr, root), 64u);
+
+  auto* snapshot = root->Clone();
+  void* ptr = root;
+  EXPECT_EQ(DefragJson(nullptr, nullptr, &ptr), 0);
+  root = static_cast<JsonValue*>(ptr);
+  EXPECT_TRUE(root->DeepEqual(snapshot));
+
+  JsonValue::Destroy(snapshot);
+  JsonValue::Destroy(root);
+}
+
+TEST(JsonRdbBinary, VeryLargeArrayAndObjectReserveRoundTrip) {
+  auto* arr = JsonValue::CreateArray();
+  ASSERT_TRUE(arr->ArrayReserve(10000));
+  for (int i = 0; i < 10000; i++) {
+    arr->ArrayAppend(JsonValue::CreateInteger(i));
+  }
+  auto* loaded_arr = BinaryRoundTrip(arr);
+  ASSERT_NE(loaded_arr, nullptr);
+  EXPECT_EQ(loaded_arr->ArrayLen(), 10000u);
+  EXPECT_EQ(loaded_arr->ArrayGet(9999)->GetInteger(), 9999);
+  JsonValue::Destroy(arr);
+  JsonValue::Destroy(loaded_arr);
+
+  auto* obj = JsonValue::CreateObject();
+  ASSERT_TRUE(obj->ObjectReserve(5000));
+  for (int i = 0; i < 5000; i++) {
+    std::string k = "field_" + std::to_string(i);
+    obj->ObjectSet(k.data(), static_cast<uint32_t>(k.size()),
+                   JsonValue::CreateString("short", 5));
+  }
+  auto* loaded_obj = BinaryRoundTrip(obj);
+  ASSERT_NE(loaded_obj, nullptr);
+  EXPECT_EQ(loaded_obj->ObjectLen(), 5000u);
+  EXPECT_EQ(loaded_obj->ObjectGet("field_4999")->GetString(), "short");
+  JsonValue::Destroy(obj);
+  JsonValue::Destroy(loaded_obj);
 }

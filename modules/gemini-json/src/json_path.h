@@ -34,6 +34,7 @@ enum class FilterOp : uint8_t {
   kGe,
   kLt,
   kLe,
+  kRegex,
 };
 
 struct FilterValue {
@@ -45,16 +46,48 @@ struct FilterValue {
   std::string str_val;
 };
 
+struct FilterStep {
+  bool is_index = false;
+  int32_t index = 0;
+  std::string key;
+};
+
+struct FilterOperand {
+  enum class Kind : uint8_t { kLiteral, kCurrentPath, kRootPath };
+  Kind kind = Kind::kLiteral;
+  FilterValue literal;
+  std::vector<FilterStep> steps;
+};
+
+struct FilterNode {
+  enum class Kind : uint8_t { kOr, kAnd, kNot, kExists, kCompare };
+  Kind kind = Kind::kExists;
+  int32_t left = -1;
+  int32_t right = -1;
+  FilterOp op = FilterOp::kExists;
+  FilterOperand lhs;
+  FilterOperand rhs;
+  bool regex_icase = false;
+};
+
 struct FilterCondition {
+  // Legacy summary fields (populated for simple single-condition filters)
   std::vector<std::string> field_path;
   FilterOp op = FilterOp::kExists;
   FilterValue value;
+
+  // Full boolean/comparison/regex AST arena
+  std::vector<FilterNode> nodes;
+  int32_t root = -1;
 };
 
 struct UnionMember {
-  bool is_index;
+  enum class Kind : uint8_t { kIndex, kKey, kSlice };
+  Kind kind = Kind::kIndex;
+  bool is_index = false;  // kept for backward compatibility
   int32_t index = 0;
   std::string key;
+  SliceParams slice;
 };
 
 struct UnionParams {
@@ -62,7 +95,7 @@ struct UnionParams {
 };
 
 struct PathSegment {
-  PathSegType type;
+  PathSegType type = PathSegType::kRoot;
   std::string key;
   int32_t index = 0;
   SliceParams slice;
@@ -73,6 +106,8 @@ struct PathSegment {
 struct JsonPath {
   std::vector<PathSegment> segments;
   bool is_legacy = false;
+  bool is_simple = false;          // true if only kRoot / kKey / kIndex
+  bool has_multi_recursive = false;
 };
 
 struct PathMatch {
@@ -80,6 +115,7 @@ struct PathMatch {
   JsonValue* parent;
   int32_t array_index = -1;
   std::string object_key;
+  bool has_object_key = false;
 };
 
 struct PathParseResult {
@@ -88,5 +124,9 @@ struct PathParseResult {
 };
 
 PathParseResult ParsePath(std::string_view input);
+
+// Cached path parser (128-entry LRU, single-threaded).
+// Returns pointer to cached JsonPath on success, or nullptr with *error set.
+const JsonPath* ParsePathCached(std::string_view input, const char** error);
 
 std::vector<PathMatch> EvaluatePath(const JsonPath& path, JsonValue* root);

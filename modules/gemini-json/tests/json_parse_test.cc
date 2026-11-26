@@ -362,3 +362,122 @@ TEST(JsonParseTest, ComplexDocument) {
   EXPECT_DOUBLE_EQ(book->ArrayGet(0)->ObjectGet("price")->GetNumber(), 8.95);
   JsonValue::Destroy(v);
 }
+
+TEST(JsonParseTest, MaxDepthAllowedAndRejected) {
+  auto make_nested = [](int depth) {
+    std::string s;
+    s.reserve(static_cast<size_t>(depth) * 2 + 1);
+    for (int i = 0; i < depth; i++) s += '[';
+    s += '1';
+    for (int i = 0; i < depth; i++) s += ']';
+    return s;
+  };
+
+  auto ok = JsonParse(make_nested(kMaxJsonDepth));
+  ASSERT_NE(ok.value, nullptr);
+  JsonValue::Destroy(ok.value);
+
+  auto bad1 = JsonParse(make_nested(kMaxJsonDepth + 1));
+  EXPECT_EQ(bad1.value, nullptr);
+  EXPECT_NE(bad1.error, nullptr);
+
+  auto bad2 = JsonParse(make_nested(5000));
+  EXPECT_EQ(bad2.value, nullptr);
+  EXPECT_NE(bad2.error, nullptr);
+}
+
+TEST(JsonParseTest, FloatOverflowRejected) {
+  auto r = JsonParse("1e9999");
+  EXPECT_EQ(r.value, nullptr);
+  EXPECT_NE(r.error, nullptr);
+}
+
+TEST(JsonParseTest, RejectUnescapedControlChars) {
+  std::string with_nl = "\"hello\nworld\"";
+  std::string with_tab = "\"hello\tworld\"";
+  std::string with_ctl = "\"a\x01""b\"";
+  std::string with_nul("\"a\0b\"", 5);
+
+  for (const auto& s : {with_nl, with_tab, with_ctl, with_nul}) {
+    auto r = JsonParse(s);
+    EXPECT_EQ(r.value, nullptr) << "Should reject control char";
+    EXPECT_NE(r.error, nullptr);
+  }
+}
+
+TEST(JsonParseTest, Utf8Validation) {
+  // Valid 2, 3, 4-byte UTF-8
+  auto ok = JsonParse("\"\xC3\xA9 \xE4\xB8\x96\xE7\x95\x8C \xF0\x9F\x98\x80\"");
+  ASSERT_NE(ok.value, nullptr);
+  JsonValue::Destroy(ok.value);
+
+  // Invalid UTF-8 sequences
+  const std::string bad_utf8[] = {
+    "\"\xFF\"",                   // invalid lead byte
+    "\"\xC2\"",                   // truncated 2-byte
+    "\"\xC0\xAF\"",               // overlong '/'
+    "\"\xED\xA0\x80\"",           // UTF-16 surrogate in UTF-8
+    "\"\xF4\x90\x80\x80\"",       // > U+10FFFF
+    "\"\xE2\x82\"",               // truncated 3-byte
+  };
+  for (const auto& s : bad_utf8) {
+    auto r = JsonParse(s);
+    EXPECT_EQ(r.value, nullptr);
+    EXPECT_NE(r.error, nullptr);
+  }
+}
+
+TEST(JsonParseTest, Int64BoundariesAndPromotion) {
+  auto rmax = JsonParse("9223372036854775807");
+  ASSERT_NE(rmax.value, nullptr);
+  EXPECT_TRUE(rmax.value->IsInteger());
+  EXPECT_EQ(rmax.value->GetInteger(), INT64_MAX);
+  JsonValue::Destroy(rmax.value);
+
+  auto rmin = JsonParse("-9223372036854775808");
+  ASSERT_NE(rmin.value, nullptr);
+  EXPECT_TRUE(rmin.value->IsInteger());
+  EXPECT_EQ(rmin.value->GetInteger(), INT64_MIN);
+  JsonValue::Destroy(rmin.value);
+
+  auto rover = JsonParse("9223372036854775808");
+  ASSERT_NE(rover.value, nullptr);
+  EXPECT_EQ(rover.value->Type(), JsonType::kNumber);
+  EXPECT_DOUBLE_EQ(rover.value->GetNumber(), 9223372036854775808.0);
+  JsonValue::Destroy(rover.value);
+}
+
+TEST(JsonSerializeTest, IndependentFormattingAndControlHex) {
+  auto* v = Parse(R"({"a":1,"b":"x"})");
+  ASSERT_NE(v, nullptr);
+
+  SerializeOptions space_only;
+  space_only.space = " ";
+  EXPECT_EQ(JsonSerialize(v, space_only), R"({"a": 1,"b": "x"})");
+
+  SerializeOptions nl_only;
+  nl_only.newline = "\n";
+  EXPECT_EQ(JsonSerialize(v, nl_only), "{\n\"a\":1,\n\"b\":\"x\"\n}");
+
+  JsonValue::Destroy(v);
+
+  auto* ctl = JsonValue::CreateString("\x01\x1f", 2);
+  EXPECT_EQ(JsonSerialize(ctl), "\"\\u0001\\u001f\"");
+  JsonValue::Destroy(ctl);
+}
+
+TEST(JsonSerializeTest, ZeroCopyArrayAndObjectOfArrays) {
+  auto* doc = Parse(R"({"a":1,"b":[2,3],"c":"hi"})");
+  ASSERT_NE(doc, nullptr);
+
+  const JsonValue* items[] = {doc->ObjectGet("a"), doc->ObjectGet("b")};
+  EXPECT_EQ(JsonSerializeArray(items, 2), "[1,[2,3]]");
+
+  const JsonValue* c_items[] = {doc->ObjectGet("c")};
+  NamedMatchList lists[] = {
+    {"$.a", items, 1},
+    {"$.c", c_items, 1},
+  };
+  EXPECT_EQ(JsonSerializeObjectOfArrays(lists, 2), R"({"$.a":[1],"$.c":["hi"]})");
+  JsonValue::Destroy(doc);
+}

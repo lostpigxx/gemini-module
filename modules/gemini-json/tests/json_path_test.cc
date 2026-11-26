@@ -507,3 +507,168 @@ TEST(PathEvalTest, FilterExistencePartial) {
   EXPECT_EQ(matches.size(), 2u);
   JsonValue::Destroy(doc);
 }
+
+TEST(PathParseTest, FilterNumberNonNullTerminatedBuffer) {
+  // Buffer has trailing digits outside string_view; ParseDouble must not read past end.
+  std::string raw = "$[?(@.x == 12)]99999999";
+  std::string_view sv(raw.data(), 15);  // "$[?(@.x == 12)]"
+  auto r = ParsePath(sv);
+  ASSERT_EQ(r.error, nullptr);
+  EXPECT_EQ(r.path.segments.back().filter.value.kind, FilterValue::Kind::kInteger);
+  EXPECT_EQ(r.path.segments.back().filter.value.int_val, 12);
+}
+
+TEST(PathEvalTest, EmptyObjectKeyMatch) {
+  auto* doc = Parse(R"({"": 42, "a": 1})");
+  auto pr = ParsePath(R"($[""])");
+  ASSERT_EQ(pr.error, nullptr);
+  auto matches = EvaluatePath(pr.path, doc);
+  ASSERT_EQ(matches.size(), 1u);
+  EXPECT_TRUE(matches[0].has_object_key);
+  EXPECT_EQ(matches[0].object_key, "");
+  EXPECT_EQ(matches[0].value->GetInteger(), 42);
+  JsonValue::Destroy(doc);
+}
+
+// --- Phase 4: Rich Filters, Quoted Punctuation, Mixed Union, Slice, Cache ---
+
+TEST(PathEvalTest, QuotedKeyWithCommaAndColon) {
+  auto* doc = Parse(R"({"a,b": 1, "c:d": 2, "e\nf": 3})");
+  auto r1 = ParsePath(R"($["a,b"])");
+  ASSERT_EQ(r1.error, nullptr);
+  auto m1 = EvaluatePath(r1.path, doc);
+  ASSERT_EQ(m1.size(), 1u);
+  EXPECT_EQ(m1[0].value->GetInteger(), 1);
+
+  auto r2 = ParsePath(R"($["c:d"])");
+  ASSERT_EQ(r2.error, nullptr);
+  auto m2 = EvaluatePath(r2.path, doc);
+  ASSERT_EQ(m2.size(), 1u);
+  EXPECT_EQ(m2[0].value->GetInteger(), 2);
+
+  auto r3 = ParsePath(R"($["e\nf"])");
+  ASSERT_EQ(r3.error, nullptr);
+  auto m3 = EvaluatePath(r3.path, doc);
+  ASSERT_EQ(m3.size(), 1u);
+  EXPECT_EQ(m3[0].value->GetInteger(), 3);
+
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, SliceStepZeroAndNegativeStep) {
+  auto* doc = Parse("[0,1,2,3,4]");
+  auto r0 = ParsePath("$[0:5:0]");
+  ASSERT_EQ(r0.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r0.path, doc).size(), 0u);
+
+  auto rrev = ParsePath("$[4:0:-2]");
+  ASSERT_EQ(rrev.error, nullptr);
+  auto m = EvaluatePath(rrev.path, doc);
+  ASSERT_EQ(m.size(), 2u);
+  EXPECT_EQ(m[0].value->GetInteger(), 4);
+  EXPECT_EQ(m[1].value->GetInteger(), 2);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, MixedUnionAndWhitespace) {
+  auto* doc = Parse("[10, 20, 30, 40, 50]");
+  auto r = ParsePath("$[ 0 , 2:4 , -1 ]");
+  ASSERT_EQ(r.error, nullptr);
+  auto m = EvaluatePath(r.path, doc);
+  ASSERT_EQ(m.size(), 4u);
+  EXPECT_EQ(m[0].value->GetInteger(), 10);
+  EXPECT_EQ(m[1].value->GetInteger(), 30);
+  EXPECT_EQ(m[2].value->GetInteger(), 40);
+  EXPECT_EQ(m[3].value->GetInteger(), 50);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, FilterCompoundBooleanAndNot) {
+  auto* doc = MakeTestDoc();
+  auto r1 = ParsePath("$.store.book[?(@.category == 'fiction' && @.price < 15)]");
+  ASSERT_EQ(r1.error, nullptr);
+  auto m1 = EvaluatePath(r1.path, doc);
+  EXPECT_EQ(m1.size(), 2u);
+
+  auto r2 = ParsePath("$.store.book[?(@.category == 'reference' || @.price > 20)]");
+  ASSERT_EQ(r2.error, nullptr);
+  auto m2 = EvaluatePath(r2.path, doc);
+  EXPECT_EQ(m2.size(), 2u);
+
+  auto r3 = ParsePath("$.store.book[?(!(@.category == 'fiction'))]");
+  ASSERT_EQ(r3.error, nullptr);
+  auto m3 = EvaluatePath(r3.path, doc);
+  ASSERT_EQ(m3.size(), 1u);
+  EXPECT_EQ(m3[0].value->ObjectGet("title")->GetString(), "Sayings");
+
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, FilterSelfScalarAndNestedIndexAndRootRef) {
+  auto* arr = Parse("[1, 5, 10, 15, 20]");
+  auto r1 = ParsePath("$[?(@ > 5 && @ <= 15)]");
+  ASSERT_EQ(r1.error, nullptr);
+  auto m1 = EvaluatePath(r1.path, arr);
+  ASSERT_EQ(m1.size(), 2u);
+  EXPECT_EQ(m1[0].value->GetInteger(), 10);
+  EXPECT_EQ(m1[1].value->GetInteger(), 15);
+  JsonValue::Destroy(arr);
+
+  auto* doc = Parse(R"({"limit": 12, "items": [{"a": 5, "b": 10, "tags": ["hot"]}, {"a": 15, "b": 10, "tags": ["cold"]}]})");
+  auto r2 = ParsePath("$.items[?(@.a < @.b && @.tags[0] == 'hot')]");
+  ASSERT_EQ(r2.error, nullptr);
+  auto m2 = EvaluatePath(r2.path, doc);
+  ASSERT_EQ(m2.size(), 1u);
+  EXPECT_EQ(m2[0].value->ObjectGet("a")->GetInteger(), 5);
+
+  auto r3 = ParsePath("$.items[?(@.a > $.limit)]");
+  ASSERT_EQ(r3.error, nullptr);
+  auto m3 = EvaluatePath(r3.path, doc);
+  ASSERT_EQ(m3.size(), 1u);
+  EXPECT_EQ(m3[0].value->ObjectGet("a")->GetInteger(), 15);
+  JsonValue::Destroy(doc);
+}
+
+TEST(PathEvalTest, FilterRegexAndLargeIntPrecision) {
+  auto* doc = MakeTestDoc();
+  auto r1 = ParsePath("$.store.book[?(@.author =~ /^tolk/i)]");
+  ASSERT_EQ(r1.error, nullptr);
+  auto m1 = EvaluatePath(r1.path, doc);
+  ASSERT_EQ(m1.size(), 1u);
+  EXPECT_EQ(m1[0].value->ObjectGet("author")->GetString(), "Tolkien");
+
+  auto r2 = ParsePath("$.store.book[?(@.title =~ '(?i)moby')]");
+  ASSERT_EQ(r2.error, nullptr);
+  EXPECT_EQ(EvaluatePath(r2.path, doc).size(), 1u);
+
+  auto rbad = ParsePath("$.store.book[?(@.title =~ /[invalid/)]");
+  EXPECT_NE(rbad.error, nullptr);
+  JsonValue::Destroy(doc);
+
+  auto* bigs = Parse("[9007199254740992, 9007199254740993]");
+  auto rbig = ParsePath("$[?(@ == 9007199254740993)]");
+  ASSERT_EQ(rbig.error, nullptr);
+  auto mbig = EvaluatePath(rbig.path, bigs);
+  ASSERT_EQ(mbig.size(), 1u);
+  EXPECT_EQ(mbig[0].value->GetInteger(), 9007199254740993LL);
+  JsonValue::Destroy(bigs);
+}
+
+TEST(PathEvalTest, MultiRecursiveDedupAndLruCache) {
+  auto* doc = Parse(R"({"a":{"a":{"b":1},"b":2}})");
+  auto r = ParsePath("$..a..b");
+  ASSERT_EQ(r.error, nullptr);
+  auto m = EvaluatePath(r.path, doc);
+  EXPECT_EQ(m.size(), 2u);
+  JsonValue::Destroy(doc);
+
+  // Exercise LRU cache beyond 128 entries
+  for (int i = 0; i < 200; i++) {
+    std::string p = "$.k_" + std::to_string(i);
+    const char* err = nullptr;
+    const JsonPath* cached = ParsePathCached(p, &err);
+    ASSERT_NE(cached, nullptr);
+    EXPECT_EQ(err, nullptr);
+    EXPECT_TRUE(cached->is_simple);
+  }
+}

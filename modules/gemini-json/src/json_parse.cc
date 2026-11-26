@@ -2,34 +2,108 @@
 #include "rm_alloc.h"
 
 #include <cerrno>
+#include <charconv>
+#include <climits>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
 namespace {
+
+// Lookup table for fast whitespace check
+static constexpr uint8_t kWsTable[256] = {
+  0,0,0,0,0,0,0,0, 0,1,1,0,0,1,0,0,  // 0x09='\t', 0x0A='\n', 0x0D='\r'
+  0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
+  1,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,  // 0x20=' '
+};
+
+// Lookup table for hex digits (0..15, or 0xFF for invalid)
+static constexpr uint8_t kHexVal[256] = {
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+     0,   1,   2,   3,   4,   5,   6,   7,   8,   9,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,  10,  11,  12,  13,  14,  15,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,  10,  11,  12,  13,  14,  15,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+  0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+};
+
+// Stack-backed small buffer for escaped strings (avoids heap alloc for <= 256B)
+struct SmallBuf {
+  char inline_buf[256];
+  char* data = inline_buf;
+  size_t len = 0;
+  size_t cap = sizeof(inline_buf);
+
+  ~SmallBuf() {
+    if (data != inline_buf) RMFree(data);
+  }
+
+  bool Reserve(size_t needed) {
+    if (needed <= cap) return true;
+    size_t nc = cap * 2;
+    while (nc < needed) nc *= 2;
+    if (data == inline_buf) {
+      auto* nd = static_cast<char*>(RMAlloc(nc));
+      if (!nd) return false;
+      if (len > 0) std::memcpy(nd, inline_buf, len);
+      data = nd;
+    } else {
+      auto* nd = static_cast<char*>(RMRealloc(data, nc));
+      if (!nd) return false;
+      data = nd;
+    }
+    cap = nc;
+    return true;
+  }
+
+  bool Push(char c) {
+    if (len == cap && !Reserve(len + 1)) return false;
+    data[len++] = c;
+    return true;
+  }
+
+  bool PushN(const char* s, size_t n) {
+    if (n == 0) return true;
+    if (len + n > cap && !Reserve(len + n)) return false;
+    std::memcpy(data + len, s, n);
+    len += n;
+    return true;
+  }
+};
 
 struct Parser {
   const char* pos;
   const char* end;
   const char* start;
   const char* error;
+  int depth = 0;
 
-  void SkipWhitespace() {
-    while (pos < end && (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r'))
+  inline void SkipWhitespace() {
+    while (pos < end && kWsTable[static_cast<uint8_t>(*pos)]) {
       pos++;
+    }
   }
 
-  bool HasMore() const { return pos < end; }
+  inline bool HasMore() const { return pos < end; }
+  inline char Peek() const { return *pos; }
+  inline char Advance() { return *pos++; }
 
-  char Peek() const { return *pos; }
-
-  char Advance() { return *pos++; }
-
-  bool Match(char c) {
+  inline bool Match(char c) {
     if (pos < end && *pos == c) { pos++; return true; }
     return false;
   }
 
-  bool MatchLiteral(const char* lit, size_t len) {
+  inline bool MatchLiteral(const char* lit, size_t len) {
     if (static_cast<size_t>(end - pos) >= len && std::memcmp(pos, lit, len) == 0) {
       pos += len;
       return true;
@@ -41,23 +115,46 @@ struct Parser {
   size_t Offset() const { return static_cast<size_t>(pos - start); }
 };
 
-static int HexDigit(char c) {
-  if (c >= '0' && c <= '9') return c - '0';
-  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-  return -1;
+// Validate a single UTF-8 sequence starting at `p` (where *p >= 0x80).
+// Returns sequence length (2..4) on success, or 0 if invalid UTF-8.
+static inline int ValidateUtf8Seq(const char* p, const char* end) {
+  auto b0 = static_cast<uint8_t>(p[0]);
+  if (b0 >= 0xC2 && b0 <= 0xDF) {
+    if (p + 2 > end) return 0;
+    auto b1 = static_cast<uint8_t>(p[1]);
+    return ((b1 & 0xC0) == 0x80) ? 2 : 0;
+  }
+  if (b0 >= 0xE0 && b0 <= 0xEF) {
+    if (p + 3 > end) return 0;
+    auto b1 = static_cast<uint8_t>(p[1]);
+    auto b2 = static_cast<uint8_t>(p[2]);
+    if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80) return 0;
+    if (b0 == 0xE0 && b1 < 0xA0) return 0;  // overlong
+    if (b0 == 0xED && b1 >= 0xA0) return 0; // UTF-16 surrogate
+    return 3;
+  }
+  if (b0 >= 0xF0 && b0 <= 0xF4) {
+    if (p + 4 > end) return 0;
+    auto b1 = static_cast<uint8_t>(p[1]);
+    auto b2 = static_cast<uint8_t>(p[2]);
+    auto b3 = static_cast<uint8_t>(p[3]);
+    if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80 || (b3 & 0xC0) != 0x80) return 0;
+    if (b0 == 0xF0 && b1 < 0x90) return 0;  // overlong
+    if (b0 == 0xF4 && b1 >= 0x90) return 0; // > U+10FFFF
+    return 4;
+  }
+  return 0;
 }
 
-static int ParseHex4(Parser& p) {
+static inline int ParseHex4(Parser& p) {
   if (p.end - p.pos < 4) return -1;
-  int val = 0;
-  for (int i = 0; i < 4; i++) {
-    int d = HexDigit(p.pos[i]);
-    if (d < 0) return -1;
-    val = (val << 4) | d;
-  }
+  uint8_t d0 = kHexVal[static_cast<uint8_t>(p.pos[0])];
+  uint8_t d1 = kHexVal[static_cast<uint8_t>(p.pos[1])];
+  uint8_t d2 = kHexVal[static_cast<uint8_t>(p.pos[2])];
+  uint8_t d3 = kHexVal[static_cast<uint8_t>(p.pos[3])];
+  if ((d0 | d1 | d2 | d3) & 0x80) return -1;
   p.pos += 4;
-  return val;
+  return (d0 << 12) | (d1 << 8) | (d2 << 4) | d3;
 }
 
 static int EncodeUtf8(uint32_t cp, char* out) {
@@ -86,122 +183,188 @@ static int EncodeUtf8(uint32_t cp, char* out) {
   return 0;
 }
 
-struct GrowBuf {
-  char* data = nullptr;
-  size_t len = 0;
-  size_t cap = 0;
-
-  ~GrowBuf() { RMFree(data); }
-
-  bool Push(char c) {
-    if (len == cap && !Grow()) return false;
-    data[len++] = c;
-    return true;
-  }
-
-  bool PushN(const char* s, size_t n) {
-    while (len + n > cap) { if (!Grow()) return false; }
-    std::memcpy(data + len, s, n);
-    len += n;
-    return true;
-  }
-
-  bool Grow() {
-    size_t nc = cap == 0 ? 64 : cap * 2;
-    auto* nd = static_cast<char*>(RMRealloc(data, nc));
-    if (!nd) return false;
-    data = nd;
-    cap = nc;
-    return true;
-  }
-
-  char* Release() {
-    char* r = data;
-    data = nullptr;
-    len = cap = 0;
-    return r;
-  }
-};
-
-static JsonValue* ParseValue(Parser& p);
-
-struct StringKeyResult {
-  char* data;
-  size_t len;
-};
-
-static bool ParseStringContent(Parser& p, GrowBuf& buf) {
+// Parse a JSON string into either a zero-copy view of the input (fast path,
+// no escapes) or into `scratch` (escaped path). Sets `out_view` on success.
+static bool ParseStringView(Parser& p, SmallBuf& scratch, std::string_view& out_view) {
   if (!p.Match('"')) { p.SetError("expected '\"'"); return false; }
 
-  while (p.HasMore()) {
-    char c = p.Advance();
-    if (c == '"') return true;
+  const char* chunk_start = p.pos;
+  const char* cur = p.pos;
+  const char* end = p.end;
+
+  // Fast path: scan unescaped string directly in input buffer
+  while (cur < end) {
+    auto c = static_cast<uint8_t>(*cur);
+    if (c == '"') {
+      out_view = std::string_view(chunk_start, static_cast<size_t>(cur - chunk_start));
+      p.pos = cur + 1;
+      return true;
+    }
     if (c == '\\') {
-      if (!p.HasMore()) { p.SetError("unexpected end in string escape"); return false; }
-      char esc = p.Advance();
-      switch (esc) {
-        case '"':  buf.Push('"'); break;
-        case '\\': buf.Push('\\'); break;
-        case '/':  buf.Push('/'); break;
-        case 'b':  buf.Push('\b'); break;
-        case 'f':  buf.Push('\f'); break;
-        case 'n':  buf.Push('\n'); break;
-        case 'r':  buf.Push('\r'); break;
-        case 't':  buf.Push('\t'); break;
-        case 'u': {
-          int cp = ParseHex4(p);
-          if (cp < 0) { p.SetError("invalid \\uXXXX escape"); return false; }
-          if (cp >= 0xD800 && cp <= 0xDBFF) {
-            if (p.end - p.pos < 2 || p.pos[0] != '\\' || p.pos[1] != 'u') {
-              p.SetError("missing low surrogate"); return false;
-            }
-            p.pos += 2;
-            int low = ParseHex4(p);
-            if (low < 0xDC00 || low > 0xDFFF) {
-              p.SetError("invalid low surrogate"); return false;
-            }
-            cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
-          } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
-            p.SetError("unexpected low surrogate"); return false;
-          }
-          char utf8[4];
-          int n = EncodeUtf8(static_cast<uint32_t>(cp), utf8);
-          if (n == 0) { p.SetError("invalid codepoint"); return false; }
-          buf.PushN(utf8, static_cast<size_t>(n));
-          break;
-        }
-        default:
-          p.SetError("invalid escape character");
-          return false;
+      break;  // switch to escaped path
+    }
+    if (c < 0x20) {
+      p.pos = cur;
+      p.SetError("unescaped control character in string");
+      return false;
+    }
+    if (c >= 0x80) {
+      int n = ValidateUtf8Seq(cur, end);
+      if (n == 0) {
+        p.pos = cur;
+        p.SetError("invalid UTF-8 sequence in string");
+        return false;
       }
-    } else {
-      buf.Push(c);
+      cur += n;
+      continue;
+    }
+    cur++;
+  }
+
+  if (cur >= end) {
+    p.pos = cur;
+    p.SetError("unterminated string");
+    return false;
+  }
+
+  // Escaped path: copy clean prefix scanned so far into scratch
+  scratch.len = 0;
+  if (!scratch.PushN(chunk_start, static_cast<size_t>(cur - chunk_start))) {
+    p.SetError("allocation failure");
+    return false;
+  }
+  p.pos = cur;
+
+  while (p.pos < end) {
+    // Scan next clean chunk
+    const char* run_start = p.pos;
+    while (p.pos < end) {
+      auto c = static_cast<uint8_t>(*p.pos);
+      if (c == '"' || c == '\\') break;
+      if (c < 0x20) {
+        p.SetError("unescaped control character in string");
+        return false;
+      }
+      if (c >= 0x80) {
+        int n = ValidateUtf8Seq(p.pos, end);
+        if (n == 0) {
+          p.SetError("invalid UTF-8 sequence in string");
+          return false;
+        }
+        p.pos += n;
+        continue;
+      }
+      p.pos++;
+    }
+
+    if (p.pos > run_start) {
+      if (!scratch.PushN(run_start, static_cast<size_t>(p.pos - run_start))) {
+        p.SetError("allocation failure");
+        return false;
+      }
+    }
+
+    if (p.pos >= end) {
+      p.SetError("unterminated string");
+      return false;
+    }
+
+    char c = *p.pos++;
+    if (c == '"') {
+      out_view = std::string_view(scratch.data, scratch.len);
+      return true;
+    }
+
+    // c == '\\'
+    if (p.pos >= end) { p.SetError("unexpected end in string escape"); return false; }
+    char esc = *p.pos++;
+    bool ok = true;
+    switch (esc) {
+      case '"':  ok = scratch.Push('"'); break;
+      case '\\': ok = scratch.Push('\\'); break;
+      case '/':  ok = scratch.Push('/'); break;
+      case 'b':  ok = scratch.Push('\b'); break;
+      case 'f':  ok = scratch.Push('\f'); break;
+      case 'n':  ok = scratch.Push('\n'); break;
+      case 'r':  ok = scratch.Push('\r'); break;
+      case 't':  ok = scratch.Push('\t'); break;
+      case 'u': {
+        int cp = ParseHex4(p);
+        if (cp < 0) { p.SetError("invalid \\uXXXX escape"); return false; }
+        if (cp >= 0xD800 && cp <= 0xDBFF) {
+          if (p.end - p.pos < 2 || p.pos[0] != '\\' || p.pos[1] != 'u') {
+            p.SetError("missing low surrogate"); return false;
+          }
+          p.pos += 2;
+          int low = ParseHex4(p);
+          if (low < 0xDC00 || low > 0xDFFF) {
+            p.SetError("invalid low surrogate"); return false;
+          }
+          cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+        } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+          p.SetError("unexpected low surrogate"); return false;
+        }
+        char utf8[4];
+        int n = EncodeUtf8(static_cast<uint32_t>(cp), utf8);
+        if (n == 0) { p.SetError("invalid codepoint"); return false; }
+        ok = scratch.PushN(utf8, static_cast<size_t>(n));
+        break;
+      }
+      default:
+        p.SetError("invalid escape character");
+        return false;
+    }
+    if (!ok) {
+      p.SetError("allocation failure");
+      return false;
     }
   }
+
   p.SetError("unterminated string");
   return false;
 }
 
+static JsonValue* ParseValue(Parser& p);
+
 static JsonValue* ParseString(Parser& p) {
-  GrowBuf buf;
-  if (!ParseStringContent(p, buf)) return nullptr;
-  return JsonValue::CreateString(buf.data, static_cast<uint32_t>(buf.len));
+  SmallBuf scratch;
+  std::string_view sv;
+  if (!ParseStringView(p, scratch, sv)) return nullptr;
+  return JsonValue::CreateString(sv.data(), static_cast<uint32_t>(sv.size()));
 }
 
-static bool ParseStringKey(Parser& p, StringKeyResult& out) {
-  GrowBuf buf;
-  if (!ParseStringContent(p, buf)) return false;
-  buf.Push('\0');
-  out.len = buf.len - 1;
-  out.data = buf.Release();
-  return true;
+static bool ParseDoubleFast(const char* first, const char* last, double& out) {
+  if constexpr (requires(const char* a, const char* b, double& d) {
+                  std::from_chars(a, b, d);
+                }) {
+    auto [ptr, ec] = std::from_chars(first, last, out);
+    return ec == std::errc() && ptr == last && std::isfinite(out);
+  } else {
+    size_t len = static_cast<size_t>(last - first);
+    char buf[64];
+    char* heap_buf = nullptr;
+    char* parse_buf = buf;
+    if (len >= sizeof(buf)) {
+      heap_buf = static_cast<char*>(RMAlloc(len + 1));
+      if (!heap_buf) return false;
+      parse_buf = heap_buf;
+    }
+    std::memcpy(parse_buf, first, len);
+    parse_buf[len] = '\0';
+    char* endptr = nullptr;
+    errno = 0;
+    out = std::strtod(parse_buf, &endptr);
+    RMFree(heap_buf);
+    return errno != ERANGE && endptr == parse_buf + len && std::isfinite(out);
+  }
 }
 
 static JsonValue* ParseNumber(Parser& p) {
   const char* num_start = p.pos;
+  bool neg = false;
   bool is_float = false;
 
-  if (p.HasMore() && *p.pos == '-') p.pos++;
+  if (p.HasMore() && *p.pos == '-') { neg = true; p.pos++; }
 
   if (!p.HasMore() || *p.pos < '0' || *p.pos > '9') {
     p.SetError("invalid number");
@@ -209,6 +372,7 @@ static JsonValue* ParseNumber(Parser& p) {
     return nullptr;
   }
 
+  const char* digits_start = p.pos;
   if (*p.pos == '0') {
     p.pos++;
     if (p.HasMore() && *p.pos >= '0' && *p.pos <= '9') {
@@ -219,6 +383,7 @@ static JsonValue* ParseNumber(Parser& p) {
   } else {
     while (p.HasMore() && *p.pos >= '0' && *p.pos <= '9') p.pos++;
   }
+  const char* digits_end = p.pos;
 
   if (p.HasMore() && *p.pos == '.') {
     is_float = true;
@@ -243,39 +408,35 @@ static JsonValue* ParseNumber(Parser& p) {
     while (p.HasMore() && *p.pos >= '0' && *p.pos <= '9') p.pos++;
   }
 
-  size_t num_len = static_cast<size_t>(p.pos - num_start);
-
   if (!is_float) {
-    char buf[32];
-    if (num_len < sizeof(buf)) {
-      std::memcpy(buf, num_start, num_len);
-      buf[num_len] = '\0';
-      errno = 0;
-      char* endptr;
-      long long val = std::strtoll(buf, &endptr, 10);
-      if (errno == 0 && endptr == buf + num_len) {
-        return JsonValue::CreateInteger(static_cast<int64_t>(val));
+    size_t digit_count = static_cast<size_t>(digits_end - digits_start);
+    if (digit_count <= 18) {
+      uint64_t acc = 0;
+      for (const char* d = digits_start; d < digits_end; d++) {
+        acc = acc * 10 + static_cast<uint64_t>(*d - '0');
+      }
+      int64_t val = neg ? -static_cast<int64_t>(acc) : static_cast<int64_t>(acc);
+      return JsonValue::CreateInteger(val);
+    }
+    if (digit_count == 19) {
+      uint64_t acc = 0;
+      for (const char* d = digits_start; d < digits_end; d++) {
+        acc = acc * 10 + static_cast<uint64_t>(*d - '0');
+      }
+      if (!neg && acc <= static_cast<uint64_t>(INT64_MAX)) {
+        return JsonValue::CreateInteger(static_cast<int64_t>(acc));
+      }
+      if (neg && acc <= static_cast<uint64_t>(INT64_MAX) + 1ULL) {
+        if (acc == static_cast<uint64_t>(INT64_MAX) + 1ULL) {
+          return JsonValue::CreateInteger(INT64_MIN);
+        }
+        return JsonValue::CreateInteger(-static_cast<int64_t>(acc));
       }
     }
   }
 
-  char buf[64];
-  char* heap_buf = nullptr;
-  char* parse_buf = buf;
-  if (num_len >= sizeof(buf)) {
-    heap_buf = static_cast<char*>(RMAlloc(num_len + 1));
-    if (!heap_buf) { p.SetError("allocation failure"); return nullptr; }
-    parse_buf = heap_buf;
-  }
-  std::memcpy(parse_buf, num_start, num_len);
-  parse_buf[num_len] = '\0';
-
-  char* endptr;
-  errno = 0;
-  double val = std::strtod(parse_buf, &endptr);
-  RMFree(heap_buf);
-
-  if (errno == ERANGE || endptr != parse_buf + num_len) {
+  double val = 0.0;
+  if (!ParseDoubleFast(num_start, p.pos, val)) {
     p.SetError("invalid number");
     return nullptr;
   }
@@ -283,23 +444,30 @@ static JsonValue* ParseNumber(Parser& p) {
 }
 
 static JsonValue* ParseArray(Parser& p) {
+  if (p.depth >= kMaxJsonDepth) {
+    p.SetError("maximum nesting depth exceeded");
+    return nullptr;
+  }
+  p.depth++;
   p.pos++; // skip '['
   p.SkipWhitespace();
 
   auto* arr = JsonValue::CreateArray();
-  if (!arr) { p.SetError("allocation failure"); return nullptr; }
+  if (!arr) { p.depth--; p.SetError("allocation failure"); return nullptr; }
 
   if (p.HasMore() && p.Peek() == ']') {
     p.pos++;
+    p.depth--;
     return arr;
   }
 
   while (true) {
     auto* elem = ParseValue(p);
-    if (!elem) { JsonValue::Destroy(arr); return nullptr; }
+    if (!elem) { JsonValue::Destroy(arr); p.depth--; return nullptr; }
     if (!arr->ArrayAppend(elem)) {
       JsonValue::Destroy(elem);
       JsonValue::Destroy(arr);
+      p.depth--;
       p.SetError("allocation failure");
       return nullptr;
     }
@@ -313,6 +481,7 @@ static JsonValue* ParseArray(Parser& p) {
     break;
   }
 
+  p.depth--;
   if (!p.Match(']')) {
     JsonValue::Destroy(arr);
     p.SetError("expected ']' or ','");
@@ -322,48 +491,55 @@ static JsonValue* ParseArray(Parser& p) {
 }
 
 static JsonValue* ParseObject(Parser& p) {
+  if (p.depth >= kMaxJsonDepth) {
+    p.SetError("maximum nesting depth exceeded");
+    return nullptr;
+  }
+  p.depth++;
   p.pos++; // skip '{'
   p.SkipWhitespace();
 
   auto* obj = JsonValue::CreateObject();
-  if (!obj) { p.SetError("allocation failure"); return nullptr; }
+  if (!obj) { p.depth--; p.SetError("allocation failure"); return nullptr; }
 
   if (p.HasMore() && p.Peek() == '}') {
     p.pos++;
+    p.depth--;
     return obj;
   }
 
+  SmallBuf key_scratch;
   while (true) {
     p.SkipWhitespace();
-    StringKeyResult key;
-    if (!ParseStringKey(p, key)) {
+    std::string_view key_sv;
+    if (!ParseStringView(p, key_scratch, key_sv)) {
       JsonValue::Destroy(obj);
+      p.depth--;
       return nullptr;
     }
 
     p.SkipWhitespace();
     if (!p.Match(':')) {
-      RMFree(key.data);
       JsonValue::Destroy(obj);
+      p.depth--;
       p.SetError("expected ':'");
       return nullptr;
     }
 
     auto* val = ParseValue(p);
     if (!val) {
-      RMFree(key.data);
       JsonValue::Destroy(obj);
+      p.depth--;
       return nullptr;
     }
 
-    if (!obj->ObjectSet(key.data, static_cast<uint32_t>(key.len), val)) {
+    if (!obj->ObjectSet(key_sv.data(), static_cast<uint32_t>(key_sv.size()), val)) {
       JsonValue::Destroy(val);
-      RMFree(key.data);
       JsonValue::Destroy(obj);
+      p.depth--;
       p.SetError("allocation failure");
       return nullptr;
     }
-    RMFree(key.data);
 
     p.SkipWhitespace();
     if (p.HasMore() && p.Peek() == ',') {
@@ -373,6 +549,7 @@ static JsonValue* ParseObject(Parser& p) {
     break;
   }
 
+  p.depth--;
   if (!p.Match('}')) {
     JsonValue::Destroy(obj);
     p.SetError("expected '}' or ','");

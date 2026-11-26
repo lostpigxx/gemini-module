@@ -222,7 +222,7 @@ TEST(AsanBoundaryTest, VeryLongString) {
 
 TEST(AsanBoundaryTest, DeeplyNestedParse) {
   std::string json;
-  constexpr int depth = 200;
+  constexpr int depth = kMaxJsonDepth;
   for (int i = 0; i < depth; i++) json += "{\"n\":";
   json += "null";
   for (int i = 0; i < depth; i++) json += "}";
@@ -241,7 +241,7 @@ TEST(AsanBoundaryTest, DeeplyNestedParse) {
 
 TEST(AsanBoundaryTest, DeeplyNestedArrayParse) {
   std::string json;
-  constexpr int depth = 200;
+  constexpr int depth = kMaxJsonDepth;
   for (int i = 0; i < depth; i++) json += "[";
   json += "1";
   for (int i = 0; i < depth; i++) json += "]";
@@ -249,6 +249,18 @@ TEST(AsanBoundaryTest, DeeplyNestedArrayParse) {
   auto r = JsonParse(json);
   ASSERT_NE(r.value, nullptr);
   JsonValue::Destroy(r.value);
+}
+
+TEST(AsanBoundaryTest, ExcessiveDepthRejectedCleanly) {
+  std::string json;
+  constexpr int depth = 2000;
+  for (int i = 0; i < depth; i++) json += "{\"a\":[";
+  json += "1";
+  for (int i = 0; i < depth; i++) json += "]}";
+
+  auto r = JsonParse(json);
+  EXPECT_EQ(r.value, nullptr);
+  EXPECT_NE(r.error, nullptr);
 }
 
 TEST(AsanBoundaryTest, LargeArrayGrowth) {

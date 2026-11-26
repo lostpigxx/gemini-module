@@ -119,3 +119,19 @@ if(GTest_FOUND)
     DEPENDS json_value_test json_parse_test json_path_test json_asan_test json_rdb_test
   )
 endif()
+
+add_executable(json_bench EXCLUDE_FROM_ALL
+  tests/json_bench.cc
+  src/json_value.cc
+  src/json_parse.cc
+  src/json_serialize.cc
+  src/json_path.cc
+  src/json_type.cc
+)
+target_include_directories(json_bench PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(json_bench PRIVATE redis_module_api)
+target_compile_definitions(json_bench PRIVATE REDIS_JSON_TESTING)
+target_compile_options(json_bench PRIVATE -O2 -Wall -Wextra -Wpedantic -Wno-c++20-designator)

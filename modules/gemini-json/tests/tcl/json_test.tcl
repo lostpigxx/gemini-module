@@ -523,7 +523,7 @@ test_assert "JSON.DEBUG MEMORY returns positive number" {
 test "JSON.DEBUG HELP returns array" {
   set result [r JSON.DEBUG HELP]
   llength $result
-} {2}
+} {4}
 
 puts "\n=== JSON.RESP ==="
 
@@ -773,6 +773,216 @@ test_assert "Master-Replica PSYNC full sync and live JSON replication" {
   if {$live_n != 15 || $live_len != 2 || $live_ok ne "true"} {
     error "Live replication mismatch: n=$live_n len=$live_len ok=$live_ok"
   }
+}
+
+puts "\n=== Phase 1: Safety, Boundaries & Correctness ==="
+
+test_assert "JSON.DEL overlapping recursive path does not crash" {
+  r JSON.SET ovdoc $ {{"a":{"b":{"c":1}},"d":[10,20,30]}}
+  set n [r JSON.DEL ovdoc {$..*}]
+  if {$n < 2} { error "Expected >= 2 deleted top-level items, got $n" }
+  set res [r JSON.GET ovdoc $]
+  if {$res ne {[{}]}} { error "Expected \[{}], got $res" }
+  r DEL ovdoc
+}
+
+test_assert "JSON.DEL across multiple arrays deletes correct indices" {
+  r JSON.SET multiarr $ {{"a":[0,1,2,3],"b":[10,11,12,13]}}
+  set n [r JSON.DEL multiarr {$..[0,2]}]
+  if {$n != 4} { error "Expected 4 deleted, got $n" }
+  set a [r JSON.GET multiarr .a]
+  set b [r JSON.GET multiarr .b]
+  if {$a ne {[1,3]} || $b ne {[11,13]}} { error "Unexpected arrays: a=$a b=$b" }
+  r DEL multiarr
+}
+
+test_assert "Empty string object key set, get, and del" {
+  r JSON.SET emptyk $ {{"":1,"a":2}}
+  set v [r JSON.GET emptyk {$[""]}]
+  if {$v ne {[1]}} { error "Expected \[1\], got $v" }
+  r JSON.SET emptyk {$[""]} 99
+  set v2 [r JSON.GET emptyk {$[""]}]
+  if {$v2 ne {[99]}} { error "Expected \[99\], got $v2" }
+  set d [r JSON.DEL emptyk {$[""]}]
+  if {$d != 1} { error "Expected 1 deleted, got $d" }
+  set v3 [r JSON.GET emptyk {$[""]}]
+  if {$v3 ne {[]}} { error "Expected \[\], got $v3" }
+  r DEL emptyk
+}
+
+test_assert "JSON.MSET atomic rollback on error" {
+  r SET mset_str "not_json"
+  r DEL mset_atomic_ok
+  set caught 0
+  if {[catch {r JSON.MSET mset_atomic_ok $ {{"x":1}} mset_str $ {{"y":2}}} err]} {
+    set caught 1
+  }
+  if {!$caught} { error "Expected WRONGTYPE error" }
+  if {[r EXISTS mset_atomic_ok] != 0} {
+    error "JSON.MSET was not atomic: mset_atomic_ok was created!"
+  }
+  r DEL mset_str
+}
+
+test "JSON.ARRTRIM negative out-of-range stop empties array" {
+  r JSON.SET trimneg $ {[1,2,3,4,5]}
+  r JSON.ARRTRIM trimneg . -100 -50
+} {0}
+
+test "JSON.NUMMULTBY preserves integer type" {
+  r JSON.SET multint $ {{"n":7}}
+  r JSON.NUMMULTBY multint .n 6
+  r JSON.TYPE multint .n
+} {integer}
+
+test_error "JSON.NUMINCRBY rejects overflow to Inf" {
+  r JSON.SET infdoc $ {{"n":1e308}}
+  r JSON.NUMINCRBY infdoc .n 1e308
+} {ERR*finite*}
+
+test_error "JSON.NUMMULTBY rejects overflow to Inf" {
+  r JSON.NUMMULTBY infdoc .n 10
+} {ERR*finite*}
+
+test_error "JSON.SET rejects nesting depth > 128" {
+  set deep "[string repeat {[} 130]1[string repeat {]} 130]"
+  r JSON.SET toodeep $ $deep
+} {ERR*depth*}
+
+puts "\n=== Phase 2: Compact DOM, Hash Delete & Memory Shrink ==="
+
+test_assert "MEMORY USAGE drops significantly after JSON.CLEAR on large array" {
+  set items {}
+  for {set i 0} {$i < 500} {incr i} { lappend items $i }
+  r JSON.SET shrink_arr $ "\[[join $items ,]\]"
+  set mem_before [r MEMORY USAGE shrink_arr]
+  r JSON.CLEAR shrink_arr $
+  set mem_after [r MEMORY USAGE shrink_arr]
+  if {$mem_after * 4 >= $mem_before} {
+    error "Expected memory to drop >= 4x: before=$mem_before after=$mem_after"
+  }
+  r DEL shrink_arr
+}
+
+test_assert "Large object insert, lookup, delete, and UNLINK" {
+  set pairs {}
+  for {set i 0} {$i < 200} {incr i} {
+    lappend pairs "\"k$i\":\"val_$i\""
+  }
+  r JSON.SET bigobj $ "\{[join $pairs ,]\}"
+  if {[r JSON.OBJLEN bigobj .] != 200} { error "Expected 200 keys" }
+  for {set i 0} {$i < 150} {incr i} {
+    r JSON.DEL bigobj "$.k$i"
+  }
+  if {[r JSON.OBJLEN bigobj .] != 50} { error "Expected 50 keys remaining" }
+  set v [r JSON.GET bigobj .k199]
+  if {$v ne {"val_199"}} { error "Expected \"val_199\", got $v" }
+  r UNLINK bigobj
+}
+
+puts "\n=== Phase 3: RFC 8259, Zero-Copy GET & Formatting ==="
+
+test "JSON.GET multi-path zero-copy serialization" {
+  r JSON.SET mpdoc $ {{"a":1,"b":[2,3],"c":"hi"}}
+  r JSON.GET mpdoc $.a $.c
+} {{"$.a":[1],"$.c":["hi"]}}
+
+test "JSON.GET independent SPACE formatting" {
+  r JSON.GET mpdoc SPACE { } .
+} {{"a": 1,"b": [2,3],"c": "hi"}}
+
+test "JSON.GET NOESCAPE option accepted" {
+  r JSON.GET mpdoc NOESCAPE $.c
+} {["hi"]}
+
+test_error "JSON.SET rejects unescaped control character in string" {
+  r JSON.SET badctl $ "\"hello\nworld\""
+} {ERR*control*}
+
+puts "\n=== Phase 4: Rich JSONPath Filters, Punctuation Keys & Slices ==="
+
+test "JSONPath compound filter && and ||" {
+  r JSON.SET p4doc $ {{"limit":15,"items":[{"name":"Alpha","cat":"a","price":10},{"name":"Beta","cat":"a","price":20},{"name":"Gamma","cat":"b","price":5}]}}
+  r JSON.GET p4doc {$.items[?(@.cat == 'a' && @.price > $.limit)].name}
+} {["Beta"]}
+
+test "JSONPath filter negation !" {
+  r JSON.GET p4doc {$.items[?(!(@.cat == 'a'))].name}
+} {["Gamma"]}
+
+test "JSONPath filter regex =~ case-insensitive" {
+  r JSON.GET p4doc {$.items[?(@.name =~ /^alp/i)].name}
+} {["Alpha"]}
+
+test "JSONPath filter on scalar array @" {
+  r JSON.SET p4arr $ {[1,5,10,15,20]}
+  r JSON.GET p4arr {$[?(@ >= 10 && @ < 20)]}
+} {[10,15]}
+
+test "JSONPath quoted keys with comma and colon" {
+  r JSON.SET p4punct $ {{"a,b":1,"c:d":2}}
+  r JSON.GET p4punct {$["a,b"]} {$["c:d"]}
+} {{"$[\"a,b\"]":[1],"$[\"c:d\"]":[2]}}
+
+test "JSONPath slice step 0 returns empty array" {
+  r JSON.GET p4arr {$[0:5:0]}
+} {[]}
+
+test "JSONPath mixed union with spaces" {
+  r JSON.GET p4arr {$[ 0 , 2:4 , -1 ]}
+} {[1,10,15,20]}
+
+puts "\n=== Phase 5: Large Doc, StringAppend, JSON.DEBUG & AOF/RDB E2E ==="
+
+test_assert "JSON.STRAPPEND SSO to heap growth" {
+  r JSON.SET sappend $ {{"s":"a"}}
+  for {set i 0} {$i < 20} {incr i} {
+    r JSON.STRAPPEND sappend .s {"0123456789"}
+  }
+  set len [r JSON.STRLEN sappend .s]
+  if {$len != 201} { error "Expected len 201, got $len" }
+  r DEL sappend
+}
+
+test "JSON.DEBUG DEPTH returns nesting depth" {
+  r JSON.SET dbgdoc $ {{"a":{"b":[1,2,3]},"c":4}}
+  r JSON.DEBUG DEPTH dbgdoc .
+} {3}
+
+test "JSON.DEBUG FIELDS returns total field/element count" {
+  r JSON.DEBUG FIELDS dbgdoc .
+} {6}
+
+test_assert "JSON.DEBUG MEMORY JSONPath returns array" {
+  set res [r JSON.DEBUG MEMORY dbgdoc {$}]
+  if {[llength $res] != 1 || [lindex $res 0] <= 0} {
+    error "Expected 1-element positive array, got $res"
+  }
+  r DEL dbgdoc
+}
+
+test_assert "Large document (~300KB) SET/GET/Filter/BGSAVE/BGREWRITEAOF" {
+  set recs {}
+  for {set i 0} {$i < 2000} {incr i} {
+    lappend recs "\{\"id\":$i,\"name\":\"rec_$i\",\"price\":[expr {($i % 100) + 0.5}],\"active\":true\}"
+  }
+  set big_json "\{\"records\":\[[join $recs ,]\]\}"
+  r JSON.SET largedoc $ $big_json
+  if {[r JSON.ARRLEN largedoc .records] != 2000} {
+    error "Expected 2000 records"
+  }
+  set hit [r JSON.GET largedoc {$.records[1999].name}]
+  if {$hit ne {["rec_1999"]}} { error "Unexpected rec_1999: $hit" }
+  set depth [r JSON.DEBUG DEPTH largedoc .]
+  if {$depth != 3} { error "Expected depth 3, got $depth" }
+
+  # Trigger AOF rewrite (exercises AofRewriteJson on large doc)
+  r CONFIG SET appendonly yes
+  after 500
+  r BGREWRITEAOF
+  after 1000
+  r CONFIG SET appendonly no
+  r DEL largedoc
 }
 
 # ============================================================
