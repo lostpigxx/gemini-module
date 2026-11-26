@@ -529,6 +529,51 @@ test_assert "TDIGEST.MERGE Redis 7 COMMAND GETKEYS returns dest and sources" {
   }
 }
 
+test_assert "TDIGEST query commands succeed on a read-only replica" {
+  r TDIGEST.CREATE td_repl COMPRESSION 100
+  r TDIGEST.ADD td_repl 10 20 30 40 50 60 70 80 90 100
+
+  set repl_port [expr {$port + 1}]
+  set repl_log "/tmp/tdigest_repl_${repl_port}.log"
+  set repl_rdb "/tmp/tdigest_repl_${repl_port}.rdb"
+  file delete -force $repl_log $repl_rdb
+  exec redis-server --port $repl_port --loadmodule $module_path \
+    --save "" --appendonly no --dbfilename [file tail $repl_rdb] --dir /tmp \
+    --replicaof 127.0.0.1 $port --replica-read-only yes \
+    --logfile $repl_log --daemonize yes
+
+  set rfd ""
+  for {set i 0} {$i < 50} {incr i} {
+    after 100
+    if {![catch {set rfd [redis_connect 127.0.0.1 $repl_port]}]} {
+      if {![catch {set pong [redis_command $rfd PING]}] && $pong eq "PONG"} {
+        set exists [redis_command $rfd EXISTS td_repl]
+        if {$exists == 1} { break }
+      }
+      close $rfd
+      set rfd ""
+    }
+  }
+  if {$rfd eq ""} { error "replica did not sync td_repl in time" }
+
+  set q50 [redis_command $rfd TDIGEST.QUANTILE td_repl 0.5]
+  set cdf [redis_command $rfd TDIGEST.CDF td_repl 50]
+  set rnk [redis_command $rfd TDIGEST.RANK td_repl 50]
+  set rrnk [redis_command $rfd TDIGEST.REVRANK td_repl 50]
+  set br [redis_command $rfd TDIGEST.BYRANK td_repl 5]
+  set brr [redis_command $rfd TDIGEST.BYREVRANK td_repl 5]
+  set tm [redis_command $rfd TDIGEST.TRIMMED_MEAN td_repl 0.1 0.9]
+
+  catch {redis_command $rfd SHUTDOWN NOSAVE}
+  catch {close $rfd}
+  file delete -force $repl_log $repl_rdb
+
+  if {[llength $q50] != 1 || [llength $cdf] != 1 || [llength $rnk] != 1 ||
+      [llength $rrnk] != 1 || [llength $br] != 1 || [llength $brr] != 1 || $tm eq ""} {
+    error "unexpected empty reply from read-only replica"
+  }
+}
+
 # ============================================================
 # Cleanup & Summary
 # ============================================================

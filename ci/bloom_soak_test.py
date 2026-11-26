@@ -41,6 +41,7 @@ stats = {
     "bf_reserve": 0, "bf_add": 0, "bf_madd": 0, "bf_insert": 0,
     "bf_exists": 0, "bf_mexists": 0, "bf_info": 0, "bf_card": 0,
     "bf_scandump": 0, "bf_loadchunk": 0,
+    "cf_ops": 0, "cms_ops": 0, "topk_ops": 0, "tdigest_ops": 0,
 }
 
 
@@ -319,7 +320,81 @@ def print_stats():
     print(f"Filters created:       {stats['filters_created']}")
     print(f"Items inserted:        {stats['items_inserted']}")
     print(f"SCANDUMP round-trips:  {stats['scandump_roundtrips']}")
+    print(f"Submodules (CF/CMS/TopK/TD): {stats['cf_ops']}/{stats['cms_ops']}/{stats['topk_ops']}/{stats['tdigest_ops']}")
     print(f"{'=' * 40}")
+
+
+def run_submodules_cycle(r, cycle):
+    """Exercise Cuckoo, CMS, Top-K, and T-Digest with invariant verification."""
+    # 1. Cuckoo Filter: scaling + add/exists/count/del + scandump/loadchunk
+    cf_k = f"soak:cf:{cycle}"
+    cf_k2 = f"soak:cf_copy:{cycle}"
+    r.execute_command("CF.RESERVE", cf_k, 128, "BUCKETSIZE", 4, "EXPANSION", 2)
+    cf_items = [f"cf_{cycle}_{i}" for i in range(150)]
+    r.execute_command("CF.INSERT", cf_k, "ITEMS", *cf_items)
+    ex = r.execute_command("CF.MEXISTS", cf_k, *cf_items)
+    if any(v != 1 for v in ex):
+        soak_fail(f"CF false negative in cycle {cycle}")
+    cursor = 0
+    while True:
+        res = r.execute_command("CF.SCANDUMP", cf_k, cursor)
+        nxt, data = res[0], res[1]
+        if nxt == 0:
+            break
+        r.execute_command("CF.LOADCHUNK", cf_k2, nxt, data)
+        cursor = nxt
+    if r.execute_command("CF.EXISTS", cf_k2, cf_items[0]) != 1:
+        soak_fail(f"CF LOADCHUNK lost item in cycle {cycle}")
+    if r.execute_command("CF.DEL", cf_k, cf_items[0]) != 1:
+        soak_fail(f"CF DEL failed in cycle {cycle}")
+    r.delete(cf_k, cf_k2)
+    inc("cf_ops", 6)
+
+    # 2. Count-Min Sketch: incrby + query + self-aliased merge
+    cms_a = f"soak:cms_a:{cycle}"
+    cms_b = f"soak:cms_b:{cycle}"
+    r.execute_command("CMS.INITBYDIM", cms_a, 256, 4)
+    r.execute_command("CMS.INITBYDIM", cms_b, 256, 4)
+    r.execute_command("CMS.INCRBY", cms_a, "hot", 10, "warm", 3)
+    r.execute_command("CMS.INCRBY", cms_b, "hot", 7)
+    r.execute_command("CMS.MERGE", cms_a, 2, cms_a, cms_b, "WEIGHTS", 2, 3)
+    q = r.execute_command("CMS.QUERY", cms_a, "hot")[0]
+    if q < 41:
+        soak_fail(f"CMS self-alias merge undercounted: got {q}, expected >= 41")
+    r.delete(cms_a, cms_b)
+    inc("cms_ops", 6)
+
+    # 3. Top-K: add + batched incrby + query + list
+    tk_k = f"soak:topk:{cycle}"
+    r.execute_command("TOPK.RESERVE", tk_k, 5, 128, 4, 0.9)
+    r.execute_command("TOPK.INCRBY", tk_k, "elephant", 500, "mouse", 2)
+    r.execute_command("TOPK.ADD", tk_k, "a", "b", "c", "d", "e")
+    if r.execute_command("TOPK.QUERY", tk_k, "elephant")[0] != 1:
+        soak_fail(f"Top-K missed elephant in cycle {cycle}")
+    lst = r.execute_command("TOPK.LIST", tk_k, "WITHCOUNT")
+    if not lst or lst[0] != b"elephant":
+        soak_fail(f"Top-K list top mismatch in cycle {cycle}: {lst[:2]}")
+    r.delete(tk_k)
+    inc("topk_ops", 5)
+
+    # 4. T-Digest: add + quantile + cdf + merge OVERRIDE self-alias
+    td_a = f"soak:td_a:{cycle}"
+    td_b = f"soak:td_b:{cycle}"
+    r.execute_command("TDIGEST.CREATE", td_a, "COMPRESSION", 100)
+    r.execute_command("TDIGEST.CREATE", td_b, "COMPRESSION", 100)
+    vals_a = [str(i) for i in range(1, 201)]
+    vals_b = [str(i) for i in range(201, 401)]
+    r.execute_command("TDIGEST.ADD", td_a, *vals_a)
+    r.execute_command("TDIGEST.ADD", td_b, *vals_b)
+    r.execute_command("TDIGEST.MERGE", td_a, 2, td_a, td_b, "OVERRIDE")
+    q50 = float(r.execute_command("TDIGEST.QUANTILE", td_a, 0.5)[0])
+    if not (190.0 <= q50 <= 210.0):
+        soak_fail(f"T-Digest median out of range in cycle {cycle}: {q50}")
+    c = float(r.execute_command("TDIGEST.CDF", td_a, 200.5)[0])
+    if not (0.45 <= c <= 0.55):
+        soak_fail(f"T-Digest CDF out of range in cycle {cycle}: {c}")
+    r.delete(td_a, td_b)
+    inc("tdigest_ops", 7)
 
 
 def main():
@@ -377,6 +452,7 @@ def main():
 
                 try:
                     run_scenario(r_conn, scenario, cycle)
+                    run_submodules_cycle(r_conn, cycle)
                 except redis.ConnectionError:
                     soak_fail("Lost connection to redis-server (crash?)")
                 except redis.ResponseError as e:

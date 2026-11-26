@@ -7,7 +7,7 @@ header() { printf '\n\033[1;36m========== %s ==========\033[0m\n' "$*"; }
 
 FAIL=0
 
-for env in redis5 redis6 redis7; do
+for env in redis7; do
   header "Building $env"
   if ! docker build -f "Dockerfile.$env" -t "gemini-module:$env" .; then
     red "FAIL: docker build $env"

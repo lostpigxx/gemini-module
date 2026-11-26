@@ -148,42 +148,33 @@ tclsh modules/gemini-search/tests/tcl/search_test.tcl ./build/redis_search.so
 
 ## Docker CI
 
-Docker CI 提供三组环境验证 gemini-bloom 在不同 Redis 版本下的兼容性：
+Docker CI 统一面向 **Redis 7**（离线构建，支持无外网环境）：
 
 | 环境 | Redis | RedisBloom | Dockerfile |
 |---|---|---|---|
-| redis5 | 5.0.14 | 2.2.18 | `Dockerfile.redis5` |
-| redis6 | 6.2.20 | 2.4.20 | `Dockerfile.redis6` |
 | redis7 | 7.2.11 | 2.6.25 | `Dockerfile.redis7` |
 
-每组环境运行以下测试：
+CI 运行以下全量测试：
 
 | 测试项 | 说明 |
 |---|---|
-| GTest 单元测试 | `bloom_test` target：bloom_filter_test、sb_chain_test、bloom_rdb_test、cuckoo_filter_test、cf_chain_test、cf_rdb_test、cms_sketch_test、cms_rdb_test、topk_sketch_test、topk_rdb_test、tdigest_sketch_test、tdigest_rdb_test |
-| Tcl 集成测试 | 启动 redis-server 加载模块，验证 BF.\*、CF.\*、CMS.\*、TOPK.\*、TDIGEST.\* 命令行为 |
-| Compat 对比测试 | 同时启动 gemini-bloom 和 RedisBloom，对比所有 BF.* 命令返回值 |
-| Soak 长稳测试 | 持续运行 BF.* 命令验证零 false negative、内存无泄漏（默认 300s） |
-| RDB 迁移测试 | 4 方向 RDB 迁入迁出（RB→GB、GB→RB、GB→GB、RB→RB），验证 BF.EXISTS 100% 一致（含 false positive），覆盖 16 种 filter 配置、约 30 万 items |
+| GTest + Fuzz（普通 & ASan） | `bloom_test`（13 套，含 `bloom_fuzz_test`）、`json_test`（6 套，含 `json_stress_test`）、`search_test` |
+| Tcl 集成测试 | 启动 Redis 7.2 加载模块，验证 `BF.*`、`CF.*`、`CMS.*`、`TOPK.*`、`TDIGEST.*`、`JSON.*`、`FT.*` |
+| Compat 对比测试 | 同时启动 gemini-bloom 和 RedisBloom 2.6.25，对比所有 `BF.*` 命令返回值（RESP3 + RESP2） |
+| Soak 长稳测试 | 持续运行 `gemini-bloom`（BF/CF/CMS/Top-K/T-Digest 全子模块）、`gemini-json`、`gemini-search` 验证不变量与内存无泄漏（RESP3 + RESP2） |
+| RDB 迁移测试 | 4 方向 RDB 迁入迁出（RB→GB、GB→RB、GB→GB、RB→RB）及多跳链式迁移，验证 `BF.EXISTS` 100% 一致（RESP3 + RESP2） |
 
-Redis 6/7 环境下 Compat、Soak、RDB 迁移会跑两轮（RESP3 + RESP2），Redis 5 只跑 RESP2。
-
-> Compat / Soak / RDB 迁移测试目前只覆盖 BF.\*。`gemini-search` 仅面向 Redis 7，其 GTest（`search_test`）、ASan GTest、Tcl 集成测试与 Soak 长稳测试（`ci/search_soak_test.py`，RESP3 + RESP2）均在 `redis7` 环境中运行。`gemini-json` 尚未接入 Docker CI，仅有本地 GTest + Tcl 测试。
-
-### 运行单组环境
+### 运行 Redis 7 CI
 
 ```bash
-# 构建并运行（以 redis7 为例）
+# 构建并运行
 docker build -f Dockerfile.redis7 -t gemini-module:redis7 .
 docker run --rm gemini-module:redis7
 
 # 缩短 soak 测试时间（默认 300s）
 docker run --rm -e SOAK_DURATION_SEC=30 gemini-module:redis7
-```
 
-### 运行全部三组环境
-
-```bash
+# 或通过脚本一键构建并运行
 bash ci/run_all_envs.sh
 ```
 
