@@ -4189,8 +4189,8 @@ puts "\n=== Phases 59-61: BQ RDB, WAND Top-K, ON JSON Arrays ==="
 test_assert "Phase 59: QUANTIZATION BQ + DICT + LANGUAGE_FIELD survive BGSAVE + restart" {
   r FT.DICTADD p59dict "redis" "vector"
   r FT.CREATE p59idx DICT p59dict LANGUAGE_FIELD lang SCHEMA title TEXT lang TAG vec VECTOR HNSW TYPE FLOAT32 DIM 8 DISTANCE_METRIC COSINE QUANTIZATION BQ
-  set v1 [binary format f8 1.0 1.0 1.0 1.0 1.0 1.0 1.0 1.0]
-  set v2 [binary format f8 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0]
+  set v1 [binary format f* {1.0 1.0 1.0 1.0 1.0 1.0 1.0 1.0}]
+  set v2 [binary format f* {-1.0 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0 -1.0}]
   r FT.ADD p59idx d1 FIELDS title "redis vector" lang "english" vec $v1
   r FT.ADD p59idx d2 FIELDS title "other doc" lang "english" vec $v2
 

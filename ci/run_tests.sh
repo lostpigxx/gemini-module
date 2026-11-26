@@ -11,6 +11,12 @@ header() { printf '\n\033[1;36m========== %s ==========\033[0m\n' "$*"; }
 REDIS_MAJOR=$(redis-server --version | sed -n 's/.*v=\([0-9]*\).*/\1/p')
 REDIS_MAJOR=${REDIS_MAJOR:-0}
 
+# ── Build all module .so targets first so Tcl/soak never test stale binaries ──
+header "Build: redis_bloom, redis_json, redis_search"
+cmake -B "$BUILD_DIR" >/dev/null && \
+  cmake --build "$BUILD_DIR" --target redis_bloom redis_json redis_search -j"$(nproc)" || \
+  { red "FAIL: module build"; exit 1; }
+
 # ── GTest unit tests ─────────────────────────────────────────
 header "GTest: gemini-bloom"
 cmake --build "$BUILD_DIR" --target bloom_test -j"$(nproc)" || \
