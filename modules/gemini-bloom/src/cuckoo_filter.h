@@ -25,6 +25,15 @@ constexpr uint32_t kCfMaxIterations = 65535;
 constexpr uint64_t kCfMaxLayerDataSize = 1ULL * 1024 * 1024 * 1024;
 constexpr uint64_t kCfMaxTotalDataSize = 2ULL * 1024 * 1024 * 1024;
 
+// Precomputed per-item hash pair so CuckooChain hashes an item only once
+// across all layers in the chain.
+struct CfItemHash {
+  uint8_t fp;
+  uint32_t rawIndex;
+};
+
+CfItemHash CfHashItem(std::span<const std::byte> item);
+
 class CuckooFilter {
 public:
   CuckooFilter() = default;
@@ -49,6 +58,12 @@ public:
   bool Contains(std::span<const std::byte> item) const;
   bool Delete(std::span<const std::byte> item);
   uint64_t Count(std::span<const std::byte> item) const;
+
+  // Pre-hashed overloads used by CuckooChain to avoid re-hashing per layer.
+  std::optional<bool> Insert(CfItemHash h);
+  bool Contains(CfItemHash h) const;
+  bool Delete(CfItemHash h);
+  uint64_t Count(CfItemHash h) const;
 
   std::optional<CuckooFilter> Clone() const;
 

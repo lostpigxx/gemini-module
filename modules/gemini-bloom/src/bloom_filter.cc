@@ -52,7 +52,8 @@ BloomLayer::BloomLayer(BloomLayer&& other) noexcept
       bitsPerEntry_(other.bitsPerEntry_),
       bitArray_(other.bitArray_),
       dataSize_(other.dataSize_),
-      totalBits_(other.totalBits_) {
+      totalBits_(other.totalBits_),
+      fastMod_(other.fastMod_) {
   other.bitArray_ = nullptr;
 }
 
@@ -68,6 +69,7 @@ BloomLayer& BloomLayer::operator=(BloomLayer&& other) noexcept {
     bitArray_ = other.bitArray_;
     dataSize_ = other.dataSize_;
     totalBits_ = other.totalBits_;
+    fastMod_ = other.fastMod_;
     other.bitArray_ = nullptr;
   }
   return *this;
@@ -131,6 +133,7 @@ std::optional<BloomLayer> BloomLayer::Create(uint64_t cap, double falsePositiveR
 
   layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
   if (!layer.bitArray_) return std::nullopt;
+  layer.fastMod_.Init(layer.totalBits_);
 
   return layer;
 }
@@ -145,6 +148,7 @@ std::optional<BloomLayer> BloomLayer::Clone() const {
   copy.bitsPerEntry_ = bitsPerEntry_;
   copy.totalBits_ = totalBits_;
   copy.dataSize_ = dataSize_;
+  copy.fastMod_ = fastMod_;
 
   copy.bitArray_ = static_cast<uint8_t*>(RMAlloc(copy.dataSize_));
   if (!copy.bitArray_) return std::nullopt;
@@ -173,30 +177,62 @@ void BloomLayer::SetBit(uint64_t bitIndex) {
 // positions from a single HashPair. Reference: Kirsch & Mitzenmacher,
 // "Less Hashing, Same Performance" (ESA 2006).
 
+void BloomLayer::PrefetchFirst(const HashPair& hp) const {
+  if (!bitArray_) return;
+  uint64_t pos = fastMod_.Rem(hp.primary);
+  __builtin_prefetch(&bitArray_[pos >> 3], 0, 1);
+}
+
 bool BloomLayer::Test(const HashPair& hp) const {
-  bool isPow2 = UseBitMasking();
-  uint64_t mask = isPow2 ? ComputeModuloMask() : 0;
+  uint64_t raw = hp.primary;
+  if (fastMod_.isPow2) {
+    uint64_t mask = fastMod_.mult;
+    for (uint32_t probe = 0; probe < hashCount_; probe++) {
+      uint64_t pos = raw & mask;
+      if ((bitArray_[pos >> 3] & static_cast<uint8_t>(1u << (pos & 7))) == 0) return false;
+      raw += hp.secondary;
+    }
+    return true;
+  }
 
   for (uint32_t probe = 0; probe < hashCount_; probe++) {
-    uint64_t pos = ProbePosition(hp, probe, mask, totalBits_, isPow2);
-    if (!TestBit(pos)) return false;
+    uint64_t pos = fastMod_.Rem(raw);
+    if ((bitArray_[pos >> 3] & static_cast<uint8_t>(1u << (pos & 7))) == 0) return false;
+    raw += hp.secondary;
   }
   return true;
 }
 
 bool BloomLayer::Insert(const HashPair& hp) {
-  bool isPow2 = UseBitMasking();
-  uint64_t mask = isPow2 ? ComputeModuloMask() : 0;
+  uint64_t raw = hp.primary;
   bool anyNew = false;
 
+  if (fastMod_.isPow2) {
+    uint64_t mask = fastMod_.mult;
+    for (uint32_t probe = 0; probe < hashCount_; probe++) {
+      uint64_t pos = raw & mask;
+      uint64_t byteOff = pos >> 3;
+      uint8_t bitMask = static_cast<uint8_t>(1u << (pos & 7));
+      uint8_t old = bitArray_[byteOff];
+      if ((old & bitMask) == 0) {
+        bitArray_[byteOff] = old | bitMask;
+        anyNew = true;
+      }
+      raw += hp.secondary;
+    }
+    return anyNew;
+  }
+
   for (uint32_t probe = 0; probe < hashCount_; probe++) {
-    uint64_t pos = ProbePosition(hp, probe, mask, totalBits_, isPow2);
-    auto [byteOff, bitMask] = ResolveBit(pos);
+    uint64_t pos = fastMod_.Rem(raw);
+    uint64_t byteOff = pos >> 3;
+    uint8_t bitMask = static_cast<uint8_t>(1u << (pos & 7));
     uint8_t old = bitArray_[byteOff];
     if ((old & bitMask) == 0) {
       bitArray_[byteOff] = old | bitMask;
       anyNew = true;
     }
+    raw += hp.secondary;
   }
   return anyNew;
 }

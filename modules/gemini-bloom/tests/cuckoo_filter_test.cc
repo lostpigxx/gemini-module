@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "cuckoo_filter.h"
+#include "murmur2.h"
 
 #include <cstring>
 #include <string>
@@ -234,4 +235,41 @@ TEST(CuckooFilterTest, CloneIsIndependentOfOriginal) {
 
   EXPECT_TRUE(filter->Contains(ToSpan(item)));
   EXPECT_FALSE(clone->Contains(ToSpan(item)));
+}
+
+TEST(CuckooFilterTest, AltIndexLutMatchesMurmurHash2) {
+  for (uint32_t fp = 0; fp < 256; fp++) {
+    uint8_t b = static_cast<uint8_t>(fp);
+    uint32_t h = MurmurHash2(&b, 1, 0x9747b28cu);
+    uint64_t expected = 42ULL ^ (static_cast<uint64_t>(h) & 1023ULL);
+    EXPECT_EQ(CfAltIndex(42ULL, b, 1024ULL), expected) << "fp=" << fp;
+  }
+}
+
+TEST(CuckooFilterTest, SwarBucketSizesInsertCountDeleteRecount) {
+  const uint32_t sizes[] = {1, 2, 3, 4, 7, 8, 15, 16, 32, 64, 255};
+  for (uint32_t bs : sizes) {
+    auto filter = CuckooFilter::Create(32, bs, 100);
+    ASSERT_TRUE(filter.has_value()) << "bucketSize=" << bs;
+    uint32_t n = std::min<uint32_t>(bs * 8, 128);
+    for (uint32_t i = 0; i < n; i++) {
+      std::string s = "swar_" + std::to_string(bs) + "_" + std::to_string(i);
+      ASSERT_TRUE(filter->Insert(ToSpan(s)).has_value());
+    }
+    uint64_t beforeRecount = filter->NumItems();
+    filter->RecountItems();
+    EXPECT_EQ(filter->NumItems(), beforeRecount) << "bucketSize=" << bs;
+    for (uint32_t i = 0; i < n; i++) {
+      std::string s = "swar_" + std::to_string(bs) + "_" + std::to_string(i);
+      EXPECT_TRUE(filter->Contains(ToSpan(s)));
+      EXPECT_GE(filter->Count(ToSpan(s)), 1u);
+    }
+    for (uint32_t i = 0; i < n / 2; i++) {
+      std::string s = "swar_" + std::to_string(bs) + "_" + std::to_string(i);
+      EXPECT_TRUE(filter->Delete(ToSpan(s)));
+    }
+    uint64_t afterDel = filter->NumItems();
+    filter->RecountItems();
+    EXPECT_EQ(filter->NumItems(), afterDel) << "bucketSize=" << bs;
+  }
 }

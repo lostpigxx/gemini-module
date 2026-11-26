@@ -121,7 +121,23 @@ bool ScalingBloomFilter::GrowIfNeeded() {
 std::optional<bool> ScalingBloomFilter::Put(std::span<const std::byte> data) {
   auto hp = ComputeHash(data);
 
-  if (IsDuplicate(hp)) return false;
+  // Check older layers first (if any).
+  for (size_t i = numLayers_ - 1; i-- > 0;) {
+    if (layers_[i].bloom.Test(hp)) return false;
+  }
+
+  // Fast path: when top layer has remaining capacity, Insert directly in one
+  // pass (Insert returns false if all k bits were already set).
+  auto& top = layers_[numLayers_ - 1];
+  if (top.itemCount < top.bloom.GetCapacity()) {
+    if (!top.bloom.Insert(hp)) return false;
+    top.itemCount++;
+    totalItems_++;
+    return true;
+  }
+
+  // Top layer is full: verify not already in top layer before expanding.
+  if (top.bloom.Test(hp)) return false;
   if (!GrowIfNeeded()) return std::nullopt;
 
   auto& target = layers_[numLayers_ - 1];
@@ -133,6 +149,25 @@ std::optional<bool> ScalingBloomFilter::Put(std::span<const std::byte> data) {
 
 bool ScalingBloomFilter::Contains(std::span<const std::byte> data) const {
   return IsDuplicate(ComputeHash(data));
+}
+
+void ScalingBloomFilter::ContainsBatch(std::span<const std::span<const std::byte>> items,
+                                       std::span<uint8_t> outExists) const {
+  constexpr size_t kChunk = 8;
+  size_t n = items.size();
+  const auto& topBloom = layers_[numLayers_ - 1].bloom;
+
+  for (size_t base = 0; base < n; base += kChunk) {
+    size_t count = std::min(kChunk, n - base);
+    HashPair hps[kChunk];
+    for (size_t j = 0; j < count; j++) {
+      hps[j] = ComputeHash(items[base + j]);
+      topBloom.PrefetchFirst(hps[j]);
+    }
+    for (size_t j = 0; j < count; j++) {
+      outExists[base + j] = IsDuplicate(hps[j]) ? 1 : 0;
+    }
+  }
 }
 
 uint64_t ScalingBloomFilter::TotalCapacity() const {

@@ -450,10 +450,20 @@ static int CmdMexists(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (RejectIfLoading(ctx, filter)) return REDISMODULE_OK;
 
   RedisModule_ReplyWithArray(ctx, count);
-  for (int i = 0; i < count; i++) {
-    size_t len;
-    const char* item = RedisModule_StringPtrLen(argv[i + 2], &len);
-    RedisModule_ReplyWithLongLong(ctx, filter->Contains(AsBytes(item, len)) ? 1 : 0);
+  constexpr int kChunk = 8;
+  std::span<const std::byte> spans[kChunk];
+  uint8_t exists[kChunk];
+  for (int base = 0; base < count; base += kChunk) {
+    int n = (count - base < kChunk) ? (count - base) : kChunk;
+    for (int j = 0; j < n; j++) {
+      size_t len;
+      const char* item = RedisModule_StringPtrLen(argv[base + j + 2], &len);
+      spans[j] = AsBytes(item, len);
+    }
+    filter->ContainsBatch({spans, static_cast<size_t>(n)}, {exists, static_cast<size_t>(n)});
+    for (int j = 0; j < n; j++) {
+      RedisModule_ReplyWithLongLong(ctx, exists[j]);
+    }
   }
   return REDISMODULE_OK;
 }

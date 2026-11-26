@@ -3,6 +3,8 @@
 
 #include "murmur2.h"
 
+#include <cstring>
+
 uint32_t MurmurHash2(const void* key, int len, uint32_t seed) {
   const uint32_t m = 0x5bd1e995;
   const int r = 24;
@@ -12,10 +14,14 @@ uint32_t MurmurHash2(const void* key, int len, uint32_t seed) {
 
   while (len >= 4) {
     uint32_t k;
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    std::memcpy(&k, data, sizeof(k));
+#else
     k  = static_cast<uint32_t>(data[0]);
     k |= static_cast<uint32_t>(data[1]) << 8;
     k |= static_cast<uint32_t>(data[2]) << 16;
     k |= static_cast<uint32_t>(data[3]) << 24;
+#endif
 
     k *= m;
     k ^= k >> r;
@@ -49,6 +55,9 @@ uint64_t MurmurHash64A(const void* key, int len, uint64_t seed) {
 
   while (len >= 8) {
     uint64_t k;
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    std::memcpy(&k, data, sizeof(k));
+#else
     k  = static_cast<uint64_t>(data[0]);
     k |= static_cast<uint64_t>(data[1]) << 8;
     k |= static_cast<uint64_t>(data[2]) << 16;
@@ -57,6 +66,7 @@ uint64_t MurmurHash64A(const void* key, int len, uint64_t seed) {
     k |= static_cast<uint64_t>(data[5]) << 40;
     k |= static_cast<uint64_t>(data[6]) << 48;
     k |= static_cast<uint64_t>(data[7]) << 56;
+#endif
 
     k *= m;
     k ^= k >> r;

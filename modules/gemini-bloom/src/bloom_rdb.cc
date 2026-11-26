@@ -118,6 +118,7 @@ std::optional<BloomLayer> BloomLayer::ReadFrom(RdbReader& r, BloomFlags filterFl
   }
   std::memcpy(layer.bitArray_, buf, bufLen);
   RedisModule_Free(buf);
+  layer.fastMod_.Init(layer.totalBits_);
   return layer;
 }
 
@@ -146,6 +147,7 @@ std::optional<BloomLayer> BloomLayer::FromWireMeta(const WireLayerMeta& meta, Bl
   layer.dataSize_ = meta.dataSize;
   layer.bitArray_ = static_cast<uint8_t*>(RMCalloc(layer.dataSize_, 1));
   if (!layer.bitArray_) return std::nullopt;
+  layer.fastMod_.Init(layer.totalBits_);
   return layer;
 }
 

@@ -94,6 +94,46 @@ inline BitAddress ResolveBit(uint64_t bitIndex) {
   return {bitIndex >> 3, static_cast<uint8_t>(1u << (bitIndex & 7))};
 }
 
+// Exact division-free 64-bit modulo via Granlund-Montgomery reciprocal
+// multiplication. Produces bit-for-bit identical results to `n % d` for all
+// uint64_t n and any d in [2, 2^62], keeping MBbloom-- RDB 100% compatible.
+struct FastMod64 {
+  __extension__ using u128 = unsigned __int128;
+
+  uint64_t d = 1;
+  uint64_t mult = 0;
+  uint8_t shift = 0;
+  bool isPow2 = true;
+
+  void Init(uint64_t divisor) {
+    d = divisor;
+    if (divisor <= 1) {
+      isPow2 = true;
+      mult = 0;
+      shift = 0;
+      return;
+    }
+    if ((divisor & (divisor - 1)) == 0) {
+      isPow2 = true;
+      mult = divisor - 1;
+      shift = 0;
+      return;
+    }
+    isPow2 = false;
+    unsigned l = static_cast<unsigned>(std::bit_width(divisor - 1));
+    u128 q = (static_cast<u128>(1) << (64 + l)) / divisor + 1;
+    mult = static_cast<uint64_t>(q - (static_cast<u128>(1) << 64));
+    shift = static_cast<uint8_t>(l - 1);
+  }
+
+  inline uint64_t Rem(uint64_t n) const {
+    if (isPow2) return n & mult;
+    uint64_t t1 = static_cast<uint64_t>((static_cast<u128>(n) * mult) >> 64);
+    uint64_t q = (t1 + ((n - t1) >> 1)) >> shift;
+    return n - q * d;
+  }
+};
+
 // Maps a hash pair to a bit index within the filter,
 // using Kirsch-Mitzenmacher enhanced double hashing.
 inline uint64_t ProbePosition(const HashPair& hp, uint32_t probeIndex,
@@ -137,6 +177,7 @@ public:
 
   bool Test(const HashPair& hp) const;
   bool Insert(const HashPair& hp);
+  void PrefetchFirst(const HashPair& hp) const;
 
   // Deep copy: BloomLayer is move-only, so cloning needs an explicit method
   // rather than a copy constructor.
@@ -172,4 +213,5 @@ private:
   uint8_t* bitArray_ = nullptr;
   uint64_t dataSize_ = 0;
   uint64_t totalBits_ = 0;
+  FastMod64 fastMod_{};
 };

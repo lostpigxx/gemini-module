@@ -316,3 +316,25 @@ TEST(BloomLayerTest, CloneIsIndependentOfOriginal) {
   EXPECT_TRUE(layer->Test(hp));
   EXPECT_FALSE(clone->Test(hp));
 }
+
+TEST(FastMod64Test, MatchesHardwareModuloExhaustive) {
+  const uint64_t divisors[] = {
+    2, 3, 5, 7, 64, 960, 1024, 1536, 9584, 65535, 65536, 65537,
+    1000000, 1378776ULL * 8, (1ULL << 30) - 64, (1ULL << 34) - 64
+  };
+  uint64_t x = 0x123456789abcdef0ULL;
+  for (uint64_t d : divisors) {
+    FastMod64 fm;
+    fm.Init(d);
+    const uint64_t edges[] = {0, 1, d - 1, d, d + 1, UINT64_MAX - 1, UINT64_MAX};
+    for (uint64_t v : edges) {
+      ASSERT_EQ(fm.Rem(v), v % d) << "d=" << d << " v=" << v;
+    }
+    for (int i = 0; i < 65536; i++) {
+      x ^= x << 13;
+      x ^= x >> 7;
+      x ^= x << 17;
+      ASSERT_EQ(fm.Rem(x), x % d) << "d=" << d << " x=" << x;
+    }
+  }
+}

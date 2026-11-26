@@ -115,7 +115,8 @@ bool CuckooChain::AppendLayer(uint64_t numBuckets) {
 // --- Public API ---
 
 std::optional<bool> CuckooChain::Add(std::span<const std::byte> item) {
-  auto result = layers_[numLayers_ - 1].cuckoo.Insert(item);
+  CfItemHash h = CfHashItem(item);
+  auto result = layers_[numLayers_ - 1].cuckoo.Insert(h);
   if (result.has_value()) {
     totalItems_++;
     return true;
@@ -131,22 +132,25 @@ std::optional<bool> CuckooChain::Add(std::span<const std::byte> item) {
   }
   if (nextBuckets > kCfMaxBuckets || !AppendLayer(nextBuckets)) return std::nullopt;
 
-  result = layers_[numLayers_ - 1].cuckoo.Insert(item);
+  result = layers_[numLayers_ - 1].cuckoo.Insert(h);
   if (!result.has_value()) return std::nullopt;
   totalItems_++;
   return true;
 }
 
 bool CuckooChain::Contains(std::span<const std::byte> item) const {
-  for (const auto& layer : Layers()) {
-    if (layer.cuckoo.Contains(item)) return true;
+  CfItemHash h = CfHashItem(item);
+  // Check newest (largest) layer first for higher hit probability.
+  for (size_t i = numLayers_; i-- > 0;) {
+    if (layers_[i].cuckoo.Contains(h)) return true;
   }
   return false;
 }
 
 bool CuckooChain::Delete(std::span<const std::byte> item) {
+  CfItemHash h = CfHashItem(item);
   for (auto& layer : Layers()) {
-    if (layer.cuckoo.Delete(item)) {
+    if (layer.cuckoo.Delete(h)) {
       totalDeleted_++;
       return true;
     }
@@ -155,9 +159,10 @@ bool CuckooChain::Delete(std::span<const std::byte> item) {
 }
 
 uint64_t CuckooChain::Count(std::span<const std::byte> item) const {
+  CfItemHash h = CfHashItem(item);
   uint64_t total = 0;
   for (const auto& layer : Layers()) {
-    total += layer.cuckoo.Count(item);
+    total += layer.cuckoo.Count(h);
   }
   return total;
 }

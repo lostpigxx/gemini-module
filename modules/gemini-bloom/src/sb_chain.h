@@ -38,6 +38,9 @@ public:
   // Returns: true = inserted, false = duplicate, nullopt = full (fixed-size mode)
   std::optional<bool> Put(std::span<const std::byte> data);
   bool Contains(std::span<const std::byte> data) const;
+  // Batched lookup with software prefetching for multi-item queries (BF.MEXISTS).
+  void ContainsBatch(std::span<const std::span<const std::byte>> items,
+                     std::span<uint8_t> outExists) const;
 
   uint64_t TotalCapacity() const;
   size_t BytesUsed() const;
