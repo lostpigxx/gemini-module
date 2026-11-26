@@ -2,6 +2,19 @@
 
 All notable changes to `gemini-module` are documented in this file.
 
+## [Unreleased]
+
+### gemini-search (`redis_search.so`)
+- **Phase 62 — HNSW Direct RDB Graph Persistence (`encver 14`)**: Compact live-node serialization & strict bounds-checked deserialization of `HnswIndex` layered neighbor graphs (`FP32` / `SQ8` / `BQ`), cutting 2k×768d reload time from `~91 ms` to `0.16 ms` (**~550× faster**).
+- **Phase 63 — BQ Two-Stage Oversample & Rerank (`encver 15`)**: Optional `RERANK FP16|SQ8` and `OVERSAMPLE <n>` on `QUANTIZATION BQ` fields (with query-level override in `FT.SEARCH`, `FT.AGGREGATE`, and `FT.HYBRID ... VSIM`), combining BQ coarse speed with FP16/SQ8 precision recall.
+- **Phase 64 — Background Incremental Async Indexing**: Non-blocking `FT.CREATE` initial scan via Redis 7 `RedisModule_CreateTimer` + `RedisModule_ScanCursor` time-sliced batches (`BG_INDEX_MIN_KEYS`, `BG_INDEX_BATCH_KEYS`, `BG_INDEX_TICK_MS`), `FT.INFO` `indexing`/`percent_indexed` progress reporting, and safe cancellation on `FT.DROPINDEX`/`FLUSHDB`.
+- **Client SDK Compatibility Fixes**: Added `FT.CREATE` `SCORE`/`SCORE_FIELD`/`PAYLOAD_FIELD`/`NOFIELDS` and standard `VECTOR FLAT|HNSW <attr_count>` parsing, fixed `ON HASH` auto-indexing of `VECTOR` fields in `IndexHashKey`, and added `SCORER`/`VERBATIM`/`ADDSCORES` support in `FT.AGGREGATE`.
+
+### Tooling, Tests & Documentation
+- Added `ci/sdk_compat_test.py` (`redis-py` end-to-end compatibility test across all 3 modules for RESP2 & RESP3) and wired it into `ci/run_tests.sh`.
+- Added unified `ci/run_benchmarks.sh` script for `bloom_bench`, `json_bench`, and `search_bench`.
+- Added `modules/gemini-json/DESIGN.md`, `doc/roadmap.md`, and `doc/v1.1-development-plan.md`, and updated `.gitignore` for `build_*` directories.
+
 ## [v1.0.0] - 2026-11-26
 
 First production-ready release of `gemini-module`, a C++20 Redis 7 module suite containing **gemini-bloom**, **gemini-json**, and **gemini-search**, fully verified under GTest, ASan/UBSan, fuzz/differential testing, and Docker Redis 7.2.11 CI (Tcl, Compat, Soak, and RDB Migration).

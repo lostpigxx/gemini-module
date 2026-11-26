@@ -75,7 +75,7 @@ modules/gemini-search/
 
 ## 4. 持久化与 ModuleType 回调（Redis 7）
 
-### 4.1 RDB 序列化（`GmSearch-`，`kSearchEncVer = 13`）
+### 4.1 RDB 序列化（`GmSearch-`，`kSearchEncVer = 15`）
 
 - 向下兼容加载 `encver 1..13`。
 - `encver 13` 完整持久化：索引名、前缀、数据源类型（`HASH`/`JSON`）、全部字段定义（含 `VECTOR` 参数与 `FLOAT32`/`FLOAT64`/`FLOAT16`/`BFLOAT16`、`QUANTIZATION SQ8/BQ`、`json_path`、`sortable`/`noindex`/`index_missing`/`index_empty`/`weight`、`nostem`/`phonetic`、`tag_separator`/`case_sensitive`、`geoshape_coord`）、索引选项（自定义 stopwords、`nofreqs`/`nooffsets`/`nohl`、`temporary_ttl`、`language`、`language_field`、`custom_dict`、`filter_expr`）、每索引同义词组、全部文档及二进制 `PAYLOAD`。
@@ -130,16 +130,15 @@ modules/gemini-search/
 
 ## 7. 已知限制
 
-1. **单线程内联建索引**：`FT.CREATE` 初始扫描和 `FT.ADD` 均为同步执行，暂未引入后台线程异步建索引（查询侧已通过 `SearchExecutor` + Per-Index `shared_mutex` 全面支持非阻塞异步卸载）。
-2. **无 RediSearch RDB 互通**：仅提供命令级兼容，RDB 格式为 `GmSearch-` 私有格式。
+1. **单机/主从架构**：支持单节点与 Master-Replica `PSYNC` 全量/增量复制，暂未实现 Redis Cluster 跨分片 Scatter-Gather 协调查询（规划在 v2.0）。
+2. **无 RediSearch RDB 互通**：仅提供命令级与客户端 SDK 兼容（已通过 `redis-py` RESP2/RESP3 端到端验证），RDB 格式为 `GmSearch-` 私有格式。
 3. **音似编码仅支持英文**：词干已内置英文/法文/德文/西班牙文，`phonetic.cc`（Double Metaphone）目前仅面向英文。
-4. **RDB `encver 12` 尚未持久化 Phase 54 的 `DICT <custom_dict>`**：当前重启后需重新指定 `DICT`（详见第 9 节 v10 规划）。
 
 ---
 
-## 8. 核心演进总结与性能基线（截至 Phase 58）
+## 8. 核心演进总结与性能基线（截至 Phase 64）
 
-### 8.1 近期里程碑（v5–v9，Phases 40–58）
+### 8.1 近期里程碑（v5–v1.1，Phases 40–64）
 
 | 阶段 | 核心能力与优化 |
 |---|---|
@@ -148,6 +147,8 @@ modules/gemini-search/
 | **v7 (P47–P51)** | `TextIndex` 稠密 `uint32_t` ID + 前向词表（$O(\text{doc\_terms})$ 删除）、`TagIndex`/`NumericIndex` 紧凑排序向量 + 槽位复用、FP32 ARM NEON & x86-64 AVX2 SIMD 内核、`SearchExecutor` 线程池 + `RedisModule_BlockClient` 异步 KNN 卸载 |
 | **v8 (P52–P54)** | `SQ8` ARM NEON & x86-64 AVX2 SIMD 内核、`FT.HYBRID` 与非游标 `FT.AGGREGATE` 异步非阻塞卸载、CJK 自定义词典前向最大匹配（FMM）分词（`FT.DICTADD` + `FT.CREATE ... DICT`） |
 | **v9 (P55–P58)** | 1-bit 二值量化 `QUANTIZATION BQ`（32× 内存压缩 + NEON `vcntq_u8`/`popcnt` 汉明距离）、BM25 Top-K WAND 剪枝引擎（`TextIndex::SearchTopK`）、`HnswIndex` `thread_local` 并发读安全、Per-Index 细粒度 `shared_mutex` 读写锁、非 KNN `FT.SEARCH` 全路径异步卸载 |
+| **v1.0 (P59–P61)** | RDB `encver 13`（BQ/`DICT`/`LANGUAGE_FIELD` 闭环）、`mem_usage2`、RDB 逐字节模糊测试、HNSW 零分配 `GreedySearchLayer` + BQ 预量化 + WAND 接入 `FT.SEARCH`、`ON JSON` 多值数组通配索引 |
+| **v1.1 (P62–P64)** | **P62**：HNSW 图结构直接 RDB 序列化（`encver 14`，重启加载提速 480×–550×）；**P63**：BQ 两阶段检索（`RERANK FP16/SQ8` + `OVERSAMPLE`，`encver 15`）；**P64**：`FT.CREATE` 基于 Redis 7 Timer + ScanCursor 的后台增量异步建索引（`FT.INFO` `indexing`/`percent_indexed`）及 `redis-py` SDK 兼容闭环 |
 
 ### 8.2 `search_bench` 实测基线（Apple Silicon ARM64 NEON）
 
