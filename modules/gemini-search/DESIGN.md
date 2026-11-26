@@ -121,15 +121,62 @@ modules/gemini-search/
 
 ## 6. 测试与 CI 体系
 
-- **GTest 单元测试**（15 个测试二进制，376+ 用例）：覆盖每个索引数据结构、查询解析器、表达式引擎、RDB/Aux/AOF/ModuleType 回调（含恶意流拒绝）及 ASan 内存安全测试。
-- **Tcl 集成测试**（`modules/gemini-search/tests/tcl/search_test.tcl`，334+ 用例）：覆盖全部 31 个 `FT.*` 命令、BGSAVE/BGREWRITEAOF 重启、Keyspace 事件、`ON JSON` 与 `gemini-json` 联调、RESP3 连接。
-- **Python 长稳测试**（`ci/search_soak_test.py`）：持续混合执行 `HSET`/`UNLINK`/HNSW 增删、`FT.SEARCH` 正确性校验、`FT.AGGREGATE WITHCURSOR`、`FT.PROFILE` 和 `MEMORY USAGE` 内存增长检查（支持 RESP2 + RESP3）。
-- **Docker CI**：在 `Dockerfile.redis7`（Redis 7.2.11）中运行 GTest、ASan GTest、Tcl 集成测试与 Soak 测试。
+- **GTest 单元测试**（17 个测试二进制，覆盖核心算法与并发安全）：覆盖 `TextIndex`（含 CJK FMM 词典分词、BM25 WAND Top-K 精确等价性）、`TagIndex`/`NumericIndex`、`VectorIndex`/`HnswIndex`（含 FP32/SQ8/BQ SIMD 任意维度一致性与 4 线程并发读压测）、`HybridFusion`、`SearchExecutor`、`QueryParser`、`ExprEngine`、`Rdb/Aux/AOF/ModuleType`（含恶意流拒绝）及 ASan+UBSan 内存安全测试。
+- **Tcl 集成测试**（`modules/gemini-search/tests/tcl/search_test.tcl`，**377 用例**）：覆盖全部 32 个 `FT.*` 命令（含 `FT.HYBRID`、`QUANTIZATION SQ8/BQ`、CJK FMM `DICT`、全路径异步非阻塞查询）、BGSAVE/BGREWRITEAOF 重启、Master-Replica `PSYNC` 复制、Keyspace 事件、`ON JSON` 与 `gemini-json` 联调、RESP3 连接。
+- **Python 长稳测试**（`ci/search_soak_test.py`）：持续混合执行 `HSET`/`UNLINK`/HNSW 增删、`FT.SEARCH` 正确性校验、`FT.AGGREGATE WITHCURSOR`、`FT.PROFILE` 和 `MEMORY USAGE` 内存增长检查（支持 RESP2 + RESP3，60s 实测 ~500k ops，内存增量 `+0.20 MB`）。
+- **Docker CI**：在 `Dockerfile.redis7`（Redis 7.2.11）中通过 `ci/run_tests.sh` 统一运行三模块（`gemini-bloom` / `gemini-json` / `gemini-search`）的 GTest、ASan+UBSan GTest、Tcl 集成测试与 Soak 测试。
 
 ---
 
 ## 7. 已知限制
 
-1. **单线程内联索引**：`FT.CREATE` 初始扫描和 `FT.ADD` 均为同步执行，暂未引入后台线程异步建索引。
+1. **单线程内联建索引**：`FT.CREATE` 初始扫描和 `FT.ADD` 均为同步执行，暂未引入后台线程异步建索引（查询侧已通过 `SearchExecutor` + Per-Index `shared_mutex` 全面支持非阻塞异步卸载）。
 2. **无 RediSearch RDB 互通**：仅提供命令级兼容，RDB 格式为 `GmSearch-` 私有格式。
 3. **音似编码仅支持英文**：词干已内置英文/法文/德文/西班牙文，`phonetic.cc`（Double Metaphone）目前仅面向英文。
+4. **RDB `encver 12` 尚未持久化 Phase 54 的 `DICT <custom_dict>`**：当前重启后需重新指定 `DICT`（详见第 9 节 v10 规划）。
+
+---
+
+## 8. 核心演进总结与性能基线（截至 Phase 58）
+
+### 8.1 近期里程碑（v5–v9，Phases 40–58）
+
+| 阶段 | 核心能力与优化 |
+|---|---|
+| **v5 (P40–P41)** | 递归深度/向量维度/NaN 边界加固、`LIMIT 0 0` 计数快路径、`FT.ADD PAYLOAD`/`WITHPAYLOADS`、`INDEXMISSING`/`INDEXEMPTY`、`RedisModule_ReplicateVerbatim` + Master-Replica `PSYNC` 验证 |
+| **v6 (P42–P46)** | `FT.HYBRID`（BM25 + Vector RRF/LINEAR 融合）、稠密 ID `HnswIndex`、`FLOAT16`/`BFLOAT16`/`QUANTIZATION SQ8`、多键 `SORTBY MAX` + 14 个聚合函数 + 聚合 KNN、UTF-8 CJK Bigram 分词与高亮、`FT.INFO` 内存观测 + `ON_TIMEOUT`/`MAXSEARCHRESULTS` 治理 |
+| **v7 (P47–P51)** | `TextIndex` 稠密 `uint32_t` ID + 前向词表（$O(\text{doc\_terms})$ 删除）、`TagIndex`/`NumericIndex` 紧凑排序向量 + 槽位复用、FP32 ARM NEON & x86-64 AVX2 SIMD 内核、`SearchExecutor` 线程池 + `RedisModule_BlockClient` 异步 KNN 卸载 |
+| **v8 (P52–P54)** | `SQ8` ARM NEON & x86-64 AVX2 SIMD 内核、`FT.HYBRID` 与非游标 `FT.AGGREGATE` 异步非阻塞卸载、CJK 自定义词典前向最大匹配（FMM）分词（`FT.DICTADD` + `FT.CREATE ... DICT`） |
+| **v9 (P55–P58)** | 1-bit 二值量化 `QUANTIZATION BQ`（32× 内存压缩 + NEON `vcntq_u8`/`popcnt` 汉明距离）、BM25 Top-K WAND 剪枝引擎（`TextIndex::SearchTopK`）、`HnswIndex` `thread_local` 并发读安全、Per-Index 细粒度 `shared_mutex` 读写锁、非 KNN `FT.SEARCH` 全路径异步卸载 |
+
+### 8.2 `search_bench` 实测基线（Apple Silicon ARM64 NEON）
+
+| 基准项 | 延迟 / 耗时 | 备注 |
+|---|---|---|
+| `FlatVector FP32 Cosine KNN-10 (5k × 768d)` | `550.96 us/op` | NEON SIMD FP32 基线 |
+| `FlatVector SQ8 Cosine KNN-10 (5k × 768d)` | `615.97 us/op` | 4× 内存压缩，NEON 动态反量化 |
+| `FlatVector BQ Hamming KNN-10 (5k × 768d)` | **`19.57 us/op`** | **32× 内存压缩，较 FP32 提速 ~28×** |
+| `FlatVector L2 KNN-10 (5k × 128d)` | `40.15 us/op` | NEON SIMD FP32 |
+| `HnswIndex L2 KNN-10 (2k × 128d)` | **`10.38 us/op`** | 建图 `89.51 ms`，线程安全零分配遍历 |
+| `TextIndex::Search Full BM25 (20k docs)` | `589.39 us/op` | 4 词全量 BM25 |
+| `TextIndex::SearchTopK WAND-10 (20k docs)` | **`76.33 us/op`** | **与全量等价，提速 7.7×** |
+| `TextIndex::Update/Remove (30k vocab)` | `3.29 us/op` | 稠密 ID + 前向词表 |
+| `SortableColumn SORTBY (10k)` vs `DocStore strtod` | `335.44 us/op` vs `7595.65 us/op` | 预解析列提速 ~22× |
+
+---
+
+## 9. 后续演进与待办路线（v10+ Handoff）
+
+以下为当前已识别、尚未实施的高价值演进方向，下次重启 `gemini-search` 开发时可直接从 [development-plan-v10.md](../../doc/gemini-search/development-plan-v10.md) 切入：
+
+1. **v10 方向（推荐优先）— 持久化闭环与 `ON JSON` 深度联动（Phases 59–61）**
+   - **P59 — RDB `encver 13` + AOF 闭环**：将 Phase 54 的 `IndexSpec::custom_dict` 持久化进 RDB 并在 `FT.INFO` 中展示；补齐 `AofRewriteSearch` 对 `DICT` 与 `QUANTIZATION BQ` 的完整重写；同时消除 `search_rdb.cc` 中 `custom_dict` 缺失初始化的编译告警。
+   - **P60 — HNSW 图结构直接 RDB 序列化 / 并发重建**：在 RDB 中持久化 `HnswIndex` 的分层邻接表（或加载期多线程重建），将大向量索引的重启恢复耗时从全量重插降至毫秒级直接加载。
+   - **P61 — `ON JSON` 多值数组 JSONPath 索引**：支持 `$.tags[*]`、`$.items[*].title` 等数组通配路径展开建索引，并与 `gemini-json` 联调完整的嵌套文档增删改查测试。
+2. **向量检索进阶（v11 候选）**
+   - **BQ 粗排 + 原向量精排（Oversample & Rerank）**：保留 BQ 32× 压缩与 `~19 us` 粗排速度的同时，通过 oversample + FP16/SQ8 精排将高维召回率提升至 95%+。
+   - **Product Quantization (PQ)**：面向百万级高维向量进一步在内存与召回间提供可调档位。
+   - **WAND 接入 `EvaluateQueryScored` 多词 OR/AND 查询路径**：当前 `TextIndex::SearchTopK` 已实现并完成基准验证，可进一步在 `FT.SEARCH ... LIMIT offset count`（无额外 `SORTBY`）的顶层单字段/多字段 BM25 查询中自动触发 WAND Top-K 剪枝。
+3. **跨模块工程化（待办）**
+   - **GitHub Actions CI**（`.github/workflows/ci.yml`）：自动触发 Docker Redis 7 全量三模块构建、GTest、ASan/UBSan、Tcl 与短时长 Soak 回归。
+   - **统一性能基线回归脚本**：整合 `gemini-bloom` / `gemini-json` / `gemini-search` 的压测脚本与历史基线对比。
