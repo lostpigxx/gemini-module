@@ -782,11 +782,15 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (arg_i >= argc)
         return RedisModule_ReplyWithError(ctx, "ERR MAXIDLE requires a value");
       arg_i++;
-    } else if (MatchArg(kw, "DIALECT") || MatchArg(kw, "TIMEOUT")) {
+    } else if (MatchArg(kw, "DIALECT") || MatchArg(kw, "TIMEOUT") ||
+               MatchArg(kw, "SCORER")) {
       pending_groupby = nullptr;
       arg_i++;
       if (arg_i >= argc)
         return RedisModule_ReplyWithError(ctx, "ERR option requires a value");
+      arg_i++;
+    } else if (MatchArg(kw, "VERBATIM") || MatchArg(kw, "ADDSCORES")) {
+      pending_groupby = nullptr;
       arg_i++;
     } else {
       return RedisModule_ReplyWithError(ctx, "ERR unknown AGGREGATE option");

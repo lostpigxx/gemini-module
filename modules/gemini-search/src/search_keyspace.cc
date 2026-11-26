@@ -29,7 +29,6 @@ void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry,
 
   std::unordered_map<std::string, std::string> doc_fields;
   for (auto& fspec : entry.spec.fields) {
-    if (fspec.type == FieldType::kVector) continue;
     RedisModuleString* val = nullptr;
     RedisModule_HashGet(rkey, REDISMODULE_HASH_CFIELDS, fspec.name.c_str(),
                         &val, NULL);

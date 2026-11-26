@@ -133,7 +133,20 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         return RedisModule_ReplyWithError(ctx, expr_err.c_str());
       }
       i++;
-    } else if (MatchArg(opt, "MAXTEXTFIELDS")) {
+    } else if (MatchArg(opt, "MAXTEXTFIELDS") || MatchArg(opt, "NOFIELDS")) {
+      i++;
+    } else if (MatchArg(opt, "SCORE")) {
+      i++;
+      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SCORE requires a value");
+      char* ep = nullptr;
+      double sc = std::strtod(std::string(ArgView(argv[i])).c_str(), &ep);
+      if (*ep != '\0' || !std::isfinite(sc) || sc < 0.0) {
+        return RedisModule_ReplyWithError(ctx, "ERR SCORE must be a non-negative finite number");
+      }
+      i++;
+    } else if (MatchArg(opt, "SCORE_FIELD") || MatchArg(opt, "PAYLOAD_FIELD")) {
+      i++;
+      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR option requires a field name");
       i++;
     } else {
       break;
@@ -197,8 +210,28 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
             ctx, "ERR unknown VECTOR algorithm, expected FLAT or HNSW");
       }
 
+      // Optional RediSearch-compatible attribute count right after FLAT/HNSW
+      // (e.g., VECTOR HNSW 6 TYPE FLOAT32 DIM 4 DISTANCE_METRIC COSINE).
+      int param_end = argc;
+      if (i < argc) {
+        auto maybe_cnt = ArgView(argv[i]);
+        if (!maybe_cnt.empty() &&
+            std::isdigit(static_cast<unsigned char>(maybe_cnt[0]))) {
+          char* ep = nullptr;
+          long attr_cnt = std::strtol(std::string(maybe_cnt).c_str(), &ep, 10);
+          if (*ep == '\0' && attr_cnt >= 0) {
+            i++;
+            if (i + attr_cnt > argc) {
+              return RedisModule_ReplyWithError(
+                  ctx, "ERR VECTOR attribute count exceeds arguments");
+            }
+            param_end = i + static_cast<int>(attr_cnt);
+          }
+        }
+      }
+
       bool has_dim = false, has_metric = false;
-      while (i < argc) {
+      while (i < param_end) {
         auto param = ArgView(argv[i]);
         if (MatchArg(param, "TYPE")) {
           if (i + 1 >= argc) {

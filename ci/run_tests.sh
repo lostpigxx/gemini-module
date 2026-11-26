@@ -138,6 +138,13 @@ if [ "$REDIS_MAJOR" -ge 7 ]; then
   SOAK_DURATION_SEC="${SEARCH_SOAK_DURATION_SEC:-60}" RESP_PROTOCOL=2 \
     python3 ci/search_soak_test.py "./$BUILD_DIR/redis_search.so" || \
     { red "FAIL: search soak RESP2"; FAIL=1; }
+
+  header "SDK Compat: redis-py (bloom + json + search, RESP2 & RESP3)"
+  python3 ci/sdk_compat_test.py \
+    "./$BUILD_DIR/redis_bloom.so" \
+    "./$BUILD_DIR/redis_json.so" \
+    "./$BUILD_DIR/redis_search.so" || \
+    { red "FAIL: redis-py sdk compat"; FAIL=1; }
 fi
 
 # ── Summary ──────────────────────────────────────────────────
