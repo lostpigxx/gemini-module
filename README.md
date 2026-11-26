@@ -1,6 +1,8 @@
 # gemini-module
 
-A collection of Redis modules, built from scratch with C++20.
+> **Release: `v1.0.0`** — Target: **Redis 7** (baseline Redis 7.2.11) · See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
+A collection of Redis 7 modules, built from scratch with C++20.
 
 ## Modules
 
@@ -19,7 +21,8 @@ RedisBloom-family probabilistic data types, all served by a single `redis_bloom.
 Only the Bloom Filter shares RedisBloom's RDB type name and supports RDB-level migration to/from RedisBloom.
 CF / CMS / Top-K / T-Digest are command-compatible but use private RDB formats. CMS / Top-K / T-Digest also
 register a private `*.LOADCHUNK` command used only for AOF rewrite replay. See
-[modules/gemini-bloom/DESIGN.md](modules/gemini-bloom/DESIGN.md) for details.
+[modules/gemini-bloom/DESIGN.md](modules/gemini-bloom/DESIGN.md) and
+[doc/gemini-bloom/audit-and-optimization-plan.md](doc/gemini-bloom/audit-and-optimization-plan.md) for details.
 
 ### gemini-json — JSON Data Type
 
@@ -56,7 +59,8 @@ Design doc: [modules/gemini-search/DESIGN.md](modules/gemini-search/DESIGN.md). 
 [v6](doc/gemini-search/development-plan-v6.md) (P42–46, Hybrid, FP16/BF16/SQ8, CJK, observability),
 [v7](doc/gemini-search/development-plan-v7.md) (P47–51, dense-ID indices, NEON/AVX2 SIMD, async executor),
 [v8](doc/gemini-search/development-plan-v8.md) (P52–54, SQ8 SIMD, async hybrid/aggregate, CJK FMM dict),
-[v9](doc/gemini-search/development-plan-v9.md) (P55–58, 1-bit BQ, WAND BM25, per-index RWLock & full-path async).
+[v9](doc/gemini-search/development-plan-v9.md) (P55–58, 1-bit BQ, WAND BM25, per-index RWLock & full-path async),
+[audit & v10](doc/gemini-search/audit-and-optimization-plan.md) (P59–61, RDB `encver 13` BQ/DICT, HNSW BQ/Greedy + WAND wiring, `ON JSON` array wildcards).
 
 ## Project Structure
 

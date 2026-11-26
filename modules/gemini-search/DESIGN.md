@@ -8,7 +8,7 @@ gemini-search 是一个基于 C++20 从零实现的 Redis 全文检索、向量�
 
 - **目标 Redis 版本**：仅面向 **Redis 7**（基线 Redis 7.2.11），不考虑 Redis 5/6 兼容。
 - **Clean-room 原则**：严格仅基于公开命令文档（redis.io）和学术算法（BM25、Porter2、Double Metaphone、HNSW arXiv:1603.09320、RRF、Ray Casting）独立设计与实现，禁止阅读或引用 RediSearch 源码（RSALv2/SSPL）。
-- **数据格式**：使用私有模块数据类型名 `GmSearch-`（当前 `kSearchEncVer = 12`，向下兼容 `1..12`）和私有 `aux_save2`/`aux_load` 持久化格式，全部写命令调用 `RedisModule_ReplicateVerbatim` 支持 Master-Replica `PSYNC` 全量与在线复制。
+- **数据格式**：使用私有模块数据类型名 `GmSearch-`（当前 `kSearchEncVer = 13`，向下兼容 `1..13`）和私有 `aux_save2`/`aux_load` 持久化格式，全部写命令调用 `RedisModule_ReplicateVerbatim` 支持 Master-Replica `PSYNC` 全量与在线复制。
 
 ---
 
@@ -75,10 +75,10 @@ modules/gemini-search/
 
 ## 4. 持久化与 ModuleType 回调（Redis 7）
 
-### 4.1 RDB 序列化（`GmSearch-`，`kSearchEncVer = 12`）
+### 4.1 RDB 序列化（`GmSearch-`，`kSearchEncVer = 13`）
 
-- 向下兼容加载 `encver 1..12`。
-- `encver 12` 完整持久化：索引名、前缀、数据源类型（`HASH`/`JSON`）、全部字段定义（含 `VECTOR` 参数与 `FLOAT32`/`FLOAT64`/`FLOAT16`/`BFLOAT16`、`QUANTIZATION SQ8`、`json_path`、`sortable`/`noindex`/`index_missing`/`index_empty`/`weight`、`nostem`/`phonetic`、`tag_separator`/`case_sensitive`、`geoshape_coord`）、索引选项（自定义 stopwords、`nofreqs`/`nooffsets`/`nohl`、`temporary_ttl`、`language`、`language_field`、`filter_expr`）、每索引同义词组、全部文档及二进制 `PAYLOAD`。
+- 向下兼容加载 `encver 1..13`。
+- `encver 13` 完整持久化：索引名、前缀、数据源类型（`HASH`/`JSON`）、全部字段定义（含 `VECTOR` 参数与 `FLOAT32`/`FLOAT64`/`FLOAT16`/`BFLOAT16`、`QUANTIZATION SQ8/BQ`、`json_path`、`sortable`/`noindex`/`index_missing`/`index_empty`/`weight`、`nostem`/`phonetic`、`tag_separator`/`case_sensitive`、`geoshape_coord`）、索引选项（自定义 stopwords、`nofreqs`/`nooffsets`/`nohl`、`temporary_ttl`、`language`、`language_field`、`custom_dict`、`filter_expr`）、每索引同义词组、全部文档及二进制 `PAYLOAD`。
 - 开启 `REDISMODULE_OPTIONS_HANDLE_IO_ERRORS`，反序列化阶段对 IO 错误、枚举值范围、向量维度、NaN/负权重及各类集合数量上限做严格校验，非法流直接返回 `nullptr`。
 
 ### 4.2 全局非 Key 状态持久化（`aux_save2` / `aux_load`）
@@ -98,7 +98,7 @@ modules/gemini-search/
 | `aux_save2` / `aux_load` | `AuxSaveSearch` / `AuxLoadSearch` | 全局别名/词典/补全/配置持久化 |
 | `aof_rewrite` | `AofRewriteSearch` | 无字段上限的命令式 AOF 重写 |
 | `free` | `FreeSearch` | 释放 `IndexEntry` 与 key value |
-| `mem_usage` | `SearchMemUsage` | 统计 `DocumentStore` 精确字节数 + 各索引结构内存 |
+| `mem_usage2` | `SearchMemUsage2` | 统计 `DocumentStore` 精确字节数 + 各索引结构（含 HNSW/SQ8/BQ）内存 |
 | `digest` | `DigestSearch` | 确定性摘要（参与 `DEBUG DIGEST-VALUE`） |
 | `copy2` | `CopySearch2` | 支持 `COPY` 深拷贝为独立索引 |
 | `free_effort2` | `FreeEffortSearch2` | 返回 `1 + doc_store.Size()` 供 Redis 判断 lazy free |
