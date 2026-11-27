@@ -351,7 +351,7 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  auto& entry = it->second;
+  auto& entry = *it->second;
 
   std::string query_str(ArgView(argv[2]));
 
@@ -873,12 +873,11 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                                    ? "__vec_score"
                                    : parsed.knn_score_alias;
             {
-              std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
-              auto iit = GetIndices().find(idx_str);
-              if (iit == GetIndices().end()) {
+              auto entry_ptr = GetIndexEntryShared(idx_str);
+              if (!entry_ptr) {
                 rep->error = "ERR index not found";
               } else {
-                const auto& e = iit->second;
+                const auto& e = *entry_ptr;
                 std::shared_lock<std::shared_mutex> idx_lk(e.Mutex());
                 const auto* vi = e.vector_indices.Get(parsed.knn_field);
                 std::vector<KnnResult> knn_res;
@@ -1158,12 +1157,11 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
             auto* rep = new AsyncSearchReply();
             rep->opts = opts;
             {
-              std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
-              auto iit = GetIndices().find(idx_str);
-              if (iit == GetIndices().end()) {
+              auto entry_ptr = GetIndexEntryShared(idx_str);
+              if (!entry_ptr) {
                 rep->error = "ERR index not found";
               } else {
-                const auto& e = iit->second;
+                const auto& e = *entry_ptr;
                 std::shared_lock<std::shared_mutex> idx_lk(e.Mutex());
                 std::vector<ScoredResult> scored_results;
                 std::vector<std::string> result_ids;
@@ -1983,7 +1981,7 @@ int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  auto& entry = it->second;
+  auto& entry = *it->second;
   TouchIndex(entry);
 
   auto mode = ArgView(argv[2]);
@@ -2186,7 +2184,7 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  auto& entry = it->second;
+  auto& entry = *it->second;
 
   bool has_search = false;
   std::string text_query;
@@ -2597,12 +2595,11 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
           auto* rep = new AsyncHybridReply();
           rep->opts = opts;
           {
-            std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
-            auto iit = GetIndices().find(idx_str);
-            if (iit == GetIndices().end()) {
+            auto entry_ptr = GetIndexEntryShared(idx_str);
+            if (!entry_ptr) {
               rep->error = "ERR index not found";
             } else {
-              const auto& e = iit->second;
+              const auto& e = *entry_ptr;
               std::shared_lock<std::shared_mutex> idx_lk(e.Mutex());
               std::vector<KnnResult> vec_hits;
               if (const auto* vi = e.vector_indices.Get(vec_field)) {

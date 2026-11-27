@@ -2,11 +2,12 @@ extern "C" {
 #include "redismodule.h"
 }
 
+#include "cluster_topology.h"
 #include "search_commands.h"
 #include "search_rdb.h"
 
 extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
-                                   RedisModuleString** /*argv*/, int /*argc*/) {
+                                   RedisModuleString** argv, int argc) {
   if (RedisModule_Init(ctx, "GeminiSearch", 1, REDISMODULE_APIVER_1) == REDISMODULE_ERR) {
     return REDISMODULE_ERR;
   }
@@ -37,6 +38,11 @@ extern "C" int RedisModule_OnLoad(RedisModuleCtx* ctx,
 
   if (RegisterSearchCommands(ctx) != REDISMODULE_OK) {
     RedisModule_Log(ctx, "warning", "Failed to register search commands");
+    return REDISMODULE_ERR;
+  }
+
+  if (gemini_search::ClusterManager::Instance().Init(ctx, argv, argc) != REDISMODULE_OK) {
+    RedisModule_Log(ctx, "warning", "Failed to initialize cluster subsystem");
     return REDISMODULE_ERR;
   }
 

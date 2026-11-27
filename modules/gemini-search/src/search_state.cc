@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-static std::unordered_map<std::string, IndexEntry> g_indices;
+static std::unordered_map<std::string, std::shared_ptr<IndexEntry>> g_indices;
 static std::shared_mutex g_indices_mutex;
 static SearchExecutor g_executor(2);
 static std::unordered_map<std::string, std::string> g_aliases;
@@ -35,9 +35,15 @@ static std::unordered_map<std::string, std::string> g_config = {
     {"BG_INDEX_MIN_KEYS", "1000"},
     {"BG_INDEX_BATCH_KEYS", "128"},
     {"BG_INDEX_TICK_MS", "1"},
+    {"CLUSTER_ENABLED", "1"},
+    {"CLUSTER_RPC_PORT_OFFSET", "20000"},
+    {"CLUSTER_QUERY_TIMEOUT_MS", "5000"},
+    {"CLUSTER_MAX_SCATTER_LIMIT", "10000"},
+    {"CLUSTER_BM25_DFS", "0"},
+    {"CLUSTER_AGG_MAX_GROUPS", "100000"},
 };
 
-std::unordered_map<std::string, IndexEntry>& GetIndices() { return g_indices; }
+std::unordered_map<std::string, std::shared_ptr<IndexEntry>>& GetIndices() { return g_indices; }
 std::shared_mutex& GetIndicesMutex() { return g_indices_mutex; }
 SearchExecutor& GetSearchExecutor() { return g_executor; }
 std::unordered_map<uint64_t, AggCursor>& GetCursors() { return g_cursors; }
@@ -137,6 +143,62 @@ uint64_t GetBgIndexTickMs() {
   return 1;
 }
 
+bool GetClusterEnabledConfig() {
+  auto it = g_config.find("CLUSTER_ENABLED");
+  if (it != g_config.end()) {
+    return it->second != "0" && !MatchArg(it->second, "FALSE") && !MatchArg(it->second, "NO");
+  }
+  return true;
+}
+
+int GetClusterRpcPortOffset() {
+  auto it = g_config.find("CLUSTER_RPC_PORT_OFFSET");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long v = std::strtol(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v >= 0 && v <= 50000) return static_cast<int>(v);
+  }
+  return 20000;
+}
+
+uint64_t GetClusterQueryTimeoutMs() {
+  auto it = g_config.find("CLUSTER_QUERY_TIMEOUT_MS");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long long v = std::strtoll(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v > 0) return static_cast<uint64_t>(v);
+  }
+  return 5000;
+}
+
+size_t GetClusterMaxScatterLimit() {
+  auto it = g_config.find("CLUSTER_MAX_SCATTER_LIMIT");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long long v = std::strtoll(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v > 0) return static_cast<size_t>(v);
+  }
+  return 10000;
+}
+
+bool GetClusterBm25Dfs() {
+  auto it = g_config.find("CLUSTER_BM25_DFS");
+  if (it != g_config.end()) {
+    return it->second == "1" || MatchArg(it->second, "TRUE") || MatchArg(it->second, "YES");
+  }
+  return false;
+}
+
+size_t GetClusterAggMaxGroups() {
+  auto it = g_config.find("CLUSTER_AGG_MAX_GROUPS");
+  if (it != g_config.end()) {
+    char* ep = nullptr;
+    long long v = std::strtoll(it->second.c_str(), &ep, 10);
+    if (*ep == '\0' && v > 0) return static_cast<size_t>(v);
+  }
+  return 100000;
+}
+
 uint64_t NextIndexGeneration() { return g_next_index_generation++; }
 
 bool IsOnTimeoutReturn() {
@@ -168,12 +230,21 @@ std::string ResolveAlias(const std::string& name) {
 IndexEntry* GetIndexEntry(const std::string& name) {
   auto resolved = ResolveAlias(name);
   auto it = g_indices.find(resolved);
+  if (it == g_indices.end() || !it->second) return nullptr;
+  return it->second.get();
+}
+
+std::shared_ptr<IndexEntry> GetIndexEntryShared(const std::string& name) {
+  std::shared_lock<std::shared_mutex> lk(g_indices_mutex);
+  auto resolved = ResolveAlias(name);
+  auto it = g_indices.find(resolved);
   if (it == g_indices.end()) return nullptr;
-  return &it->second;
+  return it->second;
 }
 
 bool CreateIndexEntry(const std::string& name, IndexEntry entry) {
-  auto [it, inserted] = g_indices.try_emplace(name, std::move(entry));
+  auto ptr = std::make_shared<IndexEntry>(std::move(entry));
+  auto [it, inserted] = g_indices.try_emplace(name, std::move(ptr));
   return inserted;
 }
 
@@ -204,6 +275,12 @@ void ClearAllGlobalState() {
       {"BG_INDEX_MIN_KEYS", "1000"},
       {"BG_INDEX_BATCH_KEYS", "128"},
       {"BG_INDEX_TICK_MS", "1"},
+      {"CLUSTER_ENABLED", "1"},
+      {"CLUSTER_RPC_PORT_OFFSET", "20000"},
+      {"CLUSTER_QUERY_TIMEOUT_MS", "5000"},
+      {"CLUSTER_MAX_SCATTER_LIMIT", "10000"},
+      {"CLUSTER_BM25_DFS", "0"},
+      {"CLUSTER_AGG_MAX_GROUPS", "100000"},
   };
 }
 
@@ -245,7 +322,7 @@ bool CreateIndexFromRdb(
     entry.doc_store.Add(doc_id, fields);
     AddDocToIndicesInternal(entry, doc_id, fields, skip_ptr);
   }
-  g_indices[name] = std::move(entry);
+  g_indices[name] = std::make_shared<IndexEntry>(std::move(entry));
   return true;
 }
 

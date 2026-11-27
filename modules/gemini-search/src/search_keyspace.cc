@@ -292,14 +292,14 @@ void BgScanTimerCallback(RedisModuleCtx* ctx, void* data) {
   }
 
   auto iit = GetIndices().find(tok->index_name);
-  if (iit == GetIndices().end() || iit->second.generation != tok->generation) {
+  if (iit == GetIndices().end() || !iit->second || iit->second->generation != tok->generation) {
     if (sit->second.cursor) RedisModule_ScanCursorDestroy(sit->second.cursor);
     g_bg_scans.erase(sit);
     return;
   }
 
   auto& state = sit->second;
-  auto& entry = iit->second;
+  auto& entry = *iit->second;
   RedisModule_SelectDb(ctx, state.db_id);
 
   const size_t batch_limit = GetBgIndexBatchKeys();
@@ -423,7 +423,9 @@ int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event,
                         strcmp(event, "json.nummultby") == 0 ||
                         strcmp(event, "json.strappend") == 0);
 
-  for (auto& [idx_name, entry] : GetIndices()) {
+  for (auto& [idx_name, entry_ptr] : GetIndices()) {
+    if (!entry_ptr) continue;
+    auto& entry = *entry_ptr;
     if (!entry.spec.HasPrefixes()) continue;
     if (!entry.spec.MatchesPrefix(key_str)) continue;
 

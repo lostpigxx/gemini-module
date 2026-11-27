@@ -29,7 +29,7 @@ from redis.exceptions import ClusterCrossSlotError, MovedError, ResponseError
 
 
 def find_free_ports(count: int) -> list[int]:
-    """Find `count` free ports whose cluster bus port (port + 10000) is also free."""
+    """Find `count` free ports whose cluster bus (port + 10000) and search RPC (port + 20000) are free."""
     ports: list[int] = []
     sockets: list[socket.socket] = []
     try:
@@ -37,17 +37,20 @@ def find_free_ports(count: int) -> list[int]:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.bind(("127.0.0.1", 0))
             p = s.getsockname()[1]
-            if p >= 50000 or p in ports:
+            if p >= 40000 or p in ports:
                 s.close()
                 continue
             bus = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            rpc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
                 bus.bind(("127.0.0.1", p + 10000))
+                rpc.bind(("127.0.0.1", p + 20000))
             except OSError:
+                rpc.close()
                 bus.close()
                 s.close()
                 continue
-            sockets.extend([s, bus])
+            sockets.extend([s, bus, rpc])
             ports.append(p)
     finally:
         for s in sockets:
@@ -285,9 +288,114 @@ def test_live_slot_migration(rc: RedisCluster, nodes: list[redis.Redis], ports: 
     print(f"  PASS: Live slot {mslot} migration (node0 -> node1) for all 6 module types (BF/CF/CMS/TopK/T-Digest/JSON)")
 
 
+def kv_list_to_dict(raw) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    return {raw[i]: raw[i + 1] for i in range(0, len(raw), 2)}
+
+
+def test_search_cluster_phase66(nodes: list[redis.Redis], ports: list[int]) -> None:
+    """Verify gemini-search Phase 66: topology discovery, Cluster Bus hello, and binary RPC PING/PONG."""
+    t0 = time.time()
+    deadline = t0 + 3.0
+    discovered_all = False
+    last_infos = []
+
+    while time.time() < deadline:
+        last_infos = [kv_list_to_dict(n.execute_command("FT._DEBUG", "CLUSTER")) for n in nodes]
+        ok = True
+        for info in last_infos:
+            if (
+                info.get("mode") != "cluster"
+                or info.get("rpc_server_running") != 1
+                or info.get("scatter_enabled") != 1
+                or info.get("master_count") != 3
+                or info.get("cluster_size") != 3
+            ):
+                ok = False
+                break
+            node_entries = [kv_list_to_dict(x) for x in info.get("nodes", [])]
+            if len(node_entries) != 3 or any(
+                ne.get("discovered") != 1 or int(ne.get("rpc_port", 0)) <= 0 for ne in node_entries
+            ):
+                ok = False
+                break
+        if ok:
+            discovered_all = True
+            break
+        time.sleep(0.05)
+
+    elapsed_ms = (time.time() - t0) * 1000.0
+    assert discovered_all, f"Search cluster RPC discovery timed out; last state: {last_infos}"
+
+    # Verify each node's discovered rpc_port table matches actual bound ports on all peers
+    my_rpc_by_id = {info["my_node_id"]: int(info["my_rpc_port"]) for info in last_infos}
+    assert len(my_rpc_by_id) == 3
+    for idx, info in enumerate(last_infos):
+        assert int(info["my_rpc_port"]) > 0
+        assert int(info["my_redis_port"]) == ports[idx]
+        for raw_ne in info["nodes"]:
+            ne = kv_list_to_dict(raw_ne)
+            assert ne["role"] == "master"
+            assert int(ne["healthy"]) == 1
+            assert int(ne["discovered"]) == 1
+            assert int(ne["rpc_port"]) == my_rpc_by_id[ne["node_id"]]
+
+    print(
+        f"  PASS: gemini-search Phase 66 Cluster Bus topology & RPC port discovery "
+        f"({elapsed_ms:.1f}ms, ports={list(my_rpc_by_id.values())})"
+    )
+
+    # Verify full-mesh binary RPC PING/PONG from every node to all remote peers
+    for idx, n in enumerate(nodes):
+        assert n.execute_command("FT._DEBUG") == "GeminiSearch OK"
+        pong_raw = n.execute_command("FT._DEBUG", "CLUSTER", "PING", "2000")
+        assert len(pong_raw) == 2, f"Expected 2 remote peer pongs from node{idx}, got {pong_raw}"
+        for entry_raw in pong_raw:
+            entry = kv_list_to_dict(entry_raw)
+            assert entry["status"] == "OK", f"Node{idx} RPC ping failed: {entry}"
+            assert int(entry["rpc_port"]) == my_rpc_by_id[entry["node_id"]]
+            assert entry["error"] == ""
+
+    # Verify server/client RPC counters incremented
+    after_info = kv_list_to_dict(nodes[0].execute_command("FT._DEBUG", "CLUSTER"))
+    assert int(after_info["rpc_server_requests_handled"]) >= 2
+    assert int(after_info["rpc_client_requests_succeeded"]) >= 2
+    print("  PASS: gemini-search Phase 66 full-mesh binary RPC PING/PONG (6/6 peer links OK)")
+
+    # Verify FT.CONFIG CLUSTER_* dynamic toggle & validation
+    assert nodes[0].execute_command("FT.CONFIG", "SET", "CLUSTER_ENABLED", "0") == "OK"
+    disabled_info = kv_list_to_dict(nodes[0].execute_command("FT._DEBUG", "CLUSTER"))
+    assert int(disabled_info["cluster_enabled"]) == 0
+    assert int(disabled_info["scatter_enabled"]) == 0
+
+    assert nodes[0].execute_command("FT.CONFIG", "SET", "CLUSTER_ENABLED", "1") == "OK"
+    enabled_info = kv_list_to_dict(nodes[0].execute_command("FT._DEBUG", "CLUSTER"))
+    assert int(enabled_info["cluster_enabled"]) == 1
+    assert int(enabled_info["scatter_enabled"]) == 1
+
+    for bad_cmd in (
+        ("FT.CONFIG", "SET", "CLUSTER_ENABLED", "invalid"),
+        ("FT.CONFIG", "SET", "CLUSTER_QUERY_TIMEOUT_MS", "0"),
+        ("FT.CONFIG", "SET", "CLUSTER_RPC_PORT_OFFSET", "60000"),
+        ("FT.CONFIG", "SET", "CLUSTER_MAX_SCATTER_LIMIT", "-1"),
+    ):
+        try:
+            nodes[0].execute_command(*bad_cmd)
+            raise AssertionError(f"Expected ResponseError for {bad_cmd}")
+        except ResponseError:
+            pass
+    print("  PASS: gemini-search Phase 66 FT.CONFIG CLUSTER_* parameters & dynamic toggle")
+
+
 def main() -> int:
     bloom_so = sys.argv[1] if len(sys.argv) > 1 else "./build/redis_bloom.so"
     json_so = sys.argv[2] if len(sys.argv) > 2 else "./build/redis_json.so"
+    search_so = sys.argv[3] if len(sys.argv) > 3 else "./build/redis_search.so"
+
+    modules = [bloom_so, json_so]
+    if os.path.exists(search_so):
+        modules.append(search_so)
 
     for p in (bloom_so, json_so):
         if not os.path.exists(p):
@@ -300,14 +408,16 @@ def main() -> int:
     nodes: list[redis.Redis] = []
     rc = None
     try:
-        print(f"Starting 3-node Redis 7 Cluster on ports {ports}...")
+        print(f"Starting 3-node Redis 7 Cluster on ports {ports} (modules={len(modules)})...")
         for idx, p in enumerate(ports):
-            procs.append(start_cluster_node(p, [bloom_so, json_so], os.path.join(workdir, f"node{idx}")))
+            procs.append(start_cluster_node(p, modules, os.path.join(workdir, f"node{idx}")))
         nodes = setup_3node_cluster(ports)
         rc = RedisCluster(host="127.0.0.1", port=ports[0], decode_responses=True)
 
         test_routing_and_keyspecs(rc, nodes)
         test_live_slot_migration(rc, nodes, ports)
+        if os.path.exists(search_so):
+            test_search_cluster_phase66(nodes, ports)
         print("\nAll Redis 7 Cluster integration tests PASSED!")
         return 0
     finally:

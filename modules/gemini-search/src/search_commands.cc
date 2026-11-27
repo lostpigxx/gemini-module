@@ -11,7 +11,9 @@ static void MaintenanceTimerCallback(RedisModuleCtx* ctx, void* /*data*/) {
 
   // 2. Drop expired TEMPORARY indices
   std::vector<std::string> expired;
-  for (const auto& [name, entry] : GetIndices()) {
+  for (const auto& [name, entry_ptr] : GetIndices()) {
+    if (!entry_ptr) continue;
+    const auto& entry = *entry_ptr;
     if (entry.spec.temporary_ttl > 0 && entry.last_access_ms > 0 &&
         now_ms - entry.last_access_ms >=
             static_cast<int64_t>(entry.spec.temporary_ttl) * 1000LL) {
@@ -19,7 +21,10 @@ static void MaintenanceTimerCallback(RedisModuleCtx* ctx, void* /*data*/) {
     }
   }
   for (const auto& name : expired) {
-    GetIndices().erase(name);
+    {
+      std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
+      GetIndices().erase(name);
+    }
     auto& aliases = GetAliases();
     for (auto ait = aliases.begin(); ait != aliases.end(); ) {
       if (ait->second == name) ait = aliases.erase(ait);

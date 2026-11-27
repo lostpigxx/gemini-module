@@ -457,18 +457,19 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   std::string idx_str(index_name);
   std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
-  auto [it, inserted] = GetIndices().try_emplace(idx_str);
+  auto [it, inserted] = GetIndices().try_emplace(idx_str, std::make_shared<IndexEntry>());
   if (!inserted) {
     return RedisModule_ReplyWithError(ctx, "ERR index already exists");
   }
-  it->second.spec = IndexSpec{idx_str, std::move(fields), std::move(prefixes),
-                              index_language, source_type,
-                              std::move(custom_stopwords), has_custom_stopwords,
-                              idx_nofreqs, idx_nooffsets, idx_nohl, idx_temporary,
-                              std::move(idx_filter_expr), idx_skip_initial_scan,
-                              std::move(index_language_field),
-                              std::move(index_custom_dict)};
-  TouchIndex(it->second);
+  auto& entry = *it->second;
+  entry.spec = IndexSpec{idx_str, std::move(fields), std::move(prefixes),
+                         index_language, source_type,
+                         std::move(custom_stopwords), has_custom_stopwords,
+                         idx_nofreqs, idx_nooffsets, idx_nohl, idx_temporary,
+                         std::move(idx_filter_expr), idx_skip_initial_scan,
+                         std::move(index_language_field),
+                         std::move(index_custom_dict)};
+  TouchIndex(entry);
 
   if (SearchModuleType) {
     auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
@@ -477,8 +478,8 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                                    new std::string(idx_str));
   }
 
-  if (it->second.spec.HasPrefixes() && !it->second.spec.skip_initial_scan) {
-    StartOrRunInitialScan(ctx, it->second);
+  if (entry.spec.HasPrefixes() && !entry.spec.skip_initial_scan) {
+    StartOrRunInitialScan(ctx, entry);
   }
 
   RedisModule_ReplicateVerbatim(ctx);
@@ -507,7 +508,7 @@ int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   std::vector<std::string> doc_ids;
   if (delete_docs) {
-    doc_ids = it->second.doc_store.AllIds();
+    doc_ids = it->second->doc_store.AllIds();
   }
   StopBackgroundIndexing(ctx, idx_str);
   GetIndices().erase(it);
@@ -546,7 +547,7 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  auto& entry = it->second;
+  auto& entry = *it->second;
 
   long info_len = (entry.spec.HasPrefixes() ? 10 : 8) + 12 +
                   (!entry.spec.custom_dict.empty() ? 2 : 0);
@@ -762,7 +763,7 @@ int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  auto& entry = it->second;
+  auto& entry = *it->second;
 
   std::unordered_map<std::string, std::string> doc_fields;
   for (int i = arg_i; i < argc; i += 2) {
@@ -814,7 +815,7 @@ int FtDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  auto& entry = it->second;
+  auto& entry = *it->second;
   std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
 
   std::string doc_id_str(ArgView(argv[2]));
@@ -842,7 +843,7 @@ int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  auto& entry = it->second;
+  auto& entry = *it->second;
   std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
 
   if (!MatchArg(ArgView(argv[2]), "SCHEMA") || !MatchArg(ArgView(argv[3]), "ADD")) {
@@ -971,7 +972,7 @@ int FtTagvalsCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  auto& entry = it->second;
+  auto& entry = *it->second;
 
   std::string field_name(ArgView(argv[2]));
   const auto* fspec = entry.spec.FindField(field_name);

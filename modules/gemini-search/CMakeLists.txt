@@ -24,6 +24,9 @@ set(SEARCH_SOURCES
   src/phonetic.cc
   src/hybrid_fusion.cc
   src/search_executor.cc
+  src/cluster_codec.cc
+  src/cluster_rpc.cc
+  src/cluster_topology.cc
 )
 
 add_library(redis_search SHARED ${SEARCH_SOURCES})
@@ -346,6 +349,34 @@ if(GTest_FOUND)
   target_compile_definitions(search_executor_test PRIVATE GEMINI_SEARCH_TESTING)
   target_compile_options(search_executor_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(cluster_codec_test EXCLUDE_FROM_ALL
+    tests/cluster_codec_test.cc
+    src/cluster_codec.cc
+  )
+  target_include_directories(cluster_codec_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(cluster_codec_test PRIVATE
+    GTest::gtest_main
+  )
+  target_compile_definitions(cluster_codec_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(cluster_codec_test PRIVATE -Wall -Wextra -Wpedantic)
+
+  add_executable(cluster_rpc_test EXCLUDE_FROM_ALL
+    tests/cluster_rpc_test.cc
+    src/cluster_rpc.cc
+    src/cluster_codec.cc
+  )
+  target_include_directories(cluster_rpc_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(cluster_rpc_test PRIVATE
+    GTest::gtest_main
+    pthread
+  )
+  target_compile_definitions(cluster_rpc_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(cluster_rpc_test PRIVATE -Wall -Wextra -Wpedantic)
+
   add_custom_target(search_test
     COMMAND index_spec_test --gtest_color=yes
     COMMAND document_store_test --gtest_color=yes
@@ -362,8 +393,10 @@ if(GTest_FOUND)
     COMMAND query_parser_test --gtest_color=yes
     COMMAND hybrid_search_test --gtest_color=yes
     COMMAND search_executor_test --gtest_color=yes
+    COMMAND cluster_codec_test --gtest_color=yes
+    COMMAND cluster_rpc_test --gtest_color=yes
     COMMAND search_rdb_test --gtest_color=yes
     COMMAND search_asan_test --gtest_color=yes
-    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test phonetic_test geoshape_index_test suggest_dict_test expr_engine_test query_parser_test hybrid_search_test search_executor_test search_rdb_test search_asan_test
+    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test phonetic_test geoshape_index_test suggest_dict_test expr_engine_test query_parser_test hybrid_search_test search_executor_test cluster_codec_test cluster_rpc_test search_rdb_test search_asan_test
   )
 endif()

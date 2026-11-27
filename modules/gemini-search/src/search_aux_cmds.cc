@@ -1,3 +1,4 @@
+#include "cluster_topology.h"
 #include "search_internal.h"
 #include "suggest_dict.h"
 
@@ -179,7 +180,7 @@ int FtSynUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::vector<std::string> terms;
   for (int i = 3; i < argc; i++) terms.emplace_back(ArgView(argv[i]));
 
-  it->second.synonyms.Update(group_id, terms);
+  it->second->synonyms.Update(group_id, terms);
   RedisModule_ReplicateVerbatim(ctx);
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
@@ -194,7 +195,7 @@ int FtSynDumpCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   auto it = GetIndices().find(idx_str);
   if (it == GetIndices().end()) return RedisModule_ReplyWithError(ctx, "ERR index not found");
 
-  auto groups = it->second.synonyms.Dump();
+  auto groups = it->second->synonyms.Dump();
   long total = 0;
   for (auto& [gid, terms] : groups) total += 1 + static_cast<long>(terms.size());
   RedisModule_ReplyWithArray(ctx, total);
@@ -214,7 +215,7 @@ int FtSpellCheckCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
   auto it = GetIndices().find(idx_str);
   if (it == GetIndices().end()) return RedisModule_ReplyWithError(ctx, "ERR index not found");
-  auto& entry = it->second;
+  auto& entry = *it->second;
 
   std::string query_str(ArgView(argv[2]));
   int max_dist = 1;
@@ -400,11 +401,29 @@ int FtConfigCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (*ep != '\0' || v < 0) {
         return RedisModule_ReplyWithError(ctx, "ERR parameter must be a non-negative integer");
       }
-    } else if (param == "BG_INDEX_BATCH_KEYS") {
+    } else if (param == "BG_INDEX_BATCH_KEYS" || param == "CLUSTER_QUERY_TIMEOUT_MS" ||
+               param == "CLUSTER_MAX_SCATTER_LIMIT" || param == "CLUSTER_AGG_MAX_GROUPS") {
       char* ep = nullptr;
       long long v = std::strtoll(val.c_str(), &ep, 10);
       if (*ep != '\0' || v <= 0) {
-        return RedisModule_ReplyWithError(ctx, "ERR BG_INDEX_BATCH_KEYS must be a positive integer");
+        return RedisModule_ReplyWithError(ctx, "ERR parameter must be a positive integer");
+      }
+    } else if (param == "CLUSTER_RPC_PORT_OFFSET") {
+      char* ep = nullptr;
+      long long v = std::strtoll(val.c_str(), &ep, 10);
+      if (*ep != '\0' || v < 0 || v > 50000) {
+        return RedisModule_ReplyWithError(ctx, "ERR CLUSTER_RPC_PORT_OFFSET must be in [0, 50000]");
+      }
+    } else if (param == "CLUSTER_ENABLED" || param == "CLUSTER_BM25_DFS") {
+      if (val == "1" || MatchArg(val, "TRUE") || MatchArg(val, "YES")) {
+        val = "1";
+      } else if (val == "0" || MatchArg(val, "FALSE") || MatchArg(val, "NO")) {
+        val = "0";
+      } else {
+        return RedisModule_ReplyWithError(ctx, "ERR parameter must be 0 or 1");
+      }
+      if (param == "CLUSTER_ENABLED") {
+        gemini_search::ClusterManager::Instance().SetClusterEnabled(val == "1");
       }
     }
     it->second = std::move(val);
@@ -415,9 +434,11 @@ int FtConfigCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 }
 
 
-// FT._DEBUG
-int FtDebugCommand(RedisModuleCtx* ctx, RedisModuleString** /*argv*/,
-                          int /*argc*/) {
+// FT._DEBUG [CLUSTER [PING [timeout_ms]]]
+int FtDebugCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
+  if (argc >= 2 && MatchArg(ArgView(argv[1]), "CLUSTER")) {
+    return gemini_search::HandleDebugClusterCommand(ctx, argv, argc);
+  }
   return RedisModule_ReplyWithSimpleString(ctx, "GeminiSearch OK");
 }
 

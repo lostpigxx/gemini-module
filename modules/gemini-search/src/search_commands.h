@@ -58,6 +58,7 @@ struct IndexEntry {
 int RegisterSearchCommands(RedisModuleCtx* ctx);
 
 IndexEntry* GetIndexEntry(const std::string& name);
+std::shared_ptr<IndexEntry> GetIndexEntryShared(const std::string& name);
 bool CreateIndexEntry(const std::string& name, IndexEntry entry);
 void EraseIndexEntry(const std::string& name);
 bool CreateIndexFromRdb(

@@ -455,7 +455,7 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (it == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  auto& entry = it->second;
+  auto& entry = *it->second;
   TouchIndex(entry);
 
   // Pre-scan for DIALECT, TIMEOUT, and PARAMS options
@@ -866,12 +866,11 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
          qopts = std::move(qopts)]() {
           auto* rep = new AsyncAggReply();
           {
-            std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
-            auto iit = GetIndices().find(idx_str);
-            if (iit == GetIndices().end()) {
+            auto entry_ptr = GetIndexEntryShared(idx_str);
+            if (!entry_ptr) {
               rep->error = "ERR index not found";
             } else {
-              const auto& e = iit->second;
+              const auto& e = *entry_ptr;
               std::shared_lock<std::shared_mutex> idx_lk(e.Mutex());
               std::vector<std::string> result_ids;
               std::unordered_map<std::string, std::string> knn_scores;

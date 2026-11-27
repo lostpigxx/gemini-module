@@ -4541,6 +4541,44 @@ test_assert "Phase 65: Filtered HNSW adapts on large candidate set and returns o
 }
 
 # ============================================================
+# Phase 66: Cluster Infrastructure Standalone Zero-Overhead Check
+# ============================================================
+
+puts "\n=== Phase 66: Cluster Infrastructure (Standalone Mode) ==="
+
+test_assert "Phase 66: Standalone FT._DEBUG CLUSTER reports standalone with no RPC listener" {
+  set dbg [r FT._DEBUG CLUSTER]
+  array set cinfo $dbg
+  if {$cinfo(mode) ne "standalone"} {
+    error "Expected mode=standalone, got: $cinfo(mode)"
+  }
+  if {$cinfo(rpc_server_running) != 0 || $cinfo(my_rpc_port) != 0 || $cinfo(scatter_enabled) != 0} {
+    error "Standalone mode must not start RPC listener: $dbg"
+  }
+  set ping_err 0
+  if {[catch {r FT._DEBUG CLUSTER PING}]} { set ping_err 1 }
+  if {!$ping_err} {
+    error "Expected FT._DEBUG CLUSTER PING to error in standalone mode"
+  }
+  # Verify CLUSTER_* FT.CONFIG parameters
+  set c_en [r FT.CONFIG GET CLUSTER_ENABLED]
+  if {[lindex $c_en 1] ne "1"} { error "Expected CLUSTER_ENABLED=1, got $c_en" }
+  set c_off [r FT.CONFIG GET CLUSTER_RPC_PORT_OFFSET]
+  if {[lindex $c_off 1] ne "20000"} { error "Expected CLUSTER_RPC_PORT_OFFSET=20000, got $c_off" }
+  set c_to [r FT.CONFIG GET CLUSTER_QUERY_TIMEOUT_MS]
+  if {[lindex $c_to 1] ne "5000"} { error "Expected CLUSTER_QUERY_TIMEOUT_MS=5000, got $c_to" }
+  set c_lim [r FT.CONFIG GET CLUSTER_MAX_SCATTER_LIMIT]
+  if {[lindex $c_lim 1] ne "10000"} { error "Expected CLUSTER_MAX_SCATTER_LIMIT=10000, got $c_lim" }
+  set c_dfs [r FT.CONFIG GET CLUSTER_BM25_DFS]
+  if {[lindex $c_dfs 1] ne "0"} { error "Expected CLUSTER_BM25_DFS=0, got $c_dfs" }
+  set c_grp [r FT.CONFIG GET CLUSTER_AGG_MAX_GROUPS]
+  if {[lindex $c_grp 1] ne "100000"} { error "Expected CLUSTER_AGG_MAX_GROUPS=100000, got $c_grp" }
+  r FT.CONFIG SET CLUSTER_BM25_DFS 1
+  if {[lindex [r FT.CONFIG GET CLUSTER_BM25_DFS] 1] ne "1"} { error "Failed to set CLUSTER_BM25_DFS" }
+  r FT.CONFIG SET CLUSTER_BM25_DFS 0
+}
+
+# ============================================================
 # Cleanup & Summary
 # ============================================================
 

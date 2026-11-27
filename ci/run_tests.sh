@@ -100,7 +100,7 @@ if [ "$REDIS_MAJOR" -ge 7 ]; then
   launch_job "SDK Compat: redis-py (RESP2 & RESP3)" \
     python3 ci/sdk_compat_test.py "./$BUILD_DIR/redis_bloom.so" "./$BUILD_DIR/redis_json.so" "./$BUILD_DIR/redis_search.so"
   launch_job "Cluster: 3-node Redis 7 Cluster" \
-    python3 ci/cluster_test.py "./$BUILD_DIR/redis_bloom.so" "./$BUILD_DIR/redis_json.so"
+    python3 ci/cluster_test.py "./$BUILD_DIR/redis_bloom.so" "./$BUILD_DIR/redis_json.so" "./$BUILD_DIR/redis_search.so"
 fi
 
 # Soak tests (all 6 in parallel!)

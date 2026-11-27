@@ -22,7 +22,7 @@ struct AggCursor {
 constexpr size_t kMaxCursorsPerIndex = 128;
 
 // Global state accessors (defined in search_state.cc)
-std::unordered_map<std::string, IndexEntry>& GetIndices();
+std::unordered_map<std::string, std::shared_ptr<IndexEntry>>& GetIndices();
 std::shared_mutex& GetIndicesMutex();
 SearchExecutor& GetSearchExecutor();
 std::unordered_map<uint64_t, AggCursor>& GetCursors();
@@ -38,6 +38,12 @@ size_t GetAsyncMinDocs();
 size_t GetBgIndexMinKeys();
 size_t GetBgIndexBatchKeys();
 uint64_t GetBgIndexTickMs();
+bool GetClusterEnabledConfig();
+int GetClusterRpcPortOffset();
+uint64_t GetClusterQueryTimeoutMs();
+size_t GetClusterMaxScatterLimit();
+bool GetClusterBm25Dfs();
+size_t GetClusterAggMaxGroups();
 uint64_t NextIndexGeneration();
 bool IsOnTimeoutReturn();
 uint64_t GetTotalCursorsCreated();
