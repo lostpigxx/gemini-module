@@ -269,4 +269,105 @@ bool DecodeSchemaSyncRequest(std::string_view data, RpcSchemaSyncRequest& out);
 void EncodeSchemaSyncResponse(const RpcSchemaSyncResponse& resp, std::string& out);
 bool DecodeSchemaSyncResponse(std::string_view data, RpcSchemaSyncResponse& out);
 
+// Phase 68: FT.SEARCH Query-Then-Fetch payloads
+struct RpcSearchNumericFilter {
+  std::string field;
+  double min = 0.0;
+  double max = 0.0;
+  bool min_exclusive = false;
+  bool max_exclusive = false;
+};
+
+struct RpcSearchPhase1Request {
+  std::string index_name;
+  std::string query_str;
+  std::vector<std::pair<std::string, std::string>> params;
+  int64_t remaining_timeout_ms = 5000;
+  uint64_t limit_k = 0;
+  bool count_only = false;
+  bool withscores = false;
+  bool verbatim = false;
+  bool nostopwords = false;
+  bool inorder = false;
+  int32_t slop = 0;
+  int32_t dialect = 2;
+  uint8_t scorer = 0;
+  bool has_language = false;
+  std::string language;
+  std::vector<std::string> infields;
+  bool has_inkeys = false;
+  std::vector<std::string> inkeys;
+  bool has_sortby = false;
+  std::string sortby_field;
+  bool sortby_desc = false;
+  std::vector<RpcSearchNumericFilter> numeric_filters;
+  bool has_geofilter = false;
+  std::string geofilter_field;
+  double geofilter_lon = 0.0;
+  double geofilter_lat = 0.0;
+  double geofilter_radius = 0.0;
+  uint8_t geofilter_unit = 0;
+};
+
+struct RpcSearchPhase1Item {
+  std::string doc_id;
+  double score = 0.0;
+  double sort_num = 0.0;
+  std::string sort_str;
+  bool has_yield_dist = false;
+};
+
+struct RpcSearchPhase1Response {
+  bool ok = false;
+  std::string error_msg;
+  uint64_t total_hits = 0;
+  uint8_t sort_mode = 0;
+  bool is_knn = false;
+  std::string score_alias;
+  std::vector<RpcSearchPhase1Item> items;
+};
+
+struct RpcFetchDocsRequest {
+  std::string index_name;
+  std::vector<std::string> doc_ids;
+  bool nocontent = false;
+  bool withpayloads = false;
+  bool has_return = false;
+  std::vector<std::string> return_fields;
+  std::vector<std::pair<std::string, std::string>> return_aliases;
+  bool has_highlight = false;
+  std::vector<std::string> highlight_fields;
+  std::string highlight_open = "<b>";
+  std::string highlight_close = "</b>";
+  bool has_summarize = false;
+  std::vector<std::string> summarize_fields;
+  int32_t summarize_frags = 3;
+  int32_t summarize_len = 20;
+  std::string summarize_separator = "...";
+  std::vector<std::string> query_terms;
+};
+
+struct RpcFetchedDoc {
+  std::string doc_id;
+  bool found = false;
+  bool has_payload = false;
+  std::string payload;
+  std::vector<std::pair<std::string, std::string>> fields;
+};
+
+struct RpcFetchDocsResponse {
+  bool ok = false;
+  std::string error_msg;
+  std::vector<RpcFetchedDoc> docs;
+};
+
+void EncodeSearchPhase1Request(const RpcSearchPhase1Request& req, std::string& out);
+bool DecodeSearchPhase1Request(std::string_view data, RpcSearchPhase1Request& out);
+void EncodeSearchPhase1Response(const RpcSearchPhase1Response& resp, std::string& out);
+bool DecodeSearchPhase1Response(std::string_view data, RpcSearchPhase1Response& out);
+void EncodeFetchDocsRequest(const RpcFetchDocsRequest& req, std::string& out);
+bool DecodeFetchDocsRequest(std::string_view data, RpcFetchDocsRequest& out);
+void EncodeFetchDocsResponse(const RpcFetchDocsResponse& resp, std::string& out);
+bool DecodeFetchDocsResponse(std::string_view data, RpcFetchDocsResponse& out);
+
 }  // namespace gemini_search

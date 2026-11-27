@@ -778,4 +778,284 @@ bool DecodeSchemaSyncResponse(std::string_view data, RpcSchemaSyncResponse& out)
   return r.AtEnd();
 }
 
+void EncodeSearchPhase1Request(const RpcSearchPhase1Request& req, std::string& out) {
+  BinaryWriter w(256);
+  w.WriteString(req.index_name);
+  w.WriteString(req.query_str);
+  w.WriteVarUint(static_cast<uint64_t>(req.params.size()));
+  for (const auto& [k, v] : req.params) {
+    w.WriteString(k);
+    w.WriteString(v);
+  }
+  w.WriteI64(req.remaining_timeout_ms);
+  w.WriteVarUint(req.limit_k);
+  w.WriteBool(req.count_only);
+  w.WriteBool(req.withscores);
+  w.WriteBool(req.verbatim);
+  w.WriteBool(req.nostopwords);
+  w.WriteBool(req.inorder);
+  w.WriteVarInt(static_cast<int64_t>(req.slop));
+  w.WriteVarInt(static_cast<int64_t>(req.dialect));
+  w.WriteU8(req.scorer);
+  w.WriteBool(req.has_language);
+  if (req.has_language) w.WriteString(req.language);
+  w.WriteStringVec(req.infields);
+  w.WriteBool(req.has_inkeys);
+  if (req.has_inkeys) w.WriteStringVec(req.inkeys);
+  w.WriteBool(req.has_sortby);
+  if (req.has_sortby) {
+    w.WriteString(req.sortby_field);
+    w.WriteBool(req.sortby_desc);
+  }
+  w.WriteVarUint(static_cast<uint64_t>(req.numeric_filters.size()));
+  for (const auto& nf : req.numeric_filters) {
+    w.WriteString(nf.field);
+    w.WriteDouble(nf.min);
+    w.WriteDouble(nf.max);
+    w.WriteBool(nf.min_exclusive);
+    w.WriteBool(nf.max_exclusive);
+  }
+  w.WriteBool(req.has_geofilter);
+  if (req.has_geofilter) {
+    w.WriteString(req.geofilter_field);
+    w.WriteDouble(req.geofilter_lon);
+    w.WriteDouble(req.geofilter_lat);
+    w.WriteDouble(req.geofilter_radius);
+    w.WriteU8(req.geofilter_unit);
+  }
+  out = w.TakeBuffer();
+}
+
+bool DecodeSearchPhase1Request(std::string_view data, RpcSearchPhase1Request& out) {
+  out = RpcSearchPhase1Request{};
+  BinaryReader r(data);
+  if (!r.ReadString(out.index_name, kMaxErrorMsgBytes) || out.index_name.empty()) return false;
+  if (!r.ReadString(out.query_str, kMaxRpcPayloadBytes)) return false;
+
+  uint64_t param_count = 0;
+  if (!r.ReadVarUint(param_count) || param_count > 10000 || param_count > r.Remaining()) {
+    return false;
+  }
+  out.params.reserve(static_cast<size_t>(param_count));
+  for (uint64_t i = 0; i < param_count; i++) {
+    std::string k, v;
+    if (!r.ReadString(k, kMaxErrorMsgBytes) || !r.ReadString(v, kMaxRpcPayloadBytes)) return false;
+    out.params.emplace_back(std::move(k), std::move(v));
+  }
+
+  int64_t slop = 0, dialect = 0;
+  if (!r.ReadI64(out.remaining_timeout_ms)) return false;
+  if (!r.ReadVarUint(out.limit_k)) return false;
+  if (!r.ReadBool(out.count_only) || !r.ReadBool(out.withscores) || !r.ReadBool(out.verbatim) ||
+      !r.ReadBool(out.nostopwords) || !r.ReadBool(out.inorder)) {
+    return false;
+  }
+  if (!r.ReadVarInt(slop) || slop < 0 || slop > 1000000) return false;
+  if (!r.ReadVarInt(dialect) || dialect < 0 || dialect > 100) return false;
+  out.slop = static_cast<int32_t>(slop);
+  out.dialect = static_cast<int32_t>(dialect);
+  if (!r.ReadU8(out.scorer)) return false;
+  if (!r.ReadBool(out.has_language)) return false;
+  if (out.has_language && !r.ReadString(out.language, 128)) return false;
+  if (!r.ReadStringVec(out.infields, 4096, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadBool(out.has_inkeys)) return false;
+  if (out.has_inkeys && !r.ReadStringVec(out.inkeys, kMaxRpcVecItems, kMaxErrorMsgBytes)) {
+    return false;
+  }
+  if (!r.ReadBool(out.has_sortby)) return false;
+  if (out.has_sortby) {
+    if (!r.ReadString(out.sortby_field, kMaxErrorMsgBytes) || !r.ReadBool(out.sortby_desc)) {
+      return false;
+    }
+  }
+  uint64_t nf_count = 0;
+  if (!r.ReadVarUint(nf_count) || nf_count > 1024 || nf_count > r.Remaining()) return false;
+  out.numeric_filters.reserve(static_cast<size_t>(nf_count));
+  for (uint64_t i = 0; i < nf_count; i++) {
+    RpcSearchNumericFilter nf;
+    // Allow +-inf for numeric FILTER bounds, disallow NaN
+    if (!r.ReadString(nf.field, kMaxErrorMsgBytes)) return false;
+    if (!r.ReadDouble(nf.min, /*allow_non_finite=*/true) || std::isnan(nf.min)) return false;
+    if (!r.ReadDouble(nf.max, /*allow_non_finite=*/true) || std::isnan(nf.max)) return false;
+    if (!r.ReadBool(nf.min_exclusive) || !r.ReadBool(nf.max_exclusive)) return false;
+    out.numeric_filters.push_back(std::move(nf));
+  }
+  if (!r.ReadBool(out.has_geofilter)) return false;
+  if (out.has_geofilter) {
+    if (!r.ReadString(out.geofilter_field, kMaxErrorMsgBytes) ||
+        !r.ReadDouble(out.geofilter_lon) || !r.ReadDouble(out.geofilter_lat) ||
+        !r.ReadDouble(out.geofilter_radius) || !r.ReadU8(out.geofilter_unit)) {
+      return false;
+    }
+  }
+  return r.AtEnd();
+}
+
+void EncodeSearchPhase1Response(const RpcSearchPhase1Response& resp, std::string& out) {
+  BinaryWriter w(64 + resp.items.size() * 48);
+  w.WriteBool(resp.ok);
+  w.WriteString(resp.error_msg);
+  w.WriteVarUint(resp.total_hits);
+  w.WriteU8(resp.sort_mode);
+  w.WriteBool(resp.is_knn);
+  w.WriteString(resp.score_alias);
+  w.WriteVarUint(static_cast<uint64_t>(resp.items.size()));
+  for (const auto& item : resp.items) {
+    w.WriteString(item.doc_id);
+    w.WriteDouble(item.score);
+    w.WriteDouble(item.sort_num);
+    w.WriteString(item.sort_str);
+    w.WriteBool(item.has_yield_dist);
+  }
+  out = w.TakeBuffer();
+}
+
+bool DecodeSearchPhase1Response(std::string_view data, RpcSearchPhase1Response& out) {
+  out = RpcSearchPhase1Response{};
+  BinaryReader r(data);
+  if (!r.ReadBool(out.ok)) return false;
+  if (!r.ReadString(out.error_msg, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadVarUint(out.total_hits)) return false;
+  if (!r.ReadU8(out.sort_mode) || out.sort_mode > 6) return false;
+  if (!r.ReadBool(out.is_knn)) return false;
+  if (!r.ReadString(out.score_alias, kMaxErrorMsgBytes)) return false;
+
+  uint64_t count = 0;
+  if (!r.ReadVarUint(count) || count > kMaxRpcVecItems || count > r.Remaining()) return false;
+  out.items.reserve(static_cast<size_t>(count));
+  for (uint64_t i = 0; i < count; i++) {
+    RpcSearchPhase1Item item;
+    if (!r.ReadString(item.doc_id, kMaxErrorMsgBytes)) return false;
+    if (!r.ReadDouble(item.score, /*allow_non_finite=*/true) || std::isnan(item.score)) {
+      return false;
+    }
+    if (!r.ReadDouble(item.sort_num, /*allow_non_finite=*/true) || std::isnan(item.sort_num)) {
+      return false;
+    }
+    if (!r.ReadString(item.sort_str, kMaxRpcPayloadBytes)) return false;
+    if (!r.ReadBool(item.has_yield_dist)) return false;
+    out.items.push_back(std::move(item));
+  }
+  return r.AtEnd();
+}
+
+void EncodeFetchDocsRequest(const RpcFetchDocsRequest& req, std::string& out) {
+  BinaryWriter w(128 + req.doc_ids.size() * 24);
+  w.WriteString(req.index_name);
+  w.WriteStringVec(req.doc_ids);
+  w.WriteBool(req.nocontent);
+  w.WriteBool(req.withpayloads);
+  w.WriteBool(req.has_return);
+  if (req.has_return) {
+    w.WriteStringVec(req.return_fields);
+    w.WriteVarUint(static_cast<uint64_t>(req.return_aliases.size()));
+    for (const auto& [k, v] : req.return_aliases) {
+      w.WriteString(k);
+      w.WriteString(v);
+    }
+  }
+  w.WriteBool(req.has_highlight);
+  if (req.has_highlight) {
+    w.WriteStringVec(req.highlight_fields);
+    w.WriteString(req.highlight_open);
+    w.WriteString(req.highlight_close);
+  }
+  w.WriteBool(req.has_summarize);
+  if (req.has_summarize) {
+    w.WriteStringVec(req.summarize_fields);
+    w.WriteVarInt(static_cast<int64_t>(req.summarize_frags));
+    w.WriteVarInt(static_cast<int64_t>(req.summarize_len));
+    w.WriteString(req.summarize_separator);
+  }
+  w.WriteStringVec(req.query_terms);
+  out = w.TakeBuffer();
+}
+
+bool DecodeFetchDocsRequest(std::string_view data, RpcFetchDocsRequest& out) {
+  out = RpcFetchDocsRequest{};
+  BinaryReader r(data);
+  if (!r.ReadString(out.index_name, kMaxErrorMsgBytes) || out.index_name.empty()) return false;
+  if (!r.ReadStringVec(out.doc_ids, kMaxRpcVecItems, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadBool(out.nocontent) || !r.ReadBool(out.withpayloads) || !r.ReadBool(out.has_return)) {
+    return false;
+  }
+  if (out.has_return) {
+    if (!r.ReadStringVec(out.return_fields, 4096, kMaxErrorMsgBytes)) return false;
+    uint64_t acount = 0;
+    if (!r.ReadVarUint(acount) || acount > 4096 || acount > r.Remaining()) return false;
+    out.return_aliases.reserve(static_cast<size_t>(acount));
+    for (uint64_t i = 0; i < acount; i++) {
+      std::string k, v;
+      if (!r.ReadString(k, kMaxErrorMsgBytes) || !r.ReadString(v, kMaxErrorMsgBytes)) return false;
+      out.return_aliases.emplace_back(std::move(k), std::move(v));
+    }
+  }
+  if (!r.ReadBool(out.has_highlight)) return false;
+  if (out.has_highlight) {
+    if (!r.ReadStringVec(out.highlight_fields, 4096, kMaxErrorMsgBytes)) return false;
+    if (!r.ReadString(out.highlight_open, 256) || !r.ReadString(out.highlight_close, 256)) {
+      return false;
+    }
+  }
+  if (!r.ReadBool(out.has_summarize)) return false;
+  if (out.has_summarize) {
+    int64_t frags = 0, slen = 0;
+    if (!r.ReadStringVec(out.summarize_fields, 4096, kMaxErrorMsgBytes)) return false;
+    if (!r.ReadVarInt(frags) || frags < 0 || frags > 10000) return false;
+    if (!r.ReadVarInt(slen) || slen < 0 || slen > 100000) return false;
+    out.summarize_frags = static_cast<int32_t>(frags);
+    out.summarize_len = static_cast<int32_t>(slen);
+    if (!r.ReadString(out.summarize_separator, 256)) return false;
+  }
+  if (!r.ReadStringVec(out.query_terms, 4096, kMaxErrorMsgBytes)) return false;
+  return r.AtEnd();
+}
+
+void EncodeFetchDocsResponse(const RpcFetchDocsResponse& resp, std::string& out) {
+  BinaryWriter w(128 + resp.docs.size() * 64);
+  w.WriteBool(resp.ok);
+  w.WriteString(resp.error_msg);
+  w.WriteVarUint(static_cast<uint64_t>(resp.docs.size()));
+  for (const auto& doc : resp.docs) {
+    w.WriteString(doc.doc_id);
+    w.WriteBool(doc.found);
+    w.WriteBool(doc.has_payload);
+    if (doc.has_payload) w.WriteString(doc.payload);
+    w.WriteVarUint(static_cast<uint64_t>(doc.fields.size()));
+    for (const auto& [k, v] : doc.fields) {
+      w.WriteString(k);
+      w.WriteString(v);
+    }
+  }
+  out = w.TakeBuffer();
+}
+
+bool DecodeFetchDocsResponse(std::string_view data, RpcFetchDocsResponse& out) {
+  out = RpcFetchDocsResponse{};
+  BinaryReader r(data);
+  if (!r.ReadBool(out.ok)) return false;
+  if (!r.ReadString(out.error_msg, kMaxErrorMsgBytes)) return false;
+  uint64_t dcount = 0;
+  if (!r.ReadVarUint(dcount) || dcount > kMaxRpcVecItems || dcount > r.Remaining()) return false;
+  out.docs.reserve(static_cast<size_t>(dcount));
+  for (uint64_t i = 0; i < dcount; i++) {
+    RpcFetchedDoc doc;
+    if (!r.ReadString(doc.doc_id, kMaxErrorMsgBytes)) return false;
+    if (!r.ReadBool(doc.found) || !r.ReadBool(doc.has_payload)) return false;
+    if (doc.has_payload && !r.ReadString(doc.payload, kMaxRpcPayloadBytes)) return false;
+    uint64_t fcount = 0;
+    if (!r.ReadVarUint(fcount) || fcount > 65536 || fcount > r.Remaining()) return false;
+    doc.fields.reserve(static_cast<size_t>(fcount));
+    for (uint64_t f = 0; f < fcount; f++) {
+      std::string k, v;
+      if (!r.ReadString(k, kMaxErrorMsgBytes) || !r.ReadString(v, kMaxRpcPayloadBytes)) {
+        return false;
+      }
+      doc.fields.emplace_back(std::move(k), std::move(v));
+    }
+    out.docs.push_back(std::move(doc));
+  }
+  return r.AtEnd();
+}
+
 }  // namespace gemini_search

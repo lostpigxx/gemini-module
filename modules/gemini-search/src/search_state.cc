@@ -15,6 +15,7 @@
 
 static std::unordered_map<std::string, std::shared_ptr<IndexEntry>> g_indices;
 static std::shared_mutex g_indices_mutex;
+static std::shared_mutex g_term_dicts_mutex;
 static SearchExecutor g_executor(2);
 static std::unordered_map<std::string, std::string> g_aliases;
 static std::unordered_map<uint64_t, AggCursor> g_cursors;
@@ -48,6 +49,7 @@ static std::unordered_map<std::string, std::string> g_config = {
 
 std::unordered_map<std::string, std::shared_ptr<IndexEntry>>& GetIndices() { return g_indices; }
 std::shared_mutex& GetIndicesMutex() { return g_indices_mutex; }
+std::shared_mutex& GetTermDictsMutex() { return g_term_dicts_mutex; }
 SearchExecutor& GetSearchExecutor() { return g_executor; }
 std::unordered_map<uint64_t, AggCursor>& GetCursors() { return g_cursors; }
 uint64_t NextCursorId() {

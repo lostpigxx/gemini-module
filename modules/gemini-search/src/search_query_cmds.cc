@@ -1,3 +1,6 @@
+#include "cluster_coordinator.h"
+#include "cluster_merger.h"
+#include "cluster_topology.h"
 #include "search_internal.h"
 #include "hybrid_fusion.h"
 #include "query_parser.h"
@@ -759,6 +762,144 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::unordered_set<std::string> query_terms;
   if (opts.has_highlight || opts.has_summarize) {
     CollectQueryTerms(parsed.root, query_terms);
+  }
+
+  // Phase 68: Cluster Query-Then-Fetch Scatter-Gather path (non-blocking)
+  if (gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    // Upfront schema & option validation on Coordinator before scattering RPCs
+    if (parsed.has_knn) {
+      const auto* fspec = entry.spec.FindField(parsed.knn_field);
+      if (!fspec) {
+        return RedisModule_ReplyWithError(ctx, "ERR KNN field not in schema");
+      }
+      if (fspec->type != FieldType::kVector) {
+        return RedisModule_ReplyWithError(ctx, "ERR KNN field is not a VECTOR field");
+      }
+      auto pit = params.find(parsed.knn_param_name);
+      if (pit == params.end()) {
+        return RedisModule_ReplyWithError(ctx, "ERR KNN param not found in PARAMS");
+      }
+      std::vector<float> qvec_check;
+      if (!DecodeVectorBlob(pit->second, fspec->vector_params.dim,
+                            fspec->vector_params.data_type, qvec_check)) {
+        return RedisModule_ReplyWithError(ctx, "ERR query vector dimension mismatch");
+      }
+    } else {
+      for (const auto& nf : opts.numeric_filters) {
+        const auto* nf_spec = entry.spec.FindField(nf.field);
+        if (!nf_spec || nf_spec->type != FieldType::kNumeric) {
+          return RedisModule_ReplyWithError(ctx, "ERR FILTER field is not a NUMERIC field");
+        }
+      }
+      if (opts.has_geofilter) {
+        const auto* gf_fspec = entry.spec.FindField(opts.geofilter_field);
+        if (!gf_fspec || gf_fspec->type != FieldType::kGeo) {
+          return RedisModule_ReplyWithError(ctx, "ERR GEOFILTER field is not a GEO field");
+        }
+      }
+      if (opts.has_sortby && !entry.spec.FindField(opts.sortby_field)) {
+        return RedisModule_ReplyWithError(ctx, "ERR SORTBY field not in schema");
+      }
+    }
+
+    bool count_only = (opts.has_limit && opts.limit_offset == 0 && opts.limit_count == 0);
+    size_t max_scatter = GetClusterMaxScatterLimit();
+    size_t max_sr = GetMaxSearchResults();
+    size_t scatter_limit_k = 0;
+
+    if (!count_only) {
+      if (parsed.has_knn) {
+        scatter_limit_k = parsed.knn_k;
+      } else if (opts.has_limit) {
+        uint64_t needed = static_cast<uint64_t>(opts.limit_offset) +
+                          static_cast<uint64_t>(opts.limit_count);
+        if (needed > max_scatter) {
+          return RedisModule_ReplyWithError(
+              ctx, "ERR LIMIT offset + count exceeds CLUSTER_MAX_SCATTER_LIMIT");
+        }
+        scatter_limit_k = static_cast<size_t>(std::min<uint64_t>(needed, max_sr));
+      } else {
+        scatter_limit_k = std::min(max_sr, max_scatter);
+      }
+    }
+
+    gemini_search::ClusterSearchPlan plan;
+    plan.phase1_req.index_name = idx_str;
+    plan.phase1_req.query_str = query_str;
+    plan.phase1_req.params.reserve(params.size());
+    for (const auto& [k, v] : params) plan.phase1_req.params.emplace_back(k, v);
+
+    int64_t eff_timeout = (opts.has_timeout && opts.timeout_ms > 0)
+                              ? static_cast<int64_t>(opts.timeout_ms)
+                              : static_cast<int64_t>(GetClusterQueryTimeoutMs());
+    plan.timeout_ms = eff_timeout;
+    plan.phase1_req.remaining_timeout_ms = eff_timeout;
+    plan.phase1_req.limit_k = static_cast<uint64_t>(scatter_limit_k);
+    plan.phase1_req.count_only = count_only;
+    plan.phase1_req.withscores = opts.withscores;
+    plan.phase1_req.verbatim = opts.verbatim;
+    plan.phase1_req.nostopwords = opts.nostopwords;
+    plan.phase1_req.inorder = opts.inorder;
+    plan.phase1_req.slop = opts.slop;
+    plan.phase1_req.dialect = qopts.dialect;
+    plan.phase1_req.scorer = static_cast<uint8_t>(opts.scorer);
+    plan.phase1_req.has_language = opts.has_language;
+    plan.phase1_req.language = opts.language;
+    plan.phase1_req.infields = opts.infields;
+    plan.phase1_req.has_inkeys = opts.has_inkeys;
+    plan.phase1_req.inkeys = opts.inkeys;
+    plan.phase1_req.has_sortby = opts.has_sortby;
+    plan.phase1_req.sortby_field = opts.sortby_field;
+    plan.phase1_req.sortby_desc = opts.sortby_desc;
+    plan.phase1_req.numeric_filters.reserve(opts.numeric_filters.size());
+    for (const auto& nf : opts.numeric_filters) {
+      plan.phase1_req.numeric_filters.push_back(
+          {nf.field, nf.min, nf.max, nf.min_exclusive, nf.max_exclusive});
+    }
+    plan.phase1_req.has_geofilter = opts.has_geofilter;
+    plan.phase1_req.geofilter_field = opts.geofilter_field;
+    plan.phase1_req.geofilter_lon = opts.geofilter_lon;
+    plan.phase1_req.geofilter_lat = opts.geofilter_lat;
+    plan.phase1_req.geofilter_radius = opts.geofilter_radius;
+    plan.phase1_req.geofilter_unit = static_cast<uint8_t>(opts.geofilter_unit);
+
+    plan.fetch_template.index_name = idx_str;
+    plan.fetch_template.nocontent = opts.nocontent;
+    plan.fetch_template.withpayloads = opts.withpayloads;
+    plan.fetch_template.has_return = opts.has_return;
+    plan.fetch_template.return_fields = opts.return_fields;
+    plan.fetch_template.return_aliases.reserve(opts.return_aliases.size());
+    for (const auto& [k, v] : opts.return_aliases) {
+      plan.fetch_template.return_aliases.emplace_back(k, v);
+    }
+    plan.fetch_template.has_highlight = opts.has_highlight;
+    plan.fetch_template.highlight_fields = opts.highlight_fields;
+    plan.fetch_template.highlight_open = opts.highlight_open;
+    plan.fetch_template.highlight_close = opts.highlight_close;
+    plan.fetch_template.has_summarize = opts.has_summarize;
+    plan.fetch_template.summarize_fields = opts.summarize_fields;
+    plan.fetch_template.summarize_frags = opts.summarize_frags;
+    plan.fetch_template.summarize_len = opts.summarize_len;
+    plan.fetch_template.summarize_separator = opts.summarize_separator;
+    plan.fetch_template.query_terms.assign(query_terms.begin(), query_terms.end());
+
+    plan.is_knn = parsed.has_knn;
+    plan.knn_k = parsed.knn_k;
+    plan.knn_score_alias = parsed.knn_score_alias.empty() ? "__vec_score" : parsed.knn_score_alias;
+    plan.has_limit = opts.has_limit;
+    plan.limit_offset = opts.has_limit ? static_cast<size_t>(opts.limit_offset) : 0;
+    plan.limit_count = (opts.has_limit && opts.limit_count >= 0)
+                           ? static_cast<size_t>(opts.limit_count)
+                           : 0;
+    plan.withscores = opts.withscores;
+    plan.explainscore = opts.explainscore;
+    plan.scorer_name = opts.scorer_name;
+    plan.withsortkeys = opts.withsortkeys;
+    plan.has_sortby = opts.has_sortby;
+    plan.withpayloads = opts.withpayloads;
+    plan.nocontent = opts.nocontent;
+
+    return gemini_search::ExecuteClusterSearch(ctx, std::move(plan));
   }
 
   // Record start time for TIMEOUT
@@ -1692,8 +1833,9 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
           keyed.emplace_back(sort_col->GetNumeric(result_ids[i]), i);
         }
         std::sort(keyed.begin(), keyed.end(),
-                  [desc](const auto& a, const auto& b) {
-                    return desc ? (a.first > b.first) : (a.first < b.first);
+                  [&](const auto& a, const auto& b) {
+                    if (a.first != b.first) return desc ? (a.first > b.first) : (a.first < b.first);
+                    return result_ids[a.second] < result_ids[b.second];
                   });
         std::vector<std::string> sorted;
         sorted.reserve(result_ids.size());
@@ -1706,8 +1848,9 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
           keyed.emplace_back(sort_col->GetString(result_ids[i]), i);
         }
         std::sort(keyed.begin(), keyed.end(),
-                  [desc](const auto& a, const auto& b) {
-                    return desc ? (a.first > b.first) : (a.first < b.first);
+                  [&](const auto& a, const auto& b) {
+                    if (a.first != b.first) return desc ? (a.first > b.first) : (a.first < b.first);
+                    return result_ids[a.second] < result_ids[b.second];
                   });
         std::vector<std::string> sorted;
         sorted.reserve(result_ids.size());
@@ -1731,9 +1874,11 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                       double na = 0, nb = 0;
                       TryParseDouble(va, na);
                       TryParseDouble(vb, nb);
-                      return desc ? na > nb : na < nb;
+                      if (na != nb) return desc ? na > nb : na < nb;
+                      return a < b;
                     }
-                    return desc ? va > vb : va < vb;
+                    if (va != vb) return desc ? va > vb : va < vb;
+                    return a < b;
                   });
       }
     }
@@ -1817,6 +1962,469 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   return REDISMODULE_OK;
+}
+
+// ============================================================================
+// Phase 68: Lock-only Shard Search Phase 1 & FetchDocs helpers (zero Redis GIL)
+// ============================================================================
+
+gemini_search::RpcSearchPhase1Response ExecuteLocalSearchPhase1(
+    const gemini_search::RpcSearchPhase1Request& req) {
+  gemini_search::RpcSearchPhase1Response resp;
+
+  auto entry_ptr = GetIndexEntryShared(req.index_name);
+  if (!entry_ptr) {
+    resp.ok = false;
+    resp.error_msg = "ERR index not found";
+    return resp;
+  }
+
+  const auto& entry = *entry_ptr;
+  std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+
+  std::unordered_map<std::string, std::string> params;
+  params.reserve(req.params.size());
+  for (const auto& [k, v] : req.params) params[k] = v;
+
+  QueryOptions qopts;
+  qopts.nostopwords = req.nostopwords || req.verbatim;
+  qopts.infields = req.infields;
+  qopts.slop = req.slop;
+  qopts.inorder = req.inorder;
+  qopts.stem = !req.verbatim;
+  qopts.language = req.has_language ? req.language : entry.spec.language;
+  qopts.dialect = req.dialect;
+  qopts.scorer = static_cast<ScorerType>(req.scorer);
+  qopts.max_expansions = GetMaxExpansions();
+  qopts.min_stem_len = GetMinStemLen();
+
+  std::unordered_set<std::string> custom_dict_copy;
+  if (!entry.spec.custom_dict.empty()) {
+    std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
+    auto dit = GetTermDicts().find(entry.spec.custom_dict);
+    if (dit != GetTermDicts().end()) {
+      custom_dict_copy = dit->second.Terms();
+      qopts.custom_dict = &custom_dict_copy;
+    }
+  }
+  if (req.remaining_timeout_ms > 0) {
+    qopts.deadline_ms = NowMs() + req.remaining_timeout_ms;
+  }
+
+  ParsedQuery parsed;
+  std::string parse_err;
+  if (!ParseQuery(req.query_str, parsed, parse_err, qopts)) {
+    resp.ok = false;
+    resp.error_msg = std::move(parse_err);
+    return resp;
+  }
+
+  // ── KNN / Filtered HNSW path ──
+  if (parsed.has_knn) {
+    const auto* fspec = entry.spec.FindField(parsed.knn_field);
+    if (!fspec) {
+      resp.ok = false;
+      resp.error_msg = "ERR KNN field not in schema";
+      return resp;
+    }
+    if (fspec->type != FieldType::kVector) {
+      resp.ok = false;
+      resp.error_msg = "ERR KNN field is not a VECTOR field";
+      return resp;
+    }
+    auto pit = params.find(parsed.knn_param_name);
+    if (pit == params.end()) {
+      resp.ok = false;
+      resp.error_msg = "ERR KNN param not found in PARAMS";
+      return resp;
+    }
+    std::vector<float> qvec;
+    if (!DecodeVectorBlob(pit->second, fspec->vector_params.dim, fspec->vector_params.data_type,
+                          qvec)) {
+      resp.ok = false;
+      resp.error_msg = "ERR query vector dimension mismatch";
+      return resp;
+    }
+
+    std::vector<KnnResult> knn_res;
+    if (const auto* vidx = entry.vector_indices.Get(parsed.knn_field)) {
+      if (parsed.root.type != QueryNode::Type::kMatchAll) {
+        std::string ferr;
+        auto cands = EvaluateQuery(parsed.root, entry.spec, entry.doc_store, entry.tag_indices,
+                                   entry.numeric_indices, entry.text_indices, entry.geo_indices,
+                                   ferr, qopts, &entry.geoshape_indices, &params,
+                                   &entry.vector_indices, &entry.synonyms);
+        if (!ferr.empty()) {
+          resp.ok = false;
+          resp.error_msg = std::move(ferr);
+          return resp;
+        }
+        knn_res = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands, parsed.knn_ef_runtime,
+                                         parsed.knn_oversample);
+      } else {
+        knn_res = vidx->KnnQueryEf(qvec.data(), parsed.knn_k, parsed.knn_ef_runtime,
+                                   parsed.knn_oversample);
+      }
+    }
+
+    if (req.has_inkeys) {
+      std::unordered_set<std::string> allowed(req.inkeys.begin(), req.inkeys.end());
+      knn_res.erase(std::remove_if(knn_res.begin(), knn_res.end(),
+                                   [&](const KnnResult& r) {
+                                     return allowed.find(r.doc_id) == allowed.end();
+                                   }),
+                    knn_res.end());
+    }
+
+    std::sort(knn_res.begin(), knn_res.end(), [](const KnnResult& a, const KnnResult& b) {
+      if (a.score != b.score) return a.score < b.score;
+      return a.doc_id < b.doc_id;
+    });
+
+    resp.ok = true;
+    resp.is_knn = true;
+    resp.sort_mode = static_cast<uint8_t>(gemini_search::MergeSortMode::kDistanceAsc);
+    resp.score_alias = parsed.knn_score_alias.empty() ? "__vec_score" : parsed.knn_score_alias;
+    resp.total_hits = static_cast<uint64_t>(knn_res.size());
+    resp.items.reserve(knn_res.size());
+    for (auto& kr : knn_res) {
+      gemini_search::RpcSearchPhase1Item item;
+      item.doc_id = std::move(kr.doc_id);
+      item.score = static_cast<double>(kr.score);
+      resp.items.push_back(std::move(item));
+    }
+    return resp;
+  }
+
+  // ── Non-KNN path ──
+  std::string eval_err;
+  std::vector<ScoredResult> scored_results;
+  std::vector<std::string> result_ids;
+
+  if (req.withscores) {
+    bool used_wand = false;
+    if (!req.count_only && !req.has_sortby && !req.has_inkeys && req.numeric_filters.empty() &&
+        !req.has_geofilter && req.limit_k > 0) {
+      SearchOptions wand_opts;
+      wand_opts.withscores = true;
+      wand_opts.has_limit = true;
+      wand_opts.limit_offset = 0;
+      wand_opts.limit_count = static_cast<long long>(req.limit_k);
+      used_wand = TryEvaluateWandTopK(parsed.root, entry, wand_opts, qopts, scored_results);
+    }
+    if (!used_wand) {
+      scored_results = EvaluateQueryScored(
+          parsed.root, entry.spec, entry.doc_store, entry.tag_indices, entry.numeric_indices,
+          entry.text_indices, entry.geo_indices, eval_err, qopts, &entry.geoshape_indices, &params,
+          &entry.vector_indices, &entry.synonyms);
+    }
+  } else {
+    result_ids = EvaluateQuery(
+        parsed.root, entry.spec, entry.doc_store, entry.tag_indices, entry.numeric_indices,
+        entry.text_indices, entry.geo_indices, eval_err, qopts, &entry.geoshape_indices, &params,
+        &entry.vector_indices, &entry.synonyms);
+  }
+
+  if (!eval_err.empty()) {
+    resp.ok = false;
+    resp.error_msg = std::move(eval_err);
+    return resp;
+  }
+
+  // INKEYS filter
+  if (req.has_inkeys) {
+    std::unordered_set<std::string> allowed(req.inkeys.begin(), req.inkeys.end());
+    if (req.withscores) {
+      scored_results.erase(std::remove_if(scored_results.begin(), scored_results.end(),
+                                          [&](const ScoredResult& r) {
+                                            return allowed.find(r.doc_id) == allowed.end();
+                                          }),
+                           scored_results.end());
+    } else {
+      result_ids.erase(std::remove_if(result_ids.begin(), result_ids.end(),
+                                      [&](const std::string& id) {
+                                        return allowed.find(id) == allowed.end();
+                                      }),
+                       result_ids.end());
+    }
+  }
+
+  // FILTER numeric options
+  for (const auto& nf : req.numeric_filters) {
+    const auto* nf_spec = entry.spec.FindField(nf.field);
+    if (!nf_spec || nf_spec->type != FieldType::kNumeric) {
+      resp.ok = false;
+      resp.error_msg = "ERR FILTER field is not a NUMERIC field";
+      return resp;
+    }
+    const auto* nidx = entry.numeric_indices.Get(nf.field);
+    if (!nidx) {
+      scored_results.clear();
+      result_ids.clear();
+      break;
+    }
+    auto hits = nidx->RangeQuery(nf.min, nf.min_exclusive, nf.max, nf.max_exclusive);
+    std::unordered_set<std::string> hit_set(hits.begin(), hits.end());
+    if (req.withscores) {
+      scored_results.erase(std::remove_if(scored_results.begin(), scored_results.end(),
+                                          [&](const ScoredResult& r) {
+                                            return hit_set.find(r.doc_id) == hit_set.end();
+                                          }),
+                           scored_results.end());
+    } else {
+      result_ids.erase(std::remove_if(result_ids.begin(), result_ids.end(),
+                                      [&](const std::string& id) {
+                                        return hit_set.find(id) == hit_set.end();
+                                      }),
+                       result_ids.end());
+    }
+  }
+
+  // GEOFILTER option
+  if (req.has_geofilter) {
+    const auto* gf_fspec = entry.spec.FindField(req.geofilter_field);
+    if (!gf_fspec || gf_fspec->type != FieldType::kGeo) {
+      resp.ok = false;
+      resp.error_msg = "ERR GEOFILTER field is not a GEO field";
+      return resp;
+    }
+    if (const auto* gidx = entry.geo_indices.Get(req.geofilter_field)) {
+      double radius_m = req.geofilter_radius * GeoUnitToMeters(static_cast<GeoUnit>(req.geofilter_unit));
+      auto geo_hits = gidx->RadiusQuery(req.geofilter_lon, req.geofilter_lat, radius_m);
+      std::unordered_set<std::string> geo_set;
+      for (const auto& gr : geo_hits) geo_set.insert(gr.doc_id);
+      if (req.withscores) {
+        scored_results.erase(std::remove_if(scored_results.begin(), scored_results.end(),
+                                            [&](const ScoredResult& r) {
+                                              return geo_set.find(r.doc_id) == geo_set.end();
+                                            }),
+                             scored_results.end());
+      } else {
+        result_ids.erase(std::remove_if(result_ids.begin(), result_ids.end(),
+                                        [&](const std::string& id) {
+                                          return geo_set.find(id) == geo_set.end();
+                                        }),
+                         result_ids.end());
+      }
+    } else {
+      scored_results.clear();
+      result_ids.clear();
+    }
+  }
+
+  resp.ok = true;
+  resp.is_knn = false;
+  resp.total_hits = static_cast<uint64_t>(req.withscores ? scored_results.size() : result_ids.size());
+
+  // Fast-path LIMIT 0 0: return total_hits only, skip sorting & doc serialization
+  if (req.count_only) {
+    resp.sort_mode = static_cast<uint8_t>(gemini_search::MergeSortMode::kDocIdAsc);
+    return resp;
+  }
+
+  // Optional VECTOR_RANGE $YIELD_DISTANCE_AS
+  std::string yield_alias;
+  std::unordered_map<std::string, double> yield_dists;
+  if (!req.withscores) {
+    auto FindVecRange = [&](auto& self, const QueryNode& n) -> void {
+      if (n.type == QueryNode::Type::kVectorRange && !n.vec_score_alias.empty() &&
+          yield_alias.empty()) {
+        yield_alias = n.vec_score_alias;
+        const auto* fspec = entry.spec.FindField(n.field_name);
+        const auto* vidx = entry.vector_indices.Get(n.field_name);
+        auto pit = params.find(n.vec_param_name);
+        if (fspec && vidx && pit != params.end()) {
+          std::vector<float> qvec;
+          if (DecodeVectorBlob(pit->second, fspec->vector_params.dim, fspec->vector_params.data_type,
+                               qvec)) {
+            for (const auto& h : vidx->RangeQuery(qvec.data(), static_cast<float>(n.vec_radius))) {
+              yield_dists[h.doc_id] = static_cast<double>(h.score);
+            }
+          }
+        }
+      }
+      for (const auto& ch : n.children) self(self, ch);
+    };
+    FindVecRange(FindVecRange, parsed.root);
+  }
+  resp.score_alias = yield_alias;
+
+  // Determine sort mode & extract sort keys
+  gemini_search::MergeSortMode sort_mode =
+      req.withscores ? gemini_search::MergeSortMode::kScoreDesc
+                     : gemini_search::MergeSortMode::kDocIdAsc;
+  bool numeric_sort = false;
+  const SortableColumn* sort_col = nullptr;
+  if (req.has_sortby) {
+    const auto* sort_fspec = entry.spec.FindField(req.sortby_field);
+    if (!sort_fspec) {
+      resp.ok = false;
+      resp.error_msg = "ERR SORTBY field not in schema";
+      return resp;
+    }
+    numeric_sort = (sort_fspec->type == FieldType::kNumeric);
+    if (numeric_sort) {
+      sort_mode = req.sortby_desc ? gemini_search::MergeSortMode::kSortNumDesc
+                                  : gemini_search::MergeSortMode::kSortNumAsc;
+    } else {
+      sort_mode = req.sortby_desc ? gemini_search::MergeSortMode::kSortStrDesc
+                                  : gemini_search::MergeSortMode::kSortStrAsc;
+    }
+    if (sort_fspec->sortable) {
+      sort_col = entry.sort_indices.Get(req.sortby_field);
+    }
+  }
+  resp.sort_mode = static_cast<uint8_t>(sort_mode);
+
+  auto FillSortKey = [&](const std::string& doc_id, gemini_search::RpcSearchPhase1Item& item) {
+    if (!req.has_sortby) return;
+    if (const auto* doc = entry.doc_store.Get(doc_id)) {
+      auto fit = doc->fields.find(req.sortby_field);
+      if (fit != doc->fields.end()) item.sort_str = fit->second;
+    }
+    if (numeric_sort) {
+      if (sort_col) {
+        item.sort_num = sort_col->GetNumeric(doc_id);
+      } else {
+        double nv = 0.0;
+        TryParseDouble(item.sort_str, nv);
+        item.sort_num = nv;
+      }
+    }
+  };
+
+  std::vector<gemini_search::RpcSearchPhase1Item> items;
+  if (req.withscores) {
+    items.reserve(scored_results.size());
+    for (auto& sr : scored_results) {
+      gemini_search::RpcSearchPhase1Item item;
+      item.doc_id = std::move(sr.doc_id);
+      item.score = sr.score;
+      FillSortKey(item.doc_id, item);
+      items.push_back(std::move(item));
+    }
+  } else {
+    items.reserve(result_ids.size());
+    for (auto& id : result_ids) {
+      gemini_search::RpcSearchPhase1Item item;
+      item.doc_id = std::move(id);
+      auto dit = yield_dists.find(item.doc_id);
+      if (!yield_alias.empty() && dit != yield_dists.end()) {
+        item.score = dit->second;
+        item.has_yield_dist = true;
+      }
+      FillSortKey(item.doc_id, item);
+      items.push_back(std::move(item));
+    }
+  }
+
+  auto item_cmp = [sort_mode](const gemini_search::RpcSearchPhase1Item& a,
+                              const gemini_search::RpcSearchPhase1Item& b) {
+    switch (sort_mode) {
+      case gemini_search::MergeSortMode::kDocIdAsc:
+        return a.doc_id < b.doc_id;
+      case gemini_search::MergeSortMode::kScoreDesc:
+        if (a.score != b.score) return a.score > b.score;
+        return a.doc_id < b.doc_id;
+      case gemini_search::MergeSortMode::kDistanceAsc:
+        if (a.score != b.score) return a.score < b.score;
+        return a.doc_id < b.doc_id;
+      case gemini_search::MergeSortMode::kSortNumAsc:
+        if (a.sort_num != b.sort_num) return a.sort_num < b.sort_num;
+        return a.doc_id < b.doc_id;
+      case gemini_search::MergeSortMode::kSortNumDesc:
+        if (a.sort_num != b.sort_num) return a.sort_num > b.sort_num;
+        return a.doc_id < b.doc_id;
+      case gemini_search::MergeSortMode::kSortStrAsc:
+        if (a.sort_str != b.sort_str) return a.sort_str < b.sort_str;
+        return a.doc_id < b.doc_id;
+      case gemini_search::MergeSortMode::kSortStrDesc:
+        if (a.sort_str != b.sort_str) return a.sort_str > b.sort_str;
+        return a.doc_id < b.doc_id;
+    }
+    return a.doc_id < b.doc_id;
+  };
+
+  size_t k = static_cast<size_t>(req.limit_k);
+  if (k > 0 && items.size() > k) {
+    std::partial_sort(items.begin(), items.begin() + static_cast<ptrdiff_t>(k), items.end(),
+                      item_cmp);
+    items.resize(k);
+  } else {
+    std::sort(items.begin(), items.end(), item_cmp);
+  }
+
+  resp.items = std::move(items);
+  return resp;
+}
+
+gemini_search::RpcFetchDocsResponse ExecuteLocalFetchDocs(
+    const gemini_search::RpcFetchDocsRequest& req) {
+  gemini_search::RpcFetchDocsResponse resp;
+
+  auto entry_ptr = GetIndexEntryShared(req.index_name);
+  if (!entry_ptr) {
+    resp.ok = false;
+    resp.error_msg = "ERR index not found";
+    return resp;
+  }
+
+  const auto& entry = *entry_ptr;
+  std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+
+  bool allow_hl = req.has_highlight && !entry.spec.nohl && !entry.spec.nooffsets;
+  std::unordered_map<std::string, std::string> aliases;
+  aliases.reserve(req.return_aliases.size());
+  for (const auto& [k, v] : req.return_aliases) aliases[k] = v;
+
+  std::unordered_set<std::string> qterms(req.query_terms.begin(), req.query_terms.end());
+  std::unordered_set<std::string> hl_set(req.highlight_fields.begin(), req.highlight_fields.end());
+  std::unordered_set<std::string> sm_set(req.summarize_fields.begin(), req.summarize_fields.end());
+
+  resp.ok = true;
+  resp.docs.reserve(req.doc_ids.size());
+  for (const auto& doc_id : req.doc_ids) {
+    gemini_search::RpcFetchedDoc out_doc;
+    out_doc.doc_id = doc_id;
+    const auto* doc = entry.doc_store.Get(doc_id);
+    if (!doc) {
+      out_doc.found = false;
+      resp.docs.push_back(std::move(out_doc));
+      continue;
+    }
+    out_doc.found = true;
+    out_doc.has_payload = doc->has_payload;
+    if (req.withpayloads && doc->has_payload) {
+      out_doc.payload = doc->payload;
+    }
+    if (!req.nocontent) {
+      std::vector<std::string> keys;
+      if (req.has_return) {
+        keys = req.return_fields;
+      } else {
+        keys.reserve(doc->fields.size());
+        for (const auto& [k, v] : doc->fields) keys.push_back(k);
+        std::sort(keys.begin(), keys.end());
+      }
+      out_doc.fields.reserve(keys.size());
+      for (const auto& k : keys) {
+        auto ait = aliases.find(k);
+        const std::string& out_k = (ait != aliases.end()) ? ait->second : k;
+        auto fit = doc->fields.find(k);
+        std::string val = (fit != doc->fields.end()) ? fit->second : "";
+        if (req.has_summarize && !qterms.empty() && (sm_set.empty() || sm_set.count(k) > 0)) {
+          val = ApplySummarize(val, qterms, req.summarize_frags, req.summarize_len,
+                               req.summarize_separator);
+        }
+        if (allow_hl && !qterms.empty() && (hl_set.empty() || hl_set.count(k) > 0)) {
+          val = ApplyHighlight(val, qterms, req.highlight_open, req.highlight_close);
+        }
+        out_doc.fields.emplace_back(out_k, std::move(val));
+      }
+    }
+    resp.docs.push_back(std::move(out_doc));
+  }
+  return resp;
 }
 
 // Query tree serializer for EXPLAIN

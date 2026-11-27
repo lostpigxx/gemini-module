@@ -15,7 +15,9 @@ Usage:
   python3 ci/cluster_test.py [bloom.so] [json.so]
 """
 
+import math
 import os
+import random
 import shutil
 import socket
 import struct
@@ -548,6 +550,7 @@ def test_search_cluster_phase67(
     port4 = find_free_ports(1)[0]
     proc4 = start_cluster_node(port4, modules, os.path.join(workdir, "node3"))
     node4 = redis.Redis(host="127.0.0.1", port=port4, decode_responses=True)
+    node4_id = node4.execute_command("CLUSTER", "MYID")
     try:
         node4.execute_command("CLUSTER", "MEET", "127.0.0.1", ports[0])
         deadline = time.time() + 10.0
@@ -583,6 +586,291 @@ def test_search_cluster_phase67(
             proc4.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc4.kill()
+        for n in nodes:
+            try:
+                n.execute_command("CLUSTER", "FORGET", node4_id)
+            except Exception:
+                pass
+
+
+def start_standalone_node(port: int, modules: list[str], node_dir: str) -> subprocess.Popen:
+    os.makedirs(node_dir, exist_ok=True)
+    cmd = [
+        "redis-server",
+        "--port", str(port),
+        "--bind", "127.0.0.1",
+        "--dir", node_dir,
+        "--dbfilename", "",
+        "--save", "",
+        "--loglevel", "warning",
+    ]
+    for m in modules:
+        cmd.extend(["--loadmodule", os.path.abspath(m)])
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        try:
+            c = redis.Redis(host="127.0.0.1", port=port)
+            if c.ping():
+                c.close()
+                return proc
+        except Exception:
+            time.sleep(0.05)
+    proc.terminate()
+    out, err = proc.communicate(timeout=5)
+    raise RuntimeError(f"Standalone node on {port} failed:\n{out.decode()}\n{err.decode()}")
+
+
+def make_unit_vec(dim: int, seed: int) -> bytes:
+    rng = random.Random(seed)
+    vals = [rng.gauss(0.0, 1.0) for _ in range(dim)]
+    norm = math.sqrt(sum(x * x for x in vals)) or 1.0
+    vals = [x / norm for x in vals]
+    return struct.pack(f"<{dim}f", *vals)
+
+
+def test_search_cluster_phase68_golden_parity(
+    rc: RedisCluster,
+    nodes: list[redis.Redis],
+    ports: list[int],
+    modules: list[str],
+    workdir: str,
+) -> None:
+    """Phase 68 golden parity: 3,000 identical Hash+JSON+128d/768d vector docs on Standalone vs 3-node Cluster."""
+    sa_port = find_free_ports(1)[0]
+    sa_proc = start_standalone_node(sa_port, modules, os.path.join(workdir, "standalone_p68"))
+    sa = redis.Redis(host="127.0.0.1", port=sa_port, decode_responses=True)
+    sa_raw = redis.Redis(host="127.0.0.1", port=sa_port, decode_responses=False)
+    rc_raw = RedisCluster(host="127.0.0.1", port=ports[0], decode_responses=False)
+    nodes_raw = [redis.Redis(host="127.0.0.1", port=p, decode_responses=False) for p in ports]
+    try:
+        # 1. Create identical schemas on Standalone and 3-node Cluster
+        hash_schema = [
+            "FT.CREATE", "p68_hash", "ON", "HASH", "PREFIX", "1", "p68h:",
+            "SCHEMA",
+            "title", "TEXT", "WEIGHT", "2.0",
+            "body", "TEXT",
+            "cat", "TAG",
+            "price", "NUMERIC", "SORTABLE",
+            "sku", "TEXT", "SORTABLE",
+            "loc", "GEO",
+            "v_flat", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "128", "DISTANCE_METRIC", "L2",
+            "v_hnsw", "VECTOR", "HNSW", "10", "TYPE", "FLOAT32", "DIM", "128", "DISTANCE_METRIC", "COSINE",
+            "M", "16", "EF_CONSTRUCTION", "128",
+            "v_sq8", "VECTOR", "HNSW", "12", "TYPE", "FLOAT32", "DIM", "128", "DISTANCE_METRIC", "L2",
+            "QUANTIZATION", "SQ8", "M", "16", "EF_CONSTRUCTION", "128",
+            "v_bq", "VECTOR", "HNSW", "16", "TYPE", "FLOAT32", "DIM", "128", "DISTANCE_METRIC", "COSINE",
+            "QUANTIZATION", "BQ", "RERANK", "FP16", "OVERSAMPLE", "8", "M", "16", "EF_CONSTRUCTION", "128",
+        ]
+        json_schema = [
+            "FT.CREATE", "p68_json", "ON", "JSON", "PREFIX", "1", "p68j:",
+            "SCHEMA",
+            "$.title", "AS", "title", "TEXT",
+            "$.cat", "AS", "cat", "TAG",
+            "$.price", "AS", "price", "NUMERIC", "SORTABLE",
+            "$.rating", "AS", "rating", "NUMERIC", "SORTABLE",
+        ]
+        vec768_schema = [
+            "FT.CREATE", "p68_v768", "ON", "HASH", "PREFIX", "1", "p68v:",
+            "SCHEMA",
+            "cat", "TAG",
+            "emb", "VECTOR", "HNSW", "10", "TYPE", "FLOAT32", "DIM", "768", "DISTANCE_METRIC", "COSINE",
+            "M", "16", "EF_CONSTRUCTION", "100",
+        ]
+
+        for schema_cmd in (hash_schema, json_schema, vec768_schema):
+            assert sa.execute_command(*schema_cmd) == "OK"
+            assert nodes[0].execute_command(*schema_cmd) == "OK"
+
+        # 2. Populate 3,000 identical docs (2,000 Hash + 1,000 JSON) + 64 x 768d docs
+        cats = ["electronics", "books", "garden", "sports", "toys"]
+        adjs = ["fast", "compact", "durable", "smart", "classic", "modern", "portable", "quiet"]
+        nouns = ["router", "engine", "sensor", "widget", "camera", "speaker", "battery", "display"]
+
+        # Store a few known vectors for KNN / VECTOR_RANGE queries
+        saved_v128: dict[int, bytes] = {}
+        saved_v768: dict[int, bytes] = {}
+
+        sa_pipe = sa_raw.pipeline(transaction=False)
+        for i in range(2000):
+            key = f"p68h:{i:04d}"
+            cat = cats[i % len(cats)]
+            adj = adjs[i % len(adjs)]
+            noun = nouns[(i // len(adjs)) % len(nouns)]
+            title = f"{adj} {noun} model{i % 25}"
+            body = (
+                f"high performance {adj} {noun} built for distributed redis search cluster "
+                f"batch{i % 10} reliable low latency indexing"
+            )
+            price = str((i * 37) % 1000 + (i % 7) * 0.25)
+            sku = f"sku_{cat[:3]}_{i:04d}"
+            lon = -122.5 + (i % 50) * 0.01
+            lat = 37.5 + ((i // 50) % 40) * 0.01
+            v = make_unit_vec(128, 10000 + i)
+            if i in (0, 42, 777):
+                saved_v128[i] = v
+            mapping = {
+                b"title": title.encode(),
+                b"body": body.encode(),
+                b"cat": cat.encode(),
+                b"price": price.encode(),
+                b"sku": sku.encode(),
+                b"loc": f"{lon:.4f},{lat:.4f}".encode(),
+                b"v_flat": v,
+                b"v_hnsw": v,
+                b"v_sq8": v,
+                b"v_bq": v,
+            }
+            sa_pipe.hset(key, mapping=mapping)
+            rc_raw.hset(key, mapping=mapping)
+            if (i + 1) % 250 == 0:
+                sa_pipe.execute()
+                sa_pipe = sa_raw.pipeline(transaction=False)
+        sa_pipe.execute()
+
+        sa_jpipe = sa.pipeline(transaction=False)
+        for i in range(1000):
+            key = f"p68j:{i:04d}"
+            cat = cats[i % len(cats)]
+            adj = adjs[i % len(adjs)]
+            noun = nouns[i % len(nouns)]
+            doc_json = (
+                f'{{"title":"{adj} {noun} json{i % 20}","cat":"{cat}",'
+                f'"price":{(i * 19) % 500},"rating":{(i % 50) / 10.0}}}'
+            )
+            sa_jpipe.execute_command("JSON.SET", key, "$", doc_json)
+            rc.execute_command("JSON.SET", key, "$", doc_json)
+            if (i + 1) % 250 == 0:
+                sa_jpipe.execute()
+                sa_jpipe = sa.pipeline(transaction=False)
+        sa_jpipe.execute()
+
+        for i in range(64):
+            key = f"p68v:{i:03d}"
+            v768 = make_unit_vec(768, 90000 + i)
+            if i == 17:
+                saved_v768[i] = v768
+            mapping = {b"cat": cats[i % 2].encode(), b"emb": v768}
+            sa_raw.hset(key, mapping=mapping)
+            rc_raw.hset(key, mapping=mapping)
+
+        # Verify all 3,000 docs landed across all 3 cluster shards
+        shard_hash_counts = [
+            int(kv_list_to_dict(n.execute_command("FT.INFO", "p68_hash"))["num_docs"])
+            for n in nodes
+        ]
+        shard_json_counts = [
+            int(kv_list_to_dict(n.execute_command("FT.INFO", "p68_json"))["num_docs"])
+            for n in nodes
+        ]
+        assert sum(shard_hash_counts) == 2000 and all(c > 400 for c in shard_hash_counts), shard_hash_counts
+        assert sum(shard_json_counts) == 1000 and all(c > 200 for c in shard_json_counts), shard_json_counts
+
+        # Helper to compare standalone vs cluster exact RESP replies
+        def assert_exact_parity(label: str, cmd_args: list, client_idx: int = 0, use_rc: bool = False):
+            exp = sa_raw.execute_command(*cmd_args)
+            if use_rc:
+                got = rc_raw.execute_command(*cmd_args)
+            else:
+                got = nodes_raw[client_idx % 3].execute_command(*cmd_args)
+            assert got == exp, f"Parity mismatch on '{label}':\n  expected={exp[:12]}\n  got     ={got[:12]}"
+
+        # 3. Execute 32+ golden parity queries!
+        q_idx = 0
+        # (1-4) Pure counts (LIMIT 0 0) across Hash, JSON, filtered, and GEOFILTER
+        assert_exact_parity("hash_count_all", ["FT.SEARCH", "p68_hash", "*", "LIMIT", "0", "0"], 0)
+        assert_exact_parity("hash_count_tag", ["FT.SEARCH", "p68_hash", "@cat:{electronics|books}", "LIMIT", "0", "0"], 1)
+        assert_exact_parity("json_count_all", ["FT.SEARCH", "p68_json", "*", "LIMIT", "0", "0"], 2)
+        assert_exact_parity("hash_count_geofilter", ["FT.SEARCH", "p68_hash", "*", "GEOFILTER", "loc", "-122.4", "37.6", "15", "km", "LIMIT", "0", "0"], 0, use_rc=True)
+        q_idx += 4
+
+        # (5-12) SORTBY numeric ASC/DESC & string ASC/DESC with pagination, RETURN AS, WITHSORTKEYS, NOCONTENT
+        assert_exact_parity("sort_price_asc_p1", ["FT.SEARCH", "p68_hash", "*", "SORTBY", "price", "ASC", "RETURN", "4", "title", "price", "AS", "cost", "LIMIT", "0", "15"], 0)
+        assert_exact_parity("sort_price_desc_p2", ["FT.SEARCH", "p68_hash", "*", "SORTBY", "price", "DESC", "RETURN", "2", "title", "price", "LIMIT", "25", "15"], 1)
+        assert_exact_parity("sort_price_deep", ["FT.SEARCH", "p68_hash", "*", "SORTBY", "price", "ASC", "NOCONTENT", "LIMIT", "1985", "20"], 2)
+        assert_exact_parity("sort_price_oob", ["FT.SEARCH", "p68_hash", "*", "SORTBY", "price", "ASC", "NOCONTENT", "LIMIT", "2500", "10"], 0)
+        assert_exact_parity("sort_sku_asc_withsortkeys", ["FT.SEARCH", "p68_hash", "@cat:{sports}", "SORTBY", "sku", "ASC", "WITHSORTKEYS", "RETURN", "1", "sku", "LIMIT", "10", "12"], 1)
+        assert_exact_parity("sort_sku_desc_nocontent", ["FT.SEARCH", "p68_hash", "@cat:{garden}", "SORTBY", "sku", "DESC", "WITHSORTKEYS", "NOCONTENT", "LIMIT", "5", "10"], 2)
+        assert_exact_parity("sort_filter_excl", ["FT.SEARCH", "p68_hash", "@cat:{electronics}", "FILTER", "price", "(100", "500", "SORTBY", "price", "ASC", "RETURN", "2", "cat", "price", "LIMIT", "0", "20"], 0, use_rc=True)
+        assert_exact_parity("sort_geofilter_combo", ["FT.SEARCH", "p68_hash", "@cat:{books|toys}", "GEOFILTER", "loc", "-122.35", "37.65", "20", "km", "SORTBY", "price", "DESC", "RETURN", "2", "sku", "price", "LIMIT", "0", "15"], 1)
+        q_idx += 8
+
+        # (13-20) Full-text, phrase, boolean AND/OR/NOT, INFIELDS, INKEYS, HIGHLIGHT, SUMMARIZE, DOCSCORE+EXPLAINSCORE
+        assert_exact_parity("text_sortby_hl", ["FT.SEARCH", "p68_hash", "fast router", "SORTBY", "sku", "ASC", "RETURN", "2", "title", "body", "HIGHLIGHT", "FIELDS", "1", "title", "TAGS", "<em>", "</em>", "LIMIT", "0", "10"], 2)
+        assert_exact_parity("text_summarize_hl", ["FT.SEARCH", "p68_hash", "distributed cluster", "SORTBY", "sku", "ASC", "RETURN", "1", "body", "SUMMARIZE", "FIELDS", "1", "body", "FRAGS", "1", "LEN", "6", "SEPARATOR", "...", "HIGHLIGHT", "FIELDS", "1", "body", "LIMIT", "0", "8"], 0)
+        assert_exact_parity("phrase_search", ["FT.SEARCH", "p68_hash", '"low latency indexing"', "SORTBY", "sku", "ASC", "NOCONTENT", "LIMIT", "0", "20"], 1)
+        assert_exact_parity("bool_and_not", ["FT.SEARCH", "p68_hash", "@cat:{electronics} -@title:compact @price:[50 400]", "SORTBY", "price", "ASC", "RETURN", "2", "title", "price", "LIMIT", "0", "15"], 2)
+        assert_exact_parity("infields_title", ["FT.SEARCH", "p68_hash", "smart", "INFIELDS", "1", "title", "SORTBY", "sku", "ASC", "NOCONTENT", "LIMIT", "0", "15"], 0)
+        assert_exact_parity("inkeys_subset", ["FT.SEARCH", "p68_hash", "*", "INKEYS", "5", "p68h:0001", "p68h:0500", "p68h:1000", "p68h:1500", "p68h:1999", "SORTBY", "sku", "ASC", "RETURN", "1", "title"], 1)
+        assert_exact_parity("docscore_withscores_explain", ["FT.SEARCH", "p68_hash", "fast engine", "WITHSCORES", "EXPLAINSCORE", "SCORER", "DOCSCORE", "RETURN", "1", "title", "LIMIT", "0", "10"], 2)
+        assert_exact_parity("withscores_sortby_override", ["FT.SEARCH", "p68_hash", "smart camera", "WITHSCORES", "SCORER", "DOCSCORE", "SORTBY", "price", "ASC", "RETURN", "2", "title", "price", "LIMIT", "0", "10"], 0)
+        q_idx += 8
+
+        # (21-24) ON JSON queries (SORTBY, RETURN, HIGHLIGHT, FILTER, LIMIT)
+        assert_exact_parity("json_sort_price_asc", ["FT.SEARCH", "p68_json", "@cat:{electronics}", "SORTBY", "price", "ASC", "RETURN", "3", "title", "price", "rating", "LIMIT", "0", "15"], 1)
+        assert_exact_parity("json_sort_rating_desc", ["FT.SEARCH", "p68_json", "compact", "SORTBY", "rating", "DESC", "HIGHLIGHT", "FIELDS", "1", "title", "RETURN", "2", "title", "rating", "LIMIT", "5", "10"], 2)
+        assert_exact_parity("json_filter_count", ["FT.SEARCH", "p68_json", "@cat:{books|sports}", "FILTER", "price", "100", "300", "LIMIT", "0", "0"], 0, use_rc=True)
+        assert_exact_parity("json_return_alias", ["FT.SEARCH", "p68_json", "*", "SORTBY", "price", "DESC", "RETURN", "4", "title", "AS", "heading", "price", "LIMIT", "10", "10"], 1)
+        q_idx += 4
+
+        # (25-32) Vector KNN (FLAT, HNSW FP32, SQ8, BQ+Rerank, 768d HNSW, Filtered HNSW, KNN LIMIT 0 0, VECTOR_RANGE)
+        qv42 = saved_v128[42]
+        qv777 = saved_v128[777]
+        qv768 = saved_v768[17]
+
+        assert_exact_parity("knn_flat_128d", ["FT.SEARCH", "p68_hash", "*=>[KNN 10 @v_flat $qv AS dist]", "PARAMS", "2", "qv", qv42, "RETURN", "2", "title", "price", "DIALECT", "2"], 0)
+        assert_exact_parity("knn_flat_limit_slice", ["FT.SEARCH", "p68_hash", "*=>[KNN 15 @v_flat $qv]", "PARAMS", "2", "qv", qv777, "NOCONTENT", "LIMIT", "3", "7", "DIALECT", "2"], 1)
+        assert_exact_parity("knn_flat_limit_0_0", ["FT.SEARCH", "p68_hash", "*=>[KNN 12 @v_flat $qv]", "PARAMS", "2", "qv", qv42, "LIMIT", "0", "0", "DIALECT", "2"], 2)
+        assert_exact_parity("knn_hnsw_fp32_128d", ["FT.SEARCH", "p68_hash", "*=>[KNN 5 @v_hnsw $qv EF_RUNTIME 128]", "PARAMS", "2", "qv", qv42, "RETURN", "1", "sku", "DIALECT", "2"], 0, use_rc=True)
+        assert_exact_parity("knn_filtered_hnsw_phase65", ["FT.SEARCH", "p68_hash", "(@cat:{electronics|books|garden})=>[KNN 8 @v_hnsw $qv EF_RUNTIME 128]", "PARAMS", "2", "qv", qv42, "RETURN", "2", "cat", "sku", "DIALECT", "2"], 1)
+        assert_exact_parity("knn_hnsw_768d", ["FT.SEARCH", "p68_v768", "*=>[KNN 5 @emb $qv EF_RUNTIME 64]", "PARAMS", "2", "qv", qv768, "RETURN", "1", "cat", "DIALECT", "2"], 2)
+
+        # SQ8 and BQ+Rerank HNSW KNN: verify exact #1 match (distance ~0 to self) & valid top-5 across shards
+        for vfield, extra in (("v_sq8", "EF_RUNTIME 128"), ("v_bq", "EF_RUNTIME 128 OVERSAMPLE 8")):
+            res_c = nodes_raw[0].execute_command(
+                "FT.SEARCH", "p68_hash", f"*=>[KNN 5 @{vfield} $qv {extra}]",
+                "PARAMS", "2", "qv", qv42, "NOCONTENT", "DIALECT", "2",
+            )
+            assert res_c[0] == 5 and res_c[1] == b"p68h:0042", f"Unexpected {vfield} KNN: {res_c}"
+
+        # VECTOR_RANGE with $YIELD_DISTANCE_AS
+        assert_exact_parity(
+            "vector_range_yield",
+            ["FT.SEARCH", "p68_hash", "@v_flat:[VECTOR_RANGE 0.05 $qv]=>{$YIELD_DISTANCE_AS: vdist}",
+             "PARAMS", "2", "qv", qv42, "SORTBY", "sku", "ASC", "RETURN", "1", "sku", "DIALECT", "2"],
+            0,
+        )
+        q_idx += 9
+
+        # 4. Verify CLUSTER_MAX_SCATTER_LIMIT protection
+        assert nodes[0].execute_command("FT.CONFIG", "SET", "CLUSTER_MAX_SCATTER_LIMIT", "50") == "OK"
+        try:
+            nodes[0].execute_command("FT.SEARCH", "p68_hash", "*", "LIMIT", "40", "20")
+            raise AssertionError("Expected CLUSTER_MAX_SCATTER_LIMIT rejection")
+        except ResponseError as e:
+            assert "CLUSTER_MAX_SCATTER_LIMIT" in str(e)
+        finally:
+            nodes[0].execute_command("FT.CONFIG", "SET", "CLUSTER_MAX_SCATTER_LIMIT", "10000")
+
+        # Cleanup Phase 68 indices
+        for idx_name in ("p68_hash", "p68_json", "p68_v768"):
+            assert nodes[0].execute_command("FT.DROPINDEX", idx_name) == "OK"
+
+        print(
+            f"  PASS: gemini-search Phase 68 golden parity ({q_idx} queries, 3,000 Hash+JSON + 128d/768d "
+            f"FLAT/HNSW/SQ8/BQ/Filtered-HNSW/VECTOR_RANGE, 100% match vs standalone)"
+        )
+    finally:
+        for nr in nodes_raw:
+            nr.close()
+        rc_raw.close()
+        sa_raw.close()
+        sa.close()
+        sa_proc.terminate()
+        try:
+            sa_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            sa_proc.kill()
 
 
 def main() -> int:
@@ -616,6 +904,7 @@ def main() -> int:
         if os.path.exists(search_so):
             test_search_cluster_phase66(nodes, ports)
             test_search_cluster_phase67(rc, nodes, procs, ports, modules, workdir)
+            test_search_cluster_phase68_golden_parity(rc, nodes, ports, modules, workdir)
         print("\nAll Redis 7 Cluster integration tests PASSED!")
         return 0
     finally:

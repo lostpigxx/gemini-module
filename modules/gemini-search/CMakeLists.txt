@@ -25,6 +25,7 @@ set(SEARCH_SOURCES
   src/hybrid_fusion.cc
   src/search_executor.cc
   src/cluster_codec.cc
+  src/cluster_merger.cc
   src/cluster_rpc.cc
   src/cluster_topology.cc
   src/cluster_coordinator.cc
@@ -364,6 +365,19 @@ if(GTest_FOUND)
   target_compile_definitions(cluster_codec_test PRIVATE GEMINI_SEARCH_TESTING)
   target_compile_options(cluster_codec_test PRIVATE -Wall -Wextra -Wpedantic)
 
+  add_executable(cluster_merger_test EXCLUDE_FROM_ALL
+    tests/cluster_merger_test.cc
+    src/cluster_merger.cc
+  )
+  target_include_directories(cluster_merger_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(cluster_merger_test PRIVATE
+    GTest::gtest_main
+  )
+  target_compile_definitions(cluster_merger_test PRIVATE GEMINI_SEARCH_TESTING)
+  target_compile_options(cluster_merger_test PRIVATE -Wall -Wextra -Wpedantic)
+
   add_executable(cluster_rpc_test EXCLUDE_FROM_ALL
     tests/cluster_rpc_test.cc
     src/cluster_rpc.cc
@@ -396,9 +410,10 @@ if(GTest_FOUND)
     COMMAND hybrid_search_test --gtest_color=yes
     COMMAND search_executor_test --gtest_color=yes
     COMMAND cluster_codec_test --gtest_color=yes
+    COMMAND cluster_merger_test --gtest_color=yes
     COMMAND cluster_rpc_test --gtest_color=yes
     COMMAND search_rdb_test --gtest_color=yes
     COMMAND search_asan_test --gtest_color=yes
-    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test phonetic_test geoshape_index_test suggest_dict_test expr_engine_test query_parser_test hybrid_search_test search_executor_test cluster_codec_test cluster_rpc_test search_rdb_test search_asan_test
+    DEPENDS index_spec_test document_store_test tag_index_test text_index_test numeric_index_test vector_index_test hnsw_index_test geo_index_test phonetic_test geoshape_index_test suggest_dict_test expr_engine_test query_parser_test hybrid_search_test search_executor_test cluster_codec_test cluster_merger_test cluster_rpc_test search_rdb_test search_asan_test
   )
 endif()

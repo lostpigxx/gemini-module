@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cluster_codec.h"
 #include "search_commands.h"
 #include "search_executor.h"
 
@@ -24,6 +25,7 @@ constexpr size_t kMaxCursorsPerIndex = 128;
 // Global state accessors (defined in search_state.cc)
 std::unordered_map<std::string, std::shared_ptr<IndexEntry>>& GetIndices();
 std::shared_mutex& GetIndicesMutex();
+std::shared_mutex& GetTermDictsMutex();
 SearchExecutor& GetSearchExecutor();
 std::unordered_map<uint64_t, AggCursor>& GetCursors();
 uint64_t NextCursorId();
@@ -129,6 +131,12 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
 int FtExplainCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
 int FtExplainCliCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
 int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
+
+// Lock-only shard search & doc fetch helpers (no RedisModuleCtx needed; safe on SearchExecutor)
+gemini_search::RpcSearchPhase1Response ExecuteLocalSearchPhase1(
+    const gemini_search::RpcSearchPhase1Request& req);
+gemini_search::RpcFetchDocsResponse ExecuteLocalFetchDocs(
+    const gemini_search::RpcFetchDocsRequest& req);
 
 // Aggregation & cursor commands (search_agg_cmds.cc)
 int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);

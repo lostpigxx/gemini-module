@@ -498,3 +498,134 @@ TEST(ClusterCodecTest, DdlAndSchemaSyncPayloadsRoundTrip) {
     EXPECT_FALSE(DecodeSchemaSyncResponse(std::string_view(sync_resp_buf.data(), cut), tmp));
   }
 }
+
+TEST(ClusterCodecTest, SearchPhase1AndFetchDocsRoundTripAndFuzz) {
+  RpcSearchPhase1Request p1_req;
+  p1_req.index_name = "idx_prod";
+  p1_req.query_str = "(@cat:{db})=>[KNN 10 @vec $qv EF_RUNTIME 64]";
+  p1_req.params = {{"qv", std::string("\x00\x00\x80\x3f\x00\x00\x00\x00", 8)}};
+  p1_req.remaining_timeout_ms = 2500;
+  p1_req.limit_k = 30;
+  p1_req.count_only = false;
+  p1_req.withscores = true;
+  p1_req.verbatim = false;
+  p1_req.nostopwords = true;
+  p1_req.inorder = true;
+  p1_req.slop = 2;
+  p1_req.dialect = 2;
+  p1_req.scorer = 1;
+  p1_req.has_language = true;
+  p1_req.language = "english";
+  p1_req.infields = {"title", "body"};
+  p1_req.has_inkeys = true;
+  p1_req.inkeys = {"doc:1", "doc:2"};
+  p1_req.has_sortby = true;
+  p1_req.sortby_field = "price";
+  p1_req.sortby_desc = true;
+  p1_req.numeric_filters = {{"price", -std::numeric_limits<double>::infinity(), 100.0, false, true}};
+  p1_req.has_geofilter = true;
+  p1_req.geofilter_field = "loc";
+  p1_req.geofilter_lon = -122.4194;
+  p1_req.geofilter_lat = 37.7749;
+  p1_req.geofilter_radius = 10.5;
+  p1_req.geofilter_unit = 1;
+
+  std::string p1_req_buf;
+  EncodeSearchPhase1Request(p1_req, p1_req_buf);
+  RpcSearchPhase1Request p1_req_out;
+  ASSERT_TRUE(DecodeSearchPhase1Request(p1_req_buf, p1_req_out));
+  EXPECT_EQ(p1_req_out.index_name, p1_req.index_name);
+  EXPECT_EQ(p1_req_out.query_str, p1_req.query_str);
+  EXPECT_EQ(p1_req_out.params, p1_req.params);
+  EXPECT_EQ(p1_req_out.limit_k, 30u);
+  EXPECT_TRUE(p1_req_out.withscores);
+  EXPECT_TRUE(p1_req_out.has_sortby);
+  EXPECT_EQ(p1_req_out.sortby_field, "price");
+  ASSERT_EQ(p1_req_out.numeric_filters.size(), 1u);
+  EXPECT_TRUE(std::isinf(p1_req_out.numeric_filters[0].min));
+  EXPECT_TRUE(p1_req_out.has_geofilter);
+  EXPECT_DOUBLE_EQ(p1_req_out.geofilter_radius, 10.5);
+
+  RpcSearchPhase1Response p1_resp;
+  p1_resp.ok = true;
+  p1_resp.total_hits = 1234;
+  p1_resp.sort_mode = 2;
+  p1_resp.is_knn = true;
+  p1_resp.score_alias = "dist";
+  p1_resp.items = {
+      {"doc:1", 0.125, 10.0, "10", true},
+      {"doc:2", 0.25, 20.0, "20", false},
+  };
+  std::string p1_resp_buf;
+  EncodeSearchPhase1Response(p1_resp, p1_resp_buf);
+  RpcSearchPhase1Response p1_resp_out;
+  ASSERT_TRUE(DecodeSearchPhase1Response(p1_resp_buf, p1_resp_out));
+  EXPECT_TRUE(p1_resp_out.ok);
+  EXPECT_EQ(p1_resp_out.total_hits, 1234u);
+  EXPECT_EQ(p1_resp_out.score_alias, "dist");
+  ASSERT_EQ(p1_resp_out.items.size(), 2u);
+  EXPECT_EQ(p1_resp_out.items[0].doc_id, "doc:1");
+  EXPECT_TRUE(p1_resp_out.items[0].has_yield_dist);
+
+  RpcFetchDocsRequest f_req;
+  f_req.index_name = "idx_prod";
+  f_req.doc_ids = {"doc:1", "doc:2"};
+  f_req.nocontent = false;
+  f_req.withpayloads = true;
+  f_req.has_return = true;
+  f_req.return_fields = {"title", "price"};
+  f_req.return_aliases = {{"title", "t"}};
+  f_req.has_highlight = true;
+  f_req.highlight_fields = {"title"};
+  f_req.highlight_open = "<em>";
+  f_req.highlight_close = "</em>";
+  f_req.has_summarize = true;
+  f_req.summarize_fields = {"body"};
+  f_req.summarize_frags = 2;
+  f_req.summarize_len = 15;
+  f_req.summarize_separator = " | ";
+  f_req.query_terms = {"redis", "search"};
+
+  std::string f_req_buf;
+  EncodeFetchDocsRequest(f_req, f_req_buf);
+  RpcFetchDocsRequest f_req_out;
+  ASSERT_TRUE(DecodeFetchDocsRequest(f_req_buf, f_req_out));
+  EXPECT_EQ(f_req_out.doc_ids, f_req.doc_ids);
+  EXPECT_EQ(f_req_out.return_aliases, f_req.return_aliases);
+  EXPECT_EQ(f_req_out.highlight_open, "<em>");
+  EXPECT_EQ(f_req_out.summarize_separator, " | ");
+
+  RpcFetchDocsResponse f_resp;
+  f_resp.ok = true;
+  f_resp.docs = {
+      {"doc:1", true, true, std::string("p\0ay", 4), {{"t", "<em>redis</em>"}, {"price", "10"}}},
+      {"doc:2", false, false, "", {}},
+  };
+  std::string f_resp_buf;
+  EncodeFetchDocsResponse(f_resp, f_resp_buf);
+  RpcFetchDocsResponse f_resp_out;
+  ASSERT_TRUE(DecodeFetchDocsResponse(f_resp_buf, f_resp_out));
+  EXPECT_TRUE(f_resp_out.ok);
+  ASSERT_EQ(f_resp_out.docs.size(), 2u);
+  EXPECT_TRUE(f_resp_out.docs[0].found);
+  EXPECT_EQ(f_resp_out.docs[0].payload, std::string("p\0ay", 4));
+  EXPECT_FALSE(f_resp_out.docs[1].found);
+
+  // Truncation fuzzing on all 4 Search/Fetch codecs
+  for (size_t cut = 0; cut < p1_req_buf.size(); cut++) {
+    RpcSearchPhase1Request tmp;
+    EXPECT_FALSE(DecodeSearchPhase1Request(std::string_view(p1_req_buf.data(), cut), tmp));
+  }
+  for (size_t cut = 0; cut < p1_resp_buf.size(); cut++) {
+    RpcSearchPhase1Response tmp;
+    EXPECT_FALSE(DecodeSearchPhase1Response(std::string_view(p1_resp_buf.data(), cut), tmp));
+  }
+  for (size_t cut = 0; cut < f_req_buf.size(); cut++) {
+    RpcFetchDocsRequest tmp;
+    EXPECT_FALSE(DecodeFetchDocsRequest(std::string_view(f_req_buf.data(), cut), tmp));
+  }
+  for (size_t cut = 0; cut < f_resp_buf.size(); cut++) {
+    RpcFetchDocsResponse tmp;
+    EXPECT_FALSE(DecodeFetchDocsResponse(std::string_view(f_resp_buf.data(), cut), tmp));
+  }
+}

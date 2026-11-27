@@ -127,6 +127,7 @@ bool ApplyLocalDictAdd(const std::vector<std::string>& args, int64_t& out_added,
   }
   const std::string& dict_name = args[0];
   std::vector<std::string> terms(args.begin() + 1, args.end());
+  std::unique_lock<std::shared_mutex> lk(GetTermDictsMutex());
   out_added = static_cast<int64_t>(GetTermDicts()[dict_name].Add(terms));
   return true;
 }
@@ -138,6 +139,7 @@ bool ApplyLocalDictDel(const std::vector<std::string>& args, int64_t& out_remove
     return false;
   }
   const std::string& dict_name = args[0];
+  std::unique_lock<std::shared_mutex> lk(GetTermDictsMutex());
   auto it = GetTermDicts().find(dict_name);
   if (it == GetTermDicts().end()) {
     out_removed = 0;
