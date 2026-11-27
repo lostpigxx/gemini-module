@@ -56,6 +56,7 @@ Query & indexing features: boolean combinations (`DIALECT 1/2`), prefix / suffix
 Design doc: [modules/gemini-search/DESIGN.md](modules/gemini-search/DESIGN.md). Roadmaps & plans:
 [Project Roadmap](doc/roadmap.md),
 [v1.1 Plan](doc/v1.1-development-plan.md) (P62–65),
+[Cluster Scatter-Gather RFC](doc/gemini-search/cluster-scatter-gather-design.md) (P66–72),
 [v1](doc/gemini-search/development-plan.md) (P0–12),
 [v2](doc/gemini-search/development-plan-v2.md) (P13–26),
 [v3](doc/gemini-search/development-plan-v3.md) (P27–31),

@@ -180,6 +180,6 @@ modules/gemini-search/
 
 详见全仓规划 [doc/roadmap.md](../../doc/roadmap.md)：
 
-1. **分布式集群查询（Cluster Scatter-Gather）**：在 Redis Cluster 多分片架构下支持跨节点分发与归并排序（`FT.SEARCH` / `FT.HYBRID` / `FT.AGGREGATE`）。
+1. **分布式集群查询（Cluster Scatter-Gather，Phases 66–72）**：在 Redis Cluster 多分片架构下支持跨节点分发与归并排序（`FT.SEARCH` / `FT.HYBRID` / `FT.AGGREGATE`），完整架构设计报告与 Phase 规划见 [cluster-scatter-gather-design.md](../../doc/gemini-search/cluster-scatter-gather-design.md)。
 2. **Product Quantization (PQ，乘积量化)**：面向千万级高维向量（768d/1536d）提供 64× 压缩（子空间 k-means 码本 + ADC 查表距离），并按需评估 mmap / 磁盘混合存储。
 3. **多语言分词与音似增强**：统计/HMM 中文分词、更多语种词干与非英文音似编码。
