@@ -5,12 +5,12 @@
 
 ---
 
-## 一、v1.1 — 生产可用性与工程化闭环（✅ 已完成开发，待发版）
+## 一、v1.1 — 生产可用性与工程化闭环（✅ 已发布 `v1.1.0`，2026-11-28）
 
-> 详细实施方案见 [v1.1-development-plan.md](./v1.1-development-plan.md)。以下条目均已合入 `main` 并通过本地 macOS（Normal + ASan）及 Docker Redis 7.2.11 全量 21 项并行 CI 验证。
+> 详细实施方案见 [v1.1-development-plan.md](./v1.1-development-plan.md)。以下条目（含提前交付的 Phases 66–72 Cluster Scatter-Gather 与深度安全加固）均已合入 `main` 并通过本地 macOS（Redis 7.2.11）及 Docker Redis 7.2.11 全量 22 项并行 CI 验证。
 
 1. **✅ 工程化、CI 并行化与文档收口**
-   - 清理 `.gitignore`（忽略 `build_*` 构建目录），新增 `.dockerignore` 并将 `ci/run_tests.sh` 改造为 21 任务全并行（全量 CI 从 ~6.5 min 降至 ~45s）。
+   - 清理 `.gitignore`（忽略 `build_*` 构建目录），新增 `.dockerignore` 并将 `ci/run_tests.sh` 改造为 22 任务全并行（全量 CI 从 ~6.5 min 降至 ~60s）。
    - 新增统一三模块 Benchmark 回归脚本 `ci/run_benchmarks.sh`（`bloom_bench` / `json_bench` / `search_bench`）。
    - 补齐 [modules/gemini-json/DESIGN.md](../modules/gemini-json/DESIGN.md) 设计文档。
 2. **✅ `gemini-search` v1.1 核心能力升级（Phases 62–65）**
