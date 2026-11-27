@@ -251,6 +251,23 @@ int ClusterManager::Init(RedisModuleCtx* ctx, RedisModuleString** argv, int argc
         DispatchRpcRequest(req, peer_ip, std::move(send_resp));
       });
 
+  // Phase 71: Bind peer IP whitelist validator (enforced once topology discovers peer IPs)
+  rpc_server_.SetPeerValidator([this](const std::string& peer_ip) -> bool {
+    std::lock_guard<std::mutex> lk(allowed_ips_mu_);
+    if (!peer_ip_whitelist_ready_) return true;
+    std::string norm = peer_ip;
+    if (norm.size() > 7 && norm.compare(0, 7, "::ffff:") == 0) {
+      norm.erase(0, 7);
+    }
+    return allowed_peer_ips_.count(norm) > 0 || allowed_peer_ips_.count(peer_ip) > 0;
+  });
+
+  if (!auth_token_.empty()) {
+    rpc_server_.SetAuthToken(auth_token_);
+    rpc_client_.SetAuthToken(auth_token_);
+    RedisModule_Log(ctx, "notice", "GeminiSearch cluster: RPC auth token enabled");
+  }
+
   if (!rpc_server_.Start(bind_ip, target_rpc_port, /*allow_ephemeral_fallback=*/true)) {
     RedisModule_Log(ctx, "warning",
                     "GeminiSearch cluster: failed to start RPC server on %s:%d",
@@ -560,6 +577,8 @@ void ClusterManager::RefreshTopology(RedisModuleCtx* ctx) {
             }
           }
           if (master_idx >= 0) {
+            topo->has_slot_map = true;
+            topo->masters[static_cast<size_t>(master_idx)].owns_slots = true;
             for (long long s = start_slot; s <= end_slot; s++) {
               topo->slot_to_master[static_cast<size_t>(s)] = master_idx;
             }
@@ -570,9 +589,48 @@ void ClusterManager::RefreshTopology(RedisModuleCtx* ctx) {
     }
   }
 
+  // Mirror owns_slots into topo->nodes, build peer IP whitelist, and collect unhealthy peers
+  std::unordered_set<std::string> slot_owner_ids;
+  size_t slot_owning_masters = 0;
+  for (const auto& m : topo->masters) {
+    if (m.owns_slots) {
+      slot_owner_ids.insert(m.node_id);
+      slot_owning_masters++;
+    }
+  }
+
+  std::unordered_set<std::string> new_allowed_ips;
+  std::vector<std::string> unhealthy_ids;
+  if (!explicit_bind_ip_.empty() && explicit_bind_ip_ != "0.0.0.0" && explicit_bind_ip_ != "::" &&
+      explicit_bind_ip_ != "*") {
+    new_allowed_ips.insert(explicit_bind_ip_);
+  }
+  for (auto& n : topo->nodes) {
+    if (slot_owner_ids.count(n.node_id) > 0) {
+      n.owns_slots = true;
+    }
+    if (!n.ip.empty()) {
+      new_allowed_ips.insert(n.ip);
+      if (n.ip == "127.0.0.1") new_allowed_ips.insert("::1");
+      if (n.ip == "::1") new_allowed_ips.insert("127.0.0.1");
+    }
+    if (!n.is_myself && !n.is_healthy) {
+      unhealthy_ids.push_back(n.node_id);
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lk(allowed_ips_mu_);
+    if (!new_allowed_ips.empty()) {
+      allowed_peer_ips_ = std::move(new_allowed_ips);
+      peer_ip_whitelist_ready_ = true;
+    }
+  }
+
   uint64_t new_ver = topology_version_.fetch_add(1, std::memory_order_acq_rel) + 1;
   topo->version = new_ver;
-  master_count_.store(topo->masters.size(), std::memory_order_release);
+  size_t effective_masters =
+      (topo->has_slot_map && slot_owning_masters > 0) ? slot_owning_masters : topo->masters.size();
+  master_count_.store(effective_masters, std::memory_order_release);
 
   {
     std::lock_guard<std::mutex> lk(topo_mu_);
@@ -589,6 +647,10 @@ void ClusterManager::RefreshTopology(RedisModuleCtx* ctx) {
 
   if (rpc_client_.IsRunning()) {
     rpc_client_.PrunePeers(known_ids);
+    // Fast circuit break: immediately drop sockets & fail hung RPCs for FAIL/PFAIL nodes
+    for (const auto& uid : unhealthy_ids) {
+      rpc_client_.DisconnectPeer(uid);
+    }
   }
 }
 
@@ -764,7 +826,7 @@ int HandleDebugClusterCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int
   auto srv_stats = mgr.RpcServer().GetStats();
   auto cli_stats = mgr.RpcClient().GetStats();
 
-  RedisModule_ReplyWithArray(ctx, 36);
+  RedisModule_ReplyWithArray(ctx, 46);
 
   RedisModule_ReplyWithSimpleString(ctx, "mode");
   RedisModule_ReplyWithSimpleString(ctx, mgr.IsClusterMode() ? "cluster" : "standalone");
@@ -817,13 +879,28 @@ int HandleDebugClusterCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int
   RedisModule_ReplyWithSimpleString(ctx, "rpc_client_requests_succeeded");
   RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(cli_stats.requests_succeeded));
 
+  RedisModule_ReplyWithSimpleString(ctx, "cluster_partial_results_total");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(mgr.PartialResultsTotal()));
+
+  RedisModule_ReplyWithSimpleString(ctx, "rpc_auth_enabled");
+  RedisModule_ReplyWithLongLong(ctx, mgr.IsAuthEnabled() ? 1 : 0);
+
+  RedisModule_ReplyWithSimpleString(ctx, "rpc_server_auth_rejected");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(srv_stats.auth_rejected));
+
+  RedisModule_ReplyWithSimpleString(ctx, "rpc_server_peer_rejected");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(srv_stats.peer_rejected));
+
+  RedisModule_ReplyWithSimpleString(ctx, "rpc_server_inflight_rejected");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(srv_stats.inflight_rejected));
+
   RedisModule_ReplyWithSimpleString(ctx, "nodes");
   if (!topo) {
     RedisModule_ReplyWithArray(ctx, 0);
   } else {
     RedisModule_ReplyWithArray(ctx, static_cast<long>(topo->nodes.size()));
     for (const auto& n : topo->nodes) {
-      RedisModule_ReplyWithArray(ctx, 18);
+      RedisModule_ReplyWithArray(ctx, 20);
       RedisModule_ReplyWithSimpleString(ctx, "node_id");
       RedisModule_ReplyWithStringBuffer(ctx, n.node_id.data(), n.node_id.size());
       RedisModule_ReplyWithSimpleString(ctx, "ip");
@@ -842,6 +919,8 @@ int HandleDebugClusterCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int
       RedisModule_ReplyWithLongLong(ctx, n.is_myself ? 1 : 0);
       RedisModule_ReplyWithSimpleString(ctx, "schema_epoch");
       RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(n.schema_epoch));
+      RedisModule_ReplyWithSimpleString(ctx, "owns_slots");
+      RedisModule_ReplyWithLongLong(ctx, n.owns_slots ? 1 : 0);
     }
   }
   return REDISMODULE_OK;

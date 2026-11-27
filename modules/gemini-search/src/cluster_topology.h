@@ -24,6 +24,7 @@ extern "C" {
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace gemini_search {
@@ -43,6 +44,7 @@ struct ShardNodeInfo {
   bool is_master = false;
   bool is_healthy = false;  // !(flags & (REDISMODULE_NODE_FAIL | REDISMODULE_NODE_PFAIL))
   bool rpc_port_discovered = false;
+  bool owns_slots = false;  // True if master currently owns >= 1 hash slot in CLUSTER SLOTS
 };
 
 struct ClusterTopology {
@@ -50,6 +52,7 @@ struct ClusterTopology {
   std::string my_node_id;
   int my_redis_port = 0;
   int my_rpc_port = 0;
+  bool has_slot_map = false;           // True if CLUSTER SLOTS returned at least one slot range
   std::vector<ShardNodeInfo> nodes;    // All known cluster nodes sorted by node_id
   std::vector<ShardNodeInfo> masters;  // All master nodes sorted by node_id
   std::array<int16_t, 16384> slot_to_master{};
@@ -128,6 +131,13 @@ class ClusterManager {
   // Periodic tick invoked from cluster discovery timer & maintenance timer (main thread)
   void OnClusterTick(RedisModuleCtx* ctx);
 
+  // Phase 71: Observability metrics & auth status
+  void RecordPartialResult() { partial_results_total_.fetch_add(1, std::memory_order_relaxed); }
+  uint64_t PartialResultsTotal() const {
+    return partial_results_total_.load(std::memory_order_relaxed);
+  }
+  bool IsAuthEnabled() const { return !auth_token_.empty(); }
+
  private:
   ClusterManager() = default;
   ~ClusterManager() { Shutdown(); }
@@ -154,6 +164,7 @@ class ClusterManager {
   std::atomic<int> my_rpc_port_{0};
   std::atomic<uint64_t> schema_epoch_{0};
   std::atomic<uint64_t> topology_version_{0};
+  std::atomic<uint64_t> partial_results_total_{0};
 
   std::mutex detached_ctx_mu_;
   RedisModuleCtx* detached_ctx_ = nullptr;
@@ -162,6 +173,10 @@ class ClusterManager {
   int explicit_rpc_port_ = 0;
   std::string explicit_bind_ip_;
   std::string auth_token_;
+
+  mutable std::mutex allowed_ips_mu_;
+  std::unordered_set<std::string> allowed_peer_ips_;
+  bool peer_ip_whitelist_ready_ = false;
 
   std::string my_node_id_;
   int my_redis_port_ = 0;

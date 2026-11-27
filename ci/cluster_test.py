@@ -24,11 +24,17 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import zlib
 
 import redis
 from redis.cluster import RedisCluster
 from redis.exceptions import ClusterCrossSlotError, MovedError, ResponseError
+
+
+def parse_kv_list(arr: list) -> dict:
+    return {arr[i]: arr[i + 1] for i in range(0, len(arr), 2)}
 
 
 def find_free_ports(count: int) -> list[int]:
@@ -61,7 +67,13 @@ def find_free_ports(count: int) -> list[int]:
     return ports
 
 
-def start_cluster_node(port: int, modules: list[str], node_dir: str) -> subprocess.Popen:
+def start_cluster_node(
+    port: int,
+    modules: list[str],
+    node_dir: str,
+    node_timeout_ms: int = 5000,
+    module_args: dict[str, list[str]] | None = None,
+) -> subprocess.Popen:
     os.makedirs(node_dir, exist_ok=True)
     cmd = [
         "redis-server",
@@ -72,11 +84,13 @@ def start_cluster_node(port: int, modules: list[str], node_dir: str) -> subproce
         "--save", "",
         "--cluster-enabled", "yes",
         "--cluster-config-file", f"nodes-{port}.conf",
-        "--cluster-node-timeout", "5000",
+        "--cluster-node-timeout", str(node_timeout_ms),
         "--loglevel", "warning",
     ]
     for m in modules:
         cmd.extend(["--loadmodule", os.path.abspath(m)])
+        if module_args and m in module_args:
+            cmd.extend(module_args[m])
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     deadline = time.time() + 10.0
     while time.time() < deadline:
@@ -1460,6 +1474,288 @@ def test_search_cluster_phase70(
             sa_proc.kill()
 
 
+def test_search_cluster_phase71(
+    rc: RedisCluster,
+    nodes: list[redis.Redis],
+    ports: list[int],
+    modules: list[str],
+    search_so: str,
+    workdir: str,
+) -> None:
+    """Phase 71: Concurrent 500-slot live MIGRATE zero-duplicate consistency,
+    6-node (3M+3R) SIGKILL Master-Replica failover, ON_TIMEOUT FAIL vs RETURN + partial metric,
+    and CLUSTER_AUTH_TOKEN RPC authentication rejection."""
+    print("[9/9] Testing gemini-search Phase 71 (Live 500-slot MIGRATE, 6-node Failover & RPC Auth)...")
+
+    # ── Part A: Concurrent 500-slot live MIGRATE with continuous FT.SEARCH & FT.HYBRID ──
+    rc_raw = RedisCluster(host="127.0.0.1", port=ports[0], decode_responses=False)
+    nodes_raw = [redis.Redis(host="127.0.0.1", port=p, decode_responses=False) for p in ports]
+    try:
+        assert nodes[0].execute_command(
+            "FT.CREATE", "p71_mig", "ON", "HASH", "PREFIX", "1", "p71m:",
+            "SCHEMA",
+            "cat", "TAG",
+            "price", "NUMERIC", "SORTABLE",
+            "body", "TEXT",
+            "emb", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "8", "DISTANCE_METRIC", "L2",
+        ) == "OK"
+
+        rng = random.Random(717171)
+        qvec = struct.pack("<8f", *[0.25] * 8)
+        for i in range(600):
+            v = [rng.uniform(-1.0, 1.0) for _ in range(8)]
+            rc_raw.hset(f"p71m:{i:04d}", mapping={
+                b"cat": f"c{i % 5}".encode(),
+                b"price": str(10 + i).encode(),
+                b"body": f"alpha item{i} cluster search".encode(),
+                b"emb": struct.pack("<8f", *v),
+            })
+
+        assert nodes[2].execute_command("FT.SEARCH", "p71_mig", "*", "LIMIT", "0", "0") == [600]
+        info_pre = parse_kv_list(nodes[0].execute_command("FT.INFO", "p71_mig"))
+        assert int(info_pre["num_docs"]) == 600
+
+        stop_ev = threading.Event()
+        query_errors: list[str] = []
+        query_count = [0]
+
+        def query_worker() -> None:
+            q_node = redis.Redis(host="127.0.0.1", port=ports[2], decode_responses=True)
+            q_node_raw = redis.Redis(host="127.0.0.1", port=ports[2], decode_responses=False)
+            try:
+                while not stop_ev.is_set():
+                    res = q_node.execute_command(
+                        "FT.SEARCH", "p71_mig", "*", "SORTBY", "price", "ASC",
+                        "NOCONTENT", "LIMIT", "0", "50"
+                    )
+                    ids = res[1:]
+                    if len(ids) != len(set(ids)):
+                        query_errors.append(f"Duplicate doc_ids in FT.SEARCH during MIGRATE: {ids}")
+                        return
+                    hres = q_node_raw.execute_command(
+                        "FT.HYBRID", "p71_mig", "SEARCH", "alpha",
+                        "VSIM", "@emb", "$qv", "KNN", "20",
+                        "COMBINE", "RRF", "PARAMS", "2", "qv", qvec,
+                        "NOCONTENT", "LIMIT", "0", "20", "DIALECT", "2",
+                    )
+                    hids = hres[1:]
+                    if len(hids) != len(set(hids)):
+                        query_errors.append(f"Duplicate doc_ids in FT.HYBRID during MIGRATE: {hids}")
+                        return
+                    query_count[0] += 1
+            except Exception as exc:
+                query_errors.append(f"Concurrent query exception during MIGRATE: {exc}")
+            finally:
+                q_node.close()
+                q_node_raw.close()
+
+        worker = threading.Thread(target=query_worker, daemon=True)
+        worker.start()
+
+        src_id = nodes[0].execute_command("CLUSTER", "MYID")
+        dst_id = nodes[1].execute_command("CLUSTER", "MYID")
+        migrated_keys = 0
+        for slot in range(0, 500):
+            nodes[1].execute_command("CLUSTER", "SETSLOT", slot, "IMPORTING", src_id)
+            nodes[0].execute_command("CLUSTER", "SETSLOT", slot, "MIGRATING", dst_id)
+            while True:
+                keys = nodes[0].execute_command("CLUSTER", "GETKEYSINSLOT", slot, 100)
+                if not keys:
+                    break
+                nodes[0].execute_command("MIGRATE", "127.0.0.1", ports[1], "", 0, 5000, "KEYS", *keys)
+                migrated_keys += len(keys)
+            for n in nodes:
+                n.execute_command("CLUSTER", "SETSLOT", slot, "NODE", dst_id)
+
+        stop_ev.set()
+        worker.join(timeout=10)
+        assert not query_errors, f"Part A MIGRATE errors: {query_errors}"
+        assert query_count[0] >= 5, f"Expected concurrent queries during MIGRATE, got {query_count[0]}"
+        assert migrated_keys > 0, "Expected at least one key migrated in slots 0..499"
+
+        for idx, n in enumerate(nodes):
+            cnt = n.execute_command("FT.SEARCH", "p71_mig", "*", "LIMIT", "0", "0")
+            assert cnt == [600], f"Post-MIGRATE count mismatch on node {idx}: {cnt}"
+        info_post = parse_kv_list(nodes[0].execute_command("FT.INFO", "p71_mig"))
+        assert int(info_post["num_docs"]) == 600, f"Post-MIGRATE FT.INFO mismatch: {info_post}"
+        assert nodes[0].execute_command("FT.DROPINDEX", "p71_mig") == "OK"
+    finally:
+        for nr in nodes_raw:
+            nr.close()
+        rc_raw.close()
+
+    # ── Part B: 6-Node (3M + 3R) Failover + ON_TIMEOUT FAIL/RETURN + CLUSTER_AUTH_TOKEN ──
+    ha_ports = find_free_ports(6)
+    ha_dir = os.path.join(workdir, "ha_6node")
+    ha_procs: list[subprocess.Popen] = []
+    ha_nodes: list[redis.Redis] = []
+    ha_rc = None
+    try:
+        mod_args = {search_so: ["CLUSTER_AUTH_TOKEN", "p71secret"]}
+        for i, p in enumerate(ha_ports):
+            ha_procs.append(
+                start_cluster_node(
+                    p, modules, os.path.join(ha_dir, f"n{i}"),
+                    node_timeout_ms=2000, module_args=mod_args,
+                )
+            )
+        ha_nodes = [redis.Redis(host="127.0.0.1", port=p, decode_responses=True) for p in ha_ports]
+
+        # Assign slots to 3 masters (0, 1, 2)
+        ranges = [(0, 5460), (5461, 10922), (10923, 16383)]
+        for c, (lo, hi) in zip(ha_nodes[:3], ranges):
+            c.execute_command("CLUSTER", "ADDSLOTS", *range(lo, hi + 1))
+
+        # Meet all 6 nodes
+        for p in ha_ports[1:]:
+            ha_nodes[0].execute_command("CLUSTER", "MEET", "127.0.0.1", p)
+
+        deadline = time.time() + 15.0
+        while time.time() < deadline:
+            if all("cluster_known_nodes:6" in c.execute_command("CLUSTER", "INFO") for c in ha_nodes):
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("6-node cluster did not discover all 6 nodes")
+
+        # Attach replicas (3->0, 4->1, 5->2)
+        master_ids = [ha_nodes[i].execute_command("CLUSTER", "MYID") for i in range(3)]
+        for i in range(3):
+            ha_nodes[3 + i].execute_command("CLUSTER", "REPLICATE", master_ids[i])
+
+        # Wait for cluster_state:ok, all 3 replicas linked, and all RPC ports discovered
+        deadline = time.time() + 20.0
+        while time.time() < deadline:
+            ok_state = all("cluster_state:ok" in c.execute_command("CLUSTER", "INFO") for c in ha_nodes[:3])
+            repl_up = all(
+                ha_nodes[3 + i].info("replication").get("master_link_status") == "up"
+                for i in range(3)
+            )
+            dbg0 = parse_kv_list(ha_nodes[0].execute_command("FT._DEBUG", "CLUSTER"))
+            peers_ready = (
+                len(dbg0.get("nodes", [])) == 6
+                and all(parse_kv_list(n)["discovered"] == 1 for n in dbg0["nodes"])
+            )
+            if ok_state and repl_up and peers_ready:
+                break
+            time.sleep(0.2)
+        else:
+            raise RuntimeError("6-node cluster did not converge in time")
+
+        # 1. Verify CLUSTER_AUTH_TOKEN active, authenticated PING passes, unauth raw TCP rejected
+        dbg0 = parse_kv_list(ha_nodes[0].execute_command("FT._DEBUG", "CLUSTER"))
+        assert dbg0["rpc_auth_enabled"] == 1, f"Expected rpc_auth_enabled=1: {dbg0}"
+        ping_res = ha_nodes[0].execute_command("FT._DEBUG", "CLUSTER", "PING")
+        assert len(ping_res) == 5
+        assert all(parse_kv_list(p)["status"] == "OK" for p in ping_res), f"Auth PING failed: {ping_res}"
+
+        # Send a raw unauthenticated kRpcPing frame to Master 0's RPC port -> must be rejected!
+        rpc_port0 = int(dbg0["my_rpc_port"])
+        # Header layout (30B): magic(4) ver(2) op(2) flags(2) req_id(8) payload_len(4) hcrc(4) pcrc(4)
+        hdr22 = b"GMSC" + struct.pack("<HHHQI", 1, 1, 0, 999, 0)
+        hcrc = zlib.crc32(hdr22) & 0xFFFFFFFF
+        raw_frame = hdr22 + struct.pack("<II", hcrc, 0)
+        raw_sock = socket.create_connection(("127.0.0.1", rpc_port0), timeout=3.0)
+        try:
+            raw_sock.sendall(raw_frame)
+            resp_bytes = raw_sock.recv(256)
+            assert len(resp_bytes) >= 0  # Either error frame followed by close or immediate EOF
+        finally:
+            raw_sock.close()
+        time.sleep(0.05)
+        dbg0_after_auth = parse_kv_list(ha_nodes[0].execute_command("FT._DEBUG", "CLUSTER"))
+        assert int(dbg0_after_auth["rpc_server_auth_rejected"]) >= 1, (
+            f"Expected rpc_server_auth_rejected >= 1, got: {dbg0_after_auth}"
+        )
+
+        # 2. Create index & insert 300 docs across all 3 masters, then WAIT for replica sync
+        assert ha_nodes[0].execute_command(
+            "FT.CREATE", "p71_ha", "ON", "HASH", "PREFIX", "1", "p71ha:",
+            "SCHEMA", "cat", "TAG", "price", "NUMERIC", "SORTABLE",
+        ) == "OK"
+
+        ha_rc = RedisCluster(host="127.0.0.1", port=ha_ports[0], decode_responses=True)
+        for i in range(300):
+            ha_rc.hset(f"p71ha:{i:03d}", mapping={"cat": f"g{i % 6}", "price": str(100 + i)})
+        for m in ha_nodes[:3]:
+            assert m.execute_command("WAIT", 1, 3000) >= 1
+
+        assert ha_nodes[0].execute_command("FT.SEARCH", "p71_ha", "*", "LIMIT", "0", "0") == [300]
+        assert int(parse_kv_list(ha_nodes[0].execute_command("FT.INFO", "p71_ha"))["num_docs"]) == 300
+
+        # 3. SIGKILL Master 1!
+        ha_procs[1].kill()
+        ha_procs[1].wait(timeout=5)
+
+        # 4. ON_TIMEOUT FAIL (default) MUST raise an error (never silent partial result)
+        try:
+            ha_nodes[0].execute_command("FT.SEARCH", "p71_ha", "*", "LIMIT", "0", "0")
+            raise AssertionError("Expected FT.SEARCH to fail under ON_TIMEOUT FAIL when Master 1 is killed")
+        except ResponseError:
+            pass
+
+        # 5. Switch Master 0 to ON_TIMEOUT RETURN -> returns partial results + increments metric
+        assert ha_nodes[0].execute_command("FT.CONFIG", "SET", "ON_TIMEOUT", "RETURN") == "OK"
+        partial_res = ha_nodes[0].execute_command("FT.SEARCH", "p71_ha", "*", "LIMIT", "0", "0")
+        assert 100 <= partial_res[0] < 300, f"Expected partial count in [100, 300), got {partial_res}"
+        dbg_partial = parse_kv_list(ha_nodes[0].execute_command("FT._DEBUG", "CLUSTER"))
+        assert int(dbg_partial["cluster_partial_results_total"]) >= 1, (
+            f"Expected cluster_partial_results_total >= 1: {dbg_partial}"
+        )
+
+        # 6. Wait for Replica 1 (node 4) to automatically promote to new Master
+        killed_master_id = master_ids[1]
+        promoted_replica_id = ha_nodes[4].execute_command("CLUSTER", "MYID")
+        deadline = time.time() + 20.0
+        while time.time() < deadline:
+            dbg_now = parse_kv_list(ha_nodes[0].execute_command("FT._DEBUG", "CLUSTER"))
+            active_masters = [
+                parse_kv_list(n) for n in dbg_now.get("nodes", [])
+                if parse_kv_list(n)["role"] == "master"
+                and parse_kv_list(n)["healthy"] == 1
+                and parse_kv_list(n)["owns_slots"] == 1
+                and parse_kv_list(n)["discovered"] == 1
+            ]
+            active_ids = {m["node_id"] for m in active_masters}
+            if (
+                len(active_masters) == 3
+                and promoted_replica_id in active_ids
+                and killed_master_id not in active_ids
+            ):
+                break
+            time.sleep(0.2)
+        else:
+            raise RuntimeError("Replica 1 did not promote to healthy slot-owning Master in time")
+
+        # 7. Switch back to ON_TIMEOUT FAIL -> 100% full recovery (300/300 docs!)
+        assert ha_nodes[0].execute_command("FT.CONFIG", "SET", "ON_TIMEOUT", "FAIL") == "OK"
+        recovered = ha_nodes[0].execute_command("FT.SEARCH", "p71_ha", "*", "LIMIT", "0", "0")
+        assert recovered == [300], f"Expected full 300-doc recovery after failover, got {recovered}"
+        info_rec = parse_kv_list(ha_nodes[0].execute_command("FT.INFO", "p71_ha"))
+        assert int(info_rec["num_docs"]) == 300, f"Post-failover FT.INFO mismatch: {info_rec}"
+        top10 = ha_nodes[0].execute_command("FT.SEARCH", "p71_ha", "*", "SORTBY", "price", "ASC", "LIMIT", "0", "10")
+        assert top10[0] == 10 and len(top10) == 1 + 10 * 2 and top10[1] == "p71ha:000", (
+            f"Unexpected post-failover SORTBY top10: {top10[:5]}"
+        )
+
+        print(
+            f"  PASS: gemini-search Phase 71 (500-slot live MIGRATE zero-dup across {query_count[0]} queries, "
+            "6-node 3M+3R SIGKILL failover 100% recovery, ON_TIMEOUT FAIL/RETURN, CLUSTER_AUTH_TOKEN)"
+        )
+    finally:
+        if ha_rc:
+            ha_rc.close()
+        for c in ha_nodes:
+            c.close()
+        for p in ha_procs:
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+
+
 def main() -> int:
     bloom_so = sys.argv[1] if len(sys.argv) > 1 else "./build/redis_bloom.so"
     json_so = sys.argv[2] if len(sys.argv) > 2 else "./build/redis_json.so"
@@ -1494,6 +1790,7 @@ def main() -> int:
             test_search_cluster_phase68_golden_parity(rc, nodes, ports, modules, workdir)
             test_search_cluster_phase69(rc, nodes, ports, modules, workdir)
             test_search_cluster_phase70(rc, nodes, ports, modules, workdir)
+            test_search_cluster_phase71(rc, nodes, ports, modules, search_so, workdir)
         print("\nAll Redis 7 Cluster integration tests PASSED!")
         return 0
     finally:

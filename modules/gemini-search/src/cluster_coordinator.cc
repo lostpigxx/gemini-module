@@ -684,10 +684,14 @@ void OnPhase2FetchDone(const std::shared_ptr<ClusterSearchContext>& sctx,
     if (sctx->finished || sctx->cancelled) return;
 
     if (!ok || !resp.ok) {
-      if (!sctx->on_timeout_return && sctx->error_msg.empty()) {
-        std::string reason = !ok ? err : resp.error_msg;
-        sctx->error_msg = "ERR cluster shard fetch failed (" +
-                          (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+      if (!sctx->on_timeout_return) {
+        if (sctx->error_msg.empty()) {
+          std::string reason = !ok ? err : resp.error_msg;
+          sctx->error_msg = "ERR cluster shard fetch failed (" +
+                            (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+        }
+      } else {
+        ClusterManager::Instance().RecordPartialResult();
       }
     } else {
       size_t n = std::min(winner_indices.size(), resp.docs.size());
@@ -725,10 +729,14 @@ void OnPhase1ShardDone(const std::shared_ptr<ClusterSearchContext>& sctx, uint32
     if (sctx->finished || sctx->cancelled) return;
 
     if (!ok || !resp.ok) {
-      if (!sctx->on_timeout_return && sctx->error_msg.empty()) {
-        std::string reason = !ok ? err : resp.error_msg;
-        sctx->error_msg = "ERR cluster shard query failed (" +
-                          (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+      if (!sctx->on_timeout_return) {
+        if (sctx->error_msg.empty()) {
+          std::string reason = !ok ? err : resp.error_msg;
+          sctx->error_msg = "ERR cluster shard query failed (" +
+                            (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+        }
+      } else {
+        ClusterManager::Instance().RecordPartialResult();
       }
     } else {
       if (!sctx->sort_mode_set) {
@@ -924,10 +932,14 @@ void OnSearchPhase0DfsDone(const std::shared_ptr<ClusterSearchContext>& sctx,
     std::lock_guard<std::mutex> lk(sctx->mu);
     if (sctx->finished || sctx->cancelled) return;
     if (!ok || !resp.ok) {
-      if (!sctx->on_timeout_return && sctx->error_msg.empty()) {
-        std::string reason = !ok ? err : resp.error_msg;
-        sctx->error_msg = "ERR cluster shard DFS stats failed (" +
-                          (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+      if (!sctx->on_timeout_return) {
+        if (sctx->error_msg.empty()) {
+          std::string reason = !ok ? err : resp.error_msg;
+          sctx->error_msg = "ERR cluster shard DFS stats failed (" +
+                            (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+        }
+      } else {
+        ClusterManager::Instance().RecordPartialResult();
       }
     } else {
       sctx->dfs_shard_stats.push_back(std::move(resp.fields));
@@ -1014,19 +1026,34 @@ bool CollectHealthyMasterShards(RedisModuleCtx* ctx, bool on_timeout_return,
   auto topo = mgr.GetTopology();
   out_shards.clear();
   if (!topo) return true;
+  bool skipped_unavailable = false;
   uint32_t sidx = 0;
   for (const auto& m : topo->masters) {
-    if (!m.is_healthy) continue;
+    // Skip masters that own 0 slots (e.g., dead old master after Replica failover or empty node)
+    if (topo->has_slot_map && !m.owns_slots) continue;
+    if (!m.is_healthy) {
+      if (!on_timeout_return) {
+        err_out = "ERR cluster shard unavailable (" +
+                  (m.node_id.size() > 8 ? m.node_id.substr(0, 8) : m.node_id) + ")";
+        return false;
+      }
+      skipped_unavailable = true;
+      continue;
+    }
     if (!m.is_myself && (!m.rpc_port_discovered || m.rpc_port <= 0 || m.ip.empty())) {
       if (!on_timeout_return) {
         err_out = "ERR cluster shard RPC endpoint not ready (" +
                   (m.node_id.size() > 8 ? m.node_id.substr(0, 8) : m.node_id) + ")";
         return false;
       }
+      skipped_unavailable = true;
       continue;
     }
     out_shards.push_back({sidx++, m.node_id, m.ip, m.rpc_port, m.is_myself});
     if (out_shards.size() >= kMaxClusterFanout) break;
+  }
+  if (skipped_unavailable) {
+    mgr.RecordPartialResult();
   }
   return true;
 }
@@ -1299,10 +1326,14 @@ void OnHybridPhase2FetchDone(const std::shared_ptr<ClusterHybridContext>& hctx,
     std::lock_guard<std::mutex> lk(hctx->mu);
     if (hctx->finished || hctx->cancelled) return;
     if (!ok || !resp.ok) {
-      if (!hctx->on_timeout_return && hctx->error_msg.empty()) {
-        std::string reason = !ok ? err : resp.error_msg;
-        hctx->error_msg = "ERR cluster hybrid fetch failed (" +
-                          (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+      if (!hctx->on_timeout_return) {
+        if (hctx->error_msg.empty()) {
+          std::string reason = !ok ? err : resp.error_msg;
+          hctx->error_msg = "ERR cluster hybrid fetch failed (" +
+                            (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+        }
+      } else {
+        ClusterManager::Instance().RecordPartialResult();
       }
     } else {
       size_t n = std::min(winner_indices.size(), resp.docs.size());
@@ -1336,10 +1367,14 @@ void OnHybridPhase1ShardDone(const std::shared_ptr<ClusterHybridContext>& hctx, 
     std::lock_guard<std::mutex> lk(hctx->mu);
     if (hctx->finished || hctx->cancelled) return;
     if (!ok || !resp.ok) {
-      if (!hctx->on_timeout_return && hctx->error_msg.empty()) {
-        std::string reason = !ok ? err : resp.error_msg;
-        hctx->error_msg = "ERR cluster hybrid shard query failed (" +
-                          (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+      if (!hctx->on_timeout_return) {
+        if (hctx->error_msg.empty()) {
+          std::string reason = !ok ? err : resp.error_msg;
+          hctx->error_msg = "ERR cluster hybrid shard query failed (" +
+                            (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+        }
+      } else {
+        ClusterManager::Instance().RecordPartialResult();
       }
     } else {
       ShardHybridSlice slice;
@@ -1512,10 +1547,14 @@ void OnHybridPhase0DfsDone(const std::shared_ptr<ClusterHybridContext>& hctx,
     std::lock_guard<std::mutex> lk(hctx->mu);
     if (hctx->finished || hctx->cancelled) return;
     if (!ok || !resp.ok) {
-      if (!hctx->on_timeout_return && hctx->error_msg.empty()) {
-        std::string reason = !ok ? err : resp.error_msg;
-        hctx->error_msg = "ERR cluster hybrid DFS failed (" +
-                          (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+      if (!hctx->on_timeout_return) {
+        if (hctx->error_msg.empty()) {
+          std::string reason = !ok ? err : resp.error_msg;
+          hctx->error_msg = "ERR cluster hybrid DFS failed (" +
+                            (node_id.size() > 8 ? node_id.substr(0, 8) : node_id) + "): " + reason;
+        }
+      } else {
+        ClusterManager::Instance().RecordPartialResult();
       }
     } else {
       hctx->dfs_shard_stats.push_back(std::move(resp.fields));
@@ -2370,26 +2409,11 @@ void TriggerSchemaSyncIfNeeded(RedisModuleCtx* /*ctx*/) {
 
 int ExecuteClusterSearch(RedisModuleCtx* ctx, ClusterSearchPlan plan) {
   auto& mgr = ClusterManager::Instance();
-  mgr.RefreshTopology(ctx);
-  auto topo = mgr.GetTopology();
-
   bool on_timeout_return = IsOnTimeoutReturn();
   std::vector<SearchShardEndpoint> shards;
-  if (topo) {
-    uint32_t sidx = 0;
-    for (const auto& m : topo->masters) {
-      if (!m.is_healthy) continue;
-      if (!m.is_myself && (!m.rpc_port_discovered || m.rpc_port <= 0 || m.ip.empty())) {
-        if (!on_timeout_return) {
-          std::string msg = "ERR cluster shard RPC endpoint not ready (" +
-                            (m.node_id.size() > 8 ? m.node_id.substr(0, 8) : m.node_id) + ")";
-          return RedisModule_ReplyWithError(ctx, msg.c_str());
-        }
-        continue;
-      }
-      shards.push_back({sidx++, m.node_id, m.ip, m.rpc_port, m.is_myself});
-      if (shards.size() >= kMaxClusterFanout) break;
-    }
+  std::string err;
+  if (!CollectHealthyMasterShards(ctx, on_timeout_return, shards, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
   }
 
   if (shards.empty()) {
@@ -2608,10 +2632,14 @@ int ExecuteClusterInfo(RedisModuleCtx* ctx, const std::string& index_name) {
       std::lock_guard<std::mutex> lk(c->mu);
       if (c->finished || c->cancelled) return;
       if (!ok || !resp.ok) {
-        if (!c->on_timeout_return && c->error_msg.empty()) {
-          std::string reason = !ok ? e : resp.error_msg;
-          c->error_msg = "ERR cluster shard info failed (" +
-                         (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+        if (!c->on_timeout_return) {
+          if (c->error_msg.empty()) {
+            std::string reason = !ok ? e : resp.error_msg;
+            c->error_msg = "ERR cluster shard info failed (" +
+                           (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+          }
+        } else {
+          ClusterManager::Instance().RecordPartialResult();
         }
       } else {
         c->shard_rows.push_back({nid, std::move(resp)});
@@ -2701,10 +2729,14 @@ int ExecuteClusterTagVals(RedisModuleCtx* ctx, const std::string& index_name,
       std::lock_guard<std::mutex> lk(c->mu);
       if (c->finished || c->cancelled) return;
       if (!ok || !resp.ok) {
-        if (!c->on_timeout_return && c->error_msg.empty()) {
-          std::string reason = !ok ? e : resp.error_msg;
-          c->error_msg = "ERR cluster shard tagvals failed (" +
-                         (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+        if (!c->on_timeout_return) {
+          if (c->error_msg.empty()) {
+            std::string reason = !ok ? e : resp.error_msg;
+            c->error_msg = "ERR cluster shard tagvals failed (" +
+                           (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+          }
+        } else {
+          ClusterManager::Instance().RecordPartialResult();
         }
       } else {
         for (auto& t : resp.tags) c->all_tags.insert(std::move(t));
@@ -2794,10 +2826,14 @@ int ExecuteClusterSpellCheck(RedisModuleCtx* ctx, RpcSpellCheckRequest req) {
       std::lock_guard<std::mutex> lk(c->mu);
       if (c->finished || c->cancelled) return;
       if (!ok || !resp.ok) {
-        if (!c->on_timeout_return && c->error_msg.empty()) {
-          std::string reason = !ok ? e : resp.error_msg;
-          c->error_msg = "ERR cluster shard spellcheck failed (" +
-                         (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+        if (!c->on_timeout_return) {
+          if (c->error_msg.empty()) {
+            std::string reason = !ok ? e : resp.error_msg;
+            c->error_msg = "ERR cluster shard spellcheck failed (" +
+                           (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+          }
+        } else {
+          ClusterManager::Instance().RecordPartialResult();
         }
       } else {
         for (auto& kt : resp.known_terms) c->known_terms.insert(std::move(kt));
@@ -2995,10 +3031,14 @@ int ExecuteClusterProfileSearch(RedisModuleCtx* ctx, ClusterProfileSearchPlan pl
       std::lock_guard<std::mutex> lk(c->mu);
       if (c->finished || c->cancelled) return;
       if (!ok || !resp.ok) {
-        if (!c->on_timeout_return && c->error_msg.empty()) {
-          std::string reason = !ok ? e : resp.error_msg;
-          c->error_msg = "ERR cluster profile shard failed (" +
-                         (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+        if (!c->on_timeout_return) {
+          if (c->error_msg.empty()) {
+            std::string reason = !ok ? e : resp.error_msg;
+            c->error_msg = "ERR cluster profile shard failed (" +
+                           (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+          }
+        } else {
+          ClusterManager::Instance().RecordPartialResult();
         }
       } else {
         if (!c->sort_mode_set) {
@@ -3130,10 +3170,14 @@ int ExecuteClusterAggregate(RedisModuleCtx* ctx, ClusterAggPlan plan) {
       std::lock_guard<std::mutex> lk(c->mu);
       if (c->finished || c->cancelled) return;
       if (!ok || !resp.ok) {
-        if (!c->on_timeout_return && c->error_msg.empty()) {
-          std::string reason = !ok ? e : resp.error_msg;
-          c->error_msg = "ERR cluster aggregate shard failed (" +
-                         (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+        if (!c->on_timeout_return) {
+          if (c->error_msg.empty()) {
+            std::string reason = !ok ? e : resp.error_msg;
+            c->error_msg = "ERR cluster aggregate shard failed (" +
+                           (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+          }
+        } else {
+          ClusterManager::Instance().RecordPartialResult();
         }
       } else {
         c->shard_results.push_back({sidx, std::move(resp)});

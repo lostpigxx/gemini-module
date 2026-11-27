@@ -193,6 +193,67 @@ int64_t ClusterNowMs() {
   return static_cast<int64_t>(ts.tv_sec) * 1000LL + static_cast<int64_t>(ts.tv_nsec) / 1000000LL;
 }
 
+namespace {
+
+inline uint64_t SplitMix64(uint64_t x) {
+  x += 0x9e3779b97f4a7c15ULL;
+  x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+  return x ^ (x >> 31);
+}
+
+inline uint64_t MixBytes64(uint64_t state, std::string_view data) {
+  state = SplitMix64(state ^ static_cast<uint64_t>(data.size()));
+  size_t i = 0;
+  while (i + 8 <= data.size()) {
+    uint64_t chunk = 0;
+    std::memcpy(&chunk, data.data() + i, 8);
+    state = SplitMix64(state ^ chunk);
+    i += 8;
+  }
+  if (i < data.size()) {
+    uint64_t tail = 0;
+    for (size_t b = 0; i + b < data.size(); b++) {
+      tail |= static_cast<uint64_t>(static_cast<uint8_t>(data[i + b])) << (b * 8);
+    }
+    state = SplitMix64(state ^ tail);
+  }
+  return state;
+}
+
+inline bool ConstantTimeEq64(uint64_t a, uint64_t b) {
+  volatile uint64_t diff = a ^ b;
+  return diff == 0;
+}
+
+struct InflightSlotGuard {
+  std::shared_ptr<std::atomic<uint64_t>> counter;
+  std::atomic<bool> released{false};
+
+  explicit InflightSlotGuard(std::shared_ptr<std::atomic<uint64_t>> c) : counter(std::move(c)) {}
+  ~InflightSlotGuard() { Release(); }
+
+  void Release() {
+    if (!released.exchange(true, std::memory_order_acq_rel) && counter) {
+      counter->fetch_sub(1, std::memory_order_acq_rel);
+    }
+  }
+};
+
+}  // namespace
+
+uint64_t ComputeRpcAuthTag(std::string_view token, RpcOpCode opcode, uint64_t request_id,
+                           std::string_view payload) {
+  constexpr uint64_t kIpadSeed = 0x3636363636363636ULL;
+  constexpr uint64_t kOpadSeed = 0x5c5c5c5c5c5c5c5cULL;
+  uint64_t inner = MixBytes64(kIpadSeed, token);
+  inner = SplitMix64(inner ^ static_cast<uint64_t>(opcode));
+  inner = SplitMix64(inner ^ request_id);
+  inner = MixBytes64(inner, payload);
+  uint64_t outer = MixBytes64(kOpadSeed, token);
+  return SplitMix64(outer ^ inner);
+}
+
 // ============================================================================
 // ClusterRpcServer
 // ============================================================================
@@ -209,6 +270,20 @@ void ClusterRpcServer::SetRequestHandler(RequestHandler handler) {
 void ClusterRpcServer::SetPeerValidator(PeerValidator validator) {
   std::lock_guard<std::mutex> lk(handler_mu_);
   peer_validator_ = std::move(validator);
+}
+
+void ClusterRpcServer::SetAuthToken(std::string token) {
+  std::lock_guard<std::mutex> lk(handler_mu_);
+  auth_token_ = std::move(token);
+}
+
+bool ClusterRpcServer::HasAuthToken() const {
+  std::lock_guard<std::mutex> lk(handler_mu_);
+  return !auth_token_.empty();
+}
+
+void ClusterRpcServer::SetMaxInflightRequests(size_t max_inflight) {
+  max_inflight_requests_.store(max_inflight, std::memory_order_release);
 }
 
 bool ClusterRpcServer::Start(const std::string& bind_ip, int port, bool allow_ephemeral_fallback) {
@@ -261,6 +336,10 @@ RpcServerStats ClusterRpcServer::GetStats() const {
   s.total_connections = total_connections_.load(std::memory_order_relaxed);
   s.requests_handled = requests_handled_.load(std::memory_order_relaxed);
   s.rejected_frames = rejected_frames_.load(std::memory_order_relaxed);
+  s.auth_rejected = auth_rejected_.load(std::memory_order_relaxed);
+  s.peer_rejected = peer_rejected_.load(std::memory_order_relaxed);
+  s.inflight_rejected = inflight_rejected_.load(std::memory_order_relaxed);
+  s.inflight_requests = inflight_requests_->load(std::memory_order_relaxed);
   s.bytes_received = bytes_received_.load(std::memory_order_relaxed);
   s.bytes_sent = bytes_sent_.load(std::memory_order_relaxed);
   return s;
@@ -339,6 +418,7 @@ void ClusterRpcServer::AcceptPending() {
       validator = peer_validator_;
     }
     if (validator && !validator(peer_ip)) {
+      peer_rejected_.fetch_add(1, std::memory_order_relaxed);
       rejected_frames_.fetch_add(1, std::memory_order_relaxed);
       close(cfd);
       continue;
@@ -392,18 +472,72 @@ bool ClusterRpcServer::HandleRead(Connection& conn) {
           return false;
         }
         conn.read_pos += consumed;
-        requests_handled_.fetch_add(1, std::memory_order_relaxed);
 
         RequestHandler handler;
+        std::string auth_token;
         {
           std::lock_guard<std::mutex> lk(handler_mu_);
           handler = request_handler_;
+          auth_token = auth_token_;
         }
 
+        // Phase 71: Verify stateless keyed MAC when CLUSTER_AUTH_TOKEN is configured
+        if (!auth_token.empty()) {
+          bool auth_ok = false;
+          if ((frame.header.flags & kRpcFlagHasAuth) != 0 && frame.payload.size() >= 8) {
+            uint64_t recv_tag = 0;
+            for (size_t b = 0; b < 8; b++) {
+              recv_tag |= static_cast<uint64_t>(static_cast<uint8_t>(frame.payload[b])) << (b * 8);
+            }
+            std::string_view body(frame.payload.data() + 8, frame.payload.size() - 8);
+            uint64_t expected_tag =
+                ComputeRpcAuthTag(auth_token, frame.header.opcode, frame.header.request_id, body);
+            auth_ok = ConstantTimeEq64(recv_tag, expected_tag);
+          }
+          if (!auth_ok) {
+            auth_rejected_.fetch_add(1, std::memory_order_relaxed);
+            rejected_frames_.fetch_add(1, std::memory_order_relaxed);
+            RpcErrorPayload err{401, "ERR unauthorized cluster RPC"};
+            std::string err_bytes;
+            EncodeErrorPayload(err, err_bytes);
+            std::string encoded;
+            if (EncodeRpcFrame(frame.header.opcode,
+                               static_cast<uint16_t>(kRpcFlagResponse | kRpcFlagError),
+                               frame.header.request_id, err_bytes, encoded)) {
+              conn.write_queue.push_back(std::move(encoded));
+              (void)HandleWrite(conn);
+            }
+            return false;
+          }
+          frame.payload.erase(0, 8);
+        }
+
+        // Phase 71: Server-side inflight concurrency quota defense against DoS/OOM
+        size_t max_inflight = max_inflight_requests_.load(std::memory_order_acquire);
+        uint64_t prev_inflight = inflight_requests_->fetch_add(1, std::memory_order_acq_rel);
+        if (max_inflight > 0 && prev_inflight >= max_inflight) {
+          inflight_requests_->fetch_sub(1, std::memory_order_acq_rel);
+          inflight_rejected_.fetch_add(1, std::memory_order_relaxed);
+          RpcErrorPayload err{503, "ERR server busy: max inflight RPC quota exceeded"};
+          std::string err_bytes;
+          EncodeErrorPayload(err, err_bytes);
+          std::string encoded;
+          if (EncodeRpcFrame(frame.header.opcode,
+                             static_cast<uint16_t>(kRpcFlagResponse | kRpcFlagError),
+                             frame.header.request_id, err_bytes, encoded)) {
+            EnqueueResponse(conn.id, std::move(encoded));
+          }
+          continue;
+        }
+
+        requests_handled_.fetch_add(1, std::memory_order_relaxed);
+
+        auto guard = std::make_shared<InflightSlotGuard>(inflight_requests_);
         uint64_t cid = conn.id;
         uint64_t req_id = frame.header.request_id;
-        ResponseSender sender = [this, cid, req_id](RpcOpCode resp_op, uint16_t flags,
-                                                    std::string payload) {
+        ResponseSender sender = [this, cid, req_id, guard](RpcOpCode resp_op, uint16_t flags,
+                                                           std::string payload) {
+          guard->Release();
           std::string encoded;
           if (EncodeRpcFrame(resp_op, static_cast<uint16_t>(flags | kRpcFlagResponse), req_id,
                              payload, encoded)) {
@@ -595,6 +729,15 @@ void ClusterRpcClient::Stop() {
   DispatchCompletions(leftover);
 }
 
+void ClusterRpcClient::SetAuthToken(std::string token) {
+  std::lock_guard<std::mutex> lk(auth_mu_);
+  auth_token_ = std::move(token);
+}
+
+void ClusterRpcClient::SetMaxInflightPerPeer(size_t max_inflight) {
+  max_inflight_per_peer_.store(max_inflight, std::memory_order_release);
+}
+
 uint64_t ClusterRpcClient::SendAsync(const std::string& node_id, const std::string& ip, int port,
                                      RpcOpCode opcode, std::string_view payload, int64_t timeout_ms,
                                      RpcCallback cb, uint16_t flags) {
@@ -619,8 +762,30 @@ uint64_t ClusterRpcClient::SendAsync(const std::string& node_id, const std::stri
   }
 
   uint64_t req_id = next_request_id_.fetch_add(1, std::memory_order_relaxed);
+
+  std::string auth_token;
+  {
+    std::lock_guard<std::mutex> lk(auth_mu_);
+    auth_token = auth_token_;
+  }
+
   std::string encoded;
-  if (!EncodeRpcFrame(opcode, flags, req_id, payload, encoded)) {
+  bool enc_ok = false;
+  if (!auth_token.empty()) {
+    uint64_t tag = ComputeRpcAuthTag(auth_token, opcode, req_id, payload);
+    std::string auth_payload;
+    auth_payload.reserve(8 + payload.size());
+    for (size_t b = 0; b < 8; b++) {
+      auth_payload.push_back(static_cast<char>((tag >> (b * 8)) & 0xFF));
+    }
+    auth_payload.append(payload.data(), payload.size());
+    enc_ok = EncodeRpcFrame(opcode, static_cast<uint16_t>(flags | kRpcFlagHasAuth), req_id,
+                            auth_payload, encoded);
+  } else {
+    enc_ok = EncodeRpcFrame(opcode, flags, req_id, payload, encoded);
+  }
+
+  if (!enc_ok) {
     if (cb) {
       RpcResponse resp;
       resp.status = RpcStatus::kInvalidArgument;
@@ -724,6 +889,7 @@ RpcClientStats ClusterRpcClient::GetStats() const {
   s.requests_succeeded = requests_succeeded_.load(std::memory_order_relaxed);
   s.requests_failed = requests_failed_.load(std::memory_order_relaxed);
   s.requests_timed_out = requests_timed_out_.load(std::memory_order_relaxed);
+  s.inflight_rejected = inflight_rejected_.load(std::memory_order_relaxed);
   return s;
 }
 
@@ -1015,7 +1181,20 @@ void ClusterRpcClient::ProcessCommands(std::vector<CompletedCallback>& completio
     peer.ip = qs.ip;
     peer.port = qs.port;
 
-    // Protect against unbounded outbound queue growth
+    // Protect against unbounded per-peer inflight concurrency & outbound queue growth
+    size_t max_per_peer = max_inflight_per_peer_.load(std::memory_order_acquire);
+    if (max_per_peer > 0 && peer.req_ids.size() >= max_per_peer) {
+      inflight_rejected_.fetch_add(1, std::memory_order_relaxed);
+      requests_failed_.fetch_add(1, std::memory_order_relaxed);
+      if (qs.callback) {
+        RpcResponse resp;
+        resp.status = RpcStatus::kDisconnected;
+        resp.error_msg = "peer max inflight RPC quota exceeded";
+        completions.push_back({std::move(qs.callback), std::move(resp)});
+      }
+      continue;
+    }
+
     size_t queued_bytes = 0;
     for (const auto& f : peer.write_queue) queued_bytes += f.size();
     if (queued_bytes + qs.encoded_frame.size() > kMaxPendingOutboundBytes) {

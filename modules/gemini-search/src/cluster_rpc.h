@@ -43,6 +43,10 @@ struct RpcServerStats {
   uint64_t total_connections = 0;
   uint64_t requests_handled = 0;
   uint64_t rejected_frames = 0;
+  uint64_t auth_rejected = 0;
+  uint64_t peer_rejected = 0;
+  uint64_t inflight_rejected = 0;
+  uint64_t inflight_requests = 0;
   uint64_t bytes_received = 0;
   uint64_t bytes_sent = 0;
 };
@@ -54,10 +58,15 @@ struct RpcClientStats {
   uint64_t requests_succeeded = 0;
   uint64_t requests_failed = 0;
   uint64_t requests_timed_out = 0;
+  uint64_t inflight_rejected = 0;
 };
 
 // Monotonic clock in milliseconds (pure POSIX, no redismodule.h)
 int64_t ClusterNowMs();
+
+// Stateless 64-bit keyed authentication tag for RPC frames (used when CLUSTER_AUTH_TOKEN is set).
+uint64_t ComputeRpcAuthTag(std::string_view token, RpcOpCode opcode, uint64_t request_id,
+                           std::string_view payload);
 
 // Async non-blocking TCP binary RPC server running on its own I/O thread.
 class ClusterRpcServer {
@@ -75,6 +84,9 @@ class ClusterRpcServer {
 
   void SetRequestHandler(RequestHandler handler);
   void SetPeerValidator(PeerValidator validator);
+  void SetAuthToken(std::string token);
+  bool HasAuthToken() const;
+  void SetMaxInflightRequests(size_t max_inflight);
 
   // Starts listening on bind_ip:port. If port == 0, binds an ephemeral port.
   // If port != 0 and bind fails with EADDRINUSE and allow_ephemeral_fallback is true,
@@ -123,6 +135,8 @@ class ClusterRpcServer {
   mutable std::mutex handler_mu_;
   RequestHandler request_handler_;
   PeerValidator peer_validator_;
+  std::string auth_token_;
+  std::atomic<size_t> max_inflight_requests_{4096};
 
   std::mutex resp_mu_;
   std::deque<OutboundMsg> pending_responses_;
@@ -131,10 +145,15 @@ class ClusterRpcServer {
   uint64_t next_conn_id_ = 1;
 
   // Stats
+  std::shared_ptr<std::atomic<uint64_t>> inflight_requests_ =
+      std::make_shared<std::atomic<uint64_t>>(0);
   std::atomic<uint64_t> active_connections_{0};
   std::atomic<uint64_t> total_connections_{0};
   std::atomic<uint64_t> requests_handled_{0};
   std::atomic<uint64_t> rejected_frames_{0};
+  std::atomic<uint64_t> auth_rejected_{0};
+  std::atomic<uint64_t> peer_rejected_{0};
+  std::atomic<uint64_t> inflight_rejected_{0};
   std::atomic<uint64_t> bytes_received_{0};
   std::atomic<uint64_t> bytes_sent_{0};
 };
@@ -153,6 +172,8 @@ class ClusterRpcClient {
   bool Start();
   void Stop();
   bool IsRunning() const { return running_.load(std::memory_order_acquire); }
+  void SetAuthToken(std::string token);
+  void SetMaxInflightPerPeer(size_t max_inflight);
 
   // Asynchronous RPC call. Returns request_id (> 0) on acceptance, or 0 if rejected synchronously.
   uint64_t SendAsync(const std::string& node_id, const std::string& ip, int port,
@@ -247,6 +268,11 @@ class ClusterRpcClient {
   std::unordered_map<std::string, PeerConn> peers_;
   std::unordered_map<uint64_t, PendingRequest> inflight_;
 
+  // Auth & quota config
+  mutable std::mutex auth_mu_;
+  std::string auth_token_;
+  std::atomic<size_t> max_inflight_per_peer_{1024};
+
   // Stats
   std::atomic<uint64_t> active_connections_{0};
   std::atomic<uint64_t> inflight_count_{0};
@@ -254,6 +280,7 @@ class ClusterRpcClient {
   std::atomic<uint64_t> requests_succeeded_{0};
   std::atomic<uint64_t> requests_failed_{0};
   std::atomic<uint64_t> requests_timed_out_{0};
+  std::atomic<uint64_t> inflight_rejected_{0};
 };
 
 }  // namespace gemini_search

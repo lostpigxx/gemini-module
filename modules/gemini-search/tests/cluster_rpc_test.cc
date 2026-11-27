@@ -296,6 +296,8 @@ TEST(ClusterRpcTest, PeerValidatorAndPrunePeers) {
   // Connection from 127.0.0.1 should be rejected by peer validator
   RpcResponse r = cli.SendSync("blocked_peer", "127.0.0.1", port, RpcOpCode::kRpcPing, "x", 1000);
   EXPECT_NE(r.status, RpcStatus::kOk);
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  EXPECT_GE(srv.GetStats().peer_rejected, 1u);
 
   // Now allow 127.0.0.1
   srv.SetPeerValidator([](const std::string& ip) { return ip == "127.0.0.1"; });
@@ -313,6 +315,143 @@ TEST(ClusterRpcTest, PeerValidatorAndPrunePeers) {
   cli.PrunePeers({"other_peer"});
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   EXPECT_EQ(cli.GetStats().active_connections, 0u);
+
+  cli.Stop();
+  srv.Stop();
+}
+
+TEST(ClusterRpcTest, AuthTokenAcceptsValidAndRejectsInvalidOrMissing) {
+  // Verify MAC tag domain sensitivity
+  uint64_t t1 = ComputeRpcAuthTag("sec1", RpcOpCode::kRpcPing, 7, "hello");
+  uint64_t t2 = ComputeRpcAuthTag("sec2", RpcOpCode::kRpcPing, 7, "hello");
+  uint64_t t3 = ComputeRpcAuthTag("sec1", RpcOpCode::kRpcSearchPhase1, 7, "hello");
+  uint64_t t4 = ComputeRpcAuthTag("sec1", RpcOpCode::kRpcPing, 8, "hello");
+  uint64_t t5 = ComputeRpcAuthTag("sec1", RpcOpCode::kRpcPing, 7, "hellp");
+  EXPECT_NE(t1, t2);
+  EXPECT_NE(t1, t3);
+  EXPECT_NE(t1, t4);
+  EXPECT_NE(t1, t5);
+
+  ClusterRpcServer srv;
+  srv.SetAuthToken("phase71_secret_key");
+  EXPECT_TRUE(srv.HasAuthToken());
+  srv.SetRequestHandler([](const RpcFrame& req, const std::string& /*ip*/,
+                           ClusterRpcServer::ResponseSender send_resp) {
+    send_resp(RpcOpCode::kRpcPong, kRpcFlagNone, "verified:" + req.payload);
+  });
+  ASSERT_TRUE(srv.Start("127.0.0.1", 0));
+  int port = srv.BoundPort();
+
+  // 1. Client without auth token must be rejected
+  ClusterRpcClient unauth_cli;
+  ASSERT_TRUE(unauth_cli.Start());
+  RpcResponse r_noauth =
+      unauth_cli.SendSync("n1", "127.0.0.1", port, RpcOpCode::kRpcPing, "msg", 2000);
+  EXPECT_TRUE(r_noauth.status != RpcStatus::kOk || (r_noauth.flags & kRpcFlagError) != 0);
+  unauth_cli.Stop();
+
+  // 2. Client with wrong auth token must be rejected
+  ClusterRpcClient wrong_cli;
+  wrong_cli.SetAuthToken("wrong_secret");
+  ASSERT_TRUE(wrong_cli.Start());
+  RpcResponse r_wrong =
+      wrong_cli.SendSync("n1", "127.0.0.1", port, RpcOpCode::kRpcPing, "msg", 2000);
+  EXPECT_TRUE(r_wrong.status != RpcStatus::kOk || (r_wrong.flags & kRpcFlagError) != 0);
+  wrong_cli.Stop();
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  EXPECT_GE(srv.GetStats().auth_rejected, 2u);
+
+  // 3. Client with matching auth token succeeds and payload is stripped cleanly
+  ClusterRpcClient ok_cli;
+  ok_cli.SetAuthToken("phase71_secret_key");
+  ASSERT_TRUE(ok_cli.Start());
+  RpcResponse r_ok =
+      ok_cli.SendSync("n1", "127.0.0.1", port, RpcOpCode::kRpcPing, "payload_123", 2000);
+  ASSERT_EQ(r_ok.status, RpcStatus::kOk);
+  EXPECT_EQ(r_ok.flags & kRpcFlagError, 0u);
+  EXPECT_EQ(r_ok.payload, "verified:payload_123");
+
+  ok_cli.Stop();
+  srv.Stop();
+}
+
+TEST(ClusterRpcTest, MaxInflightQuotaEnforcementAndRecovery) {
+  ClusterRpcServer srv;
+  srv.SetMaxInflightRequests(2);
+
+  std::mutex held_mu;
+  std::condition_variable held_cv;
+  std::vector<ClusterRpcServer::ResponseSender> held_senders;
+
+  srv.SetRequestHandler([&](const RpcFrame& req, const std::string& /*ip*/,
+                            ClusterRpcServer::ResponseSender send_resp) {
+    if (req.payload == "hold") {
+      {
+        std::lock_guard<std::mutex> lk(held_mu);
+        held_senders.push_back(std::move(send_resp));
+      }
+      held_cv.notify_all();
+    } else {
+      send_resp(RpcOpCode::kRpcPong, kRpcFlagNone, "ok:" + req.payload);
+    }
+  });
+  ASSERT_TRUE(srv.Start("127.0.0.1", 0));
+  int port = srv.BoundPort();
+
+  ClusterRpcClient cli;
+  ASSERT_TRUE(cli.Start());
+
+  std::atomic<int> held_done{0};
+  cli.SendAsync("n1", "127.0.0.1", port, RpcOpCode::kRpcPing, "hold", 5000,
+                [&](RpcResponse r) {
+                  if (r.status == RpcStatus::kOk && (r.flags & kRpcFlagError) == 0) {
+                    held_done.fetch_add(1);
+                  }
+                });
+  cli.SendAsync("n1", "127.0.0.1", port, RpcOpCode::kRpcPing, "hold", 5000,
+                [&](RpcResponse r) {
+                  if (r.status == RpcStatus::kOk && (r.flags & kRpcFlagError) == 0) {
+                    held_done.fetch_add(1);
+                  }
+                });
+
+  // Wait until both requests are held in-flight on server
+  {
+    std::unique_lock<std::mutex> lk(held_mu);
+    ASSERT_TRUE(held_cv.wait_for(lk, std::chrono::seconds(2),
+                                 [&]() { return held_senders.size() == 2; }));
+  }
+
+  // 3rd request exceeds server max_inflight=2 -> immediately rejected with 503 error frame
+  RpcResponse r_busy = cli.SendSync("n1", "127.0.0.1", port, RpcOpCode::kRpcPing, "extra", 2000);
+  ASSERT_EQ(r_busy.status, RpcStatus::kOk);
+  EXPECT_NE(r_busy.flags & kRpcFlagError, 0u);
+  EXPECT_NE(r_busy.error_msg.find("quota"), std::string::npos);
+  EXPECT_GE(srv.GetStats().inflight_rejected, 1u);
+
+  // Also verify client-side per-peer inflight quota enforcement
+  cli.SetMaxInflightPerPeer(2);
+  RpcResponse r_cli_quota =
+      cli.SendSync("n1", "127.0.0.1", port, RpcOpCode::kRpcPing, "extra2", 2000);
+  EXPECT_EQ(r_cli_quota.status, RpcStatus::kDisconnected);
+  EXPECT_GE(cli.GetStats().inflight_rejected, 1u);
+  cli.SetMaxInflightPerPeer(1024);
+
+  // Release the 2 held senders -> server inflight drops to 0 and recovers cleanly
+  {
+    std::lock_guard<std::mutex> lk(held_mu);
+    for (auto& s : held_senders) {
+      s(RpcOpCode::kRpcPong, kRpcFlagNone, "released");
+    }
+    held_senders.clear();
+  }
+
+  RpcResponse r_after = cli.SendSync("n1", "127.0.0.1", port, RpcOpCode::kRpcPing, "fresh", 2000);
+  ASSERT_EQ(r_after.status, RpcStatus::kOk);
+  EXPECT_EQ(r_after.flags & kRpcFlagError, 0u);
+  EXPECT_EQ(r_after.payload, "ok:fresh");
+  EXPECT_EQ(srv.GetStats().inflight_requests, 0u);
 
   cli.Stop();
   srv.Stop();

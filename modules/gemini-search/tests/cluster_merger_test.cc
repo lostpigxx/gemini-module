@@ -406,3 +406,62 @@ TEST(ClusterMergerTest, TwoPhaseDfsBm25ExactParityUnder90PercentSkew) {
     EXPECT_NEAR(merged.winners[i].score, ref_scores[i].score, 1e-12);
   }
 }
+
+TEST(ClusterMergerTest, MigrateDualWriteWindowDedupSearchAndHybrid) {
+  // Simulate live MIGRATE dual-existence window where 25 docs exist on both Shard 0 and Shard 1.
+  std::vector<ShardPhase1Slice> s_slices(3);
+  for (uint32_t s = 0; s < 3; s++) s_slices[s].shard_idx = s;
+
+  // 100 unique docs total: 0..49 on shard 0, 25..74 on shard 1 (25..49 overlap!), 75..99 on shard 2
+  auto add_search = [&](uint32_t s, int id) {
+    MergeCandidate c;
+    c.doc_id = "mig:" + std::to_string(id);
+    c.shard_idx = s;
+    c.score = 1000.0 - static_cast<double>(id);
+    c.sort_num = static_cast<double>(id);
+    s_slices[s].items.push_back(std::move(c));
+    s_slices[s].total_hits++;
+  };
+  for (int i = 0; i < 50; i++) add_search(0, i);
+  for (int i = 25; i < 75; i++) add_search(1, i);
+  for (int i = 75; i < 100; i++) add_search(2, i);
+
+  auto sm = MergeSearchShards(s_slices, MergeSortMode::kSortNumAsc, 0, 200,
+                              /*has_limit=*/true, /*max_results=*/1000);
+  ASSERT_EQ(sm.global_total, 100u);
+  ASSERT_EQ(sm.winners.size(), 100u);
+  std::unordered_set<std::string> seen;
+  for (size_t i = 0; i < sm.winners.size(); i++) {
+    EXPECT_EQ(sm.winners[i].doc_id, "mig:" + std::to_string(i));
+    EXPECT_TRUE(seen.insert(sm.winners[i].doc_id).second);
+  }
+
+  // Hybrid dual-write dedup across RRF and LINEAR
+  std::vector<ShardHybridSlice> h_slices(3);
+  for (uint32_t s = 0; s < 3; s++) h_slices[s].shard_idx = s;
+  for (int i = 0; i < 50; i++) {
+    h_slices[0].text_hits.push_back({"mig:" + std::to_string(i), 100.0 - i});
+    h_slices[0].vec_hits.push_back({"mig:" + std::to_string(i), 0.01f * static_cast<float>(i)});
+  }
+  for (int i = 25; i < 75; i++) {
+    h_slices[1].text_hits.push_back({"mig:" + std::to_string(i), 100.0 - i});
+    h_slices[1].vec_hits.push_back({"mig:" + std::to_string(i), 0.01f * static_cast<float>(i)});
+  }
+  for (int i = 75; i < 100; i++) {
+    h_slices[2].text_hits.push_back({"mig:" + std::to_string(i), 100.0 - i});
+    h_slices[2].vec_hits.push_back({"mig:" + std::to_string(i), 0.01f * static_cast<float>(i)});
+  }
+
+  for (FusionMethod method : {FusionMethod::kRrf, FusionMethod::kLinear}) {
+    HybridConfig hcfg;
+    hcfg.method = method;
+    auto hm = MergeHybridShards(h_slices, /*text_limit=*/100, /*knn_k=*/100, hcfg, 0, 200,
+                                /*has_limit=*/true);
+    ASSERT_EQ(hm.total_fused, 100u);
+    ASSERT_EQ(hm.winners.size(), 100u);
+    std::unordered_set<std::string> hseen;
+    for (const auto& w : hm.winners) {
+      EXPECT_TRUE(hseen.insert(w.doc_id).second);
+    }
+  }
+}
