@@ -254,12 +254,15 @@ void TextIndex::Add(const std::string& doc_id, const std::string& text,
     }
     auto& st = term_stats_[term];
     int dl = doc_lengths_[did];
-    if (st.max_tf == 0 && st.min_dl == 0) {
-      st.max_tf = info.tf;
-      st.min_dl = dl;
+    int cur_mtf = 0, cur_mdl = 0;
+    bool cur_dirty = false;
+    st.Load(cur_mtf, cur_mdl, cur_dirty);
+    if (cur_mtf == 0 && cur_mdl == 0) {
+      st.Store(info.tf, dl, false);
     } else {
-      if (info.tf > st.max_tf) st.max_tf = info.tf;
-      if (dl < st.min_dl) st.min_dl = dl;
+      if (info.tf > cur_mtf) cur_mtf = info.tf;
+      if (dl < cur_mdl) cur_mdl = dl;
+      st.Store(cur_mtf, cur_mdl, cur_dirty);
     }
     auto stemmed = StemWord(term, language);
     if (stemmed != term) {
@@ -295,10 +298,13 @@ void TextIndex::Remove(const std::string& doc_id) {
       vec.erase(pos);
       if (!vec.empty()) {
         auto sit = term_stats_.find(term);
-        if (sit != term_stats_.end() &&
-            (removed_tf >= sit->second.max_tf ||
-             doc_lengths_[did] <= sit->second.min_dl)) {
-          sit->second.dirty = true;
+        if (sit != term_stats_.end()) {
+          int cur_mtf = 0, cur_mdl = 0;
+          bool cur_dirty = false;
+          sit->second.Load(cur_mtf, cur_mdl, cur_dirty);
+          if (removed_tf >= cur_mtf || doc_lengths_[did] <= cur_mdl) {
+            sit->second.Store(cur_mtf, cur_mdl, true);
+          }
         }
       }
     }
@@ -405,24 +411,30 @@ std::vector<TextSearchResult> TextIndex::SearchTopK(
     if (pit == postings_.end() || pit->second.empty()) continue;
     const auto& posts = pit->second;
 
-    auto& st = term_stats_[term];
-    if (st.dirty || (st.max_tf == 0 && st.min_dl == 0)) {
-      int mtf = 0;
-      int mdl = doc_lengths_[posts[0].doc_id];
+    int mtf = 0;
+    int mdl = 0;
+    bool dirty = true;
+    auto sit = term_stats_.find(term);
+    if (sit != term_stats_.end()) {
+      sit->second.Load(mtf, mdl, dirty);
+    }
+    if (dirty || (mtf == 0 && mdl == 0)) {
+      mtf = 0;
+      mdl = doc_lengths_[posts[0].doc_id];
       for (const auto& p : posts) {
         if (p.tf > mtf) mtf = p.tf;
         int dl = doc_lengths_[p.doc_id];
         if (dl < mdl) mdl = dl;
       }
-      st.max_tf = mtf;
-      st.min_dl = mdl;
-      st.dirty = false;
+      if (sit != term_stats_.end()) {
+        sit->second.Store(mtf, mdl, false);
+      }
     }
 
     double df = static_cast<double>(posts.size());
     double idf = std::log((N - df + 0.5) / (df + 0.5) + 1.0);
-    double max_tf = static_cast<double>(st.max_tf);
-    double min_dl = static_cast<double>(st.min_dl);
+    double max_tf = static_cast<double>(mtf);
+    double min_dl = static_cast<double>(mdl);
     double max_tf_norm =
         (max_tf * (k1 + 1.0)) /
         (max_tf + k1 * (1.0 - b + b * min_dl / avg_doc_len_));

@@ -63,17 +63,21 @@ gemini_search::RpcCursorResponse ExecuteLocalCursorOp(
   PurgeExpiredCursorsLocked(now_ms);
 
   if (req.op == gemini_search::kRpcCursorOpDel) {
-    if (GetCursors().erase(req.cursor_id) == 0) {
+    auto it = GetCursors().find(req.cursor_id);
+    if (it == GetCursors().end() ||
+        (!req.index_name.empty() && it->second.index_name != req.index_name)) {
       resp.ok = false;
       resp.error_msg = "ERR cursor not found";
       return resp;
     }
+    GetCursors().erase(it);
     resp.ok = true;
     return resp;
   }
 
   auto it = GetCursors().find(req.cursor_id);
-  if (it == GetCursors().end()) {
+  if (it == GetCursors().end() ||
+      (!req.index_name.empty() && it->second.index_name != req.index_name)) {
     resp.ok = false;
     resp.error_msg = "ERR cursor not found";
     return resp;
@@ -226,6 +230,7 @@ gemini_search::RpcAggMapResponse ExecuteLocalAggMap(
   }
 
   const auto& entry = *entry_ptr;
+  TouchIndex(entry);
   std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
 
   std::unordered_map<std::string, std::string> params;
@@ -249,7 +254,7 @@ gemini_search::RpcAggMapResponse ExecuteLocalAggMap(
   }
   int64_t deadline_ms = 0;
   if (req.remaining_timeout_ms > 0) {
-    deadline_ms = NowMs() + req.remaining_timeout_ms;
+    deadline_ms = SaturatingAddMs(NowMs(), req.remaining_timeout_ms);
     qopts.deadline_ms = deadline_ms;
   }
 
@@ -363,8 +368,10 @@ gemini_search::RpcAggMapResponse ExecuteLocalAggMap(
     return resp;
   }
 
-  // Raw rows mode: optional pushed-down local SORTBY & top-K truncation
-  if (req.raw_has_sortby && !req.raw_sortby_keys.empty()) {
+  // Raw rows mode: optional pushed-down local SORTBY & top-K truncation (or explicit LIMIT ... 0)
+  if (req.raw_zero_limit) {
+    rows.clear();
+  } else if (req.raw_has_sortby && !req.raw_sortby_keys.empty()) {
     long long max_r = (req.raw_shard_limit > 0) ? static_cast<long long>(req.raw_shard_limit) : -1;
     gemini_search::ApplyAggSortby(rows, req.raw_sortby_keys, max_r);
   } else if (req.raw_shard_limit > 0 && rows.size() > static_cast<size_t>(req.raw_shard_limit)) {
@@ -396,161 +403,110 @@ gemini_search::RpcAggMapResponse ExecuteLocalAggMap(
   return resp;
 }
 
-int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
-                              int argc) {
-  if (argc < 3) return RedisModule_WrongArity(ctx);
-  RedisModule_AutoMemory(ctx);
+namespace {
 
-  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
-  auto it = GetIndices().find(idx_str);
-  if (it == GetIndices().end()) {
-    return RedisModule_ReplyWithError(ctx, "ERR index not found");
-  }
-  auto& entry = *it->second;
-  TouchIndex(entry);
-
-  // Pre-scan for DIALECT, TIMEOUT, and PARAMS options
-  QueryOptions qopts;
-  qopts.language = entry.spec.language;
-  qopts.dialect = GetDefaultDialect();
-  if (!entry.spec.custom_dict.empty()) {
-    auto dit = GetTermDicts().find(entry.spec.custom_dict);
-    if (dit != GetTermDicts().end()) qopts.custom_dict = &dit->second.Terms();
-  }
-  long long timeout_ms = 0;
-  std::unordered_map<std::string, std::string> params;
-  for (int ci = 3; ci < argc; ci++) {
-    auto kw = ArgView(argv[ci]);
-    if (MatchArg(kw, "DIALECT") && ci + 1 < argc) {
-      qopts.dialect = static_cast<int>(std::strtol(std::string(ArgView(argv[ci + 1])).c_str(), nullptr, 10));
-      ci++;
-    } else if (MatchArg(kw, "TIMEOUT") && ci + 1 < argc) {
-      long long tms = std::strtoll(std::string(ArgView(argv[ci + 1])).c_str(), nullptr, 10);
-      if (tms > 0) {
-        timeout_ms = tms;
-        qopts.deadline_ms = NowMs() + tms;
-      }
-      ci++;
-    } else if (MatchArg(kw, "PARAMS") && ci + 1 < argc) {
-      long long pcount = 0;
-      if (!ParseAggLong(argv[ci + 1], pcount) || pcount < 0 || pcount % 2 != 0 ||
-          ci + 2 + pcount > argc) {
-        return RedisModule_ReplyWithError(ctx, "ERR invalid PARAMS specification");
-      }
-      for (long long p = 0; p < pcount; p += 2) {
-        std::string pname(ArgView(argv[ci + 2 + p]));
-        std::string pval = ArgStr(argv[ci + 3 + p]);
-        params[std::move(pname)] = std::move(pval);
-      }
-      ci += 1 + static_cast<int>(pcount);
-    }
-  }
-
-  ParsedQuery parsed;
-  std::string parse_error;
-  if (!ParseQuery(std::string(ArgView(argv[2])), parsed, parse_error, qopts)) {
-    return RedisModule_ReplyWithError(ctx, parse_error.c_str());
-  }
-
-  std::vector<float> qvec;
-  std::string knn_score_field = parsed.knn_score_alias.empty()
-                                    ? "__vec_score"
-                                    : parsed.knn_score_alias;
-  if (parsed.has_knn) {
-    const auto* fspec = entry.spec.FindField(parsed.knn_field);
-    if (!fspec || fspec->type != FieldType::kVector) {
-      return RedisModule_ReplyWithError(ctx, "ERR KNN field is not a VECTOR field");
-    }
-    auto pit = params.find(parsed.knn_param_name);
-    if (pit == params.end()) {
-      return RedisModule_ReplyWithError(ctx, "ERR KNN param not found in PARAMS");
-    }
-    if (!DecodeVectorBlob(pit->second, fspec->vector_params.dim,
-                          fspec->vector_params.data_type, qvec)) {
-      return RedisModule_ReplyWithError(ctx, "ERR query vector dimension mismatch");
-    }
-  }
-
-  // Parse pipeline stages
+struct ParsedAggOptions {
   std::vector<PipelineStage> stages;
-  PipelineStage* pending_groupby = nullptr;
+  std::unordered_map<std::string, std::string> params;
+  int dialect = 2;
+  long long timeout_ms = 0;
+  bool with_cursor = false;
+  size_t cursor_count = 1000;
+  int64_t cursor_max_idle_ms = 300000;
+};
 
-  int arg_i = 3;
+// Single structured pass parser for FT.AGGREGATE options & pipeline stages.
+// Consumes option values properly so PARAMS/APPLY/FILTER/LOAD/SORTBY values are never
+// misparsed as top-level keywords (TIMEOUT, DIALECT, WITHCURSOR, COUNT, MAXIDLE).
+bool ParseAggPipelineAndOptions(RedisModuleString** argv, int start_arg, int argc,
+                                ParsedAggOptions& out, std::string& err_out) {
+  PipelineStage* pending_groupby = nullptr;
+  int arg_i = start_arg;
   while (arg_i < argc) {
     auto kw = ArgView(argv[arg_i]);
 
     if (MatchArg(kw, "LOAD")) {
       pending_groupby = nullptr;
       arg_i++;
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR LOAD requires count or *");
+      if (arg_i >= argc) { err_out = "ERR LOAD requires count or *"; return false; }
       if (ArgView(argv[arg_i]) == "*") {
         arg_i++;
         PipelineStage st;
         st.type = PipelineStageType::kLoad;
-        stages.push_back(std::move(st));
+        out.stages.push_back(std::move(st));
         continue;
       }
       long long ld_count = 0;
-      if (!ParseAggLong(argv[arg_i++], ld_count) || ld_count < 0)
-        return RedisModule_ReplyWithError(ctx, "ERR LOAD count must be non-negative");
+      if (!ParseAggLong(argv[arg_i++], ld_count) || ld_count < 0) {
+        err_out = "ERR LOAD count must be non-negative";
+        return false;
+      }
       PipelineStage st;
       st.type = PipelineStageType::kLoad;
       for (long long li = 0; li < ld_count; li++) {
-        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough LOAD fields");
+        if (arg_i >= argc) { err_out = "ERR not enough LOAD fields"; return false; }
         auto fv = ArgView(argv[arg_i]);
         arg_i++;
-        if (fv.empty() || fv[0] != '@')
-          return RedisModule_ReplyWithError(ctx, "ERR LOAD field must start with @");
+        if (fv.empty() || fv[0] != '@') {
+          err_out = "ERR LOAD field must start with @";
+          return false;
+        }
         st.load_fields.emplace_back(fv.substr(1));
       }
-      stages.push_back(std::move(st));
+      out.stages.push_back(std::move(st));
     } else if (MatchArg(kw, "APPLY")) {
       pending_groupby = nullptr;
       arg_i++;
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR APPLY requires expression");
+      if (arg_i >= argc) { err_out = "ERR APPLY requires expression"; return false; }
       std::string expr(ArgView(argv[arg_i]));
       arg_i++;
-      if (arg_i >= argc || !MatchArg(ArgView(argv[arg_i]), "AS"))
-        return RedisModule_ReplyWithError(ctx, "ERR APPLY requires AS alias");
+      if (arg_i >= argc || !MatchArg(ArgView(argv[arg_i]), "AS")) {
+        err_out = "ERR APPLY requires AS alias";
+        return false;
+      }
       arg_i++;
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR APPLY AS requires alias name");
+      if (arg_i >= argc) { err_out = "ERR APPLY AS requires alias name"; return false; }
       std::string alias(ArgView(argv[arg_i]));
       arg_i++;
       PipelineStage st;
       st.type = PipelineStageType::kApply;
       st.apply_expr = std::move(expr);
       st.apply_alias = std::move(alias);
-      stages.push_back(std::move(st));
+      out.stages.push_back(std::move(st));
     } else if (MatchArg(kw, "FILTER")) {
       pending_groupby = nullptr;
       arg_i++;
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR FILTER requires expression");
+      if (arg_i >= argc) { err_out = "ERR FILTER requires expression"; return false; }
       PipelineStage st;
       st.type = PipelineStageType::kFilter;
       st.filter_expr = std::string(ArgView(argv[arg_i]));
       arg_i++;
-      stages.push_back(std::move(st));
+      out.stages.push_back(std::move(st));
     } else if (MatchArg(kw, "GROUPBY")) {
       arg_i++;
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR GROUPBY requires count");
+      if (arg_i >= argc) { err_out = "ERR GROUPBY requires count"; return false; }
       long long gb_count = 0;
-      if (!ParseAggLong(argv[arg_i++], gb_count) || gb_count < 0)
-        return RedisModule_ReplyWithError(ctx, "ERR GROUPBY count must be non-negative");
+      if (!ParseAggLong(argv[arg_i++], gb_count) || gb_count < 0) {
+        err_out = "ERR GROUPBY count must be non-negative";
+        return false;
+      }
       PipelineStage st;
       st.type = PipelineStageType::kGroupby;
       for (long long g = 0; g < gb_count; g++) {
-        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough GROUPBY fields");
+        if (arg_i >= argc) { err_out = "ERR not enough GROUPBY fields"; return false; }
         auto fv = ArgView(argv[arg_i]);
         arg_i++;
-        if (fv.empty() || fv[0] != '@')
-          return RedisModule_ReplyWithError(ctx, "ERR GROUPBY field must start with @");
+        if (fv.empty() || fv[0] != '@') {
+          err_out = "ERR GROUPBY field must start with @";
+          return false;
+        }
         st.groupby_fields.emplace_back(fv.substr(1));
       }
-      stages.push_back(std::move(st));
-      pending_groupby = &stages.back();
+      out.stages.push_back(std::move(st));
+      pending_groupby = &out.stages.back();
     } else if (MatchArg(kw, "REDUCE")) {
       arg_i++;
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR REDUCE requires function name");
+      if (arg_i >= argc) { err_out = "ERR REDUCE requires function name"; return false; }
       auto func_str = ArgView(argv[arg_i]);
       arg_i++;
 
@@ -581,27 +537,31 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       } else if (MatchArg(func_str, "COUNT_DISTINCTISH")) {
         rop.func = ReduceFunc::kCountDistinctish; needs_field = true;
       } else {
-        return RedisModule_ReplyWithError(ctx, "ERR unknown REDUCE function");
+        err_out = "ERR unknown REDUCE function";
+        return false;
       }
 
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR REDUCE requires nargs");
+      if (arg_i >= argc) { err_out = "ERR REDUCE requires nargs"; return false; }
       long long nargs = 0;
-      if (!ParseAggLong(argv[arg_i++], nargs) || nargs < 0)
-        return RedisModule_ReplyWithError(ctx, "ERR REDUCE nargs must be non-negative");
+      if (!ParseAggLong(argv[arg_i++], nargs) || nargs < 0) {
+        err_out = "ERR REDUCE nargs must be non-negative";
+        return false;
+      }
 
       long long consumed = 0;
       if (needs_field && nargs >= 1) {
-        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR REDUCE missing field argument");
+        if (arg_i >= argc) { err_out = "ERR REDUCE missing field argument"; return false; }
         auto rf = ArgView(argv[arg_i]);
         arg_i++; consumed++;
-        if (rf.empty() || rf[0] != '@')
-          return RedisModule_ReplyWithError(ctx, "ERR REDUCE field must start with @");
+        if (rf.empty() || rf[0] != '@') {
+          err_out = "ERR REDUCE field must start with @";
+          return false;
+        }
         rop.field = std::string(rf.substr(1));
       }
 
-      // Parse extra args for specific reducers
       if (rop.func == ReduceFunc::kQuantile && consumed < nargs) {
-        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR QUANTILE requires percentile");
+        if (arg_i >= argc) { err_out = "ERR QUANTILE requires percentile"; return false; }
         ParseAggDouble(argv[arg_i++], rop.quantile_pct);
         consumed++;
       }
@@ -622,49 +582,53 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         }
       }
       if (rop.func == ReduceFunc::kRandomSample && consumed < nargs) {
-        if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR RANDOM_SAMPLE requires count");
+        if (arg_i >= argc) { err_out = "ERR RANDOM_SAMPLE requires count"; return false; }
         long long rsc = 0;
         ParseAggLong(argv[arg_i++], rsc);
         rop.random_sample_count = static_cast<long>(rsc);
         consumed++;
       }
 
-      // Skip any remaining args
       for (long long skip = consumed; skip < nargs; skip++) {
         if (arg_i < argc) arg_i++;
       }
 
-      if (arg_i >= argc || !MatchArg(ArgView(argv[arg_i]), "AS"))
-        return RedisModule_ReplyWithError(ctx, "ERR REDUCE requires AS alias");
+      if (arg_i >= argc || !MatchArg(ArgView(argv[arg_i]), "AS")) {
+        err_out = "ERR REDUCE requires AS alias";
+        return false;
+      }
       arg_i++;
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR REDUCE AS requires alias name");
+      if (arg_i >= argc) { err_out = "ERR REDUCE AS requires alias name"; return false; }
       rop.alias = std::string(ArgView(argv[arg_i]));
       arg_i++;
 
       if (pending_groupby) {
         pending_groupby->reducers.push_back(std::move(rop));
       } else {
-        // Implicit empty GROUPBY
         PipelineStage st;
         st.type = PipelineStageType::kGroupby;
         st.reducers.push_back(std::move(rop));
-        stages.push_back(std::move(st));
-        pending_groupby = &stages.back();
+        out.stages.push_back(std::move(st));
+        pending_groupby = &out.stages.back();
       }
     } else if (MatchArg(kw, "SORTBY")) {
       pending_groupby = nullptr;
       arg_i++;
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SORTBY requires count");
+      if (arg_i >= argc) { err_out = "ERR SORTBY requires count"; return false; }
       long long sb_count = 0;
-      if (!ParseAggLong(argv[arg_i++], sb_count) || sb_count < 1 || arg_i + sb_count > argc)
-        return RedisModule_ReplyWithError(ctx, "ERR SORTBY count invalid");
+      if (!ParseAggLong(argv[arg_i++], sb_count) || sb_count < 1 || arg_i + sb_count > argc) {
+        err_out = "ERR SORTBY count invalid";
+        return false;
+      }
       PipelineStage st;
       st.type = PipelineStageType::kSortby;
       int sb_end = arg_i + static_cast<int>(sb_count);
       while (arg_i < sb_end) {
         auto sf = ArgView(argv[arg_i++]);
-        if (sf.empty() || sf[0] != '@')
-          return RedisModule_ReplyWithError(ctx, "ERR SORTBY field must start with @");
+        if (sf.empty() || sf[0] != '@') {
+          err_out = "ERR SORTBY field must start with @";
+          return false;
+        }
         bool desc = false;
         if (arg_i < sb_end) {
           auto dir = ArgView(argv[arg_i]);
@@ -675,85 +639,241 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
       if (arg_i + 1 < argc && MatchArg(ArgView(argv[arg_i]), "MAX")) {
         long long m = 0;
-        if (!ParseAggLong(argv[arg_i + 1], m) || m < 0)
-          return RedisModule_ReplyWithError(ctx, "ERR SORTBY MAX must be a non-negative integer");
+        if (!ParseAggLong(argv[arg_i + 1], m) || m < 0) {
+          err_out = "ERR SORTBY MAX must be a non-negative integer";
+          return false;
+        }
         st.sortby_max = m;
         arg_i += 2;
       }
-      stages.push_back(std::move(st));
+      out.stages.push_back(std::move(st));
     } else if (MatchArg(kw, "PARAMS")) {
       pending_groupby = nullptr;
       arg_i++;
-      if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR PARAMS requires count");
+      if (arg_i >= argc) { err_out = "ERR PARAMS requires count"; return false; }
       long long pcount = 0;
-      if (!ParseAggLong(argv[arg_i++], pcount) || pcount < 0 || arg_i + pcount > argc)
-        return RedisModule_ReplyWithError(ctx, "ERR invalid PARAMS count");
+      if (!ParseAggLong(argv[arg_i++], pcount) || pcount < 0 || pcount % 2 != 0 ||
+          arg_i + pcount > argc) {
+        err_out = "ERR invalid PARAMS specification";
+        return false;
+      }
+      for (long long p = 0; p < pcount; p += 2) {
+        std::string pname(ArgView(argv[arg_i + p]));
+        std::string pval = ArgStr(argv[arg_i + p + 1]);
+        out.params[std::move(pname)] = std::move(pval);
+      }
       arg_i += static_cast<int>(pcount);
     } else if (MatchArg(kw, "LIMIT")) {
       pending_groupby = nullptr;
       arg_i++;
-      if (arg_i + 1 >= argc)
-        return RedisModule_ReplyWithError(ctx, "ERR LIMIT requires offset and count");
-      char* ep1 = nullptr;
-      char* ep2 = nullptr;
-      std::string off_s(ArgView(argv[arg_i]));
-      std::string cnt_s(ArgView(argv[arg_i + 1]));
-      long long off = std::strtoll(off_s.c_str(), &ep1, 10);
-      long long cnt = std::strtoll(cnt_s.c_str(), &ep2, 10);
-      if (*ep1 != '\0' || *ep2 != '\0' || off < 0 || cnt < 0)
-        return RedisModule_ReplyWithError(ctx, "ERR LIMIT offset and count must be non-negative");
+      if (arg_i + 1 >= argc) { err_out = "ERR LIMIT requires offset and count"; return false; }
+      long long off = 0, cnt = 0;
+      if (!ParseAggLong(argv[arg_i], off) || !ParseAggLong(argv[arg_i + 1], cnt) ||
+          off < 0 || cnt < 0) {
+        err_out = "ERR LIMIT offset and count must be non-negative";
+        return false;
+      }
       PipelineStage st;
       st.type = PipelineStageType::kLimit;
       st.limit_offset = off;
       st.limit_count = cnt;
-      stages.push_back(std::move(st));
+      out.stages.push_back(std::move(st));
       arg_i += 2;
     } else if (MatchArg(kw, "WITHCURSOR")) {
       pending_groupby = nullptr;
+      out.with_cursor = true;
       arg_i++;
     } else if (MatchArg(kw, "COUNT")) {
       pending_groupby = nullptr;
       arg_i++;
-      if (arg_i >= argc)
-        return RedisModule_ReplyWithError(ctx, "ERR COUNT requires a value");
+      if (arg_i >= argc) { err_out = "ERR COUNT requires a value"; return false; }
+      long long cv = 0;
+      if (ParseAggLong(argv[arg_i], cv) && cv > 0) out.cursor_count = static_cast<size_t>(cv);
       arg_i++;
     } else if (MatchArg(kw, "MAXIDLE")) {
       pending_groupby = nullptr;
       arg_i++;
-      if (arg_i >= argc)
-        return RedisModule_ReplyWithError(ctx, "ERR MAXIDLE requires a value");
+      if (arg_i >= argc) { err_out = "ERR MAXIDLE requires a value"; return false; }
+      long long mv = 0;
+      if (!ParseAggLong(argv[arg_i], mv) || mv < 0) {
+        err_out = "ERR MAXIDLE must be a non-negative integer";
+        return false;
+      }
+      out.cursor_max_idle_ms = static_cast<int64_t>(mv);
       arg_i++;
-    } else if (MatchArg(kw, "DIALECT") || MatchArg(kw, "TIMEOUT") ||
-               MatchArg(kw, "SCORER")) {
+    } else if (MatchArg(kw, "DIALECT")) {
       pending_groupby = nullptr;
       arg_i++;
-      if (arg_i >= argc)
-        return RedisModule_ReplyWithError(ctx, "ERR option requires a value");
+      if (arg_i >= argc) { err_out = "ERR option requires a value"; return false; }
+      long long d = 0;
+      if (ParseAggLong(argv[arg_i], d) && d >= 1) out.dialect = static_cast<int>(d);
+      arg_i++;
+    } else if (MatchArg(kw, "TIMEOUT")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc) { err_out = "ERR option requires a value"; return false; }
+      long long tms = 0;
+      if (ParseAggLong(argv[arg_i], tms) && tms > 0) out.timeout_ms = tms;
+      arg_i++;
+    } else if (MatchArg(kw, "SCORER")) {
+      pending_groupby = nullptr;
+      arg_i++;
+      if (arg_i >= argc) { err_out = "ERR option requires a value"; return false; }
       arg_i++;
     } else if (MatchArg(kw, "VERBATIM") || MatchArg(kw, "ADDSCORES")) {
       pending_groupby = nullptr;
       arg_i++;
     } else {
-      return RedisModule_ReplyWithError(ctx, "ERR unknown AGGREGATE option");
+      err_out = "ERR unknown AGGREGATE option";
+      return false;
     }
   }
+  return true;
+}
 
-  // Check for WITHCURSOR / COUNT / MAXIDLE
-  bool with_cursor = false;
-  size_t cursor_count = 1000;
-  int64_t cursor_max_idle_ms = 300000;
-  for (int ci = 3; ci < argc; ci++) {
-    if (MatchArg(ArgView(argv[ci]), "WITHCURSOR")) {
-      with_cursor = true;
-    } else if (MatchArg(ArgView(argv[ci]), "COUNT") && ci + 1 < argc) {
-      long long cv = 0;
-      if (ParseAggLong(argv[ci + 1], cv) && cv > 0) cursor_count = static_cast<size_t>(cv);
-    } else if (MatchArg(ArgView(argv[ci]), "MAXIDLE") && ci + 1 < argc) {
-      long long mv = 0;
-      if (!ParseAggLong(argv[ci + 1], mv) || mv < 0) {
-        return RedisModule_ReplyWithError(ctx, "ERR MAXIDLE must be a non-negative integer");
+struct AsyncAggContext {
+  RedisModuleBlockedClient* bc = nullptr;
+  std::mutex mu;
+  bool cancelled = false;
+  std::string error;
+  std::vector<AggRow> rows;
+};
+
+BlockedClientRegistry<AsyncAggContext> g_active_async_aggs;
+
+void AsyncAggDisconnectCb(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
+  g_active_async_aggs.OnDisconnect(bc);
+}
+
+int AsyncAggReplyCb(RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) {
+  auto* holder = static_cast<std::shared_ptr<AsyncAggContext>*>(
+      RedisModule_GetBlockedClientPrivateData(c));
+  if (!holder || !(*holder)) return RedisModule_ReplyWithError(c, "ERR async aggregate internal error");
+  auto& r = **holder;
+  std::lock_guard<std::mutex> lk(r.mu);
+  if (!r.error.empty()) {
+    if (r.error == "ERR query timeout" && IsOnTimeoutReturn()) {
+      RedisModule_ReplyWithArray(c, 0);
+      return REDISMODULE_OK;
+    }
+    return RedisModule_ReplyWithError(c, r.error.c_str());
+  }
+  RedisModule_ReplyWithArray(c, static_cast<long>(r.rows.size()));
+  for (const auto& row : r.rows) {
+    std::vector<std::string> keys;
+    keys.reserve(row.size());
+    for (const auto& [k, v] : row) keys.push_back(k);
+    std::sort(keys.begin(), keys.end());
+    RedisModule_ReplyWithArray(c, static_cast<long>(keys.size()) * 2);
+    for (const auto& k : keys) {
+      RedisModule_ReplyWithStringBuffer(c, k.data(), k.size());
+      const std::string& val = row.at(k);
+      RedisModule_ReplyWithStringBuffer(c, val.data(), val.size());
+    }
+  }
+  return REDISMODULE_OK;
+}
+
+int AsyncAggTimeoutCb(RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) {
+  if (IsOnTimeoutReturn()) {
+    RedisModule_ReplyWithArray(c, 0);
+    return REDISMODULE_OK;
+  }
+  return RedisModule_ReplyWithError(c, "ERR query timeout");
+}
+
+void AsyncAggFreeCb(RedisModuleCtx* /*c*/, void* priv) {
+  delete static_cast<std::shared_ptr<AsyncAggContext>*>(priv);
+}
+
+}  // namespace
+
+bool ParseAggArgsForProfile(
+    RedisModuleString** argv, int start_arg, int argc,
+    std::vector<gemini_search::PipelineStage>& stages_out,
+    std::unordered_map<std::string, std::string>& params_out,
+    int& dialect_inout, long long& timeout_ms_out, std::string& error_out) {
+  ParsedAggOptions opts;
+  opts.dialect = dialect_inout;
+  if (!ParseAggPipelineAndOptions(argv, start_arg, argc, opts, error_out)) {
+    return false;
+  }
+  stages_out = std::move(opts.stages);
+  params_out = std::move(opts.params);
+  dialect_inout = opts.dialect;
+  timeout_ms_out = opts.timeout_ms;
+  return true;
+}
+
+int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                              int argc) {
+  if (argc < 3) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  auto entry_ptr = GetIndexEntryShared(idx_str);
+  if (!entry_ptr) {
+    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+  auto& entry = *entry_ptr;
+  TouchIndex(entry);
+
+  // Parse ALL options and pipeline stages in one structured pass (never misparses values as keywords)
+  ParsedAggOptions parsed_opts;
+  parsed_opts.dialect = GetDefaultDialect();
+  std::string opt_err;
+  if (!ParseAggPipelineAndOptions(argv, 3, argc, parsed_opts, opt_err)) {
+    return RedisModule_ReplyWithError(ctx, opt_err.c_str());
+  }
+
+  QueryOptions qopts;
+  std::unordered_set<std::string> custom_dict_copy;
+  {
+    std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+    qopts.language = entry.spec.language;
+    qopts.dialect = parsed_opts.dialect;
+    if (!entry.spec.custom_dict.empty()) {
+      std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
+      auto dit = GetTermDicts().find(entry.spec.custom_dict);
+      if (dit != GetTermDicts().end()) {
+        custom_dict_copy = dit->second.Terms();
+        qopts.custom_dict = &custom_dict_copy;
       }
-      cursor_max_idle_ms = static_cast<int64_t>(mv);
+    }
+  }
+  long long timeout_ms = parsed_opts.timeout_ms;
+  if (timeout_ms > 0) {
+    qopts.deadline_ms = SaturatingAddMs(NowMs(), static_cast<int64_t>(timeout_ms));
+  }
+  auto& params = parsed_opts.params;
+  auto& stages = parsed_opts.stages;
+  bool with_cursor = parsed_opts.with_cursor;
+  size_t cursor_count = parsed_opts.cursor_count;
+  int64_t cursor_max_idle_ms = parsed_opts.cursor_max_idle_ms;
+
+  ParsedQuery parsed;
+  std::string parse_error;
+  if (!ParseQuery(std::string(ArgView(argv[2])), parsed, parse_error, qopts)) {
+    return RedisModule_ReplyWithError(ctx, parse_error.c_str());
+  }
+
+  std::vector<float> qvec;
+  std::string knn_score_field = parsed.knn_score_alias.empty()
+                                    ? "__vec_score"
+                                    : parsed.knn_score_alias;
+  if (parsed.has_knn) {
+    std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+    const auto* fspec = entry.spec.FindField(parsed.knn_field);
+    if (!fspec || fspec->type != FieldType::kVector) {
+      return RedisModule_ReplyWithError(ctx, "ERR KNN field is not a VECTOR field");
+    }
+    auto pit = params.find(parsed.knn_param_name);
+    if (pit == params.end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR KNN param not found in PARAMS");
+    }
+    if (!DecodeVectorBlob(pit->second, fspec->vector_params.dim,
+                          fspec->vector_params.data_type, qvec)) {
+      return RedisModule_ReplyWithError(ctx, "ERR query vector dimension mismatch");
     }
   }
 
@@ -786,65 +906,47 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     mreq.groupby_stage = std::move(split.groupby_stage);
     mreq.max_groups = static_cast<uint64_t>(GetClusterAggMaxGroups());
     mreq.raw_shard_limit = static_cast<uint64_t>(split.raw_shard_limit);
+    mreq.raw_zero_limit = split.raw_zero_limit;
     mreq.raw_has_sortby = split.raw_has_sortby;
     mreq.raw_sortby_keys = std::move(split.raw_sortby_keys);
 
     return gemini_search::ExecuteClusterAggregate(ctx, std::move(aplan));
   }
 
-  // Phase 53: Non-blocking async offload for non-cursor FT.AGGREGATE
+  // Phase 53: Non-blocking async offload for non-cursor FT.AGGREGATE (race-free BlockedClientRegistry)
   size_t async_min = GetAsyncMinDocs();
+  size_t doc_count = 0;
+  {
+    std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+    doc_count = entry.doc_store.Size();
+  }
   if (!with_cursor && RedisModule_BlockClient && RedisModule_UnblockClient &&
-      async_min > 0 && entry.doc_store.Size() >= async_min) {
-    struct AsyncAggReply {
-      std::string error;
-      std::vector<AggRow> rows;
-    };
-
-    auto ReplyCb = [](RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) -> int {
-      auto* r = static_cast<AsyncAggReply*>(RedisModule_GetBlockedClientPrivateData(c));
-      if (!r) return RedisModule_ReplyWithError(c, "ERR async aggregate internal error");
-      if (!r->error.empty()) return RedisModule_ReplyWithError(c, r->error.c_str());
-      RedisModule_ReplyWithArray(c, static_cast<long>(r->rows.size()));
-      for (const auto& row : r->rows) {
-        std::vector<std::string> keys;
-        keys.reserve(row.size());
-        for (const auto& [k, v] : row) keys.push_back(k);
-        std::sort(keys.begin(), keys.end());
-        RedisModule_ReplyWithArray(c, static_cast<long>(keys.size()) * 2);
-        for (const auto& k : keys) {
-          RedisModule_ReplyWithCString(c, k.c_str());
-          RedisModule_ReplyWithCString(c, row.at(k).c_str());
-        }
-      }
-      return REDISMODULE_OK;
-    };
-    auto TimeoutCb = [](RedisModuleCtx* c, RedisModuleString** /*av*/, int /*ac*/) -> int {
-      if (IsOnTimeoutReturn()) {
-        RedisModule_ReplyWithArray(c, 0);
-        return REDISMODULE_OK;
-      }
-      return RedisModule_ReplyWithError(c, "ERR query timeout");
-    };
-    auto FreeCb = [](RedisModuleCtx* /*c*/, void* priv) {
-      delete static_cast<AsyncAggReply*>(priv);
-    };
-
+      async_min > 0 && doc_count >= async_min) {
+    auto actx = std::make_shared<AsyncAggContext>();
+    // Pass timeout=0 because worker enforces qopts.deadline_ms and unblocks via BlockedClientRegistry
     RedisModuleBlockedClient* bc =
-        RedisModule_BlockClient(ctx, ReplyCb, TimeoutCb, FreeCb, timeout_ms);
+        RedisModule_BlockClient(ctx, AsyncAggReplyCb, AsyncAggTimeoutCb, AsyncAggFreeCb, 0);
+    if (!bc) return RedisModule_ReplyWithError(ctx, "ERR failed to block client for async aggregate");
+    actx->bc = bc;
+    g_active_async_aggs.Register(bc, actx);
+    if (RedisModule_SetDisconnectCallback) {
+      RedisModule_SetDisconnectCallback(bc, AsyncAggDisconnectCb);
+    }
 
     GetSearchExecutor().Submit(
-        [bc, idx_str, parsed = std::move(parsed), qvec = std::move(qvec),
+        [actx, idx_str, parsed = std::move(parsed), qvec = std::move(qvec),
          knn_score_field = std::move(knn_score_field),
          stages = std::move(stages), params = std::move(params),
-         qopts = std::move(qopts)]() {
-          auto* rep = new AsyncAggReply();
+         qopts = std::move(qopts), custom_dict_copy = std::move(custom_dict_copy)]() mutable {
+          if (!custom_dict_copy.empty()) qopts.custom_dict = &custom_dict_copy;
+          std::string err;
+          std::vector<AggRow> out_rows;
           {
-            auto entry_ptr = GetIndexEntryShared(idx_str);
-            if (!entry_ptr) {
-              rep->error = "ERR index not found";
+            auto eptr = GetIndexEntryShared(idx_str);
+            if (!eptr) {
+              err = "ERR index not found";
             } else {
-              const auto& e = *entry_ptr;
+              const auto& e = *eptr;
               std::shared_lock<std::shared_mutex> idx_lk(e.Mutex());
               std::vector<std::string> result_ids;
               std::unordered_map<std::string, std::string> knn_scores;
@@ -859,7 +961,7 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                         qopts, &e.geoshape_indices, &params, &e.vector_indices,
                         &e.synonyms);
                     if (!ferr.empty()) {
-                      rep->error = ferr;
+                      err = ferr;
                     } else {
                       knn_hits = vi->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands,
                                                       parsed.knn_ef_runtime, parsed.knn_oversample);
@@ -868,7 +970,7 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                     knn_hits = vi->KnnQueryEf(qvec.data(), parsed.knn_k,
                                               parsed.knn_ef_runtime, parsed.knn_oversample);
                   }
-                  if (rep->error.empty()) {
+                  if (err.empty()) {
                     result_ids.reserve(knn_hits.size());
                     for (const auto& h : knn_hits) {
                       result_ids.push_back(h.doc_id);
@@ -883,10 +985,10 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                     e.numeric_indices, e.text_indices, e.geo_indices, eval_error,
                     qopts, &e.geoshape_indices, &params, &e.vector_indices,
                     &e.synonyms);
-                if (!eval_error.empty()) rep->error = eval_error;
+                if (!eval_error.empty()) err = eval_error;
               }
-              if (rep->error.empty()) {
-                rep->rows.reserve(result_ids.size());
+              if (err.empty()) {
+                out_rows.reserve(result_ids.size());
                 for (const auto& doc_id : result_ids) {
                   const auto* doc = e.doc_store.Get(doc_id);
                   if (!doc) continue;
@@ -895,13 +997,23 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                     auto sit = knn_scores.find(doc_id);
                     if (sit != knn_scores.end()) r[knn_score_field] = sit->second;
                   }
-                  rep->rows.push_back(std::move(r));
+                  out_rows.push_back(std::move(r));
                 }
-                ExecuteAggPipeline(rep->rows, stages, qopts.deadline_ms, rep->error);
+                ExecuteAggPipeline(out_rows, stages, qopts.deadline_ms, err);
               }
             }
           }
-          RedisModule_UnblockClient(bc, rep);
+          RedisModuleBlockedClient* to_unblock = nullptr;
+          {
+            std::lock_guard<std::mutex> lk(actx->mu);
+            if (!actx->cancelled) {
+              actx->error = std::move(err);
+              actx->rows = std::move(out_rows);
+              to_unblock = actx->bc;
+              actx->bc = nullptr;
+            }
+          }
+          g_active_async_aggs.Unblock(actx, to_unblock);
         });
     return REDISMODULE_OK;
   }
@@ -1025,139 +1137,9 @@ bool RunAggregateForProfile(
     RedisModuleString** argv, int start_arg, int argc,
     std::vector<std::unordered_map<std::string, std::string>>& out_rows,
     std::string& error_msg, int64_t deadline_ms) {
-  std::vector<PipelineStage> stages;
-  PipelineStage* pending_groupby = nullptr;
-
-  int arg_i = start_arg;
-  while (arg_i < argc) {
-    auto kw = ArgView(argv[arg_i]);
-    if (MatchArg(kw, "LOAD")) {
-      pending_groupby = nullptr;
-      arg_i++;
-      if (arg_i >= argc) { error_msg = "ERR LOAD requires nargs"; return false; }
-      char* ep = nullptr;
-      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &ep, 10);
-      arg_i++;
-      if (*ep != '\0' || n < 0 || arg_i + n > argc) {
-        error_msg = "ERR LOAD field count mismatch";
-        return false;
-      }
-      arg_i += static_cast<int>(n);
-    } else if (MatchArg(kw, "APPLY")) {
-      pending_groupby = nullptr;
-      arg_i++;
-      if (arg_i + 2 >= argc || !MatchArg(ArgView(argv[arg_i + 1]), "AS")) {
-        error_msg = "ERR APPLY requires expr AS alias";
-        return false;
-      }
-      PipelineStage st;
-      st.type = PipelineStageType::kApply;
-      st.apply_expr = std::string(ArgView(argv[arg_i]));
-      st.apply_alias = std::string(ArgView(argv[arg_i + 2]));
-      stages.push_back(std::move(st));
-      arg_i += 3;
-    } else if (MatchArg(kw, "FILTER")) {
-      pending_groupby = nullptr;
-      arg_i++;
-      if (arg_i >= argc) { error_msg = "ERR FILTER requires expr"; return false; }
-      PipelineStage st;
-      st.type = PipelineStageType::kFilter;
-      st.filter_expr = std::string(ArgView(argv[arg_i]));
-      stages.push_back(std::move(st));
-      arg_i++;
-    } else if (MatchArg(kw, "GROUPBY")) {
-      arg_i++;
-      if (arg_i >= argc) { error_msg = "ERR GROUPBY requires nargs"; return false; }
-      char* ep = nullptr;
-      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &ep, 10);
-      arg_i++;
-      if (*ep != '\0' || n < 0 || arg_i + n > argc) {
-        error_msg = "ERR GROUPBY field count mismatch";
-        return false;
-      }
-      PipelineStage st;
-      st.type = PipelineStageType::kGroupby;
-      for (long fi = 0; fi < n; fi++) {
-        std::string f(ArgView(argv[arg_i + fi]));
-        if (!f.empty() && f[0] == '@') f = f.substr(1);
-        st.groupby_fields.push_back(std::move(f));
-      }
-      arg_i += static_cast<int>(n);
-      stages.push_back(std::move(st));
-      pending_groupby = &stages.back();
-    } else if (MatchArg(kw, "REDUCE") && pending_groupby) {
-      arg_i++;
-      if (arg_i + 1 >= argc) { error_msg = "ERR REDUCE requires func and nargs"; return false; }
-      auto fstr = ArgView(argv[arg_i++]);
-      char* ep = nullptr;
-      long nargs = std::strtol(std::string(ArgView(argv[arg_i++])).c_str(), &ep, 10);
-      if (*ep != '\0' || nargs < 0 || arg_i + nargs > argc) {
-        error_msg = "ERR REDUCE nargs mismatch";
-        return false;
-      }
-      ReduceOp rop;
-      if (MatchArg(fstr, "COUNT")) rop.func = ReduceFunc::kCount;
-      else if (MatchArg(fstr, "SUM")) rop.func = ReduceFunc::kSum;
-      else if (MatchArg(fstr, "AVG")) rop.func = ReduceFunc::kAvg;
-      else if (MatchArg(fstr, "MIN")) rop.func = ReduceFunc::kMin;
-      else if (MatchArg(fstr, "MAX")) rop.func = ReduceFunc::kMax;
-      else if (MatchArg(fstr, "COUNT_DISTINCT")) rop.func = ReduceFunc::kCountDistinct;
-      else if (MatchArg(fstr, "COUNT_DISTINCTISH")) rop.func = ReduceFunc::kCountDistinctish;
-      else if (MatchArg(fstr, "STDDEV")) rop.func = ReduceFunc::kStddev;
-      else if (MatchArg(fstr, "TOLIST")) rop.func = ReduceFunc::kTolist;
-      else { error_msg = "ERR unknown REDUCE function"; return false; }
-      if (nargs >= 1) {
-        std::string f(ArgView(argv[arg_i]));
-        if (!f.empty() && f[0] == '@') f = f.substr(1);
-        rop.field = std::move(f);
-      }
-      arg_i += static_cast<int>(nargs);
-      if (arg_i + 1 < argc && MatchArg(ArgView(argv[arg_i]), "AS")) {
-        rop.alias = std::string(ArgView(argv[arg_i + 1]));
-        arg_i += 2;
-      } else {
-        rop.alias = std::string(fstr);
-      }
-      pending_groupby->reducers.push_back(std::move(rop));
-    } else if (MatchArg(kw, "SORTBY")) {
-      pending_groupby = nullptr;
-      arg_i++;
-      if (arg_i >= argc) { error_msg = "ERR SORTBY requires nargs"; return false; }
-      char* ep = nullptr;
-      long n = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &ep, 10);
-      arg_i++;
-      if (*ep != '\0' || n < 1 || arg_i + n > argc) {
-        error_msg = "ERR SORTBY args mismatch";
-        return false;
-      }
-      PipelineStage st;
-      st.type = PipelineStageType::kSortby;
-      int sb_end = arg_i + static_cast<int>(n);
-      while (arg_i < sb_end) {
-        std::string sf(ArgView(argv[arg_i++]));
-        if (!sf.empty() && sf[0] == '@') sf = sf.substr(1);
-        bool desc = false;
-        if (arg_i < sb_end) {
-          auto dir = ArgView(argv[arg_i]);
-          if (MatchArg(dir, "DESC")) { desc = true; arg_i++; }
-          else if (MatchArg(dir, "ASC")) { desc = false; arg_i++; }
-        }
-        st.sortby_keys.emplace_back(std::move(sf), desc);
-      }
-      stages.push_back(std::move(st));
-    } else if (MatchArg(kw, "LIMIT")) {
-      pending_groupby = nullptr;
-      arg_i++;
-      if (arg_i + 1 >= argc) { error_msg = "ERR LIMIT requires offset count"; return false; }
-      PipelineStage st;
-      st.type = PipelineStageType::kLimit;
-      st.limit_offset = std::strtoll(std::string(ArgView(argv[arg_i])).c_str(), nullptr, 10);
-      st.limit_count = std::strtoll(std::string(ArgView(argv[arg_i + 1])).c_str(), nullptr, 10);
-      stages.push_back(std::move(st));
-      arg_i += 2;
-    } else {
-      arg_i++;
-    }
+  ParsedAggOptions opts;
+  if (!ParseAggPipelineAndOptions(argv, start_arg, argc, opts, error_msg)) {
+    return false;
   }
 
   out_rows.clear();
@@ -1168,5 +1150,5 @@ bool RunAggregateForProfile(
     }
   }
 
-  return ExecuteAggPipeline(out_rows, stages, deadline_ms, error_msg);
+  return ExecuteAggPipeline(out_rows, opts.stages, deadline_ms, error_msg);
 }

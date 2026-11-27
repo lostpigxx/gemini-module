@@ -6,6 +6,7 @@
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
+#include <limits>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -18,6 +19,7 @@ namespace {
 
 constexpr size_t kReadChunkBytes = 65536;
 constexpr size_t kMaxPendingOutboundBytes = 64u * 1024u * 1024u;
+constexpr size_t kMaxPreAuthPayloadBytes = 1024u * 1024u;
 constexpr int kMaxPollTimeoutMs = 50;
 
 bool SetNonBlockingAndCloexec(int fd) {
@@ -193,37 +195,208 @@ int64_t ClusterNowMs() {
   return static_cast<int64_t>(ts.tv_sec) * 1000LL + static_cast<int64_t>(ts.tv_nsec) / 1000000LL;
 }
 
+int64_t SafeAddDeadlineMs(int64_t now_ms, int64_t timeout_ms) {
+  if (timeout_ms <= 0) return now_ms;
+  if (now_ms > std::numeric_limits<int64_t>::max() - timeout_ms) {
+    return std::numeric_limits<int64_t>::max();
+  }
+  return now_ms + timeout_ms;
+}
+
 namespace {
 
-inline uint64_t SplitMix64(uint64_t x) {
-  x += 0x9e3779b97f4a7c15ULL;
-  x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
-  x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
-  return x ^ (x >> 31);
-}
+// Self-contained FIPS 180-4 SHA-256 implementation (endian-independent, zero external deps).
+class Sha256 {
+ public:
+  static constexpr size_t kBlockBytes = 64;
+  static constexpr size_t kDigestBytes = 32;
 
-inline uint64_t MixBytes64(uint64_t state, std::string_view data) {
-  state = SplitMix64(state ^ static_cast<uint64_t>(data.size()));
-  size_t i = 0;
-  while (i + 8 <= data.size()) {
-    uint64_t chunk = 0;
-    std::memcpy(&chunk, data.data() + i, 8);
-    state = SplitMix64(state ^ chunk);
-    i += 8;
+  Sha256() { Reset(); }
+
+  void Reset() {
+    h_[0] = 0x6a09e667u;
+    h_[1] = 0xbb67ae85u;
+    h_[2] = 0x3c6ef372u;
+    h_[3] = 0xa54ff53au;
+    h_[4] = 0x510e527fu;
+    h_[5] = 0x9b05688cu;
+    h_[6] = 0x1f83d9abu;
+    h_[7] = 0x5be0cd19u;
+    total_bytes_ = 0;
+    buf_len_ = 0;
   }
-  if (i < data.size()) {
-    uint64_t tail = 0;
-    for (size_t b = 0; i + b < data.size(); b++) {
-      tail |= static_cast<uint64_t>(static_cast<uint8_t>(data[i + b])) << (b * 8);
+
+  void Update(const uint8_t* data, size_t len) {
+    if (!data || len == 0) return;
+    total_bytes_ += len;
+    size_t off = 0;
+    if (buf_len_ > 0) {
+      size_t take = std::min(kBlockBytes - buf_len_, len);
+      std::memcpy(buf_ + buf_len_, data, take);
+      buf_len_ += take;
+      off += take;
+      if (buf_len_ == kBlockBytes) {
+        Transform(buf_);
+        buf_len_ = 0;
+      }
     }
-    state = SplitMix64(state ^ tail);
+    while (off + kBlockBytes <= len) {
+      Transform(data + off);
+      off += kBlockBytes;
+    }
+    if (off < len) {
+      buf_len_ = len - off;
+      std::memcpy(buf_, data + off, buf_len_);
+    }
   }
-  return state;
+
+  void Update(std::string_view sv) {
+    Update(reinterpret_cast<const uint8_t*>(sv.data()), sv.size());
+  }
+
+  std::array<uint8_t, kDigestBytes> Final() {
+    uint64_t total_bits = total_bytes_ * 8ULL;
+    uint8_t pad = 0x80u;
+    Update(&pad, 1);
+    uint8_t zero = 0;
+    while (buf_len_ != 56) {
+      Update(&zero, 1);
+    }
+    uint8_t len_be[8];
+    for (int i = 0; i < 8; i++) {
+      len_be[i] = static_cast<uint8_t>((total_bits >> ((7 - i) * 8)) & 0xFFu);
+    }
+    Update(len_be, 8);
+
+    std::array<uint8_t, kDigestBytes> digest{};
+    for (size_t i = 0; i < 8; i++) {
+      digest[i * 4 + 0] = static_cast<uint8_t>((h_[i] >> 24) & 0xFFu);
+      digest[i * 4 + 1] = static_cast<uint8_t>((h_[i] >> 16) & 0xFFu);
+      digest[i * 4 + 2] = static_cast<uint8_t>((h_[i] >> 8) & 0xFFu);
+      digest[i * 4 + 3] = static_cast<uint8_t>(h_[i] & 0xFFu);
+    }
+    return digest;
+  }
+
+ private:
+  static inline uint32_t Rotr(uint32_t x, uint32_t n) { return (x >> n) | (x << (32u - n)); }
+
+  void Transform(const uint8_t block[64]) {
+    static constexpr uint32_t kK[64] = {
+        0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u, 0x3956c25bu, 0x59f111f1u, 0x923f82a4u,
+        0xab1c5ed5u, 0xd807aa98u, 0x12835b01u, 0x243185beu, 0x550c7dc3u, 0x72be5d74u, 0x80deb1feu,
+        0x9bdc06a7u, 0xc19bf174u, 0xe49b69c1u, 0xefbe4786u, 0x0fc19dc6u, 0x240ca1ccu, 0x2de92c6fu,
+        0x4a7484aau, 0x5cb0a9dcu, 0x76f988dau, 0x983e5152u, 0xa831c66du, 0xb00327c8u, 0xbf597fc7u,
+        0xc6e00bf3u, 0xd5a79147u, 0x06ca6351u, 0x14292967u, 0x27b70a85u, 0x2e1b2138u, 0x4d2c6dfcu,
+        0x53380d13u, 0x650a7354u, 0x766a0abbu, 0x81c2c92eu, 0x92722c85u, 0xa2bfe8a1u, 0xa81a664bu,
+        0xc24b8b70u, 0xc76c51a3u, 0xd192e819u, 0xd6990624u, 0xf40e3585u, 0x106aa070u, 0x19a4c116u,
+        0x1e376c08u, 0x2748774cu, 0x34b0bcb5u, 0x391c0cb3u, 0x4ed8aa4au, 0x5b9cca4fu, 0x682e6ff3u,
+        0x748f82eeu, 0x78a5636fu, 0x84c87814u, 0x8cc70208u, 0x90befffau, 0xa4506cebu, 0xbef9a3f7u,
+        0xc67178f2u};
+
+    uint32_t w[64];
+    for (int i = 0; i < 16; i++) {
+      w[i] = (static_cast<uint32_t>(block[i * 4 + 0]) << 24) |
+             (static_cast<uint32_t>(block[i * 4 + 1]) << 16) |
+             (static_cast<uint32_t>(block[i * 4 + 2]) << 8) |
+             static_cast<uint32_t>(block[i * 4 + 3]);
+    }
+    for (int i = 16; i < 64; i++) {
+      uint32_t s0 = Rotr(w[i - 15], 7) ^ Rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+      uint32_t s1 = Rotr(w[i - 2], 17) ^ Rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+      w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+
+    uint32_t a = h_[0], b = h_[1], c = h_[2], d = h_[3];
+    uint32_t e = h_[4], f = h_[5], g = h_[6], h = h_[7];
+
+    for (int i = 0; i < 64; i++) {
+      uint32_t s1 = Rotr(e, 6) ^ Rotr(e, 11) ^ Rotr(e, 25);
+      uint32_t ch = (e & f) ^ ((~e) & g);
+      uint32_t temp1 = h + s1 + ch + kK[i] + w[i];
+      uint32_t s0 = Rotr(a, 2) ^ Rotr(a, 13) ^ Rotr(a, 22);
+      uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+      uint32_t temp2 = s0 + maj;
+
+      h = g;
+      g = f;
+      f = e;
+      e = d + temp1;
+      d = c;
+      c = b;
+      b = a;
+      a = temp1 + temp2;
+    }
+
+    h_[0] += a;
+    h_[1] += b;
+    h_[2] += c;
+    h_[3] += d;
+    h_[4] += e;
+    h_[5] += f;
+    h_[6] += g;
+    h_[7] += h;
+  }
+
+  uint32_t h_[8]{};
+  uint64_t total_bytes_ = 0;
+  uint8_t buf_[kBlockBytes]{};
+  size_t buf_len_ = 0;
+};
+
+bool ConstantTimeEqBytes(const uint8_t* a, const uint8_t* b, size_t n) {
+  volatile uint8_t diff = 0;
+  for (size_t i = 0; i < n; i++) {
+    diff = static_cast<uint8_t>(diff | static_cast<uint8_t>(a[i] ^ b[i]));
+  }
+  return diff == 0;
 }
 
-inline bool ConstantTimeEq64(uint64_t a, uint64_t b) {
-  volatile uint64_t diff = a ^ b;
-  return diff == 0;
+bool EncodeAuthenticatedFrame(RpcOpCode opcode, uint16_t flags, uint64_t request_id,
+                              std::string_view payload, std::string_view auth_token,
+                              std::string& out) {
+  if (!auth_token.empty()) {
+    if (payload.size() > kMaxRpcPayloadBytes - kRpcAuthMacBytes) {
+      return false;
+    }
+    uint16_t eff_flags = static_cast<uint16_t>(flags | kRpcFlagHasAuth);
+    auto mac = ComputeRpcAuthMac(auth_token, opcode, eff_flags, request_id, payload);
+    std::string auth_payload;
+    auth_payload.reserve(kRpcAuthMacBytes + payload.size());
+    auth_payload.append(reinterpret_cast<const char*>(mac.data()), mac.size());
+    auth_payload.append(payload.data(), payload.size());
+    return EncodeRpcFrame(opcode, eff_flags, request_id, auth_payload, out);
+  }
+  uint16_t eff_flags = static_cast<uint16_t>(flags & ~kRpcFlagHasAuth);
+  return EncodeRpcFrame(opcode, eff_flags, request_id, payload, out);
+}
+
+bool IsExpectedResponseOpCode(RpcOpCode req_op, RpcOpCode resp_op, uint16_t resp_flags) {
+  RpcOpCode expected = req_op;
+  switch (req_op) {
+    case RpcOpCode::kRpcPing: expected = RpcOpCode::kRpcPong; break;
+    case RpcOpCode::kRpcDdlCreate:
+    case RpcOpCode::kRpcDdlDrop:
+    case RpcOpCode::kRpcDdlAlter:
+    case RpcOpCode::kRpcDdlAlias:
+    case RpcOpCode::kRpcDdlSyn:
+    case RpcOpCode::kRpcDdlDict: expected = RpcOpCode::kRpcDdlResp; break;
+    case RpcOpCode::kRpcSchemaSyncReq: expected = RpcOpCode::kRpcSchemaSyncResp; break;
+    case RpcOpCode::kRpcSearchPhase1: expected = RpcOpCode::kRpcSearchPhase1Resp; break;
+    case RpcOpCode::kRpcFetchDocs: expected = RpcOpCode::kRpcFetchDocsResp; break;
+    case RpcOpCode::kRpcDfsTermStats: expected = RpcOpCode::kRpcDfsTermStatsResp; break;
+    case RpcOpCode::kRpcHybridPhase1: expected = RpcOpCode::kRpcHybridPhase1Resp; break;
+    case RpcOpCode::kRpcAggMap: expected = RpcOpCode::kRpcAggMapResp; break;
+    case RpcOpCode::kRpcInfoStats: expected = RpcOpCode::kRpcInfoStatsResp; break;
+    case RpcOpCode::kRpcTagVals: expected = RpcOpCode::kRpcTagValsResp; break;
+    case RpcOpCode::kRpcSpellCheck: expected = RpcOpCode::kRpcSpellCheckResp; break;
+    case RpcOpCode::kRpcSuggest: expected = RpcOpCode::kRpcSuggestResp; break;
+    case RpcOpCode::kRpcCursor: expected = RpcOpCode::kRpcCursorResp; break;
+    default: return false;
+  }
+  if (resp_op == expected) return true;
+  if ((resp_flags & kRpcFlagError) != 0 && resp_op == req_op) return true;
+  return false;
 }
 
 struct InflightSlotGuard {
@@ -242,21 +415,83 @@ struct InflightSlotGuard {
 
 }  // namespace
 
+std::array<uint8_t, kRpcAuthMacBytes> ComputeRpcAuthMac(std::string_view token, RpcOpCode opcode,
+                                                        uint16_t flags, uint64_t request_id,
+                                                        std::string_view payload) {
+  // RFC 2104 HMAC-SHA256
+  uint8_t key_block[Sha256::kBlockBytes] = {};
+  if (token.size() > Sha256::kBlockBytes) {
+    Sha256 kh;
+    kh.Update(token);
+    auto kd = kh.Final();
+    std::memcpy(key_block, kd.data(), kd.size());
+  } else if (!token.empty()) {
+    std::memcpy(key_block, token.data(), token.size());
+  }
+
+  uint8_t ipad[Sha256::kBlockBytes];
+  uint8_t opad[Sha256::kBlockBytes];
+  for (size_t i = 0; i < Sha256::kBlockBytes; i++) {
+    ipad[i] = static_cast<uint8_t>(key_block[i] ^ 0x36u);
+    opad[i] = static_cast<uint8_t>(key_block[i] ^ 0x5cu);
+  }
+
+  // Build explicit little-endian authenticated header fields (covers opcode, flags/direction, request_id, length)
+  uint8_t meta[2 + 2 + 8 + 8];
+  uint16_t op_u16 = static_cast<uint16_t>(opcode);
+  meta[0] = static_cast<uint8_t>(op_u16 & 0xFFu);
+  meta[1] = static_cast<uint8_t>((op_u16 >> 8) & 0xFFu);
+  meta[2] = static_cast<uint8_t>(flags & 0xFFu);
+  meta[3] = static_cast<uint8_t>((flags >> 8) & 0xFFu);
+  for (int i = 0; i < 8; i++) {
+    meta[4 + i] = static_cast<uint8_t>((request_id >> (i * 8)) & 0xFFu);
+  }
+  uint64_t plen = static_cast<uint64_t>(payload.size());
+  for (int i = 0; i < 8; i++) {
+    meta[12 + i] = static_cast<uint8_t>((plen >> (i * 8)) & 0xFFu);
+  }
+
+  Sha256 inner;
+  inner.Update(ipad, sizeof(ipad));
+  inner.Update(std::string_view("GS-RPC-AUTH-v2", 14));
+  inner.Update(meta, sizeof(meta));
+  inner.Update(payload);
+  auto inner_digest = inner.Final();
+
+  Sha256 outer;
+  outer.Update(opad, sizeof(opad));
+  outer.Update(inner_digest.data(), inner_digest.size());
+  return outer.Final();
+}
+
 uint64_t ComputeRpcAuthTag(std::string_view token, RpcOpCode opcode, uint64_t request_id,
-                           std::string_view payload) {
-  constexpr uint64_t kIpadSeed = 0x3636363636363636ULL;
-  constexpr uint64_t kOpadSeed = 0x5c5c5c5c5c5c5c5cULL;
-  uint64_t inner = MixBytes64(kIpadSeed, token);
-  inner = SplitMix64(inner ^ static_cast<uint64_t>(opcode));
-  inner = SplitMix64(inner ^ request_id);
-  inner = MixBytes64(inner, payload);
-  uint64_t outer = MixBytes64(kOpadSeed, token);
-  return SplitMix64(outer ^ inner);
+                           std::string_view payload, uint16_t flags) {
+  auto mac = ComputeRpcAuthMac(token, opcode, flags, request_id, payload);
+  uint64_t tag = 0;
+  for (size_t b = 0; b < 8; b++) {
+    tag |= static_cast<uint64_t>(mac[b]) << (b * 8);
+  }
+  return tag;
 }
 
 // ============================================================================
 // ClusterRpcServer
 // ============================================================================
+
+void ClusterRpcServer::OutboundSink::WakeupLocked() {
+  if (wakeup_write_fd >= 0) {
+    char b = 1;
+    ssize_t r = write(wakeup_write_fd, &b, 1);
+    (void)r;
+  }
+}
+
+void ClusterRpcServer::OutboundSink::Enqueue(uint64_t conn_id, std::string encoded_frame) {
+  std::lock_guard<std::mutex> lk(mu);
+  if (!alive) return;
+  pending_responses.push_back({conn_id, std::move(encoded_frame)});
+  WakeupLocked();
+}
 
 ClusterRpcServer::ClusterRpcServer() = default;
 
@@ -268,13 +503,27 @@ void ClusterRpcServer::SetRequestHandler(RequestHandler handler) {
 }
 
 void ClusterRpcServer::SetPeerValidator(PeerValidator validator) {
-  std::lock_guard<std::mutex> lk(handler_mu_);
-  peer_validator_ = std::move(validator);
+  {
+    std::lock_guard<std::mutex> lk(handler_mu_);
+    peer_validator_ = std::move(validator);
+  }
+  RevalidatePeers();
+}
+
+void ClusterRpcServer::RevalidatePeers() {
+  revalidate_peers_.store(true, std::memory_order_release);
+  WakeupIo();
 }
 
 void ClusterRpcServer::SetAuthToken(std::string token) {
-  std::lock_guard<std::mutex> lk(handler_mu_);
-  auth_token_ = std::move(token);
+  {
+    std::lock_guard<std::mutex> lk(handler_mu_);
+    auth_token_ = token;
+  }
+  {
+    std::lock_guard<std::mutex> lk(outbound_sink_->mu);
+    outbound_sink_->auth_token = std::move(token);
+  }
 }
 
 bool ClusterRpcServer::HasAuthToken() const {
@@ -286,6 +535,10 @@ void ClusterRpcServer::SetMaxInflightRequests(size_t max_inflight) {
   max_inflight_requests_.store(max_inflight, std::memory_order_release);
 }
 
+void ClusterRpcServer::SetMaxConnections(size_t max_connections) {
+  max_connections_.store(max_connections, std::memory_order_release);
+}
+
 bool ClusterRpcServer::Start(const std::string& bind_ip, int port, bool allow_ephemeral_fallback) {
   if (running_.load(std::memory_order_acquire)) return true;
   if (port < 0 || port > 65535) return false;
@@ -295,13 +548,34 @@ bool ClusterRpcServer::Start(const std::string& bind_ip, int port, bool allow_ep
   int actual_port = 0;
   int bind_err = 0;
   listen_fd_ = CreateListeningSocket(bind_ip, port, actual_port, bind_err);
-  if (listen_fd_ < 0 && port != 0 && allow_ephemeral_fallback &&
-      (bind_err == EADDRINUSE || bind_err == EACCES)) {
+  if (listen_fd_ < 0 && (bind_err == EADDRNOTAVAIL || bind_err == EINVAL) &&
+      !bind_ip.empty() && bind_ip != "0.0.0.0" && bind_ip != "*" && bind_ip != "::") {
+    // In Docker/NAT/K8s, cluster-announce-ip may not be a local interface address;
+    // fall back to wildcard bind on the requested port (then IPv4 0.0.0.0, then ephemeral).
+    std::string fallback_ip = (bind_ip.find(':') != std::string::npos) ? "::" : "0.0.0.0";
+    listen_fd_ = CreateListeningSocket(fallback_ip, port, actual_port, bind_err);
+    if (listen_fd_ < 0 && fallback_ip == "::") {
+      listen_fd_ = CreateListeningSocket("0.0.0.0", port, actual_port, bind_err);
+      fallback_ip = "0.0.0.0";
+    }
+    if (listen_fd_ < 0 && port != 0 && allow_ephemeral_fallback &&
+        (bind_err == EADDRINUSE || bind_err == EACCES)) {
+      listen_fd_ = CreateListeningSocket(fallback_ip, 0, actual_port, bind_err);
+    }
+  } else if (listen_fd_ < 0 && port != 0 && allow_ephemeral_fallback &&
+             (bind_err == EADDRINUSE || bind_err == EACCES)) {
     listen_fd_ = CreateListeningSocket(bind_ip, 0, actual_port, bind_err);
   }
   if (listen_fd_ < 0) {
     CloseWakeupPipe(wakeup_pipe_);
     return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(outbound_sink_->mu);
+    outbound_sink_->alive = true;
+    outbound_sink_->wakeup_write_fd = wakeup_pipe_[1];
+    outbound_sink_->pending_responses.clear();
   }
 
   bound_port_.store(actual_port, std::memory_order_release);
@@ -313,6 +587,12 @@ bool ClusterRpcServer::Start(const std::string& bind_ip, int port, bool allow_ep
 
 void ClusterRpcServer::Stop() {
   if (!running_.load(std::memory_order_acquire) && !io_thread_.joinable()) {
+    {
+      std::lock_guard<std::mutex> lk(outbound_sink_->mu);
+      outbound_sink_->alive = false;
+      outbound_sink_->wakeup_write_fd = -1;
+      outbound_sink_->pending_responses.clear();
+    }
     CloseAllSockets();
     return;
   }
@@ -323,11 +603,14 @@ void ClusterRpcServer::Stop() {
   }
   running_.store(false, std::memory_order_release);
   bound_port_.store(0, std::memory_order_release);
-  CloseAllSockets();
+  // Invalidate outbound sink BEFORE closing wakeup_pipe_ so async ResponseSenders never race on fd.
   {
-    std::lock_guard<std::mutex> lk(resp_mu_);
-    pending_responses_.clear();
+    std::lock_guard<std::mutex> lk(outbound_sink_->mu);
+    outbound_sink_->alive = false;
+    outbound_sink_->wakeup_write_fd = -1;
+    outbound_sink_->pending_responses.clear();
   }
+  CloseAllSockets();
 }
 
 RpcServerStats ClusterRpcServer::GetStats() const {
@@ -359,11 +642,8 @@ void ClusterRpcServer::CloseAllSockets() {
 }
 
 void ClusterRpcServer::WakeupIo() {
-  if (wakeup_pipe_[1] >= 0) {
-    char b = 1;
-    ssize_t r = write(wakeup_pipe_[1], &b, 1);
-    (void)r;
-  }
+  std::lock_guard<std::mutex> lk(outbound_sink_->mu);
+  outbound_sink_->WakeupLocked();
 }
 
 void ClusterRpcServer::DrainWakeupPipe() {
@@ -375,24 +655,49 @@ void ClusterRpcServer::DrainWakeupPipe() {
 }
 
 void ClusterRpcServer::EnqueueResponse(uint64_t conn_id, std::string encoded_frame) {
-  {
-    std::lock_guard<std::mutex> lk(resp_mu_);
-    if (stop_requested_.load(std::memory_order_acquire)) return;
-    pending_responses_.push_back({conn_id, std::move(encoded_frame)});
-  }
-  WakeupIo();
+  outbound_sink_->Enqueue(conn_id, std::move(encoded_frame));
 }
 
 void ClusterRpcServer::FlushPendingResponses() {
   std::deque<OutboundMsg> local;
   {
-    std::lock_guard<std::mutex> lk(resp_mu_);
-    local.swap(pending_responses_);
+    std::lock_guard<std::mutex> lk(outbound_sink_->mu);
+    local.swap(outbound_sink_->pending_responses);
   }
   for (auto& msg : local) {
     auto it = conns_.find(msg.conn_id);
     if (it == conns_.end() || it->second.closing) continue;
+    size_t sz = msg.encoded_frame.size();
+    if (it->second.write_queue_bytes + sz > kMaxPendingOutboundBytes) {
+      rejected_frames_.fetch_add(1, std::memory_order_relaxed);
+      it->second.closing = true;
+      continue;
+    }
+    it->second.write_queue_bytes += sz;
     it->second.write_queue.push_back(std::move(msg.encoded_frame));
+  }
+}
+
+void ClusterRpcServer::RevalidateConnections() {
+  PeerValidator validator;
+  {
+    std::lock_guard<std::mutex> lk(handler_mu_);
+    validator = peer_validator_;
+  }
+  if (!validator) return;
+  bool removed = false;
+  for (auto it = conns_.begin(); it != conns_.end();) {
+    if (!validator(it->second.peer_ip)) {
+      peer_rejected_.fetch_add(1, std::memory_order_relaxed);
+      if (it->second.fd >= 0) close(it->second.fd);
+      it = conns_.erase(it);
+      removed = true;
+    } else {
+      ++it;
+    }
+  }
+  if (removed) {
+    active_connections_.store(conns_.size(), std::memory_order_relaxed);
   }
 }
 
@@ -404,6 +709,12 @@ void ClusterRpcServer::AcceptPending() {
     if (cfd < 0) {
       if (errno == EINTR) continue;
       break;
+    }
+    size_t max_conns = max_connections_.load(std::memory_order_acquire);
+    if (max_conns > 0 && conns_.size() >= max_conns) {
+      rejected_frames_.fetch_add(1, std::memory_order_relaxed);
+      close(cfd);
+      continue;
     }
     if (!SetNonBlockingAndCloexec(cfd)) {
       close(cfd);
@@ -442,7 +753,12 @@ bool ClusterRpcServer::HandleRead(Connection& conn) {
     if (n > 0) {
       bytes_received_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
       conn.read_buf.append(tmp, static_cast<size_t>(n));
-      if (conn.read_buf.size() - conn.read_pos > kMaxRpcPayloadBytes + kRpcHeaderBytes + 65536) {
+
+      bool require_auth = HasAuthToken();
+      size_t max_buf = (require_auth && !conn.authenticated)
+                           ? (kMaxPreAuthPayloadBytes + kRpcHeaderBytes + 4096)
+                           : (kMaxRpcPayloadBytes + kRpcHeaderBytes + 65536);
+      if (conn.read_buf.size() - conn.read_pos > max_buf) {
         rejected_frames_.fetch_add(1, std::memory_order_relaxed);
         return false;
       }
@@ -456,6 +772,16 @@ bool ClusterRpcServer::HandleRead(Connection& conn) {
         RpcFrameHeader hdr;
         FrameDecodeStatus hst = DecodeRpcHeader(ptr, avail, hdr);
         if (hst != FrameDecodeStatus::kOk) {
+          rejected_frames_.fetch_add(1, std::memory_order_relaxed);
+          return false;
+        }
+        // Reject response frames sent to server or oversized pre-auth frames immediately
+        if ((hdr.flags & kRpcFlagResponse) != 0) {
+          rejected_frames_.fetch_add(1, std::memory_order_relaxed);
+          return false;
+        }
+        if (require_auth && !conn.authenticated && hdr.payload_len > kMaxPreAuthPayloadBytes) {
+          auth_rejected_.fetch_add(1, std::memory_order_relaxed);
           rejected_frames_.fetch_add(1, std::memory_order_relaxed);
           return false;
         }
@@ -481,18 +807,18 @@ bool ClusterRpcServer::HandleRead(Connection& conn) {
           auth_token = auth_token_;
         }
 
-        // Phase 71: Verify stateless keyed MAC when CLUSTER_AUTH_TOKEN is configured
+        // Verify HMAC-SHA256 MAC when CLUSTER_AUTH_TOKEN is configured, and reject
+        // unexpected kRpcFlagHasAuth frames when server has no auth token configured.
         if (!auth_token.empty()) {
           bool auth_ok = false;
-          if ((frame.header.flags & kRpcFlagHasAuth) != 0 && frame.payload.size() >= 8) {
-            uint64_t recv_tag = 0;
-            for (size_t b = 0; b < 8; b++) {
-              recv_tag |= static_cast<uint64_t>(static_cast<uint8_t>(frame.payload[b])) << (b * 8);
-            }
-            std::string_view body(frame.payload.data() + 8, frame.payload.size() - 8);
-            uint64_t expected_tag =
-                ComputeRpcAuthTag(auth_token, frame.header.opcode, frame.header.request_id, body);
-            auth_ok = ConstantTimeEq64(recv_tag, expected_tag);
+          if ((frame.header.flags & kRpcFlagHasAuth) != 0 &&
+              frame.payload.size() >= kRpcAuthMacBytes) {
+            const uint8_t* recv_mac = reinterpret_cast<const uint8_t*>(frame.payload.data());
+            std::string_view body(frame.payload.data() + kRpcAuthMacBytes,
+                                  frame.payload.size() - kRpcAuthMacBytes);
+            auto expected_mac = ComputeRpcAuthMac(auth_token, frame.header.opcode,
+                                                  frame.header.flags, frame.header.request_id, body);
+            auth_ok = ConstantTimeEqBytes(recv_mac, expected_mac.data(), kRpcAuthMacBytes);
           }
           if (!auth_ok) {
             auth_rejected_.fetch_add(1, std::memory_order_relaxed);
@@ -504,15 +830,32 @@ bool ClusterRpcServer::HandleRead(Connection& conn) {
             if (EncodeRpcFrame(frame.header.opcode,
                                static_cast<uint16_t>(kRpcFlagResponse | kRpcFlagError),
                                frame.header.request_id, err_bytes, encoded)) {
+              conn.write_queue_bytes += encoded.size();
               conn.write_queue.push_back(std::move(encoded));
               (void)HandleWrite(conn);
             }
             return false;
           }
-          frame.payload.erase(0, 8);
+          conn.authenticated = true;
+          frame.payload.erase(0, kRpcAuthMacBytes);
+        } else if ((frame.header.flags & kRpcFlagHasAuth) != 0) {
+          auth_rejected_.fetch_add(1, std::memory_order_relaxed);
+          rejected_frames_.fetch_add(1, std::memory_order_relaxed);
+          RpcErrorPayload err{401, "ERR unexpected cluster RPC auth tag"};
+          std::string err_bytes;
+          EncodeErrorPayload(err, err_bytes);
+          std::string encoded;
+          if (EncodeRpcFrame(frame.header.opcode,
+                             static_cast<uint16_t>(kRpcFlagResponse | kRpcFlagError),
+                             frame.header.request_id, err_bytes, encoded)) {
+            conn.write_queue_bytes += encoded.size();
+            conn.write_queue.push_back(std::move(encoded));
+            (void)HandleWrite(conn);
+          }
+          return false;
         }
 
-        // Phase 71: Server-side inflight concurrency quota defense against DoS/OOM
+        // Server-side inflight concurrency quota defense against DoS/OOM
         size_t max_inflight = max_inflight_requests_.load(std::memory_order_acquire);
         uint64_t prev_inflight = inflight_requests_->fetch_add(1, std::memory_order_acq_rel);
         if (max_inflight > 0 && prev_inflight >= max_inflight) {
@@ -522,9 +865,9 @@ bool ClusterRpcServer::HandleRead(Connection& conn) {
           std::string err_bytes;
           EncodeErrorPayload(err, err_bytes);
           std::string encoded;
-          if (EncodeRpcFrame(frame.header.opcode,
-                             static_cast<uint16_t>(kRpcFlagResponse | kRpcFlagError),
-                             frame.header.request_id, err_bytes, encoded)) {
+          if (EncodeAuthenticatedFrame(frame.header.opcode,
+                                       static_cast<uint16_t>(kRpcFlagResponse | kRpcFlagError),
+                                       frame.header.request_id, err_bytes, auth_token, encoded)) {
             EnqueueResponse(conn.id, std::move(encoded));
           }
           continue;
@@ -533,15 +876,35 @@ bool ClusterRpcServer::HandleRead(Connection& conn) {
         requests_handled_.fetch_add(1, std::memory_order_relaxed);
 
         auto guard = std::make_shared<InflightSlotGuard>(inflight_requests_);
+        std::weak_ptr<OutboundSink> weak_sink = outbound_sink_;
         uint64_t cid = conn.id;
         uint64_t req_id = frame.header.request_id;
-        ResponseSender sender = [this, cid, req_id, guard](RpcOpCode resp_op, uint16_t flags,
-                                                           std::string payload) {
+        ResponseSender sender = [weak_sink, cid, req_id, guard](RpcOpCode resp_op, uint16_t flags,
+                                                                std::string payload) {
           guard->Release();
+          auto sink = weak_sink.lock();
+          if (!sink) return;
+          std::string tok;
+          {
+            std::lock_guard<std::mutex> lk(sink->mu);
+            if (!sink->alive) return;
+            tok = sink->auth_token;
+          }
           std::string encoded;
-          if (EncodeRpcFrame(resp_op, static_cast<uint16_t>(flags | kRpcFlagResponse), req_id,
-                             payload, encoded)) {
-            EnqueueResponse(cid, std::move(encoded));
+          uint16_t resp_flags = static_cast<uint16_t>(flags | kRpcFlagResponse);
+          if (EncodeAuthenticatedFrame(resp_op, resp_flags, req_id, payload, tok, encoded)) {
+            sink->Enqueue(cid, std::move(encoded));
+          } else {
+            // Do not silently drop oversized (>32 MiB) responses; return an explicit error frame.
+            RpcErrorPayload err{413, "ERR RPC response payload exceeds maximum frame size"};
+            std::string err_bytes;
+            EncodeErrorPayload(err, err_bytes);
+            std::string err_encoded;
+            if (EncodeAuthenticatedFrame(resp_op,
+                                         static_cast<uint16_t>(kRpcFlagResponse | kRpcFlagError),
+                                         req_id, err_bytes, tok, err_encoded)) {
+              sink->Enqueue(cid, std::move(err_encoded));
+            }
           }
         };
 
@@ -575,7 +938,10 @@ bool ClusterRpcServer::HandleWrite(Connection& conn) {
       bytes_sent_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
       conn.write_offset += static_cast<size_t>(n);
       if (conn.write_offset >= front.size()) {
+        size_t popped_sz = front.size();
         conn.write_queue.pop_front();
+        conn.write_queue_bytes =
+            (conn.write_queue_bytes >= popped_sz) ? (conn.write_queue_bytes - popped_sz) : 0;
         conn.write_offset = 0;
       }
     } else if (n < 0) {
@@ -594,7 +960,24 @@ void ClusterRpcServer::IoLoop() {
   std::vector<uint64_t> conn_ids;
 
   while (!stop_requested_.load(std::memory_order_acquire)) {
+    if (revalidate_peers_.exchange(false, std::memory_order_acq_rel)) {
+      RevalidateConnections();
+    }
     FlushPendingResponses();
+    // Reap any connections marked closing (e.g., outbound write queue cap exceeded)
+    bool reaped = false;
+    for (auto it = conns_.begin(); it != conns_.end();) {
+      if (it->second.closing) {
+        if (it->second.fd >= 0) close(it->second.fd);
+        it = conns_.erase(it);
+        reaped = true;
+      } else {
+        ++it;
+      }
+    }
+    if (reaped) {
+      active_connections_.store(conns_.size(), std::memory_order_relaxed);
+    }
 
     pfds.clear();
     conn_ids.clear();
@@ -687,7 +1070,10 @@ ClusterRpcClient::~ClusterRpcClient() { Stop(); }
 
 bool ClusterRpcClient::Start() {
   if (running_.load(std::memory_order_acquire)) return true;
-  if (!CreateWakeupPipe(wakeup_pipe_)) return false;
+  {
+    std::lock_guard<std::mutex> lk(cmd_mu_);
+    if (!CreateWakeupPipe(wakeup_pipe_)) return false;
+  }
   stop_requested_.store(false, std::memory_order_release);
   running_.store(true, std::memory_order_release);
   io_thread_ = std::thread([this]() { IoLoop(); });
@@ -696,21 +1082,25 @@ bool ClusterRpcClient::Start() {
 
 void ClusterRpcClient::Stop() {
   if (!running_.load(std::memory_order_acquire) && !io_thread_.joinable()) {
+    std::lock_guard<std::mutex> lk(cmd_mu_);
     CloseWakeupPipe(wakeup_pipe_);
     return;
   }
   stop_requested_.store(true, std::memory_order_release);
-  WakeupIo();
+  {
+    std::lock_guard<std::mutex> lk(cmd_mu_);
+    WakeupIoLocked();
+  }
   if (io_thread_.joinable()) {
     io_thread_.join();
   }
   running_.store(false, std::memory_order_release);
-  CloseWakeupPipe(wakeup_pipe_);
 
-  // Fail any queued sends that arrived concurrently with shutdown
+  // Close wakeup_pipe_ under cmd_mu_ and fail any queued sends that arrived concurrently with shutdown
   std::vector<CompletedCallback> leftover;
   {
     std::lock_guard<std::mutex> lk(cmd_mu_);
+    CloseWakeupPipe(wakeup_pipe_);
     while (!queued_sends_.empty()) {
       auto& qs = queued_sends_.front();
       if (qs.callback) {
@@ -770,20 +1160,8 @@ uint64_t ClusterRpcClient::SendAsync(const std::string& node_id, const std::stri
   }
 
   std::string encoded;
-  bool enc_ok = false;
-  if (!auth_token.empty()) {
-    uint64_t tag = ComputeRpcAuthTag(auth_token, opcode, req_id, payload);
-    std::string auth_payload;
-    auth_payload.reserve(8 + payload.size());
-    for (size_t b = 0; b < 8; b++) {
-      auth_payload.push_back(static_cast<char>((tag >> (b * 8)) & 0xFF));
-    }
-    auth_payload.append(payload.data(), payload.size());
-    enc_ok = EncodeRpcFrame(opcode, static_cast<uint16_t>(flags | kRpcFlagHasAuth), req_id,
-                            auth_payload, encoded);
-  } else {
-    enc_ok = EncodeRpcFrame(opcode, flags, req_id, payload, encoded);
-  }
+  uint16_t req_flags = static_cast<uint16_t>(flags & ~kRpcFlagResponse);
+  bool enc_ok = EncodeAuthenticatedFrame(opcode, req_flags, req_id, payload, auth_token, encoded);
 
   if (!enc_ok) {
     if (cb) {
@@ -800,7 +1178,7 @@ uint64_t ClusterRpcClient::SendAsync(const std::string& node_id, const std::stri
 
   {
     std::lock_guard<std::mutex> lk(cmd_mu_);
-    if (stop_requested_.load(std::memory_order_acquire)) {
+    if (stop_requested_.load(std::memory_order_acquire) || !running_.load(std::memory_order_acquire)) {
       if (cb) {
         RpcResponse resp;
         resp.status = RpcStatus::kShutdown;
@@ -811,17 +1189,18 @@ uint64_t ClusterRpcClient::SendAsync(const std::string& node_id, const std::stri
     }
     QueuedSend qs;
     qs.request_id = req_id;
+    qs.req_opcode = opcode;
     qs.node_id = node_id;
     qs.ip = ip;
     qs.port = port;
     qs.encoded_frame = std::move(encoded);
     qs.sent_ms = now;
-    qs.deadline_ms = now + eff_timeout;
+    qs.deadline_ms = SafeAddDeadlineMs(now, eff_timeout);
     qs.callback = std::move(cb);
     queued_sends_.push_back(std::move(qs));
+    requests_sent_.fetch_add(1, std::memory_order_relaxed);
+    WakeupIoLocked();
   }
-  requests_sent_.fetch_add(1, std::memory_order_relaxed);
-  WakeupIo();
   return req_id;
 }
 
@@ -857,8 +1236,8 @@ bool ClusterRpcClient::CancelRequest(uint64_t request_id) {
   {
     std::lock_guard<std::mutex> lk(cmd_mu_);
     queued_cancels_.push_back(request_id);
+    WakeupIoLocked();
   }
-  WakeupIo();
   return true;
 }
 
@@ -867,8 +1246,8 @@ void ClusterRpcClient::DisconnectPeer(const std::string& node_id) {
   {
     std::lock_guard<std::mutex> lk(cmd_mu_);
     queued_disconnects_.push_back(node_id);
+    WakeupIoLocked();
   }
-  WakeupIo();
 }
 
 void ClusterRpcClient::PrunePeers(const std::unordered_set<std::string>& active_node_ids) {
@@ -877,8 +1256,8 @@ void ClusterRpcClient::PrunePeers(const std::unordered_set<std::string>& active_
     std::lock_guard<std::mutex> lk(cmd_mu_);
     has_prune_ = true;
     prune_active_set_ = active_node_ids;
+    WakeupIoLocked();
   }
-  WakeupIo();
 }
 
 RpcClientStats ClusterRpcClient::GetStats() const {
@@ -893,7 +1272,7 @@ RpcClientStats ClusterRpcClient::GetStats() const {
   return s;
 }
 
-void ClusterRpcClient::WakeupIo() {
+void ClusterRpcClient::WakeupIoLocked() {
   if (wakeup_pipe_[1] >= 0) {
     char b = 1;
     ssize_t r = write(wakeup_pipe_[1], &b, 1);
@@ -1078,13 +1457,60 @@ void ClusterRpcClient::HandlePeerRead(PeerConn& peer,
         }
         peer.read_pos += consumed;
 
+        // Validate response direction flag
+        if ((frame.header.flags & kRpcFlagResponse) == 0) {
+          FailPeer(peer, RpcStatus::kProtocolError, "RPC frame missing response flag", completions);
+          return;
+        }
+
+        // Verify response HMAC-SHA256 when auth_token is configured, and reject unexpected auth tags
+        std::string auth_token;
+        {
+          std::lock_guard<std::mutex> lk(auth_mu_);
+          auth_token = auth_token_;
+        }
+        if (!auth_token.empty()) {
+          if ((frame.header.flags & kRpcFlagHasAuth) == 0 ||
+              frame.payload.size() < kRpcAuthMacBytes) {
+            FailPeer(peer, RpcStatus::kProtocolError, "unauthenticated RPC response", completions);
+            return;
+          }
+          const uint8_t* recv_mac = reinterpret_cast<const uint8_t*>(frame.payload.data());
+          std::string_view body(frame.payload.data() + kRpcAuthMacBytes,
+                                frame.payload.size() - kRpcAuthMacBytes);
+          auto expected_mac = ComputeRpcAuthMac(auth_token, frame.header.opcode,
+                                                frame.header.flags, frame.header.request_id, body);
+          if (!ConstantTimeEqBytes(recv_mac, expected_mac.data(), kRpcAuthMacBytes)) {
+            FailPeer(peer, RpcStatus::kProtocolError, "invalid RPC response MAC", completions);
+            return;
+          }
+          frame.payload.erase(0, kRpcAuthMacBytes);
+        } else if ((frame.header.flags & kRpcFlagHasAuth) != 0) {
+          FailPeer(peer, RpcStatus::kProtocolError, "unexpected auth tag in RPC response",
+                   completions);
+          return;
+        }
+
+        // Prevent cross-peer response hijacking: verify req_id belongs to THIS peer
         uint64_t req_id = frame.header.request_id;
-        peer.req_ids.erase(req_id);
         auto it = inflight_.find(req_id);
         if (it == inflight_.end()) {
+          peer.req_ids.erase(req_id);
           // Timed out or cancelled earlier; safely discard late response
           continue;
         }
+        if (peer.req_ids.count(req_id) == 0 || it->second.node_id != peer.node_id) {
+          FailPeer(peer, RpcStatus::kProtocolError, "cross-peer response request_id mismatch",
+                   completions);
+          return;
+        }
+        if (!IsExpectedResponseOpCode(it->second.req_opcode, frame.header.opcode,
+                                      frame.header.flags)) {
+          FailPeer(peer, RpcStatus::kProtocolError, "unexpected RPC response opcode", completions);
+          return;
+        }
+        peer.req_ids.erase(req_id);
+
         int64_t now = ClusterNowMs();
         RpcResponse resp;
         resp.status = RpcStatus::kOk;
@@ -1161,6 +1587,9 @@ void ClusterRpcClient::ProcessCommands(std::vector<CompletedCallback>& completio
     }
   }
 
+  // Build cancel set so requests cancelled immediately after SendAsync (before IoLoop woke up)
+  // are never transmitted and existing inflight requests are cancelled cleanly.
+  std::unordered_set<uint64_t> cancel_set(cancels.begin(), cancels.end());
   for (uint64_t req_id : cancels) {
     auto it = inflight_.find(req_id);
     if (it != inflight_.end()) {
@@ -1171,6 +1600,9 @@ void ClusterRpcClient::ProcessCommands(std::vector<CompletedCallback>& completio
   }
 
   for (auto& qs : sends) {
+    if (cancel_set.count(qs.request_id) > 0) {
+      continue;
+    }
     auto& peer = peers_[qs.node_id];
     if (peer.node_id.empty()) peer.node_id = qs.node_id;
 
@@ -1210,6 +1642,7 @@ void ClusterRpcClient::ProcessCommands(std::vector<CompletedCallback>& completio
 
     PendingRequest pr;
     pr.request_id = qs.request_id;
+    pr.req_opcode = qs.req_opcode;
     pr.node_id = qs.node_id;
     pr.sent_ms = qs.sent_ms;
     pr.deadline_ms = qs.deadline_ms;
@@ -1340,7 +1773,9 @@ void ClusterRpcClient::IoLoop() {
     DispatchCompletions(completions);
   }
 
-  // Shutdown: close all sockets and fail all inflight requests
+  // Shutdown (or fatal poll() exit): mark stopped, close all sockets, and fail all inflight & queued requests
+  stop_requested_.store(true, std::memory_order_release);
+  running_.store(false, std::memory_order_release);
   for (auto& [nid, peer] : peers_) {
     FailPeer(peer, RpcStatus::kShutdown, "RPC client shut down", completions);
   }
@@ -1354,6 +1789,23 @@ void ClusterRpcClient::IoLoop() {
     }
   }
   inflight_.clear();
+  {
+    std::lock_guard<std::mutex> lk(cmd_mu_);
+    while (!queued_sends_.empty()) {
+      auto& qs = queued_sends_.front();
+      if (qs.callback) {
+        RpcResponse resp;
+        resp.status = RpcStatus::kShutdown;
+        resp.error_msg = "RPC client shut down";
+        completions.push_back({std::move(qs.callback), std::move(resp)});
+      }
+      queued_sends_.pop_front();
+    }
+    queued_cancels_.clear();
+    queued_disconnects_.clear();
+    has_prune_ = false;
+    prune_active_set_.clear();
+  }
   UpdateActiveConnStat();
   DispatchCompletions(completions);
 }

@@ -25,6 +25,7 @@ extern "C" {
 #include "text_index.h"
 #include "vector_index.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <shared_mutex>
@@ -44,7 +45,8 @@ struct IndexEntry {
   GeoShapeFieldIndices geoshape_indices;
   SortFieldIndices sort_indices;
   SynonymMap synonyms;
-  int64_t last_access_ms = 0;
+  std::unique_ptr<std::atomic<int64_t>> last_access_ms =
+      std::make_unique<std::atomic<int64_t>>(0);
   uint64_t generation = 0;
   bool bg_indexing = false;
   uint64_t bg_scanned_keys = 0;
@@ -53,6 +55,12 @@ struct IndexEntry {
   std::unique_ptr<std::shared_mutex> rw_mutex = std::make_unique<std::shared_mutex>();
 
   std::shared_mutex& Mutex() const { return *rw_mutex; }
+  int64_t LastAccessMs() const {
+    return last_access_ms ? last_access_ms->load(std::memory_order_relaxed) : 0;
+  }
+  void SetLastAccessMs(int64_t ms) const {
+    if (last_access_ms) last_access_ms->store(ms, std::memory_order_relaxed);
+  }
 };
 
 int RegisterSearchCommands(RedisModuleCtx* ctx);
@@ -74,6 +82,8 @@ std::unordered_map<std::string, TermDict>& GetTermDicts();
 std::unordered_map<std::string, std::string>& GetConfig();
 bool IsClusterRdbMode();
 void SetClusterRdbMode(bool enabled);
+bool IsInForkedChild();
+void MarkForkedChild();
 uint64_t GetPersistedSchemaEpoch();
 void SetPersistedSchemaEpoch(uint64_t epoch);
 std::vector<std::string>& GetPendingClusterRecoveries();

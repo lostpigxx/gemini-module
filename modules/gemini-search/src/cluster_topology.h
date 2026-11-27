@@ -98,7 +98,7 @@ class ClusterManager {
   bool IsClusterScatterEnabled() const {
     return cluster_mode_.load(std::memory_order_acquire) &&
            cluster_enabled_.load(std::memory_order_acquire) &&
-           master_count_.load(std::memory_order_acquire) > 1;
+           scatter_enabled_.load(std::memory_order_acquire);
   }
 
   // Thread-safe immutable snapshot access
@@ -150,6 +150,7 @@ class ClusterManager {
   };
 
   void ParseModuleArgs(RedisModuleString** argv, int argc);
+  std::string DetectConfigBindIp(RedisModuleCtx* ctx);
   std::string DetectBindIp(RedisModuleCtx* ctx, const std::string& node_ip);
   void DispatchRpcRequest(const RpcFrame& req, const std::string& peer_ip,
                           ClusterRpcServer::ResponseSender send_resp);
@@ -160,6 +161,7 @@ class ClusterManager {
   std::atomic<bool> shutting_down_{false};
   std::atomic<bool> cluster_mode_{false};
   std::atomic<bool> cluster_enabled_{true};
+  std::atomic<bool> scatter_enabled_{false};
   std::atomic<size_t> master_count_{0};
   std::atomic<int> my_rpc_port_{0};
   std::atomic<uint64_t> schema_epoch_{0};
@@ -191,6 +193,24 @@ class ClusterManager {
 
   ClusterRpcServer rpc_server_;
   ClusterRpcClient rpc_client_;
+};
+
+// RAII helper to acquire the Redis GIL via ClusterManager's detached thread-safe context
+// without holding DetachedCtxMutex() across a blocking GIL wait (prevents AB-BA deadlock
+// with ClusterManager::Shutdown() which holds the Redis GIL on the main thread).
+class DetachedCtxGuard {
+ public:
+  explicit DetachedCtxGuard(ClusterManager& mgr);
+  ~DetachedCtxGuard();
+
+  DetachedCtxGuard(const DetachedCtxGuard&) = delete;
+  DetachedCtxGuard& operator=(const DetachedCtxGuard&) = delete;
+
+  RedisModuleCtx* get() const { return ctx_; }
+  explicit operator bool() const { return ctx_ != nullptr; }
+
+ private:
+  RedisModuleCtx* ctx_ = nullptr;
 };
 
 // Redis Module callback hooks

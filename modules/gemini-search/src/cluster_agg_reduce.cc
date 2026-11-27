@@ -4,7 +4,10 @@
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
+#include <iterator>
+#include <limits>
 #include <random>
+#include <string_view>
 #include <unordered_set>
 
 namespace gemini_search {
@@ -89,10 +92,17 @@ void CompressCentroids(std::vector<std::pair<double, double>>& centroids, size_t
 
 std::string MakeGroupKey(const AggRow& row, const std::vector<std::string>& gb_fields) {
   std::string key;
-  for (size_t i = 0; i < gb_fields.size(); i++) {
-    if (i > 0) key.push_back('\x01');
-    auto fit = row.find(gb_fields[i]);
-    if (fit != row.end()) key += fit->second;
+  for (const auto& gf : gb_fields) {
+    auto fit = row.find(gf);
+    std::string_view val = (fit != row.end()) ? std::string_view(fit->second) : std::string_view{};
+    uint32_t len = static_cast<uint32_t>(val.size());
+    char len_buf[4];
+    len_buf[0] = static_cast<char>(len & 0xFFu);
+    len_buf[1] = static_cast<char>((len >> 8) & 0xFFu);
+    len_buf[2] = static_cast<char>((len >> 16) & 0xFFu);
+    len_buf[3] = static_cast<char>((len >> 24) & 0xFFu);
+    key.append(len_buf, 4);
+    key.append(val.data(), val.size());
   }
   return key;
 }
@@ -194,7 +204,7 @@ double HllSketch::Estimate() const {
     std::unordered_map<uint16_t, uint8_t> regs;
     regs.reserve(sparse.size());
     for (const auto& [idx, rho] : sparse) {
-      if (idx >= kNumRegs) continue;
+      if (idx >= kNumRegs || rho == 0) continue;
       auto it = regs.find(idx);
       if (it == regs.end() || rho > it->second) regs[idx] = rho;
     }
@@ -314,31 +324,50 @@ bool TryParseAggDouble(const std::string& s, double& out) {
 }
 
 void ApplyAggLimit(std::vector<AggRow>& rows, long long offset, long long count) {
-  long long total = static_cast<long long>(rows.size());
-  if (offset >= total) {
+  if (offset < 0) offset = 0;
+  if (count == 0) {
     rows.clear();
     return;
   }
-  auto begin = rows.begin() + static_cast<ptrdiff_t>(offset);
-  auto end = (count >= 0 && offset + count < total)
-                 ? rows.begin() + static_cast<ptrdiff_t>(offset + count)
-                 : rows.end();
-  rows = std::vector<AggRow>(begin, end);
+  size_t total = rows.size();
+  size_t off = static_cast<size_t>(offset);
+  if (off >= total) {
+    rows.clear();
+    return;
+  }
+  size_t end_idx = total;
+  if (count > 0) {
+    size_t cnt = static_cast<size_t>(count);
+    if (cnt < total - off) {
+      end_idx = off + cnt;
+    }
+  }
+  if (off == 0 && end_idx == total) return;
+  rows = std::vector<AggRow>(std::make_move_iterator(rows.begin() + static_cast<ptrdiff_t>(off)),
+                             std::make_move_iterator(rows.begin() + static_cast<ptrdiff_t>(end_idx)));
 }
 
 void ApplyAggSortby(std::vector<AggRow>& rows,
                     const std::vector<std::pair<std::string, bool>>& keys, long long max_rows) {
   if (keys.empty()) return;
+  static const std::string kEmptyStr;
+  // Strict weak ordering across mixed empty / numeric / non-numeric string values:
+  // rank 0 = empty, rank 1 = finite numeric (sorted numerically), rank 2 = non-numeric string.
   auto cmp = [&](const AggRow& a, const AggRow& b) {
     for (const auto& [field, desc] : keys) {
       auto ait = a.find(field);
       auto bit = b.find(field);
-      const std::string va = (ait != a.end()) ? ait->second : "";
-      const std::string vb = (bit != b.end()) ? bit->second : "";
+      const std::string& va = (ait != a.end()) ? ait->second : kEmptyStr;
+      const std::string& vb = (bit != b.end()) ? bit->second : kEmptyStr;
       if (va == vb) continue;
+
       double na = 0.0, nb = 0.0;
-      bool num = TryParseAggDouble(va, na) && TryParseAggDouble(vb, nb);
-      if (num) {
+      int rank_a = va.empty() ? 0 : (TryParseAggDouble(va, na) ? 1 : 2);
+      int rank_b = vb.empty() ? 0 : (TryParseAggDouble(vb, nb) ? 1 : 2);
+      if (rank_a != rank_b) {
+        return desc ? (rank_a > rank_b) : (rank_a < rank_b);
+      }
+      if (rank_a == 1) {
         if (na == nb) continue;
         return desc ? (na > nb) : (na < nb);
       }
@@ -432,12 +461,19 @@ ClusterAggPlanSplit SplitAggPipeline(const std::vector<PipelineStage>& stages, b
     return split;
   }
 
-  // Locate first GROUPBY stage, checking if any LIMIT precedes it
+  // Locate first GROUPBY stage, checking if any LIMIT, SORTBY ... MAX, or order-sensitive SORTBY precedes it
   size_t first_gb = stages.size();
-  bool limit_before_gb = false;
+  bool blocking_stage_before_gb = false;
+  bool sortby_before_gb = false;
   for (size_t i = 0; i < stages.size(); i++) {
     if (stages[i].type == PipelineStageType::kLimit) {
-      limit_before_gb = true;
+      blocking_stage_before_gb = true;
+    } else if (stages[i].type == PipelineStageType::kSortby) {
+      sortby_before_gb = true;
+      if (stages[i].sortby_max > 0) {
+        // SORTBY ... MAX N truncates global dataset before grouping; cannot push down GROUPBY.
+        blocking_stage_before_gb = true;
+      }
     }
     if (stages[i].type == PipelineStageType::kGroupby &&
         (!stages[i].groupby_fields.empty() || !stages[i].reducers.empty())) {
@@ -446,14 +482,22 @@ ClusterAggPlanSplit SplitAggPipeline(const std::vector<PipelineStage>& stages, b
     }
   }
 
-  if (first_gb < stages.size() && !limit_before_gb) {
+  // If SORTBY precedes GROUPBY and GROUPBY contains FIRST_VALUE without BY, global ordering matters.
+  if (first_gb < stages.size() && sortby_before_gb) {
+    for (const auto& op : stages[first_gb].reducers) {
+      if (op.func == ReduceFunc::kFirstValue && op.first_value_by.empty()) {
+        blocking_stage_before_gb = true;
+        break;
+      }
+    }
+  }
+
+  if (first_gb < stages.size() && !blocking_stage_before_gb) {
     // Two-phase Map-Reduce:
     //   Map (shard): pre-GROUPBY LOAD/APPLY/FILTER + Partial Reduce of first GROUPBY
     //   Reduce (Coordinator): Merge partial groups + post-GROUPBY APPLY/FILTER/SORTBY/LIMIT/GROUPBY
     split.mode = ClusterAggPlanSplit::Mode::kMapReduceGroupby;
     for (size_t i = 0; i < first_gb; i++) {
-      // SORTBY before GROUPBY does not affect group membership (unless FIRST_VALUE without BY,
-      // in which case pushing SORTBY to map_stages preserves local order too)
       split.map_stages.push_back(stages[i]);
     }
     split.groupby_stage = stages[first_gb];
@@ -475,26 +519,62 @@ ClusterAggPlanSplit SplitAggPipeline(const std::vector<PipelineStage>& stages, b
     cut++;
   }
 
+  auto ComputeSafeLimitCap = [](long long offset, long long count, size_t& cap_out,
+                                bool& is_zero_out) -> bool {
+    is_zero_out = false;
+    if (count == 0) {
+      cap_out = 0;
+      is_zero_out = true;
+      return true;
+    }
+    if (count < 0) return false;
+    uint64_t off = (offset > 0) ? static_cast<uint64_t>(offset) : 0ULL;
+    uint64_t cnt = static_cast<uint64_t>(count);
+    if (off > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) - cnt) {
+      return false;
+    }
+    cap_out = static_cast<size_t>(off + cnt);
+    return true;
+  };
+
   // Check if next stage is SORTBY (possibly followed by LIMIT) for per-shard top-K pushdown
   if (cut < stages.size() && stages[cut].type == PipelineStageType::kSortby) {
     split.raw_has_sortby = true;
     split.raw_sortby_keys = stages[cut].sortby_keys;
+    bool has_cap = false;
     size_t cap = 0;
     if (stages[cut].sortby_max > 0) {
       cap = static_cast<size_t>(stages[cut].sortby_max);
+      has_cap = true;
     }
     if (cut + 1 < stages.size() && stages[cut + 1].type == PipelineStageType::kLimit) {
-      long long off = std::max<long long>(0, stages[cut + 1].limit_offset);
-      long long cnt = std::max<long long>(0, stages[cut + 1].limit_count);
-      size_t lim_cap = static_cast<size_t>(off + cnt);
-      cap = (cap == 0) ? lim_cap : std::min(cap, lim_cap);
+      size_t lim_cap = 0;
+      bool lim_zero = false;
+      if (ComputeSafeLimitCap(stages[cut + 1].limit_offset, stages[cut + 1].limit_count, lim_cap,
+                              lim_zero)) {
+        if (lim_zero) {
+          split.raw_zero_limit = true;
+          cap = 0;
+          has_cap = true;
+        } else {
+          cap = has_cap ? std::min(cap, lim_cap) : lim_cap;
+          has_cap = true;
+        }
+      }
     }
-    split.raw_shard_limit = cap;
+    split.raw_shard_limit = has_cap ? cap : 0;
   } else if (cut < stages.size() && stages[cut].type == PipelineStageType::kLimit &&
              cut + 1 == stages.size()) {
-    long long off = std::max<long long>(0, stages[cut].limit_offset);
-    long long cnt = std::max<long long>(0, stages[cut].limit_count);
-    split.raw_shard_limit = static_cast<size_t>(off + cnt);
+    size_t lim_cap = 0;
+    bool lim_zero = false;
+    if (ComputeSafeLimitCap(stages[cut].limit_offset, stages[cut].limit_count, lim_cap, lim_zero)) {
+      if (lim_zero) {
+        split.raw_zero_limit = true;
+        split.raw_shard_limit = 0;
+      } else {
+        split.raw_shard_limit = lim_cap;
+      }
+    }
   }
 
   for (size_t i = cut; i < stages.size(); i++) {
@@ -714,11 +794,26 @@ void MergeReducerState(PartialReducerState& dst, const PartialReducerState& src,
       break;
     }
     case ReduceFunc::kCountDistinct: {
-      // Collect raw strings; deduplicated in FinalizeReducerState (or keep bounded)
-      for (const auto& v : src.str_vals) {
-        if (dst.str_vals.size() < kMaxPartialDistinctPerGroup * 2) {
-          dst.str_vals.push_back(v);
+      // Deduplicate before truncating so repeated values across shards never crowd out new unique values.
+      constexpr size_t kMaxMergedDistinct = kMaxPartialDistinctPerGroup * 2;
+      if (dst.str_vals.size() + src.str_vals.size() <= kMaxMergedDistinct) {
+        dst.str_vals.insert(dst.str_vals.end(), src.str_vals.begin(), src.str_vals.end());
+      } else {
+        std::unordered_set<std::string> seen;
+        seen.reserve(std::min(kMaxMergedDistinct, dst.str_vals.size() + src.str_vals.size()));
+        std::vector<std::string> deduped;
+        deduped.reserve(std::min(kMaxMergedDistinct, dst.str_vals.size() + src.str_vals.size()));
+        for (const auto& v : dst.str_vals) {
+          if (seen.size() < kMaxMergedDistinct && seen.insert(v).second) {
+            deduped.push_back(v);
+          }
         }
+        for (const auto& v : src.str_vals) {
+          if (seen.size() < kMaxMergedDistinct && seen.insert(v).second) {
+            deduped.push_back(v);
+          }
+        }
+        dst.str_vals = std::move(deduped);
       }
       break;
     }
@@ -870,31 +965,44 @@ bool MergeAndFinalizeGroups(const std::vector<std::vector<PartialGroup>>& shard_
   out_rows.clear();
   std::vector<PartialGroup> merged;
   std::unordered_map<std::string, size_t> group_idx;
+  // O(1) incremental dedup for kCountDistinct across all shards so duplicates never consume quota
+  std::vector<std::vector<std::unordered_set<std::string>>> distinct_sets;
+  constexpr size_t kMaxMergedDistinct = kMaxPartialDistinctPerGroup * 2;
 
   for (const auto& sgroups : shard_groups) {
     for (const auto& sg : sgroups) {
       auto git = group_idx.find(sg.group_key);
+      size_t gi = 0;
       if (git == group_idx.end()) {
         if (max_groups > 0 && merged.size() >= max_groups) {
           error_out = "ERR cluster aggregate exceeded CLUSTER_AGG_MAX_GROUPS limit";
           return false;
         }
-        size_t idx = merged.size();
-        group_idx.emplace(sg.group_key, idx);
+        gi = merged.size();
+        group_idx.emplace(sg.group_key, gi);
         PartialGroup copy;
         copy.group_key = sg.group_key;
         copy.key_fields = sg.key_fields;
         copy.reducers.resize(reducers.size());
         for (size_t ri = 0; ri < reducers.size(); ri++) {
           copy.reducers[ri].func = reducers[ri].func;
-          if (ri < sg.reducers.size()) {
-            MergeReducerState(copy.reducers[ri], sg.reducers[ri], reducers[ri]);
-          }
         }
         merged.push_back(std::move(copy));
+        distinct_sets.emplace_back(reducers.size());
       } else {
-        auto& dst = merged[git->second];
-        for (size_t ri = 0; ri < reducers.size() && ri < sg.reducers.size(); ri++) {
+        gi = git->second;
+      }
+
+      auto& dst = merged[gi];
+      for (size_t ri = 0; ri < reducers.size() && ri < sg.reducers.size(); ri++) {
+        if (reducers[ri].func == ReduceFunc::kCountDistinct) {
+          auto& dset = distinct_sets[gi][ri];
+          for (const auto& v : sg.reducers[ri].str_vals) {
+            if (dset.size() < kMaxMergedDistinct) {
+              dset.insert(v);
+            }
+          }
+        } else {
           MergeReducerState(dst.reducers[ri], sg.reducers[ri], reducers[ri]);
         }
       }
@@ -902,11 +1010,16 @@ bool MergeAndFinalizeGroups(const std::vector<std::vector<PartialGroup>>& shard_
   }
 
   out_rows.reserve(merged.size());
-  for (auto& pg : merged) {
+  for (size_t gi = 0; gi < merged.size(); gi++) {
+    auto& pg = merged[gi];
     AggRow row;
     for (const auto& [k, v] : pg.key_fields) row[k] = v;
     for (size_t ri = 0; ri < reducers.size() && ri < pg.reducers.size(); ri++) {
-      row[reducers[ri].alias] = FinalizeReducerState(pg.reducers[ri], reducers[ri]);
+      if (reducers[ri].func == ReduceFunc::kCountDistinct) {
+        row[reducers[ri].alias] = std::to_string(static_cast<long long>(distinct_sets[gi][ri].size()));
+      } else {
+        row[reducers[ri].alias] = FinalizeReducerState(pg.reducers[ri], reducers[ri]);
+      }
     }
     out_rows.push_back(std::move(row));
   }

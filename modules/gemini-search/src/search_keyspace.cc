@@ -395,7 +395,16 @@ void StopAllBackgroundIndexing(RedisModuleCtx* ctx) {
   g_bg_scans.clear();
 }
 
+static bool IsClusterStateOk(RedisModuleCtx* ctx);
+static void ScheduleClusterJsonRecovery(RedisModuleCtx* ctx, const std::string& idx_name);
+
 void StartOrRunInitialScan(RedisModuleCtx* ctx, IndexEntry& entry) {
+  if (entry.spec.source_type == IndexSourceType::kJson &&
+      gemini_search::ClusterManager::Instance().IsClusterMode() &&
+      !IsClusterStateOk(ctx)) {
+    ScheduleClusterJsonRecovery(ctx, entry.spec.name);
+    return;
+  }
   unsigned long long db_size = RedisModule_DbSize(ctx);
   size_t min_keys = GetBgIndexMinKeys();
   if (db_size == 0 || db_size < min_keys) {
@@ -478,14 +487,45 @@ void OnFlushDbEvent(RedisModuleCtx* ctx, RedisModuleEvent /*eid*/,
     StopAllBackgroundIndexing(ctx);
   } else if (subevent == REDISMODULE_SUBEVENT_FLUSHDB_END) {
     StopAllBackgroundIndexing(ctx);
-    GetCursors().clear();
-    GetAliases().clear();
-    GetSuggestDicts().clear();
-    GetTermDicts().clear();
+    {
+      std::lock_guard<std::mutex> lk(GetCursorsMutex());
+      GetCursors().clear();
+    }
+    {
+      std::unique_lock<std::shared_mutex> lk(GetAliasesMutex());
+      GetAliases().clear();
+    }
+    {
+      std::unique_lock<std::shared_mutex> lk(GetSuggestDictsMutex());
+      GetSuggestDicts().clear();
+    }
+    {
+      std::unique_lock<std::shared_mutex> lk(GetTermDictsMutex());
+      GetTermDicts().clear();
+    }
+    // In cluster mode (where indices are not Redis module keys), FLUSHDB deletes all underlying
+    // Hash/JSON keys without deleting index definitions. Clear all indexed documents so no stale
+    // phantom documents remain in memory.
+    {
+      std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
+      for (auto& [name, entry_ptr] : GetIndices()) {
+        if (!entry_ptr) continue;
+        std::unique_lock<std::shared_mutex> idx_lk(entry_ptr->Mutex());
+        entry_ptr->doc_store.Clear();
+        entry_ptr->tag_indices.Clear();
+        entry_ptr->numeric_indices.Clear();
+        entry_ptr->vector_indices.Clear();
+        entry_ptr->text_indices.Clear();
+        entry_ptr->geo_indices.Clear();
+        entry_ptr->geoshape_indices.Clear();
+        entry_ptr->sort_indices.Clear();
+      }
+    }
   }
 }
 
 static std::vector<std::string> g_pending_json_cluster_recoveries;
+static bool g_json_recovery_timer_armed = false;
 
 static bool IsClusterStateOk(RedisModuleCtx* ctx) {
   if (!ctx || !RedisModule_Call) return true;
@@ -504,9 +544,11 @@ static bool IsClusterStateOk(RedisModuleCtx* ctx) {
 }
 
 static void ClusterJsonRecoveryTimerCallback(RedisModuleCtx* ctx, void* /*data*/) {
+  g_json_recovery_timer_armed = false;
   if (g_pending_json_cluster_recoveries.empty()) return;
   if (!IsClusterStateOk(ctx)) {
     if (RedisModule_CreateTimer) {
+      g_json_recovery_timer_armed = true;
       RedisModule_CreateTimer(ctx, 50, ClusterJsonRecoveryTimerCallback, nullptr);
     }
     return;
@@ -516,9 +558,23 @@ static void ClusterJsonRecoveryTimerCallback(RedisModuleCtx* ctx, void* /*data*/
   RedisModule_SelectDb(ctx, 0);
   for (const auto& idx_name : pending) {
     auto entry_ptr = GetIndexEntryShared(idx_name);
-    if (entry_ptr && entry_ptr->spec.HasPrefixes() && !entry_ptr->spec.skip_initial_scan) {
+    // Always rebuild recovered cluster indices regardless of skip_initial_scan:
+    // documents written after FT.CREATE live in Redis keys and must be re-indexed on restart.
+    if (entry_ptr && entry_ptr->spec.HasPrefixes()) {
       ScanExistingKeysPreservingHnsw(ctx, *entry_ptr);
     }
+  }
+}
+
+static void ScheduleClusterJsonRecovery(RedisModuleCtx* ctx, const std::string& idx_name) {
+  if (std::find(g_pending_json_cluster_recoveries.begin(),
+                g_pending_json_cluster_recoveries.end(),
+                idx_name) == g_pending_json_cluster_recoveries.end()) {
+    g_pending_json_cluster_recoveries.push_back(idx_name);
+  }
+  if (!g_json_recovery_timer_armed && ctx && RedisModule_CreateTimer) {
+    g_json_recovery_timer_armed = true;
+    RedisModule_CreateTimer(ctx, 50, ClusterJsonRecoveryTimerCallback, nullptr);
   }
 }
 
@@ -528,9 +584,11 @@ void OnLoadingEvent(RedisModuleCtx* ctx, RedisModuleEvent /*eid*/,
       subevent == REDISMODULE_SUBEVENT_LOADING_AOF_START ||
       subevent == REDISMODULE_SUBEVENT_LOADING_REPL_START) {
     g_is_loading = true;
+    if (ctx) StopAllBackgroundIndexing(ctx);
   } else if (subevent == REDISMODULE_SUBEVENT_LOADING_ENDED) {
     g_is_loading = false;
     auto& mgr = gemini_search::ClusterManager::Instance();
+    mgr.SetClusterEnabled(GetClusterEnabledConfig());
     if (mgr.IsClusterMode()) {
       uint64_t persisted_epoch = GetPersistedSchemaEpoch();
       if (persisted_epoch > mgr.GetSchemaEpoch()) {
@@ -543,19 +601,17 @@ void OnLoadingEvent(RedisModuleCtx* ctx, RedisModuleEvent /*eid*/,
         bool cluster_ok = IsClusterStateOk(ctx);
         for (const auto& idx_name : pending) {
           auto entry_ptr = GetIndexEntryShared(idx_name);
-          if (!entry_ptr || !entry_ptr->spec.HasPrefixes() || entry_ptr->spec.skip_initial_scan) {
+          // Rebuild recovered indices regardless of skip_initial_scan
+          if (!entry_ptr || !entry_ptr->spec.HasPrefixes()) {
             continue;
           }
           // ON JSON uses RM_Call("JSON.GET"), which Redis Cluster rejects with CLUSTERDOWN
           // until clusterUpdateState() marks cluster_state:ok after startup.
           if (entry_ptr->spec.source_type == IndexSourceType::kJson && !cluster_ok) {
-            g_pending_json_cluster_recoveries.push_back(idx_name);
+            ScheduleClusterJsonRecovery(ctx, idx_name);
           } else {
             ScanExistingKeysPreservingHnsw(ctx, *entry_ptr);
           }
-        }
-        if (!g_pending_json_cluster_recoveries.empty() && RedisModule_CreateTimer) {
-          RedisModule_CreateTimer(ctx, 50, ClusterJsonRecoveryTimerCallback, nullptr);
         }
       }
       if (ctx) {

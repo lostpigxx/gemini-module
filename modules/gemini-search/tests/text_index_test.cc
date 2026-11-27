@@ -2,7 +2,9 @@
 #include "text_index.h"
 
 #include <algorithm>
+#include <atomic>
 #include <string>
+#include <thread>
 #include <vector>
 
 TEST(TextIndexTokenize, BasicTokenization) {
@@ -350,4 +352,62 @@ TEST(TextIndexWandTest, SearchTopKExactEquivalenceWithFullSearch) {
     }
   }
   EXPECT_TRUE(idx.SearchTopK({"redis"}, 0).empty());
+}
+
+TEST(TextIndexWandTest, ConcurrentSearchTopKAfterRemoveThreadSafe) {
+  TextIndex idx;
+  std::vector<std::string> vocab = {
+      "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"};
+  for (int i = 0; i < 600; i++) {
+    std::string text;
+    for (int j = 0; j < 6; j++) {
+      if (j > 0) text += " ";
+      text += vocab[(i * 5 + j * 3) % vocab.size()];
+    }
+    if (i % 15 == 0) text += " alpha alpha beta";
+    idx.Add("d_" + std::to_string(i), text);
+  }
+  // Remove docs to mark term_stats_ dirty across multiple terms
+  for (int i = 0; i < 300; i += 2) {
+    idx.Remove("d_" + std::to_string(i));
+  }
+
+  std::vector<std::vector<std::string>> queries = {
+      {"alpha", "beta", "gamma"},
+      {"delta", "epsilon", "zeta"},
+      {"eta", "theta", "alpha"},
+      {"nonexistent_term", "beta"},
+  };
+  std::vector<decltype(idx.Search(queries[0]))> expected;
+  for (const auto& q : queries) {
+    auto full = idx.Search(q);
+    if (full.size() > 15) full.resize(15);
+    expected.push_back(std::move(full));
+  }
+
+  // Hammer SearchTopK concurrently on const TextIndex while term_stats_ is dirty
+  const TextIndex& cidx = idx;
+  std::atomic<int> failures{0};
+  std::vector<std::thread> threads;
+  for (int t = 0; t < 8; t++) {
+    threads.emplace_back([&, t]() {
+      for (int iter = 0; iter < 50; iter++) {
+        size_t qi = static_cast<size_t>((t + iter) % queries.size());
+        auto got = cidx.SearchTopK(queries[qi], 15);
+        if (got.size() != expected[qi].size()) {
+          failures.fetch_add(1);
+          continue;
+        }
+        for (size_t i = 0; i < got.size(); i++) {
+          if (got[i].doc_id != expected[qi][i].doc_id ||
+              std::abs(got[i].score - expected[qi][i].score) > 1e-9) {
+            failures.fetch_add(1);
+            break;
+          }
+        }
+      }
+    });
+  }
+  for (auto& th : threads) th.join();
+  EXPECT_EQ(failures.load(), 0);
 }

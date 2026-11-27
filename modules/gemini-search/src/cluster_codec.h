@@ -554,6 +554,7 @@ struct RpcAggMapRequest {
   PipelineStage groupby_stage;
   uint64_t max_groups = 100000;
   uint64_t raw_shard_limit = 0;
+  bool raw_zero_limit = false;
   bool raw_has_sortby = false;
   std::vector<std::pair<std::string, bool>> raw_sortby_keys;
 };

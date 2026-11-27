@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <set>
@@ -38,14 +39,42 @@ class TextIndex {
   uint64_t total_doc_len_ = 0;
   double avg_doc_len_ = 0.0;
 
-  // Inverted index with postings sorted by uint32_t doc_id
+  // Inverted index with postings sorted by uint32_t doc_id.
+  // TermStats packs (max_tf:31, min_dl:31, dirty:1) into a single atomic uint64_t so
+  // concurrent SearchTopK() readers under shared_lock can lazily refresh dirty stats
+  // without mutating term_stats_ structure or racing on non-atomic fields.
   struct TermStats {
-    int max_tf = 0;
-    int min_dl = 0;
-    bool dirty = false;
+    static constexpr uint64_t kMask31 = (1ULL << 31) - 1ULL;
+    static constexpr uint64_t kDirtyBit = 1ULL << 62;
+
+    mutable std::atomic<uint64_t> packed{0};
+
+    TermStats() = default;
+    TermStats(const TermStats& o)
+        : packed(o.packed.load(std::memory_order_relaxed)) {}
+    TermStats& operator=(const TermStats& o) {
+      packed.store(o.packed.load(std::memory_order_relaxed),
+                   std::memory_order_relaxed);
+      return *this;
+    }
+
+    static uint64_t Pack(int max_tf, int min_dl, bool dirty) {
+      uint64_t mtf = (max_tf > 0) ? (static_cast<uint64_t>(max_tf) & kMask31) : 0ULL;
+      uint64_t mdl = (min_dl > 0) ? (static_cast<uint64_t>(min_dl) & kMask31) : 0ULL;
+      return mtf | (mdl << 31) | (dirty ? kDirtyBit : 0ULL);
+    }
+    void Load(int& max_tf, int& min_dl, bool& dirty) const {
+      uint64_t v = packed.load(std::memory_order_relaxed);
+      max_tf = static_cast<int>(v & kMask31);
+      min_dl = static_cast<int>((v >> 31) & kMask31);
+      dirty = (v & kDirtyBit) != 0;
+    }
+    void Store(int max_tf, int min_dl, bool dirty) const {
+      packed.store(Pack(max_tf, min_dl, dirty), std::memory_order_relaxed);
+    }
   };
   std::unordered_map<std::string, std::vector<Posting>> postings_;
-  mutable std::unordered_map<std::string, TermStats> term_stats_;
+  std::unordered_map<std::string, TermStats> term_stats_;
   std::set<std::string> sorted_terms_;
   std::set<std::string> reversed_terms_;
   std::unordered_map<std::string, std::set<std::string>> stem_map_;

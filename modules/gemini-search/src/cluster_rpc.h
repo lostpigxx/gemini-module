@@ -2,6 +2,7 @@
 
 #include "cluster_codec.h"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <deque>
@@ -64,9 +65,18 @@ struct RpcClientStats {
 // Monotonic clock in milliseconds (pure POSIX, no redismodule.h)
 int64_t ClusterNowMs();
 
-// Stateless 64-bit keyed authentication tag for RPC frames (used when CLUSTER_AUTH_TOKEN is set).
+// Overflow-safe deadline addition: returns INT64_MAX on overflow.
+int64_t SafeAddDeadlineMs(int64_t now_ms, int64_t timeout_ms);
+
+// Full 256-bit HMAC-SHA256 authentication MAC for RPC frames (used when CLUSTER_AUTH_TOKEN is set).
+constexpr size_t kRpcAuthMacBytes = 32;
+std::array<uint8_t, kRpcAuthMacBytes> ComputeRpcAuthMac(std::string_view token, RpcOpCode opcode,
+                                                        uint16_t flags, uint64_t request_id,
+                                                        std::string_view payload);
+
+// 64-bit truncated view of ComputeRpcAuthMac.
 uint64_t ComputeRpcAuthTag(std::string_view token, RpcOpCode opcode, uint64_t request_id,
-                           std::string_view payload);
+                           std::string_view payload, uint16_t flags = kRpcFlagNone);
 
 // Async non-blocking TCP binary RPC server running on its own I/O thread.
 class ClusterRpcServer {
@@ -84,9 +94,11 @@ class ClusterRpcServer {
 
   void SetRequestHandler(RequestHandler handler);
   void SetPeerValidator(PeerValidator validator);
+  void RevalidatePeers();
   void SetAuthToken(std::string token);
   bool HasAuthToken() const;
   void SetMaxInflightRequests(size_t max_inflight);
+  void SetMaxConnections(size_t max_connections);
 
   // Starts listening on bind_ip:port. If port == 0, binds an ephemeral port.
   // If port != 0 and bind fails with EADDRINUSE and allow_ephemeral_fallback is true,
@@ -104,6 +116,19 @@ class ClusterRpcServer {
     std::string encoded_frame;
   };
 
+  // Shared outbound state captured weakly by ResponseSender so asynchronous workers
+  // can never trigger UAF or wakeup_pipe_ races after ClusterRpcServer::Stop()/destruction.
+  struct OutboundSink {
+    std::mutex mu;
+    bool alive = false;
+    int wakeup_write_fd = -1;
+    std::deque<OutboundMsg> pending_responses;
+    std::string auth_token;
+
+    void Enqueue(uint64_t conn_id, std::string encoded_frame);
+    void WakeupLocked();
+  };
+
   struct Connection {
     uint64_t id = 0;
     int fd = -1;
@@ -112,6 +137,8 @@ class ClusterRpcServer {
     size_t read_pos = 0;
     std::deque<std::string> write_queue;
     size_t write_offset = 0;
+    size_t write_queue_bytes = 0;
+    bool authenticated = false;
     bool closing = false;
   };
 
@@ -120,6 +147,7 @@ class ClusterRpcServer {
   bool HandleRead(Connection& conn);
   bool HandleWrite(Connection& conn);
   void FlushPendingResponses();
+  void RevalidateConnections();
   void EnqueueResponse(uint64_t conn_id, std::string encoded_frame);
   void WakeupIo();
   void DrainWakeupPipe();
@@ -129,6 +157,7 @@ class ClusterRpcServer {
   int wakeup_pipe_[2] = {-1, -1};
   std::atomic<bool> running_{false};
   std::atomic<bool> stop_requested_{false};
+  std::atomic<bool> revalidate_peers_{false};
   std::atomic<int> bound_port_{0};
   std::thread io_thread_;
 
@@ -137,9 +166,9 @@ class ClusterRpcServer {
   PeerValidator peer_validator_;
   std::string auth_token_;
   std::atomic<size_t> max_inflight_requests_{4096};
+  std::atomic<size_t> max_connections_{1024};
 
-  std::mutex resp_mu_;
-  std::deque<OutboundMsg> pending_responses_;
+  std::shared_ptr<OutboundSink> outbound_sink_ = std::make_shared<OutboundSink>();
 
   std::unordered_map<uint64_t, Connection> conns_;
   uint64_t next_conn_id_ = 1;
@@ -200,6 +229,7 @@ class ClusterRpcClient {
 
   struct PendingRequest {
     uint64_t request_id = 0;
+    RpcOpCode req_opcode = RpcOpCode::kRpcPing;
     std::string node_id;
     int64_t sent_ms = 0;
     int64_t deadline_ms = 0;
@@ -221,6 +251,7 @@ class ClusterRpcClient {
 
   struct QueuedSend {
     uint64_t request_id = 0;
+    RpcOpCode req_opcode = RpcOpCode::kRpcPing;
     std::string node_id;
     std::string ip;
     int port = 0;
@@ -246,7 +277,7 @@ class ClusterRpcClient {
   void SweepTimeouts(int64_t now_ms, std::vector<CompletedCallback>& completions);
   int ComputePollTimeoutMs(int64_t now_ms) const;
   void DispatchCompletions(std::vector<CompletedCallback>& completions);
-  void WakeupIo();
+  void WakeupIoLocked();
   void DrainWakeupPipe();
   void UpdateActiveConnStat();
 

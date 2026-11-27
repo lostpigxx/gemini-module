@@ -44,12 +44,76 @@ struct ClusterDdlContext {
   std::string failed_reason;
 };
 
-std::mutex g_active_ddls_mu;
-std::unordered_map<RedisModuleBlockedClient*, std::shared_ptr<ClusterDdlContext>> g_active_ddls;
+BlockedClientRegistry<ClusterDdlContext> g_active_ddls;
 
 std::atomic<bool> g_schema_sync_in_flight{false};
 std::atomic<int64_t> g_last_schema_sync_ms{0};
 constexpr int64_t kSchemaSyncRetryCooldownMs = 500;
+
+bool ContainsTimeoutPhrase(const std::string& msg) {
+  std::string lower;
+  lower.reserve(msg.size());
+  for (unsigned char c : msg) lower.push_back(static_cast<char>(std::tolower(c)));
+  return lower.find("timeout") != std::string::npos ||
+         lower.find("timed out") != std::string::npos ||
+         lower.find("unavailable") != std::string::npos ||
+         lower.find("server busy") != std::string::npos;
+}
+
+bool IsTransientRpcFailure(RpcStatus status, uint16_t flags, const std::string& err_msg) {
+  if (status != RpcStatus::kOk) {
+    return status == RpcStatus::kTimeout || status == RpcStatus::kDisconnected ||
+           status == RpcStatus::kConnectFailed || status == RpcStatus::kShutdown;
+  }
+  if ((flags & kRpcFlagError) != 0) {
+    return ContainsTimeoutPhrase(err_msg);
+  }
+  return false;
+}
+
+bool IsTransientAppError(const std::string& err_msg) {
+  return ContainsTimeoutPhrase(err_msg);
+}
+
+bool FieldSpecsEqual(const FieldSpec& a, const FieldSpec& b) {
+  if (a.name != b.name || a.type != b.type || a.nostem != b.nostem ||
+      a.json_path != b.json_path || a.sortable != b.sortable || a.noindex != b.noindex ||
+      a.weight != b.weight || a.phonetic != b.phonetic || a.tag_separator != b.tag_separator ||
+      a.case_sensitive != b.case_sensitive || a.geoshape_coord != b.geoshape_coord ||
+      a.index_missing != b.index_missing || a.index_empty != b.index_empty) {
+    return false;
+  }
+  if (a.type == FieldType::kVector) {
+    const auto& va = a.vector_params;
+    const auto& vb = b.vector_params;
+    if (va.algorithm != vb.algorithm || va.dim != vb.dim || va.metric != vb.metric ||
+        va.m != vb.m || va.ef_construction != vb.ef_construction || va.data_type != vb.data_type ||
+        va.quantization != vb.quantization || va.rerank != vb.rerank ||
+        va.bq_oversample != vb.bq_oversample) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Returns true iff `target` is identical to `cur` or a pure FT.ALTER (only new fields appended).
+bool IsAppendOnlyAlterSpec(const IndexSpec& cur, const IndexSpec& target) {
+  if (cur.source_type != target.source_type || cur.prefixes != target.prefixes ||
+      cur.language != target.language || cur.has_custom_stopwords != target.has_custom_stopwords ||
+      cur.custom_stopwords != target.custom_stopwords || cur.nofreqs != target.nofreqs ||
+      cur.nooffsets != target.nooffsets || cur.nohl != target.nohl ||
+      cur.temporary_ttl != target.temporary_ttl || cur.filter_expr != target.filter_expr ||
+      cur.skip_initial_scan != target.skip_initial_scan ||
+      cur.language_field != target.language_field || cur.custom_dict != target.custom_dict) {
+    return false;
+  }
+  if (target.fields.size() < cur.fields.size()) return false;
+  for (const auto& cf : cur.fields) {
+    const FieldSpec* tf = target.FindField(cf.name);
+    if (!tf || !FieldSpecsEqual(cf, *tf)) return false;
+  }
+  return true;
+}
 
 bool BuildRollbackSpec(const std::string& cmd_name, const std::vector<std::string>& args,
                        RpcOpCode& rb_op, std::string& rb_cmd, std::vector<std::string>& rb_args) {
@@ -87,15 +151,40 @@ void FireBestEffortRollback(const std::vector<DdlPeerEndpoint>& peers, RpcOpCode
   }
 }
 
-void UnblockDdlClient(const std::shared_ptr<ClusterDdlContext>& ddl_ctx,
+bool UnblockDdlClient(const std::shared_ptr<ClusterDdlContext>& ddl_ctx,
                       RedisModuleBlockedClient* bc) {
-  if (!bc) return;
-  {
-    std::lock_guard<std::mutex> lk(g_active_ddls_mu);
-    g_active_ddls.erase(bc);
-  }
-  auto* holder = new std::shared_ptr<ClusterDdlContext>(ddl_ctx);
-  RedisModule_UnblockClient(bc, holder);
+  return g_active_ddls.Unblock(ddl_ctx, bc);
+}
+
+void ApplyDdlLocallyDetached(const std::shared_ptr<ClusterDdlContext>& ddl_ctx,
+                             std::vector<DdlPeerEndpoint> succeeded_peers) {
+  GetSearchExecutor().Submit(
+      [ddl_ctx, succeeded_peers = std::move(succeeded_peers)]() mutable {
+        auto& mgr = ClusterManager::Instance();
+        DetachedCtxGuard guard(mgr);
+        if (!guard) return;
+        RedisModuleCtx* tctx = guard.get();
+        RedisModule_SelectDb(tctx, 0);
+
+        int64_t int_reply = 0;
+        std::string local_err;
+        if (!ApplyLocalDdlCommand(tctx, ddl_ctx->cmd_name, ddl_ctx->args,
+                                  /*is_cluster_mode=*/true, /*is_rollback=*/false, int_reply,
+                                  local_err)) {
+          RpcOpCode rb_op = RpcOpCode::kRpcDdlDrop;
+          std::string rb_cmd;
+          std::vector<std::string> rb_args;
+          if (!succeeded_peers.empty() &&
+              BuildRollbackSpec(ddl_ctx->cmd_name, ddl_ctx->args, rb_op, rb_cmd, rb_args)) {
+            FireBestEffortRollback(succeeded_peers, rb_op, rb_cmd, rb_args, ddl_ctx->schema_epoch,
+                                   ddl_ctx->timeout_ms);
+          }
+          return;
+        }
+        ReplicateDdlCommand(tctx, ddl_ctx->cmd_name, ddl_ctx->args);
+        SetPersistedSchemaEpoch(mgr.GetSchemaEpoch());
+        mgr.BroadcastHello(tctx, /*request_reply=*/false);
+      });
 }
 
 int ClusterDdlReplyCallback(RedisModuleCtx* ctx, RedisModuleString** /*argv*/, int /*argc*/) {
@@ -159,20 +248,7 @@ void ClusterDdlFreePrivData(RedisModuleCtx* /*ctx*/, void* privdata) {
 }
 
 void ClusterDdlDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
-  std::shared_ptr<ClusterDdlContext> ddl_ctx;
-  {
-    std::lock_guard<std::mutex> lk(g_active_ddls_mu);
-    auto it = g_active_ddls.find(bc);
-    if (it != g_active_ddls.end()) {
-      ddl_ctx = std::move(it->second);
-      g_active_ddls.erase(it);
-    }
-  }
-  if (ddl_ctx) {
-    std::lock_guard<std::mutex> lk(ddl_ctx->mu);
-    ddl_ctx->cancelled = true;
-    ddl_ctx->bc = nullptr;
-  }
+  g_active_ddls.OnDisconnect(bc);
 }
 
 void HandleRemoteDdlRequest(const RpcFrame& req_frame, const std::string& /*peer_ip*/,
@@ -202,34 +278,35 @@ void HandleRemoteDdlRequest(const RpcFrame& req_frame, const std::string& /*peer
           return;
         }
 
-        std::lock_guard<std::mutex> ctx_lk(mgr.DetachedCtxMutex());
-        RedisModuleCtx* tctx = mgr.DetachedCtx();
-        if (!tctx || mgr.IsShuttingDown()) {
-          resp.ok = false;
-          resp.error_msg = "detached context unavailable";
-          std::string out;
-          EncodeDdlResponse(resp, out);
-          send_resp(RpcOpCode::kRpcDdlResp, kRpcFlagNone, std::move(out));
-          return;
-        }
-
-        RedisModule_ThreadSafeContextLock(tctx);
-        RedisModule_SelectDb(tctx, 0);
-
-        bool is_rollback = (req.flags & kDdlFlagRollback) != 0;
+        bool ok = false;
         int64_t int_reply = 0;
         std::string err;
-        bool ok = ApplyLocalDdlCommand(tctx, req.cmd_name, req.args, /*is_cluster_mode=*/true,
-                                       is_rollback, int_reply, err);
-        if (ok) {
-          ReplicateDdlCommand(tctx, req.cmd_name, req.args);
-          if (!is_rollback && req.schema_epoch > mgr.GetSchemaEpoch()) {
-            mgr.SetSchemaEpoch(req.schema_epoch);
-            SetPersistedSchemaEpoch(req.schema_epoch);
+        uint64_t cur_epoch = 0;
+        {
+          DetachedCtxGuard guard(mgr);
+          if (!guard) {
+            resp.ok = false;
+            resp.error_msg = "detached context unavailable";
+            std::string out;
+            EncodeDdlResponse(resp, out);
+            send_resp(RpcOpCode::kRpcDdlResp, kRpcFlagNone, std::move(out));
+            return;
           }
+          RedisModuleCtx* tctx = guard.get();
+          RedisModule_SelectDb(tctx, 0);
+
+          bool is_rollback = (req.flags & kDdlFlagRollback) != 0;
+          ok = ApplyLocalDdlCommand(tctx, req.cmd_name, req.args, /*is_cluster_mode=*/true,
+                                    is_rollback, int_reply, err);
+          if (ok) {
+            ReplicateDdlCommand(tctx, req.cmd_name, req.args);
+            if (!is_rollback && req.schema_epoch > mgr.GetSchemaEpoch()) {
+              mgr.SetSchemaEpoch(req.schema_epoch);
+              SetPersistedSchemaEpoch(req.schema_epoch);
+            }
+          }
+          cur_epoch = mgr.GetSchemaEpoch();
         }
-        uint64_t cur_epoch = mgr.GetSchemaEpoch();
-        RedisModule_ThreadSafeContextUnlock(tctx);
 
         resp.ok = ok;
         resp.int_reply = int_reply;
@@ -263,53 +340,57 @@ void HandleSchemaSyncRequest(const RpcFrame& req_frame, const std::string& /*pee
       return;
     }
 
-    std::lock_guard<std::mutex> ctx_lk(mgr.DetachedCtxMutex());
-    RedisModuleCtx* tctx = mgr.DetachedCtx();
-    if (!tctx || mgr.IsShuttingDown()) {
-      RpcErrorPayload err{503, "detached context unavailable"};
-      std::string out;
-      EncodeErrorPayload(err, out);
-      send_resp(RpcOpCode::kRpcSchemaSyncResp, kRpcFlagError, std::move(out));
-      return;
-    }
-
     RpcSchemaSyncResponse resp;
-    RedisModule_ThreadSafeContextLock(tctx);
-    resp.schema_epoch = mgr.GetSchemaEpoch();
-
     {
-      std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
-      std::vector<std::string> names;
-      names.reserve(GetIndices().size());
-      for (const auto& [name, ptr] : GetIndices()) {
-        if (ptr) names.push_back(name);
+      DetachedCtxGuard guard(mgr);
+      if (!guard) {
+        RpcErrorPayload err{503, "detached context unavailable"};
+        std::string out;
+        EncodeErrorPayload(err, out);
+        send_resp(RpcOpCode::kRpcSchemaSyncResp, kRpcFlagError, std::move(out));
+        return;
       }
-      std::sort(names.begin(), names.end());
-      resp.indices.reserve(names.size());
-      for (const auto& name : names) {
-        const auto& entry = *GetIndices().at(name);
-        std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
-        SchemaIndexSnapshot snap;
-        snap.spec = entry.spec;
-        auto dumped = entry.synonyms.Dump();
-        snap.synonyms.reserve(dumped.size());
-        for (auto& [gid, terms] : dumped) {
-          snap.synonyms.emplace_back(std::move(gid), std::move(terms));
+      resp.schema_epoch = mgr.GetSchemaEpoch();
+
+      {
+        std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+        std::vector<std::string> names;
+        names.reserve(GetIndices().size());
+        for (const auto& [name, ptr] : GetIndices()) {
+          if (ptr) names.push_back(name);
         }
-        resp.indices.push_back(std::move(snap));
+        std::sort(names.begin(), names.end());
+        resp.indices.reserve(names.size());
+        for (const auto& name : names) {
+          const auto& entry = *GetIndices().at(name);
+          std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+          SchemaIndexSnapshot snap;
+          snap.spec = entry.spec;
+          auto dumped = entry.synonyms.Dump();
+          snap.synonyms.reserve(dumped.size());
+          for (auto& [gid, terms] : dumped) {
+            snap.synonyms.emplace_back(std::move(gid), std::move(terms));
+          }
+          resp.indices.push_back(std::move(snap));
+        }
       }
-    }
 
-    for (const auto& [alias, target] : GetAliases()) {
-      resp.aliases.emplace_back(alias, target);
-    }
-    std::sort(resp.aliases.begin(), resp.aliases.end());
+      {
+        std::shared_lock<std::shared_mutex> alk(GetAliasesMutex());
+        for (const auto& [alias, target] : GetAliases()) {
+          resp.aliases.emplace_back(alias, target);
+        }
+      }
+      std::sort(resp.aliases.begin(), resp.aliases.end());
 
-    for (const auto& [dname, tdict] : GetTermDicts()) {
-      resp.term_dicts.emplace_back(dname, tdict.Dump());
+      {
+        std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
+        for (const auto& [dname, tdict] : GetTermDicts()) {
+          resp.term_dicts.emplace_back(dname, tdict.Dump());
+        }
+      }
+      std::sort(resp.term_dicts.begin(), resp.term_dicts.end());
     }
-    std::sort(resp.term_dicts.begin(), resp.term_dicts.end());
-    RedisModule_ThreadSafeContextUnlock(tctx);
 
     std::string encoded;
     EncodeSchemaSyncResponse(resp, encoded);
@@ -324,27 +405,46 @@ void ApplySchemaSyncSnapshot(RpcSchemaSyncResponse resp) {
     return;
   }
 
-  std::lock_guard<std::mutex> ctx_lk(mgr.DetachedCtxMutex());
-  RedisModuleCtx* tctx = mgr.DetachedCtx();
-  if (!tctx || mgr.IsShuttingDown()) {
+  DetachedCtxGuard guard(mgr);
+  if (!guard) {
     g_schema_sync_in_flight.store(false, std::memory_order_release);
     return;
   }
-
-  RedisModule_ThreadSafeContextLock(tctx);
+  RedisModuleCtx* tctx = guard.get();
   RedisModule_SelectDb(tctx, 0);
 
   if (resp.schema_epoch > mgr.GetSchemaEpoch()) {
-    // 1. Sync term dictionaries first (indices may reference DICT)
+    // 1. Sync term dictionaries first (indices may reference DICT) and replicate deltas
+    std::vector<std::pair<std::string, std::vector<std::string>>> dict_dels;
+    std::vector<std::pair<std::string, std::vector<std::string>>> dict_adds;
     {
       std::unique_lock<std::shared_mutex> dlk(GetTermDictsMutex());
+      for (const auto& [dname, tdict] : GetTermDicts()) {
+        auto old_terms = tdict.Dump();
+        if (!old_terms.empty()) dict_dels.emplace_back(dname, std::move(old_terms));
+      }
       GetTermDicts().clear();
       for (const auto& [dname, terms] : resp.term_dicts) {
         GetTermDicts()[dname].Add(terms);
+        if (!terms.empty()) dict_adds.emplace_back(dname, terms);
       }
     }
+    for (const auto& [dname, terms] : dict_dels) {
+      std::vector<std::string> args;
+      args.reserve(1 + terms.size());
+      args.push_back(dname);
+      args.insert(args.end(), terms.begin(), terms.end());
+      ReplicateDdlCommand(tctx, "FT.DICTDEL", args);
+    }
+    for (const auto& [dname, terms] : dict_adds) {
+      std::vector<std::string> args;
+      args.reserve(1 + terms.size());
+      args.push_back(dname);
+      args.insert(args.end(), terms.begin(), terms.end());
+      ReplicateDdlCommand(tctx, "FT.DICTADD", args);
+    }
 
-    // 2. Sync indices: drop stale ones, create missing ones, update altered fields/synonyms
+    // 2. Sync indices: drop stale ones, replace recreated/mismatched ones, alter or create others
     std::unordered_set<std::string> remote_names;
     remote_names.reserve(resp.indices.size());
     for (const auto& snap : resp.indices) {
@@ -352,11 +452,13 @@ void ApplySchemaSyncSnapshot(RpcSchemaSyncResponse resp) {
     }
 
     std::vector<std::shared_ptr<IndexEntry>> to_scan;
+    std::vector<std::pair<std::string, std::vector<std::string>>> ddl_to_replicate;
     {
       std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
       for (auto it = GetIndices().begin(); it != GetIndices().end();) {
         if (remote_names.count(it->first) == 0) {
           StopBackgroundIndexing(tctx, it->first);
+          ddl_to_replicate.emplace_back("FT.DROPINDEX", std::vector<std::string>{it->first});
           it = GetIndices().erase(it);
         } else {
           ++it;
@@ -372,35 +474,123 @@ void ApplySchemaSyncSnapshot(RpcSchemaSyncResponse resp) {
             entry->synonyms.Update(gid, terms);
           }
           TouchIndex(*entry);
+          ddl_to_replicate.emplace_back("FT.CREATE", BuildFtCreateArgs(entry->spec));
+          for (const auto& [gid, terms] : snap.synonyms) {
+            std::vector<std::string> sargs;
+            sargs.reserve(2 + terms.size());
+            sargs.push_back(entry->spec.name);
+            sargs.push_back(gid);
+            sargs.insert(sargs.end(), terms.begin(), terms.end());
+            ddl_to_replicate.emplace_back("FT.SYNUPDATE", std::move(sargs));
+          }
           GetIndices().emplace(entry->spec.name, entry);
           if (entry->spec.HasPrefixes() && !entry->spec.skip_initial_scan) {
             to_scan.push_back(entry);
           }
         } else {
-          auto& entry = *it->second;
-          std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
-          bool fields_added = false;
-          for (const auto& f : snap.spec.fields) {
-            if (!entry.spec.FindField(f.name)) {
-              entry.spec.fields.push_back(f);
-              fields_added = true;
+          auto& cur_entry = *it->second;
+          bool append_only = false;
+          {
+            std::shared_lock<std::shared_mutex> idx_lk(cur_entry.Mutex());
+            append_only = IsAppendOnlyAlterSpec(cur_entry.spec, snap.spec);
+          }
+          if (!append_only) {
+            // Index was dropped and recreated with a different schema: replace cleanly!
+            StopBackgroundIndexing(tctx, snap.spec.name);
+            ddl_to_replicate.emplace_back("FT.DROPINDEX", std::vector<std::string>{snap.spec.name});
+            auto entry = std::make_shared<IndexEntry>();
+            entry->spec = std::move(snap.spec);
+            for (const auto& [gid, terms] : snap.synonyms) {
+              entry->synonyms.Update(gid, terms);
             }
-          }
-          entry.synonyms.Clear();
-          for (const auto& [gid, terms] : snap.synonyms) {
-            entry.synonyms.Update(gid, terms);
-          }
-          if (fields_added && entry.spec.HasPrefixes()) {
-            to_scan.push_back(it->second);
+            TouchIndex(*entry);
+            ddl_to_replicate.emplace_back("FT.CREATE", BuildFtCreateArgs(entry->spec));
+            for (const auto& [gid, terms] : snap.synonyms) {
+              std::vector<std::string> sargs;
+              sargs.reserve(2 + terms.size());
+              sargs.push_back(entry->spec.name);
+              sargs.push_back(gid);
+              sargs.insert(sargs.end(), terms.begin(), terms.end());
+              ddl_to_replicate.emplace_back("FT.SYNUPDATE", std::move(sargs));
+            }
+            it->second = entry;
+            if (entry->spec.HasPrefixes() && !entry->spec.skip_initial_scan) {
+              to_scan.push_back(entry);
+            }
+          } else {
+            std::unique_lock<std::shared_mutex> idx_lk(cur_entry.Mutex());
+            std::vector<FieldSpec> added_fields;
+            for (const auto& f : snap.spec.fields) {
+              if (!cur_entry.spec.FindField(f.name)) {
+                cur_entry.spec.fields.push_back(f);
+                added_fields.push_back(f);
+              }
+            }
+            if (!added_fields.empty()) {
+              std::vector<std::string> aargs = {cur_entry.spec.name, "SCHEMA", "ADD"};
+              for (const auto& af : added_fields) {
+                AppendFieldSpecArgs(af, aargs);
+              }
+              ddl_to_replicate.emplace_back("FT.ALTER", std::move(aargs));
+            }
+            std::unordered_map<std::string, std::vector<std::string>> prev_syns;
+            for (const auto& [pgid, pterms] : cur_entry.synonyms.Dump()) {
+              prev_syns[pgid] = pterms;
+            }
+            cur_entry.synonyms.Clear();
+            for (const auto& [gid, terms] : snap.synonyms) {
+              cur_entry.synonyms.Update(gid, terms);
+              auto pit = prev_syns.find(gid);
+              if (pit == prev_syns.end() || pit->second != terms) {
+                std::vector<std::string> sargs;
+                sargs.reserve(2 + terms.size());
+                sargs.push_back(cur_entry.spec.name);
+                sargs.push_back(gid);
+                sargs.insert(sargs.end(), terms.begin(), terms.end());
+                ddl_to_replicate.emplace_back("FT.SYNUPDATE", std::move(sargs));
+              }
+            }
+            if (!added_fields.empty() && cur_entry.spec.HasPrefixes()) {
+              to_scan.push_back(it->second);
+            }
           }
         }
       }
     }
 
-    // 3. Sync aliases
-    GetAliases().clear();
-    for (const auto& [alias, target] : resp.aliases) {
-      GetAliases()[alias] = target;
+    for (const auto& [cmd, args] : ddl_to_replicate) {
+      ReplicateDdlCommand(tctx, cmd, args);
+    }
+
+    // 3. Sync aliases (protected by GetAliasesMutex()) and replicate deltas
+    std::vector<std::string> removed_aliases;
+    std::vector<std::pair<std::string, std::string>> upserted_aliases;
+    {
+      std::unique_lock<std::shared_mutex> alk(GetAliasesMutex());
+      std::unordered_set<std::string> new_alias_names;
+      new_alias_names.reserve(resp.aliases.size());
+      for (const auto& [alias, target] : resp.aliases) {
+        new_alias_names.insert(alias);
+      }
+      for (const auto& [alias, target] : GetAliases()) {
+        if (new_alias_names.count(alias) == 0) removed_aliases.push_back(alias);
+      }
+      for (const auto& [alias, target] : resp.aliases) {
+        auto it = GetAliases().find(alias);
+        if (it == GetAliases().end() || it->second != target) {
+          upserted_aliases.emplace_back(alias, target);
+        }
+      }
+      GetAliases().clear();
+      for (const auto& [alias, target] : resp.aliases) {
+        GetAliases()[alias] = target;
+      }
+    }
+    for (const auto& alias : removed_aliases) {
+      ReplicateDdlCommand(tctx, "FT.ALIASDEL", {alias});
+    }
+    for (const auto& [alias, target] : upserted_aliases) {
+      ReplicateDdlCommand(tctx, "FT.ALIASUPDATE", {alias, target});
     }
 
     // 4. Advance local epoch and trigger Phase 64 background incremental scan for new indices
@@ -417,7 +607,6 @@ void ApplySchemaSyncSnapshot(RpcSchemaSyncResponse resp) {
                     static_cast<unsigned long long>(resp.schema_epoch), resp.indices.size());
   }
 
-  RedisModule_ThreadSafeContextUnlock(tctx);
   g_schema_sync_in_flight.store(false, std::memory_order_release);
 }
 
@@ -484,6 +673,7 @@ struct ClusterSearchFinalRow {
   double score = 0.0;
   std::string sort_str;
   bool has_yield_dist = false;
+  bool fetched = false;
   bool has_payload = false;
   std::string payload;
   std::vector<std::pair<std::string, std::string>> fields;
@@ -519,19 +709,11 @@ struct ClusterSearchContext {
   std::vector<ClusterSearchFinalRow> final_rows;
 };
 
-std::mutex g_active_searches_mu;
-std::unordered_map<RedisModuleBlockedClient*, std::shared_ptr<ClusterSearchContext>>
-    g_active_searches;
+BlockedClientRegistry<ClusterSearchContext> g_active_searches;
 
 void UnblockSearchClient(const std::shared_ptr<ClusterSearchContext>& sctx,
                          RedisModuleBlockedClient* bc) {
-  if (!bc) return;
-  {
-    std::lock_guard<std::mutex> lk(g_active_searches_mu);
-    g_active_searches.erase(bc);
-  }
-  auto* holder = new std::shared_ptr<ClusterSearchContext>(sctx);
-  RedisModule_UnblockClient(bc, holder);
+  g_active_searches.Unblock(sctx, bc);
 }
 
 int ClusterSearchReplyCallback(RedisModuleCtx* ctx, RedisModuleString** /*argv*/, int /*argc*/) {
@@ -659,32 +841,22 @@ void ClusterSearchFreePrivData(RedisModuleCtx* /*ctx*/, void* privdata) {
 }
 
 void ClusterSearchDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
-  std::shared_ptr<ClusterSearchContext> sctx;
-  {
-    std::lock_guard<std::mutex> lk(g_active_searches_mu);
-    auto it = g_active_searches.find(bc);
-    if (it != g_active_searches.end()) {
-      sctx = std::move(it->second);
-      g_active_searches.erase(it);
-    }
-  }
-  if (sctx) {
-    std::lock_guard<std::mutex> lk(sctx->mu);
-    sctx->cancelled = true;
-    sctx->bc = nullptr;
-  }
+  g_active_searches.OnDisconnect(bc);
 }
 
 void OnPhase2FetchDone(const std::shared_ptr<ClusterSearchContext>& sctx,
                        const std::vector<size_t>& winner_indices, const std::string& node_id,
-                       bool ok, const std::string& err, RpcFetchDocsResponse&& resp) {
+                       bool ok, bool is_transient, const std::string& err,
+                       RpcFetchDocsResponse&& resp) {
   RedisModuleBlockedClient* to_unblock = nullptr;
   {
     std::lock_guard<std::mutex> lk(sctx->mu);
     if (sctx->finished || sctx->cancelled) return;
 
     if (!ok || !resp.ok) {
-      if (!sctx->on_timeout_return) {
+      bool allow_partial =
+          sctx->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+      if (!allow_partial) {
         if (sctx->error_msg.empty()) {
           std::string reason = !ok ? err : resp.error_msg;
           sctx->error_msg = "ERR cluster shard fetch failed (" +
@@ -700,15 +872,25 @@ void OnPhase2FetchDone(const std::shared_ptr<ClusterSearchContext>& sctx,
         if (wi < sctx->final_rows.size()) {
           auto& dst = sctx->final_rows[wi];
           auto& src = resp.docs[i];
-          dst.has_payload = src.has_payload;
-          dst.payload = std::move(src.payload);
-          dst.fields = std::move(src.fields);
+          if (src.found) {
+            dst.fetched = true;
+            dst.has_payload = src.has_payload;
+            dst.payload = std::move(src.payload);
+            dst.fields = std::move(src.fields);
+          }
         }
       }
     }
 
     if (sctx->phase2_pending > 0) sctx->phase2_pending--;
     if (sctx->phase2_pending == 0 && !sctx->finished) {
+      if (sctx->error_msg.empty()) {
+        // Filter out docs missing on shard (deleted/migrated mid-query) or skipped on partial fetch
+        sctx->final_rows.erase(
+            std::remove_if(sctx->final_rows.begin(), sctx->final_rows.end(),
+                           [](const ClusterSearchFinalRow& r) { return !r.fetched; }),
+            sctx->final_rows.end());
+      }
       sctx->finished = true;
       to_unblock = sctx->bc;
       sctx->bc = nullptr;
@@ -717,11 +899,70 @@ void OnPhase2FetchDone(const std::shared_ptr<ClusterSearchContext>& sctx,
   UnblockSearchClient(sctx, to_unblock);
 }
 
+void DispatchSearchPhase2(const std::shared_ptr<ClusterSearchContext>& sctx,
+                          std::unordered_map<uint32_t, std::vector<size_t>> fetch_plan) {
+  auto& mgr = ClusterManager::Instance();
+  int64_t elapsed = ClusterNowMs() - sctx->start_ms;
+  int64_t rem_timeout = std::max<int64_t>(200, sctx->plan.timeout_ms - elapsed);
+
+  for (auto& [sidx, winner_indices] : fetch_plan) {
+    if (sidx >= sctx->shards.size()) {
+      OnPhase2FetchDone(sctx, winner_indices, "unknown", false, false, "invalid shard index", {});
+      continue;
+    }
+    const auto& ep = sctx->shards[sidx];
+    RpcFetchDocsRequest freq = sctx->plan.fetch_template;
+    freq.doc_ids.reserve(winner_indices.size());
+    {
+      std::lock_guard<std::mutex> lk(sctx->mu);
+      for (size_t wi : winner_indices) {
+        freq.doc_ids.push_back(sctx->final_rows[wi].doc_id);
+      }
+    }
+
+    if (ep.is_myself) {
+      GetSearchExecutor().Submit(
+          [sctx, winner_indices = std::move(winner_indices), nid = ep.node_id,
+           freq = std::move(freq)]() mutable {
+            RpcFetchDocsResponse fresp = ExecuteLocalFetchDocs(freq);
+            OnPhase2FetchDone(sctx, winner_indices, nid, true, false, "", std::move(fresp));
+          });
+    } else {
+      std::string encoded_fetch;
+      EncodeFetchDocsRequest(freq, encoded_fetch);
+      mgr.RpcClient().SendAsync(
+          ep.node_id, ep.ip, ep.rpc_port, RpcOpCode::kRpcFetchDocs, encoded_fetch, rem_timeout,
+          [sctx, winner_indices = std::move(winner_indices), nid = ep.node_id](RpcResponse r) {
+            if (r.status != RpcStatus::kOk) {
+              OnPhase2FetchDone(sctx, winner_indices, nid, false,
+                                IsTransientRpcFailure(r.status, r.flags, r.error_msg),
+                                std::string(RpcStatusToString(r.status)) +
+                                    (r.error_msg.empty() ? "" : (": " + r.error_msg)),
+                                {});
+              return;
+            }
+            if (r.flags & kRpcFlagError) {
+              std::string emsg = r.error_msg.empty() ? "remote fetch error" : r.error_msg;
+              OnPhase2FetchDone(sctx, winner_indices, nid, false,
+                                IsTransientRpcFailure(r.status, r.flags, emsg), emsg, {});
+              return;
+            }
+            RpcFetchDocsResponse fresp;
+            if (!DecodeFetchDocsResponse(r.payload, fresp)) {
+              OnPhase2FetchDone(sctx, winner_indices, nid, false, false, "malformed fetch response",
+                                {});
+              return;
+            }
+            OnPhase2FetchDone(sctx, winner_indices, nid, true, false, "", std::move(fresp));
+          });
+    }
+  }
+}
+
 void OnPhase1ShardDone(const std::shared_ptr<ClusterSearchContext>& sctx, uint32_t shard_idx,
-                       const std::string& node_id, bool ok, const std::string& err,
-                       RpcSearchPhase1Response&& resp) {
-  bool start_phase2 = false;
-  std::unordered_map<uint32_t, std::vector<size_t>> fetch_plan;
+                       const std::string& node_id, bool ok, bool is_transient,
+                       const std::string& err, RpcSearchPhase1Response&& resp) {
+  bool offload_merge = false;
   RedisModuleBlockedClient* to_unblock = nullptr;
 
   {
@@ -729,7 +970,9 @@ void OnPhase1ShardDone(const std::shared_ptr<ClusterSearchContext>& sctx, uint32
     if (sctx->finished || sctx->cancelled) return;
 
     if (!ok || !resp.ok) {
-      if (!sctx->on_timeout_return) {
+      bool allow_partial =
+          sctx->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+      if (!allow_partial) {
         if (sctx->error_msg.empty()) {
           std::string reason = !ok ? err : resp.error_msg;
           sctx->error_msg = "ERR cluster shard query failed (" +
@@ -771,41 +1014,7 @@ void OnPhase1ShardDone(const std::shared_ptr<ClusterSearchContext>& sctx, uint32
         to_unblock = sctx->bc;
         sctx->bc = nullptr;
       } else {
-        const auto& plan = sctx->plan;
-        size_t knn_cap = plan.is_knn ? plan.knn_k : 0;
-        MergedSearchResult merged = MergeSearchShards(
-            sctx->slices, sctx->sort_mode, plan.limit_offset, plan.limit_count, plan.has_limit,
-            GetMaxSearchResults(), knn_cap);
-
-        if (plan.phase1_req.count_only) {
-          sctx->count_only = true;
-          sctx->global_total = merged.global_total;
-          sctx->finished = true;
-          to_unblock = sctx->bc;
-          sctx->bc = nullptr;
-        } else {
-          sctx->global_total = merged.global_total;
-          sctx->final_rows.reserve(merged.winners.size());
-          for (auto& w : merged.winners) {
-            ClusterSearchFinalRow row;
-            row.doc_id = std::move(w.doc_id);
-            row.score = w.score;
-            row.sort_str = std::move(w.sort_str);
-            row.has_yield_dist = w.has_yield_dist;
-            sctx->final_rows.push_back(std::move(row));
-          }
-
-          bool skip_fetch = sctx->final_rows.empty() || (plan.nocontent && !plan.withpayloads);
-          if (skip_fetch || merged.winners_by_shard.empty()) {
-            sctx->finished = true;
-            to_unblock = sctx->bc;
-            sctx->bc = nullptr;
-          } else {
-            fetch_plan = std::move(merged.winners_by_shard);
-            sctx->phase2_pending = fetch_plan.size();
-            start_phase2 = true;
-          }
-        }
+        offload_merge = true;
       }
     }
   }
@@ -814,60 +1023,71 @@ void OnPhase1ShardDone(const std::shared_ptr<ClusterSearchContext>& sctx, uint32
     UnblockSearchClient(sctx, to_unblock);
     return;
   }
+  if (!offload_merge) return;
 
-  if (!start_phase2) return;
-
-  // Phase 2: Targeted Fetch of winning doc_ids per shard
-  auto& mgr = ClusterManager::Instance();
-  int64_t elapsed = ClusterNowMs() - sctx->start_ms;
-  int64_t rem_timeout = std::max<int64_t>(200, sctx->plan.timeout_ms - elapsed);
-
-  for (auto& [sidx, winner_indices] : fetch_plan) {
-    if (sidx >= sctx->shards.size()) {
-      OnPhase2FetchDone(sctx, winner_indices, "unknown", false, "invalid shard index", {});
-      continue;
-    }
-    const auto& ep = sctx->shards[sidx];
-    RpcFetchDocsRequest freq = sctx->plan.fetch_template;
-    freq.doc_ids.reserve(winner_indices.size());
-    for (size_t wi : winner_indices) {
-      freq.doc_ids.push_back(sctx->final_rows[wi].doc_id);
+  // Offload MergeSearchShards to SearchExecutor so ClusterRpcClient::IoLoop never blocks on CPU
+  GetSearchExecutor().Submit([sctx]() {
+    std::vector<ShardPhase1Slice> slices;
+    MergeSortMode sort_mode = MergeSortMode::kDocIdAsc;
+    ClusterSearchPlan plan_copy;
+    {
+      std::lock_guard<std::mutex> lk(sctx->mu);
+      if (sctx->finished || sctx->cancelled) return;
+      slices = std::move(sctx->slices);
+      sort_mode = sctx->sort_mode;
+      plan_copy = sctx->plan;
     }
 
-    if (ep.is_myself) {
-      GetSearchExecutor().Submit(
-          [sctx, winner_indices = std::move(winner_indices), nid = ep.node_id,
-           freq = std::move(freq)]() mutable {
-            RpcFetchDocsResponse fresp = ExecuteLocalFetchDocs(freq);
-            OnPhase2FetchDone(sctx, winner_indices, nid, true, "", std::move(fresp));
-          });
-    } else {
-      std::string encoded_fetch;
-      EncodeFetchDocsRequest(freq, encoded_fetch);
-      mgr.RpcClient().SendAsync(
-          ep.node_id, ep.ip, ep.rpc_port, RpcOpCode::kRpcFetchDocs, encoded_fetch, rem_timeout,
-          [sctx, winner_indices = std::move(winner_indices), nid = ep.node_id](RpcResponse r) {
-            if (r.status != RpcStatus::kOk) {
-              OnPhase2FetchDone(sctx, winner_indices, nid, false,
-                                std::string(RpcStatusToString(r.status)) +
-                                    (r.error_msg.empty() ? "" : (": " + r.error_msg)),
-                                {});
-              return;
-            }
-            if (r.flags & kRpcFlagError) {
-              OnPhase2FetchDone(sctx, winner_indices, nid, false,
-                                r.error_msg.empty() ? "remote fetch error" : r.error_msg, {});
-              return;
-            }
-            RpcFetchDocsResponse fresp;
-            if (!DecodeFetchDocsResponse(r.payload, fresp)) {
-              OnPhase2FetchDone(sctx, winner_indices, nid, false, "malformed fetch response", {});
-              return;
-            }
-            OnPhase2FetchDone(sctx, winner_indices, nid, true, "", std::move(fresp));
-          });
+    size_t knn_cap = plan_copy.is_knn ? plan_copy.knn_k : 0;
+    MergedSearchResult merged = MergeSearchShards(
+        slices, sort_mode, plan_copy.limit_offset, plan_copy.limit_count, plan_copy.has_limit,
+        GetMaxSearchResults(), knn_cap);
+
+    bool start_phase2 = false;
+    std::unordered_map<uint32_t, std::vector<size_t>> fetch_plan;
+    RedisModuleBlockedClient* unblock_bc = nullptr;
+    {
+      std::lock_guard<std::mutex> lk(sctx->mu);
+      if (sctx->finished || sctx->cancelled) return;
+      if (plan_copy.phase1_req.count_only) {
+        sctx->count_only = true;
+        sctx->global_total = merged.global_total;
+        sctx->finished = true;
+        unblock_bc = sctx->bc;
+        sctx->bc = nullptr;
+      } else {
+        sctx->global_total = merged.global_total;
+        sctx->final_rows.reserve(merged.winners.size());
+        for (auto& w : merged.winners) {
+          ClusterSearchFinalRow row;
+          row.doc_id = std::move(w.doc_id);
+          row.score = w.score;
+          row.sort_str = std::move(w.sort_str);
+          row.has_yield_dist = w.has_yield_dist;
+          sctx->final_rows.push_back(std::move(row));
+        }
+
+        bool skip_fetch = sctx->final_rows.empty() ||
+                          (plan_copy.nocontent && !plan_copy.withpayloads);
+        if (skip_fetch || merged.winners_by_shard.empty()) {
+          sctx->finished = true;
+          unblock_bc = sctx->bc;
+          sctx->bc = nullptr;
+        } else {
+          fetch_plan = std::move(merged.winners_by_shard);
+          sctx->phase2_pending = fetch_plan.size();
+          start_phase2 = true;
+        }
+      }
     }
-  }
+    if (unblock_bc) {
+      UnblockSearchClient(sctx, unblock_bc);
+      return;
+    }
+    if (start_phase2) {
+      DispatchSearchPhase2(sctx, std::move(fetch_plan));
+    }
+  });
 }
 
 void DispatchSearchPhase1(const std::shared_ptr<ClusterSearchContext>& sctx) {
@@ -894,7 +1114,7 @@ void DispatchSearchPhase1(const std::shared_ptr<ClusterSearchContext>& sctx) {
           local_req = sctx->plan.phase1_req;
         }
         RpcSearchPhase1Response resp = ExecuteLocalSearchPhase1(local_req);
-        OnPhase1ShardDone(sctx, sidx, nid, true, "", std::move(resp));
+        OnPhase1ShardDone(sctx, sidx, nid, true, false, "", std::move(resp));
       });
     } else {
       mgr.RpcClient().SendAsync(
@@ -902,37 +1122,41 @@ void DispatchSearchPhase1(const std::shared_ptr<ClusterSearchContext>& sctx) {
           [sctx, sidx = ep.shard_idx, nid = ep.node_id](RpcResponse r) {
             if (r.status != RpcStatus::kOk) {
               OnPhase1ShardDone(sctx, sidx, nid, false,
+                                IsTransientRpcFailure(r.status, r.flags, r.error_msg),
                                 std::string(RpcStatusToString(r.status)) +
                                     (r.error_msg.empty() ? "" : (": " + r.error_msg)),
                                 {});
               return;
             }
             if (r.flags & kRpcFlagError) {
+              std::string emsg = r.error_msg.empty() ? "remote query error" : r.error_msg;
               OnPhase1ShardDone(sctx, sidx, nid, false,
-                                r.error_msg.empty() ? "remote query error" : r.error_msg, {});
+                                IsTransientRpcFailure(r.status, r.flags, emsg), emsg, {});
               return;
             }
             RpcSearchPhase1Response p1resp;
             if (!DecodeSearchPhase1Response(r.payload, p1resp)) {
-              OnPhase1ShardDone(sctx, sidx, nid, false, "malformed Phase1 response", {});
+              OnPhase1ShardDone(sctx, sidx, nid, false, false, "malformed Phase1 response", {});
               return;
             }
-            OnPhase1ShardDone(sctx, sidx, nid, true, "", std::move(p1resp));
+            OnPhase1ShardDone(sctx, sidx, nid, true, false, "", std::move(p1resp));
           });
     }
   }
 }
 
 void OnSearchPhase0DfsDone(const std::shared_ptr<ClusterSearchContext>& sctx,
-                           const std::string& node_id, bool ok, const std::string& err,
-                           RpcDfsTermStatsResponse&& resp) {
+                           const std::string& node_id, bool ok, bool is_transient,
+                           const std::string& err, RpcDfsTermStatsResponse&& resp) {
   bool launch_p1 = false;
   RedisModuleBlockedClient* to_unblock = nullptr;
   {
     std::lock_guard<std::mutex> lk(sctx->mu);
     if (sctx->finished || sctx->cancelled) return;
     if (!ok || !resp.ok) {
-      if (!sctx->on_timeout_return) {
+      bool allow_partial =
+          sctx->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+      if (!allow_partial) {
         if (sctx->error_msg.empty()) {
           std::string reason = !ok ? err : resp.error_msg;
           sctx->error_msg = "ERR cluster shard DFS stats failed (" +
@@ -968,46 +1192,8 @@ void OnSearchPhase0DfsDone(const std::shared_ptr<ClusterSearchContext>& sctx,
 }
 
 // ============================================================================
-// Phase 69: Generic R2-Safe Blocked Client Registry + Shard RPC Handlers
+// Phase 69: Generic Shared Holder & Shard RPC Handlers
 // ============================================================================
-
-template <typename CtxT>
-struct BlockedRegistry {
-  std::mutex mu;
-  std::unordered_map<RedisModuleBlockedClient*, std::shared_ptr<CtxT>> active;
-
-  void Register(RedisModuleBlockedClient* bc, const std::shared_ptr<CtxT>& ctx) {
-    std::lock_guard<std::mutex> lk(mu);
-    active[bc] = ctx;
-  }
-
-  void Unblock(const std::shared_ptr<CtxT>& ctx, RedisModuleBlockedClient* bc) {
-    if (!bc) return;
-    {
-      std::lock_guard<std::mutex> lk(mu);
-      active.erase(bc);
-    }
-    auto* holder = new std::shared_ptr<CtxT>(ctx);
-    RedisModule_UnblockClient(bc, holder);
-  }
-
-  void OnDisconnect(RedisModuleBlockedClient* bc) {
-    std::shared_ptr<CtxT> ctx;
-    {
-      std::lock_guard<std::mutex> lk(mu);
-      auto it = active.find(bc);
-      if (it != active.end()) {
-        ctx = std::move(it->second);
-        active.erase(it);
-      }
-    }
-    if (ctx) {
-      std::lock_guard<std::mutex> lk(ctx->mu);
-      ctx->cancelled = true;
-      ctx->bc = nullptr;
-    }
-  }
-};
 
 template <typename CtxT>
 void FreeSharedHolder(RedisModuleCtx* /*ctx*/, void* privdata) {
@@ -1198,17 +1384,15 @@ void HandleSuggestRequest(const RpcFrame& req_frame, const std::string& /*peer_i
             resp.ok = false;
             resp.error_msg = "ERR node shutting down";
           } else {
-            std::lock_guard<std::mutex> dlk(mgr.DetachedCtxMutex());
-            RedisModuleCtx* dctx = mgr.DetachedCtx();
-            if (!dctx || mgr.IsShuttingDown()) {
+            DetachedCtxGuard guard(mgr);
+            if (!guard) {
               resp.ok = false;
               resp.error_msg = "ERR node thread-safe context unavailable";
             } else {
-              RedisModule_ThreadSafeContextLock(dctx);
+              RedisModuleCtx* dctx = guard.get();
               if (ApplyLocalSuggestCommand(req.cmd_name, req.args, mutated, resp) && mutated) {
                 ReplicateDdlCommand(dctx, req.cmd_name, req.args);
               }
-              RedisModule_ThreadSafeContextUnlock(dctx);
             }
           }
         }
@@ -1222,6 +1406,7 @@ void HandleSuggestRequest(const RpcFrame& req_frame, const std::string& /*peer_i
 
 struct ClusterHybridFinalRow {
   HybridHit hit;
+  bool fetched = false;
   bool has_payload = false;
   std::string payload;
   std::vector<std::pair<std::string, std::string>> fields;
@@ -1250,7 +1435,7 @@ struct ClusterHybridContext {
   std::vector<ClusterHybridFinalRow> final_rows;
 };
 
-BlockedRegistry<ClusterHybridContext> g_active_hybrids;
+BlockedClientRegistry<ClusterHybridContext> g_active_hybrids;
 
 void ClusterHybridDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
   g_active_hybrids.OnDisconnect(bc);
@@ -1320,13 +1505,16 @@ int ClusterHybridReplyCallback(RedisModuleCtx* ctx, RedisModuleString** /*argv*/
 
 void OnHybridPhase2FetchDone(const std::shared_ptr<ClusterHybridContext>& hctx,
                              const std::vector<size_t>& winner_indices, const std::string& node_id,
-                             bool ok, const std::string& err, RpcFetchDocsResponse&& resp) {
+                             bool ok, bool is_transient, const std::string& err,
+                             RpcFetchDocsResponse&& resp) {
   RedisModuleBlockedClient* to_unblock = nullptr;
   {
     std::lock_guard<std::mutex> lk(hctx->mu);
     if (hctx->finished || hctx->cancelled) return;
     if (!ok || !resp.ok) {
-      if (!hctx->on_timeout_return) {
+      bool allow_partial =
+          hctx->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+      if (!allow_partial) {
         if (hctx->error_msg.empty()) {
           std::string reason = !ok ? err : resp.error_msg;
           hctx->error_msg = "ERR cluster hybrid fetch failed (" +
@@ -1339,7 +1527,8 @@ void OnHybridPhase2FetchDone(const std::shared_ptr<ClusterHybridContext>& hctx,
       size_t n = std::min(winner_indices.size(), resp.docs.size());
       for (size_t i = 0; i < n; i++) {
         size_t wi = winner_indices[i];
-        if (wi < hctx->final_rows.size()) {
+        if (wi < hctx->final_rows.size() && resp.docs[i].found) {
+          hctx->final_rows[wi].fetched = true;
           hctx->final_rows[wi].has_payload = resp.docs[i].has_payload;
           hctx->final_rows[wi].payload = std::move(resp.docs[i].payload);
           hctx->final_rows[wi].fields = std::move(resp.docs[i].fields);
@@ -1348,6 +1537,12 @@ void OnHybridPhase2FetchDone(const std::shared_ptr<ClusterHybridContext>& hctx,
     }
     if (hctx->phase2_pending > 0) hctx->phase2_pending--;
     if (hctx->phase2_pending == 0 && !hctx->finished) {
+      if (hctx->error_msg.empty()) {
+        hctx->final_rows.erase(
+            std::remove_if(hctx->final_rows.begin(), hctx->final_rows.end(),
+                           [](const ClusterHybridFinalRow& r) { return !r.fetched; }),
+            hctx->final_rows.end());
+      }
       hctx->finished = true;
       to_unblock = hctx->bc;
       hctx->bc = nullptr;
@@ -1356,18 +1551,80 @@ void OnHybridPhase2FetchDone(const std::shared_ptr<ClusterHybridContext>& hctx,
   g_active_hybrids.Unblock(hctx, to_unblock);
 }
 
+void DispatchHybridPhase2(const std::shared_ptr<ClusterHybridContext>& hctx,
+                          std::unordered_map<uint32_t, std::vector<size_t>> fetch_plan) {
+  auto& mgr = ClusterManager::Instance();
+  int64_t elapsed = ClusterNowMs() - hctx->start_ms;
+  int64_t rem_timeout = std::max<int64_t>(200, hctx->plan.timeout_ms - elapsed);
+
+  for (auto& [sidx, winner_indices] : fetch_plan) {
+    if (sidx >= hctx->shards.size()) {
+      OnHybridPhase2FetchDone(hctx, winner_indices, "unknown", false, false, "invalid shard index",
+                              {});
+      continue;
+    }
+    const auto& ep = hctx->shards[sidx];
+    RpcFetchDocsRequest freq = hctx->plan.fetch_template;
+    freq.doc_ids.reserve(winner_indices.size());
+    {
+      std::lock_guard<std::mutex> lk(hctx->mu);
+      for (size_t wi : winner_indices) {
+        freq.doc_ids.push_back(hctx->final_rows[wi].hit.doc_id);
+      }
+    }
+
+    if (ep.is_myself) {
+      GetSearchExecutor().Submit(
+          [hctx, winner_indices = std::move(winner_indices), nid = ep.node_id,
+           freq = std::move(freq)]() mutable {
+            RpcFetchDocsResponse fresp = ExecuteLocalFetchDocs(freq);
+            OnHybridPhase2FetchDone(hctx, winner_indices, nid, true, false, "", std::move(fresp));
+          });
+    } else {
+      std::string encoded_fetch;
+      EncodeFetchDocsRequest(freq, encoded_fetch);
+      mgr.RpcClient().SendAsync(
+          ep.node_id, ep.ip, ep.rpc_port, RpcOpCode::kRpcFetchDocs, encoded_fetch, rem_timeout,
+          [hctx, winner_indices = std::move(winner_indices), nid = ep.node_id](RpcResponse r) {
+            if (r.status != RpcStatus::kOk) {
+              OnHybridPhase2FetchDone(hctx, winner_indices, nid, false,
+                                      IsTransientRpcFailure(r.status, r.flags, r.error_msg),
+                                      std::string(RpcStatusToString(r.status)) +
+                                          (r.error_msg.empty() ? "" : (": " + r.error_msg)),
+                                      {});
+              return;
+            }
+            if (r.flags & kRpcFlagError) {
+              std::string emsg = r.error_msg.empty() ? "remote fetch error" : r.error_msg;
+              OnHybridPhase2FetchDone(hctx, winner_indices, nid, false,
+                                      IsTransientRpcFailure(r.status, r.flags, emsg), emsg, {});
+              return;
+            }
+            RpcFetchDocsResponse fresp;
+            if (!DecodeFetchDocsResponse(r.payload, fresp)) {
+              OnHybridPhase2FetchDone(hctx, winner_indices, nid, false, false,
+                                      "malformed fetch response", {});
+              return;
+            }
+            OnHybridPhase2FetchDone(hctx, winner_indices, nid, true, false, "", std::move(fresp));
+          });
+    }
+  }
+}
+
 void OnHybridPhase1ShardDone(const std::shared_ptr<ClusterHybridContext>& hctx, uint32_t shard_idx,
-                             const std::string& node_id, bool ok, const std::string& err,
-                             RpcHybridPhase1Response&& resp) {
-  bool start_phase2 = false;
-  std::unordered_map<uint32_t, std::vector<size_t>> fetch_plan;
+                             const std::string& node_id, bool ok, bool is_transient,
+                             const std::string& err, RpcHybridPhase1Response&& resp) {
+  bool offload_merge = false;
   RedisModuleBlockedClient* to_unblock = nullptr;
 
   {
     std::lock_guard<std::mutex> lk(hctx->mu);
     if (hctx->finished || hctx->cancelled) return;
     if (!ok || !resp.ok) {
-      if (!hctx->on_timeout_return) {
+      bool allow_partial =
+          hctx->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+      if (!allow_partial) {
         if (hctx->error_msg.empty()) {
           std::string reason = !ok ? err : resp.error_msg;
           hctx->error_msg = "ERR cluster hybrid shard query failed (" +
@@ -1393,34 +1650,7 @@ void OnHybridPhase1ShardDone(const std::shared_ptr<ClusterHybridContext>& hctx, 
         to_unblock = hctx->bc;
         hctx->bc = nullptr;
       } else {
-        const auto& plan = hctx->plan;
-        MergedHybridResult merged = MergeHybridShards(
-            hctx->slices, plan.phase1_req.text_limit, static_cast<size_t>(plan.phase1_req.knn_k),
-            plan.hcfg, plan.limit_offset, plan.limit_count, plan.has_limit);
-        hctx->total_fused = merged.total_fused;
-        if (plan.count_only) {
-          hctx->count_only = true;
-          hctx->finished = true;
-          to_unblock = hctx->bc;
-          hctx->bc = nullptr;
-        } else {
-          hctx->final_rows.reserve(merged.winners.size());
-          for (auto& w : merged.winners) {
-            ClusterHybridFinalRow row;
-            row.hit = std::move(w);
-            hctx->final_rows.push_back(std::move(row));
-          }
-          bool skip_fetch = hctx->final_rows.empty() || (plan.nocontent && !plan.withpayloads);
-          if (skip_fetch || merged.winners_by_shard.empty()) {
-            hctx->finished = true;
-            to_unblock = hctx->bc;
-            hctx->bc = nullptr;
-          } else {
-            fetch_plan = std::move(merged.winners_by_shard);
-            hctx->phase2_pending = fetch_plan.size();
-            start_phase2 = true;
-          }
-        }
+        offload_merge = true;
       }
     }
   }
@@ -1429,59 +1659,63 @@ void OnHybridPhase1ShardDone(const std::shared_ptr<ClusterHybridContext>& hctx, 
     g_active_hybrids.Unblock(hctx, to_unblock);
     return;
   }
-  if (!start_phase2) return;
+  if (!offload_merge) return;
 
-  auto& mgr = ClusterManager::Instance();
-  int64_t elapsed = ClusterNowMs() - hctx->start_ms;
-  int64_t rem_timeout = std::max<int64_t>(200, hctx->plan.timeout_ms - elapsed);
-
-  for (auto& [sidx, winner_indices] : fetch_plan) {
-    if (sidx >= hctx->shards.size()) {
-      OnHybridPhase2FetchDone(hctx, winner_indices, "unknown", false, "invalid shard index", {});
-      continue;
-    }
-    const auto& ep = hctx->shards[sidx];
-    RpcFetchDocsRequest freq = hctx->plan.fetch_template;
-    freq.doc_ids.reserve(winner_indices.size());
-    for (size_t wi : winner_indices) {
-      freq.doc_ids.push_back(hctx->final_rows[wi].hit.doc_id);
+  // Offload MergeHybridShards to SearchExecutor so ClusterRpcClient::IoLoop never blocks on CPU
+  GetSearchExecutor().Submit([hctx]() {
+    std::vector<ShardHybridSlice> slices;
+    ClusterHybridPlan plan_copy;
+    {
+      std::lock_guard<std::mutex> lk(hctx->mu);
+      if (hctx->finished || hctx->cancelled) return;
+      slices = std::move(hctx->slices);
+      plan_copy = hctx->plan;
     }
 
-    if (ep.is_myself) {
-      GetSearchExecutor().Submit(
-          [hctx, winner_indices = std::move(winner_indices), nid = ep.node_id,
-           freq = std::move(freq)]() mutable {
-            RpcFetchDocsResponse fresp = ExecuteLocalFetchDocs(freq);
-            OnHybridPhase2FetchDone(hctx, winner_indices, nid, true, "", std::move(fresp));
-          });
-    } else {
-      std::string encoded_fetch;
-      EncodeFetchDocsRequest(freq, encoded_fetch);
-      mgr.RpcClient().SendAsync(
-          ep.node_id, ep.ip, ep.rpc_port, RpcOpCode::kRpcFetchDocs, encoded_fetch, rem_timeout,
-          [hctx, winner_indices = std::move(winner_indices), nid = ep.node_id](RpcResponse r) {
-            if (r.status != RpcStatus::kOk) {
-              OnHybridPhase2FetchDone(hctx, winner_indices, nid, false,
-                                      std::string(RpcStatusToString(r.status)) +
-                                          (r.error_msg.empty() ? "" : (": " + r.error_msg)),
-                                      {});
-              return;
-            }
-            if (r.flags & kRpcFlagError) {
-              OnHybridPhase2FetchDone(hctx, winner_indices, nid, false,
-                                      r.error_msg.empty() ? "remote fetch error" : r.error_msg, {});
-              return;
-            }
-            RpcFetchDocsResponse fresp;
-            if (!DecodeFetchDocsResponse(r.payload, fresp)) {
-              OnHybridPhase2FetchDone(hctx, winner_indices, nid, false, "malformed fetch response",
-                                      {});
-              return;
-            }
-            OnHybridPhase2FetchDone(hctx, winner_indices, nid, true, "", std::move(fresp));
-          });
+    MergedHybridResult merged = MergeHybridShards(
+        slices, plan_copy.phase1_req.text_limit, static_cast<size_t>(plan_copy.phase1_req.knn_k),
+        plan_copy.hcfg, plan_copy.limit_offset, plan_copy.limit_count, plan_copy.has_limit);
+
+    bool start_phase2 = false;
+    std::unordered_map<uint32_t, std::vector<size_t>> fetch_plan;
+    RedisModuleBlockedClient* unblock_bc = nullptr;
+    {
+      std::lock_guard<std::mutex> lk(hctx->mu);
+      if (hctx->finished || hctx->cancelled) return;
+      hctx->total_fused = merged.total_fused;
+      if (plan_copy.count_only) {
+        hctx->count_only = true;
+        hctx->finished = true;
+        unblock_bc = hctx->bc;
+        hctx->bc = nullptr;
+      } else {
+        hctx->final_rows.reserve(merged.winners.size());
+        for (auto& w : merged.winners) {
+          ClusterHybridFinalRow row;
+          row.hit = std::move(w);
+          hctx->final_rows.push_back(std::move(row));
+        }
+        bool skip_fetch = hctx->final_rows.empty() ||
+                          (plan_copy.nocontent && !plan_copy.withpayloads);
+        if (skip_fetch || merged.winners_by_shard.empty()) {
+          hctx->finished = true;
+          unblock_bc = hctx->bc;
+          hctx->bc = nullptr;
+        } else {
+          fetch_plan = std::move(merged.winners_by_shard);
+          hctx->phase2_pending = fetch_plan.size();
+          start_phase2 = true;
+        }
+      }
     }
-  }
+    if (unblock_bc) {
+      g_active_hybrids.Unblock(hctx, unblock_bc);
+      return;
+    }
+    if (start_phase2) {
+      DispatchHybridPhase2(hctx, std::move(fetch_plan));
+    }
+  });
 }
 
 void DispatchHybridPhase1(const std::shared_ptr<ClusterHybridContext>& hctx) {
@@ -1508,7 +1742,7 @@ void DispatchHybridPhase1(const std::shared_ptr<ClusterHybridContext>& hctx) {
           local_req = hctx->plan.phase1_req;
         }
         RpcHybridPhase1Response resp = ExecuteLocalHybridPhase1(local_req);
-        OnHybridPhase1ShardDone(hctx, sidx, nid, true, "", std::move(resp));
+        OnHybridPhase1ShardDone(hctx, sidx, nid, true, false, "", std::move(resp));
       });
     } else {
       mgr.RpcClient().SendAsync(
@@ -1516,38 +1750,42 @@ void DispatchHybridPhase1(const std::shared_ptr<ClusterHybridContext>& hctx) {
           [hctx, sidx = ep.shard_idx, nid = ep.node_id](RpcResponse r) {
             if (r.status != RpcStatus::kOk) {
               OnHybridPhase1ShardDone(hctx, sidx, nid, false,
+                                      IsTransientRpcFailure(r.status, r.flags, r.error_msg),
                                       std::string(RpcStatusToString(r.status)) +
                                           (r.error_msg.empty() ? "" : (": " + r.error_msg)),
                                       {});
               return;
             }
             if (r.flags & kRpcFlagError) {
+              std::string emsg = r.error_msg.empty() ? "remote hybrid error" : r.error_msg;
               OnHybridPhase1ShardDone(hctx, sidx, nid, false,
-                                      r.error_msg.empty() ? "remote hybrid error" : r.error_msg,
-                                      {});
+                                      IsTransientRpcFailure(r.status, r.flags, emsg), emsg, {});
               return;
             }
             RpcHybridPhase1Response hresp;
             if (!DecodeHybridPhase1Response(r.payload, hresp)) {
-              OnHybridPhase1ShardDone(hctx, sidx, nid, false, "malformed hybrid response", {});
+              OnHybridPhase1ShardDone(hctx, sidx, nid, false, false, "malformed hybrid response",
+                                      {});
               return;
             }
-            OnHybridPhase1ShardDone(hctx, sidx, nid, true, "", std::move(hresp));
+            OnHybridPhase1ShardDone(hctx, sidx, nid, true, false, "", std::move(hresp));
           });
     }
   }
 }
 
 void OnHybridPhase0DfsDone(const std::shared_ptr<ClusterHybridContext>& hctx,
-                           const std::string& node_id, bool ok, const std::string& err,
-                           RpcDfsTermStatsResponse&& resp) {
+                           const std::string& node_id, bool ok, bool is_transient,
+                           const std::string& err, RpcDfsTermStatsResponse&& resp) {
   bool launch_p1 = false;
   RedisModuleBlockedClient* to_unblock = nullptr;
   {
     std::lock_guard<std::mutex> lk(hctx->mu);
     if (hctx->finished || hctx->cancelled) return;
     if (!ok || !resp.ok) {
-      if (!hctx->on_timeout_return) {
+      bool allow_partial =
+          hctx->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+      if (!allow_partial) {
         if (hctx->error_msg.empty()) {
           std::string reason = !ok ? err : resp.error_msg;
           hctx->error_msg = "ERR cluster hybrid DFS failed (" +
@@ -1601,7 +1839,7 @@ struct ClusterInfoContext {
   std::vector<ShardInfoRow> shard_rows;
 };
 
-BlockedRegistry<ClusterInfoContext> g_active_infos;
+BlockedClientRegistry<ClusterInfoContext> g_active_infos;
 
 void ClusterInfoDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
   g_active_infos.OnDisconnect(bc);
@@ -1695,7 +1933,7 @@ struct ClusterTagValsContext {
   std::set<std::string> all_tags;
 };
 
-BlockedRegistry<ClusterTagValsContext> g_active_tagvals;
+BlockedClientRegistry<ClusterTagValsContext> g_active_tagvals;
 
 void ClusterTagValsDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
   g_active_tagvals.OnDisconnect(bc);
@@ -1734,9 +1972,15 @@ struct ClusterSpellCheckContext {
 
   std::unordered_set<std::string> known_terms;
   std::unordered_map<std::string, std::unordered_map<std::string, double>> scores_by_term;
+
+  struct SpellOut {
+    std::string term;
+    std::vector<std::pair<double, std::string>> suggestions;
+  };
+  std::vector<SpellOut> final_results;
 };
 
-BlockedRegistry<ClusterSpellCheckContext> g_active_spellchecks;
+BlockedClientRegistry<ClusterSpellCheckContext> g_active_spellchecks;
 
 void ClusterSpellCheckDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
   g_active_spellchecks.OnDisconnect(bc);
@@ -1755,70 +1999,8 @@ int ClusterSpellCheckReplyCallback(RedisModuleCtx* ctx, RedisModuleString** /*ar
     return RedisModule_ReplyWithError(ctx, sctx.error_msg.c_str());
   }
 
-  auto terms = TextIndex::Tokenize(sctx.req.query_str);
-  std::unordered_set<std::string> known = sctx.known_terms;
-  std::unordered_set<std::string> excluded;
-  {
-    std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
-    for (const auto& dname : sctx.req.include_dicts) {
-      auto dit = GetTermDicts().find(dname);
-      if (dit != GetTermDicts().end()) {
-        for (const auto& term : terms) {
-          if (dit->second.Contains(term)) known.insert(term);
-        }
-      }
-    }
-    for (const auto& dname : sctx.req.exclude_dicts) {
-      auto dit = GetTermDicts().find(dname);
-      if (dit != GetTermDicts().end()) {
-        for (const auto& term : terms) {
-          if (dit->second.Contains(term)) excluded.insert(term);
-        }
-      }
-    }
-  }
-
-  struct SpellOut {
-    std::string term;
-    std::vector<std::pair<double, std::string>> suggestions;
-  };
-  std::vector<SpellOut> results;
-
-  for (const auto& term : terms) {
-    if (known.count(term) || excluded.count(term)) continue;
-    std::unordered_map<std::string, double> sug_scores;
-    auto tit = sctx.scores_by_term.find(term);
-    if (tit != sctx.scores_by_term.end()) sug_scores = tit->second;
-
-    // Add include_dicts candidates once on Coordinator
-    if (!sctx.req.include_dicts.empty()) {
-      std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
-      for (const auto& dname : sctx.req.include_dicts) {
-        auto dit = GetTermDicts().find(dname);
-        if (dit == GetTermDicts().end()) continue;
-        for (const auto& dt : dit->second.Dump()) {
-          int dist = TextIndex::LevenshteinDistance(term, dt);
-          if (dist <= sctx.req.max_dist && dist > 0) {
-            sug_scores[dt] += 1.0 / static_cast<double>(dist);
-          }
-        }
-      }
-    }
-
-    SpellOut out;
-    out.term = term;
-    for (auto& [sug, sc] : sug_scores) {
-      if (!excluded.count(sug)) out.suggestions.emplace_back(sc, sug);
-    }
-    std::sort(out.suggestions.begin(), out.suggestions.end(), [](const auto& a, const auto& b) {
-      if (a.first != b.first) return a.first > b.first;
-      return a.second < b.second;
-    });
-    results.push_back(std::move(out));
-  }
-
-  RedisModule_ReplyWithArray(ctx, static_cast<long>(results.size()));
-  for (const auto& ss : results) {
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(sctx.final_results.size()));
+  for (const auto& ss : sctx.final_results) {
     RedisModule_ReplyWithArray(ctx, 2 + static_cast<long>(ss.suggestions.size()));
     RedisModule_ReplyWithSimpleString(ctx, "TERM");
     RedisModule_ReplyWithStringBuffer(ctx, ss.term.data(), ss.term.size());
@@ -1843,7 +2025,7 @@ struct ClusterSuggestContext {
   RpcSuggestResponse resp;
 };
 
-BlockedRegistry<ClusterSuggestContext> g_active_suggests;
+BlockedClientRegistry<ClusterSuggestContext> g_active_suggests;
 
 void ClusterSuggestDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
   g_active_suggests.OnDisconnect(bc);
@@ -1910,7 +2092,7 @@ struct ClusterProfileSearchContext {
   std::vector<std::string> winner_ids;
 };
 
-BlockedRegistry<ClusterProfileSearchContext> g_active_profiles;
+BlockedClientRegistry<ClusterProfileSearchContext> g_active_profiles;
 
 void ClusterProfileDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
   g_active_profiles.OnDisconnect(bc);
@@ -2037,7 +2219,7 @@ struct ClusterAggContext {
   std::vector<AggRow> final_rows;
 };
 
-BlockedRegistry<ClusterAggContext> g_active_aggs;
+BlockedClientRegistry<ClusterAggContext> g_active_aggs;
 
 void ClusterAggDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
   g_active_aggs.OnDisconnect(bc);
@@ -2124,7 +2306,7 @@ struct ClusterCursorContext {
   RpcCursorResponse resp;
 };
 
-BlockedRegistry<ClusterCursorContext> g_active_cursors;
+BlockedClientRegistry<ClusterCursorContext> g_active_cursors;
 
 void ClusterCursorDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
   g_active_cursors.OnDisconnect(bc);
@@ -2236,10 +2418,7 @@ int ExecuteClusterDdl(RedisModuleCtx* ctx, RpcOpCode opcode, const std::string& 
     return RedisModule_ReplyWithError(ctx, "ERR failed to block client for cluster DDL");
   }
   ddl_ctx->bc = bc;
-  {
-    std::lock_guard<std::mutex> lk(g_active_ddls_mu);
-    g_active_ddls[bc] = ddl_ctx;
-  }
+  g_active_ddls.Register(bc, ddl_ctx);
   if (RedisModule_SetDisconnectCallback) {
     RedisModule_SetDisconnectCallback(bc, ClusterDdlDisconnectCallback);
   }
@@ -2277,7 +2456,10 @@ int ExecuteClusterDdl(RedisModuleCtx* ctx, RpcOpCode opcode, const std::string& 
           }
 
           bool start_rollback = false;
+          bool apply_detached_if_disconnected = false;
+          bool already_cancelled = false;
           std::vector<DdlPeerEndpoint> rollback_targets;
+          std::vector<DdlPeerEndpoint> succeeded_copy;
           RedisModuleBlockedClient* to_unblock = nullptr;
           RpcOpCode rb_op = RpcOpCode::kRpcDdlDrop;
           std::string rb_cmd;
@@ -2301,6 +2483,11 @@ int ExecuteClusterDdl(RedisModuleCtx* ctx, RpcOpCode opcode, const std::string& 
                 start_rollback = true;
               } else {
                 ddl_ctx->finished = true;
+                if (ddl_ctx->failed_reason.empty()) {
+                  apply_detached_if_disconnected = true;
+                  succeeded_copy = ddl_ctx->succeeded_peers;
+                }
+                already_cancelled = ddl_ctx->cancelled;
                 if (!ddl_ctx->cancelled) {
                   to_unblock = ddl_ctx->bc;
                   ddl_ctx->bc = nullptr;
@@ -2342,7 +2529,12 @@ int ExecuteClusterDdl(RedisModuleCtx* ctx, RpcOpCode opcode, const std::string& 
             return;
           }
 
-          UnblockDdlClient(ddl_ctx, to_unblock);
+          bool unblocked = UnblockDdlClient(ddl_ctx, to_unblock);
+          // If all remote shards succeeded but the client disconnected before ReplyCallback could
+          // run, apply the DDL locally on DetachedCtx so the Coordinator never diverges from peers.
+          if (apply_detached_if_disconnected && (already_cancelled || !unblocked)) {
+            ApplyDdlLocallyDetached(ddl_ctx, std::move(succeeded_copy));
+          }
         });
   }
 
@@ -2356,9 +2548,20 @@ void TriggerSchemaSyncIfNeeded(RedisModuleCtx* /*ctx*/) {
   auto topo = mgr.GetTopology();
   if (!topo) return;
 
+  // Replicas receive schema mutations strictly via Redis replication stream from their Master.
+  bool myself_is_master = false;
+  for (const auto& m : topo->masters) {
+    if (m.is_myself) {
+      myself_is_master = true;
+      break;
+    }
+  }
+  if (!myself_is_master) return;
+
   uint64_t local_epoch = mgr.GetSchemaEpoch();
   const ShardNodeInfo* best_peer = nullptr;
-  for (const auto& n : topo->nodes) {
+  // Only sync schema from healthy Master nodes (never Replicas).
+  for (const auto& n : topo->masters) {
     if (n.is_myself || !n.is_healthy || !n.rpc_port_discovered || n.rpc_port <= 0 || n.ip.empty()) {
       continue;
     }
@@ -2437,10 +2640,7 @@ int ExecuteClusterSearch(RedisModuleCtx* ctx, ClusterSearchPlan plan) {
     return RedisModule_ReplyWithError(ctx, "ERR failed to block client for cluster search");
   }
   sctx->bc = bc;
-  {
-    std::lock_guard<std::mutex> lk(g_active_searches_mu);
-    g_active_searches[bc] = sctx;
-  }
+  g_active_searches.Register(bc, sctx);
   if (RedisModule_SetDisconnectCallback) {
     RedisModule_SetDisconnectCallback(bc, ClusterSearchDisconnectCallback);
   }
@@ -2471,7 +2671,7 @@ int ExecuteClusterSearch(RedisModuleCtx* ctx, ClusterSearchPlan plan) {
       if (ep.is_myself) {
         GetSearchExecutor().Submit([sctx, nid = ep.node_id, dfs_req]() {
           RpcDfsTermStatsResponse dresp = ExecuteLocalDfsTermStats(dfs_req);
-          OnSearchPhase0DfsDone(sctx, nid, true, "", std::move(dresp));
+          OnSearchPhase0DfsDone(sctx, nid, true, false, "", std::move(dresp));
         });
       } else {
         mgr.RpcClient().SendAsync(
@@ -2479,22 +2679,24 @@ int ExecuteClusterSearch(RedisModuleCtx* ctx, ClusterSearchPlan plan) {
             [sctx, nid = ep.node_id](RpcResponse r) {
               if (r.status != RpcStatus::kOk) {
                 OnSearchPhase0DfsDone(sctx, nid, false,
+                                      IsTransientRpcFailure(r.status, r.flags, r.error_msg),
                                       std::string(RpcStatusToString(r.status)) +
                                           (r.error_msg.empty() ? "" : (": " + r.error_msg)),
                                       {});
                 return;
               }
               if (r.flags & kRpcFlagError) {
+                std::string emsg = r.error_msg.empty() ? "remote DFS error" : r.error_msg;
                 OnSearchPhase0DfsDone(sctx, nid, false,
-                                      r.error_msg.empty() ? "remote DFS error" : r.error_msg, {});
+                                      IsTransientRpcFailure(r.status, r.flags, emsg), emsg, {});
                 return;
               }
               RpcDfsTermStatsResponse dresp;
               if (!DecodeDfsTermStatsResponse(r.payload, dresp)) {
-                OnSearchPhase0DfsDone(sctx, nid, false, "malformed DFS response", {});
+                OnSearchPhase0DfsDone(sctx, nid, false, false, "malformed DFS response", {});
                 return;
               }
-              OnSearchPhase0DfsDone(sctx, nid, true, "", std::move(dresp));
+              OnSearchPhase0DfsDone(sctx, nid, true, false, "", std::move(dresp));
             });
       }
     }
@@ -2556,7 +2758,7 @@ int ExecuteClusterHybrid(RedisModuleCtx* ctx, ClusterHybridPlan plan) {
       if (ep.is_myself) {
         GetSearchExecutor().Submit([hctx, nid = ep.node_id, dfs_req]() {
           RpcDfsTermStatsResponse dresp = ExecuteLocalDfsTermStats(dfs_req);
-          OnHybridPhase0DfsDone(hctx, nid, true, "", std::move(dresp));
+          OnHybridPhase0DfsDone(hctx, nid, true, false, "", std::move(dresp));
         });
       } else {
         mgr.RpcClient().SendAsync(
@@ -2564,22 +2766,24 @@ int ExecuteClusterHybrid(RedisModuleCtx* ctx, ClusterHybridPlan plan) {
             [hctx, nid = ep.node_id](RpcResponse r) {
               if (r.status != RpcStatus::kOk) {
                 OnHybridPhase0DfsDone(hctx, nid, false,
+                                      IsTransientRpcFailure(r.status, r.flags, r.error_msg),
                                       std::string(RpcStatusToString(r.status)) +
                                           (r.error_msg.empty() ? "" : (": " + r.error_msg)),
                                       {});
                 return;
               }
               if (r.flags & kRpcFlagError) {
+                std::string emsg = r.error_msg.empty() ? "remote DFS error" : r.error_msg;
                 OnHybridPhase0DfsDone(hctx, nid, false,
-                                      r.error_msg.empty() ? "remote DFS error" : r.error_msg, {});
+                                      IsTransientRpcFailure(r.status, r.flags, emsg), emsg, {});
                 return;
               }
               RpcDfsTermStatsResponse dresp;
               if (!DecodeDfsTermStatsResponse(r.payload, dresp)) {
-                OnHybridPhase0DfsDone(hctx, nid, false, "malformed DFS response", {});
+                OnHybridPhase0DfsDone(hctx, nid, false, false, "malformed DFS response", {});
                 return;
               }
-              OnHybridPhase0DfsDone(hctx, nid, true, "", std::move(dresp));
+              OnHybridPhase0DfsDone(hctx, nid, true, false, "", std::move(dresp));
             });
       }
     }
@@ -2626,13 +2830,15 @@ int ExecuteClusterInfo(RedisModuleCtx* ctx, const std::string& index_name) {
   int64_t timeout_ms = static_cast<int64_t>(GetClusterQueryTimeoutMs());
 
   auto OnDone = [](const std::shared_ptr<ClusterInfoContext>& c, const std::string& nid, bool ok,
-                   const std::string& e, RpcInfoStatsResponse&& resp) {
+                   bool is_transient, const std::string& e, RpcInfoStatsResponse&& resp) {
     RedisModuleBlockedClient* to_unblock = nullptr;
     {
       std::lock_guard<std::mutex> lk(c->mu);
       if (c->finished || c->cancelled) return;
       if (!ok || !resp.ok) {
-        if (!c->on_timeout_return) {
+        bool allow_partial =
+            c->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+        if (!allow_partial) {
           if (c->error_msg.empty()) {
             std::string reason = !ok ? e : resp.error_msg;
             c->error_msg = "ERR cluster shard info failed (" +
@@ -2658,29 +2864,30 @@ int ExecuteClusterInfo(RedisModuleCtx* ctx, const std::string& index_name) {
     if (ep.is_myself) {
       GetSearchExecutor().Submit([ictx, nid = ep.node_id, req, OnDone]() {
         RpcInfoStatsResponse resp = ExecuteLocalInfoStats(req);
-        OnDone(ictx, nid, true, "", std::move(resp));
+        OnDone(ictx, nid, true, false, "", std::move(resp));
       });
     } else {
       mgr.RpcClient().SendAsync(
           ep.node_id, ep.ip, ep.rpc_port, RpcOpCode::kRpcInfoStats, encoded, timeout_ms,
           [ictx, nid = ep.node_id, OnDone](RpcResponse r) {
             if (r.status != RpcStatus::kOk) {
-              OnDone(ictx, nid, false,
+              OnDone(ictx, nid, false, IsTransientRpcFailure(r.status, r.flags, r.error_msg),
                      std::string(RpcStatusToString(r.status)) +
                          (r.error_msg.empty() ? "" : (": " + r.error_msg)),
                      {});
               return;
             }
             if (r.flags & kRpcFlagError) {
-              OnDone(ictx, nid, false, r.error_msg.empty() ? "remote info error" : r.error_msg, {});
+              std::string emsg = r.error_msg.empty() ? "remote info error" : r.error_msg;
+              OnDone(ictx, nid, false, IsTransientRpcFailure(r.status, r.flags, emsg), emsg, {});
               return;
             }
             RpcInfoStatsResponse iresp;
             if (!DecodeInfoStatsResponse(r.payload, iresp)) {
-              OnDone(ictx, nid, false, "malformed info response", {});
+              OnDone(ictx, nid, false, false, "malformed info response", {});
               return;
             }
-            OnDone(ictx, nid, true, "", std::move(iresp));
+            OnDone(ictx, nid, true, false, "", std::move(iresp));
           });
     }
   }
@@ -2723,13 +2930,15 @@ int ExecuteClusterTagVals(RedisModuleCtx* ctx, const std::string& index_name,
   int64_t timeout_ms = static_cast<int64_t>(GetClusterQueryTimeoutMs());
 
   auto OnDone = [](const std::shared_ptr<ClusterTagValsContext>& c, const std::string& nid,
-                   bool ok, const std::string& e, RpcTagValsResponse&& resp) {
+                   bool ok, bool is_transient, const std::string& e, RpcTagValsResponse&& resp) {
     RedisModuleBlockedClient* to_unblock = nullptr;
     {
       std::lock_guard<std::mutex> lk(c->mu);
       if (c->finished || c->cancelled) return;
       if (!ok || !resp.ok) {
-        if (!c->on_timeout_return) {
+        bool allow_partial =
+            c->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+        if (!allow_partial) {
           if (c->error_msg.empty()) {
             std::string reason = !ok ? e : resp.error_msg;
             c->error_msg = "ERR cluster shard tagvals failed (" +
@@ -2755,30 +2964,30 @@ int ExecuteClusterTagVals(RedisModuleCtx* ctx, const std::string& index_name,
     if (ep.is_myself) {
       GetSearchExecutor().Submit([tctx, nid = ep.node_id, req, OnDone]() {
         RpcTagValsResponse resp = ExecuteLocalTagVals(req);
-        OnDone(tctx, nid, true, "", std::move(resp));
+        OnDone(tctx, nid, true, false, "", std::move(resp));
       });
     } else {
       mgr.RpcClient().SendAsync(
           ep.node_id, ep.ip, ep.rpc_port, RpcOpCode::kRpcTagVals, encoded, timeout_ms,
           [tctx, nid = ep.node_id, OnDone](RpcResponse r) {
             if (r.status != RpcStatus::kOk) {
-              OnDone(tctx, nid, false,
+              OnDone(tctx, nid, false, IsTransientRpcFailure(r.status, r.flags, r.error_msg),
                      std::string(RpcStatusToString(r.status)) +
                          (r.error_msg.empty() ? "" : (": " + r.error_msg)),
                      {});
               return;
             }
             if (r.flags & kRpcFlagError) {
-              OnDone(tctx, nid, false,
-                     r.error_msg.empty() ? "remote tagvals error" : r.error_msg, {});
+              std::string emsg = r.error_msg.empty() ? "remote tagvals error" : r.error_msg;
+              OnDone(tctx, nid, false, IsTransientRpcFailure(r.status, r.flags, emsg), emsg, {});
               return;
             }
             RpcTagValsResponse tresp;
             if (!DecodeTagValsResponse(r.payload, tresp)) {
-              OnDone(tctx, nid, false, "malformed tagvals response", {});
+              OnDone(tctx, nid, false, false, "malformed tagvals response", {});
               return;
             }
-            OnDone(tctx, nid, true, "", std::move(tresp));
+            OnDone(tctx, nid, true, false, "", std::move(tresp));
           });
     }
   }
@@ -2820,13 +3029,17 @@ int ExecuteClusterSpellCheck(RedisModuleCtx* ctx, RpcSpellCheckRequest req) {
   int64_t timeout_ms = static_cast<int64_t>(GetClusterQueryTimeoutMs());
 
   auto OnDone = [](const std::shared_ptr<ClusterSpellCheckContext>& c, const std::string& nid,
-                   bool ok, const std::string& e, RpcSpellCheckResponse&& resp) {
+                   bool ok, bool is_transient, const std::string& e,
+                   RpcSpellCheckResponse&& resp) {
+    bool offload_finalize = false;
     RedisModuleBlockedClient* to_unblock = nullptr;
     {
       std::lock_guard<std::mutex> lk(c->mu);
       if (c->finished || c->cancelled) return;
       if (!ok || !resp.ok) {
-        if (!c->on_timeout_return) {
+        bool allow_partial =
+            c->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+        if (!allow_partial) {
           if (c->error_msg.empty()) {
             std::string reason = !ok ? e : resp.error_msg;
             c->error_msg = "ERR cluster shard spellcheck failed (" +
@@ -2846,42 +3059,129 @@ int ExecuteClusterSpellCheck(RedisModuleCtx* ctx, RpcSpellCheckRequest req) {
       }
       if (c->pending > 0) c->pending--;
       if (c->pending == 0 && !c->finished) {
-        c->finished = true;
-        to_unblock = c->bc;
-        c->bc = nullptr;
+        if (!c->error_msg.empty()) {
+          c->finished = true;
+          to_unblock = c->bc;
+          c->bc = nullptr;
+        } else {
+          offload_finalize = true;
+        }
       }
     }
-    g_active_spellchecks.Unblock(c, to_unblock);
+    if (to_unblock) {
+      g_active_spellchecks.Unblock(c, to_unblock);
+      return;
+    }
+    if (!offload_finalize) return;
+
+    // Offload Levenshtein distance calculation & sorting to SearchExecutor (zero main-thread stall)
+    GetSearchExecutor().Submit([c]() {
+      RpcSpellCheckRequest req_copy;
+      std::unordered_set<std::string> known;
+      std::unordered_map<std::string, std::unordered_map<std::string, double>> scores_by_term;
+      {
+        std::lock_guard<std::mutex> lk(c->mu);
+        if (c->finished || c->cancelled) return;
+        req_copy = c->req;
+        known = std::move(c->known_terms);
+        scores_by_term = std::move(c->scores_by_term);
+      }
+
+      auto terms = TextIndex::Tokenize(req_copy.query_str);
+      // Snapshot include/exclude dictionary contents under shared_lock
+      std::vector<std::string> include_terms;
+      std::unordered_set<std::string> exclude_terms;
+      {
+        std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
+        for (const auto& dname : req_copy.include_dicts) {
+          auto dit = GetTermDicts().find(dname);
+          if (dit != GetTermDicts().end()) {
+            for (const auto& term : terms) {
+              if (dit->second.Contains(term)) known.insert(term);
+            }
+            for (auto& dt : dit->second.Dump()) {
+              include_terms.push_back(std::move(dt));
+            }
+          }
+        }
+        for (const auto& dname : req_copy.exclude_dicts) {
+          auto dit = GetTermDicts().find(dname);
+          if (dit != GetTermDicts().end()) {
+            for (auto& dt : dit->second.Dump()) {
+              exclude_terms.insert(std::move(dt));
+            }
+          }
+        }
+      }
+
+      std::vector<ClusterSpellCheckContext::SpellOut> results;
+      for (const auto& term : terms) {
+        if (known.count(term) || exclude_terms.count(term)) continue;
+        std::unordered_map<std::string, double> sug_scores;
+        auto tit = scores_by_term.find(term);
+        if (tit != scores_by_term.end()) sug_scores = std::move(tit->second);
+
+        for (const auto& dt : include_terms) {
+          if (exclude_terms.count(dt)) continue;
+          int dist = TextIndex::LevenshteinDistance(term, dt);
+          if (dist <= req_copy.max_dist && dist > 0) {
+            sug_scores[dt] += 1.0 / static_cast<double>(dist);
+          }
+        }
+
+        ClusterSpellCheckContext::SpellOut out;
+        out.term = term;
+        for (auto& [sug, sc] : sug_scores) {
+          if (!exclude_terms.count(sug)) out.suggestions.emplace_back(sc, sug);
+        }
+        std::sort(out.suggestions.begin(), out.suggestions.end(), [](const auto& a, const auto& b) {
+          if (a.first != b.first) return a.first > b.first;
+          return a.second < b.second;
+        });
+        results.push_back(std::move(out));
+      }
+
+      RedisModuleBlockedClient* unblock_bc = nullptr;
+      {
+        std::lock_guard<std::mutex> lk(c->mu);
+        if (c->finished || c->cancelled) return;
+        c->final_results = std::move(results);
+        c->finished = true;
+        unblock_bc = c->bc;
+        c->bc = nullptr;
+      }
+      g_active_spellchecks.Unblock(c, unblock_bc);
+    });
   };
 
   for (const auto& ep : shards) {
     if (ep.is_myself) {
       GetSearchExecutor().Submit([sctx, nid = ep.node_id, OnDone]() {
         RpcSpellCheckResponse resp = ExecuteLocalSpellCheck(sctx->req);
-        OnDone(sctx, nid, true, "", std::move(resp));
+        OnDone(sctx, nid, true, false, "", std::move(resp));
       });
     } else {
       mgr.RpcClient().SendAsync(
           ep.node_id, ep.ip, ep.rpc_port, RpcOpCode::kRpcSpellCheck, encoded, timeout_ms,
           [sctx, nid = ep.node_id, OnDone](RpcResponse r) {
             if (r.status != RpcStatus::kOk) {
-              OnDone(sctx, nid, false,
+              OnDone(sctx, nid, false, IsTransientRpcFailure(r.status, r.flags, r.error_msg),
                      std::string(RpcStatusToString(r.status)) +
                          (r.error_msg.empty() ? "" : (": " + r.error_msg)),
                      {});
               return;
             }
             if (r.flags & kRpcFlagError) {
-              OnDone(sctx, nid, false,
-                     r.error_msg.empty() ? "remote spellcheck error" : r.error_msg, {});
+              std::string emsg = r.error_msg.empty() ? "remote spellcheck error" : r.error_msg;
+              OnDone(sctx, nid, false, IsTransientRpcFailure(r.status, r.flags, emsg), emsg, {});
               return;
             }
             RpcSpellCheckResponse sresp;
             if (!DecodeSpellCheckResponse(r.payload, sresp)) {
-              OnDone(sctx, nid, false, "malformed spellcheck response", {});
+              OnDone(sctx, nid, false, false, "malformed spellcheck response", {});
               return;
             }
-            OnDone(sctx, nid, true, "", std::move(sresp));
+            OnDone(sctx, nid, true, false, "", std::move(sresp));
           });
     }
   }
@@ -3022,16 +3322,19 @@ int ExecuteClusterProfileSearch(RedisModuleCtx* ctx, ClusterProfileSearchPlan pl
   int64_t timeout_ms = pctx->plan.timeout_ms > 0 ? pctx->plan.timeout_ms : 5000;
 
   auto OnDone = [](const std::shared_ptr<ClusterProfileSearchContext>& c, uint32_t sidx,
-                   const std::string& nid, int64_t shard_start_us, bool ok, const std::string& e,
-                   RpcSearchPhase1Response&& resp) {
+                   const std::string& nid, int64_t shard_start_us, bool ok, bool is_transient,
+                   const std::string& e, RpcSearchPhase1Response&& resp) {
     int64_t now_us = MonotonicUs();
     double shard_us = static_cast<double>(std::max<int64_t>(0, now_us - shard_start_us));
+    bool offload_merge = false;
     RedisModuleBlockedClient* to_unblock = nullptr;
     {
       std::lock_guard<std::mutex> lk(c->mu);
       if (c->finished || c->cancelled) return;
       if (!ok || !resp.ok) {
-        if (!c->on_timeout_return) {
+        bool allow_partial =
+            c->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+        if (!allow_partial) {
           if (c->error_msg.empty()) {
             std::string reason = !ok ? e : resp.error_msg;
             c->error_msg = "ERR cluster profile shard failed (" +
@@ -3067,22 +3370,57 @@ int ExecuteClusterProfileSearch(RedisModuleCtx* ctx, ClusterProfileSearchPlan pl
       if (c->pending == 0 && !c->finished) {
         c->scatter_time_us =
             static_cast<double>(std::max<int64_t>(0, now_us - c->scatter_start_us));
-        if (c->error_msg.empty()) {
-          int64_t m_start = MonotonicUs();
-          MergedSearchResult merged = MergeSearchShards(
-              c->slices, c->sort_mode, c->plan.limit_offset, c->plan.limit_count, c->plan.has_limit,
-              GetMaxSearchResults(), 0);
-          c->merge_time_us = static_cast<double>(std::max<int64_t>(0, MonotonicUs() - m_start));
-          c->total_matched = merged.global_total;
-          c->winner_ids.reserve(merged.winners.size());
-          for (auto& w : merged.winners) c->winner_ids.push_back(std::move(w.doc_id));
+        if (!c->error_msg.empty()) {
+          c->finished = true;
+          to_unblock = c->bc;
+          c->bc = nullptr;
+        } else {
+          offload_merge = true;
         }
-        c->finished = true;
-        to_unblock = c->bc;
-        c->bc = nullptr;
       }
     }
-    g_active_profiles.Unblock(c, to_unblock);
+    if (to_unblock) {
+      g_active_profiles.Unblock(c, to_unblock);
+      return;
+    }
+    if (!offload_merge) return;
+
+    // Offload MergeSearchShards from ClusterRpcClient::IoLoop to SearchExecutor
+    GetSearchExecutor().Submit([c]() {
+      std::vector<ShardPhase1Slice> slices;
+      MergeSortMode sort_mode = MergeSortMode::kDocIdAsc;
+      ClusterProfileSearchPlan plan_copy;
+      {
+        std::lock_guard<std::mutex> lk(c->mu);
+        if (c->finished || c->cancelled) return;
+        slices = std::move(c->slices);
+        sort_mode = c->sort_mode;
+        plan_copy = c->plan;
+      }
+
+      int64_t m_start = MonotonicUs();
+      MergedSearchResult merged = MergeSearchShards(
+          slices, sort_mode, plan_copy.limit_offset, plan_copy.limit_count, plan_copy.has_limit,
+          GetMaxSearchResults(), 0);
+      double merge_us = static_cast<double>(std::max<int64_t>(0, MonotonicUs() - m_start));
+
+      std::vector<std::string> winner_ids;
+      winner_ids.reserve(merged.winners.size());
+      for (auto& w : merged.winners) winner_ids.push_back(std::move(w.doc_id));
+
+      RedisModuleBlockedClient* unblock_bc = nullptr;
+      {
+        std::lock_guard<std::mutex> lk(c->mu);
+        if (c->finished || c->cancelled) return;
+        c->merge_time_us = merge_us;
+        c->total_matched = merged.global_total;
+        c->winner_ids = std::move(winner_ids);
+        c->finished = true;
+        unblock_bc = c->bc;
+        c->bc = nullptr;
+      }
+      g_active_profiles.Unblock(c, unblock_bc);
+    });
   };
 
   for (const auto& ep : pctx->shards) {
@@ -3090,7 +3428,7 @@ int ExecuteClusterProfileSearch(RedisModuleCtx* ctx, ClusterProfileSearchPlan pl
     if (ep.is_myself) {
       GetSearchExecutor().Submit([pctx, sidx = ep.shard_idx, nid = ep.node_id, st_us, OnDone]() {
         RpcSearchPhase1Response resp = ExecuteLocalSearchPhase1(pctx->plan.phase1_req);
-        OnDone(pctx, sidx, nid, st_us, true, "", std::move(resp));
+        OnDone(pctx, sidx, nid, st_us, true, false, "", std::move(resp));
       });
     } else {
       mgr.RpcClient().SendAsync(
@@ -3098,22 +3436,24 @@ int ExecuteClusterProfileSearch(RedisModuleCtx* ctx, ClusterProfileSearchPlan pl
           [pctx, sidx = ep.shard_idx, nid = ep.node_id, st_us, OnDone](RpcResponse r) {
             if (r.status != RpcStatus::kOk) {
               OnDone(pctx, sidx, nid, st_us, false,
+                     IsTransientRpcFailure(r.status, r.flags, r.error_msg),
                      std::string(RpcStatusToString(r.status)) +
                          (r.error_msg.empty() ? "" : (": " + r.error_msg)),
                      {});
               return;
             }
             if (r.flags & kRpcFlagError) {
-              OnDone(pctx, sidx, nid, st_us, false,
-                     r.error_msg.empty() ? "remote profile error" : r.error_msg, {});
+              std::string emsg = r.error_msg.empty() ? "remote profile error" : r.error_msg;
+              OnDone(pctx, sidx, nid, st_us, false, IsTransientRpcFailure(r.status, r.flags, emsg),
+                     emsg, {});
               return;
             }
             RpcSearchPhase1Response p1resp;
             if (!DecodeSearchPhase1Response(r.payload, p1resp)) {
-              OnDone(pctx, sidx, nid, st_us, false, "malformed profile response", {});
+              OnDone(pctx, sidx, nid, st_us, false, false, "malformed profile response", {});
               return;
             }
-            OnDone(pctx, sidx, nid, st_us, true, "", std::move(p1resp));
+            OnDone(pctx, sidx, nid, st_us, true, false, "", std::move(p1resp));
           });
     }
   }
@@ -3163,14 +3503,17 @@ int ExecuteClusterAggregate(RedisModuleCtx* ctx, ClusterAggPlan plan) {
   int64_t timeout_ms = actx->plan.timeout_ms > 0 ? actx->plan.timeout_ms : 5000;
 
   auto OnDone = [](const std::shared_ptr<ClusterAggContext>& c, uint32_t sidx,
-                   const std::string& nid, bool ok, const std::string& e,
+                   const std::string& nid, bool ok, bool is_transient, const std::string& e,
                    RpcAggMapResponse&& resp) {
+    bool offload_reduce = false;
     RedisModuleBlockedClient* to_unblock = nullptr;
     {
       std::lock_guard<std::mutex> lk(c->mu);
       if (c->finished || c->cancelled) return;
       if (!ok || !resp.ok) {
-        if (!c->on_timeout_return) {
+        bool allow_partial =
+            c->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+        if (!allow_partial) {
           if (c->error_msg.empty()) {
             std::string reason = !ok ? e : resp.error_msg;
             c->error_msg = "ERR cluster aggregate shard failed (" +
@@ -3185,80 +3528,106 @@ int ExecuteClusterAggregate(RedisModuleCtx* ctx, ClusterAggPlan plan) {
 
       if (c->pending > 0) c->pending--;
       if (c->pending == 0 && !c->finished) {
-        if (c->error_msg.empty()) {
-          // Sort shard results deterministically by shard_idx
-          std::sort(c->shard_results.begin(), c->shard_results.end(),
-                    [](const auto& a, const auto& b) { return a.shard_idx < b.shard_idx; });
-
-          std::vector<AggRow> rows;
-          std::string reduce_err;
-          if (c->plan.map_req.mode == 1) {
-            std::vector<std::vector<PartialGroup>> all_groups;
-            all_groups.reserve(c->shard_results.size());
-            for (auto& sr : c->shard_results) {
-              all_groups.push_back(std::move(sr.resp.partial_groups));
-            }
-            if (!MergeAndFinalizeGroups(all_groups, c->plan.map_req.groupby_stage.reducers,
-                                        static_cast<size_t>(c->plan.map_req.max_groups), rows,
-                                        reduce_err)) {
-              c->error_msg = std::move(reduce_err);
-            }
-          } else {
-            // Raw rows mode: deduplicate by doc_id (for live MIGRATE safety), optional KNN top-K
-            struct RawItem {
-              std::string doc_id;
-              bool has_knn_dist = false;
-              double knn_dist = 0.0;
-              AggRow row;
-            };
-            std::unordered_set<std::string> seen_ids;
-            std::vector<RawItem> items;
-            for (auto& sr : c->shard_results) {
-              for (auto& rr : sr.resp.raw_rows) {
-                if (!rr.doc_id.empty() && !seen_ids.insert(rr.doc_id).second) continue;
-                RawItem item;
-                item.doc_id = std::move(rr.doc_id);
-                item.has_knn_dist = rr.has_knn_dist;
-                item.knn_dist = rr.knn_dist;
-                for (auto& [k, v] : rr.fields) item.row[k] = std::move(v);
-                items.push_back(std::move(item));
-              }
-            }
-            if (c->plan.is_knn && c->plan.knn_k > 0) {
-              std::sort(items.begin(), items.end(), [](const RawItem& a, const RawItem& b) {
-                if (a.knn_dist != b.knn_dist) return a.knn_dist < b.knn_dist;
-                return a.doc_id < b.doc_id;
-              });
-              if (items.size() > c->plan.knn_k) items.resize(c->plan.knn_k);
-            }
-            rows.reserve(items.size());
-            for (auto& it : items) rows.push_back(std::move(it.row));
-          }
-
-          if (c->error_msg.empty() && !c->plan.reduce_stages.empty()) {
-            int64_t deadline_ms =
-                (c->plan.timeout_ms > 0) ? (c->start_ms + c->plan.timeout_ms) : 0;
-            if (!ExecuteAggPipelineStages(rows, c->plan.reduce_stages, deadline_ms, reduce_err)) {
-              c->error_msg = std::move(reduce_err);
-            }
-          }
-          if (c->error_msg.empty()) {
-            c->final_rows = std::move(rows);
-          }
+        if (!c->error_msg.empty()) {
+          c->finished = true;
+          to_unblock = c->bc;
+          c->bc = nullptr;
+        } else {
+          offload_reduce = true;
         }
-        c->finished = true;
-        to_unblock = c->bc;
-        c->bc = nullptr;
       }
     }
-    g_active_aggs.Unblock(c, to_unblock);
+    if (to_unblock) {
+      g_active_aggs.Unblock(c, to_unblock);
+      return;
+    }
+    if (!offload_reduce) return;
+
+    // Offload MergeAndFinalizeGroups + ExecuteAggPipelineStages from IoLoop to SearchExecutor
+    GetSearchExecutor().Submit([c]() {
+      std::vector<ClusterAggContext::ShardAggResult> shard_results;
+      ClusterAggPlan plan_copy;
+      int64_t start_ms = 0;
+      {
+        std::lock_guard<std::mutex> lk(c->mu);
+        if (c->finished || c->cancelled) return;
+        shard_results = std::move(c->shard_results);
+        plan_copy = c->plan;
+        start_ms = c->start_ms;
+      }
+
+      std::sort(shard_results.begin(), shard_results.end(),
+                [](const auto& a, const auto& b) { return a.shard_idx < b.shard_idx; });
+
+      std::vector<AggRow> rows;
+      std::string reduce_err;
+      if (plan_copy.map_req.mode == 1) {
+        std::vector<std::vector<PartialGroup>> all_groups;
+        all_groups.reserve(shard_results.size());
+        for (auto& sr : shard_results) {
+          all_groups.push_back(std::move(sr.resp.partial_groups));
+        }
+        MergeAndFinalizeGroups(all_groups, plan_copy.map_req.groupby_stage.reducers,
+                               static_cast<size_t>(plan_copy.map_req.max_groups), rows, reduce_err);
+      } else {
+        struct RawItem {
+          std::string doc_id;
+          bool has_knn_dist = false;
+          double knn_dist = 0.0;
+          AggRow row;
+        };
+        std::unordered_set<std::string> seen_ids;
+        std::vector<RawItem> items;
+        for (auto& sr : shard_results) {
+          for (auto& rr : sr.resp.raw_rows) {
+            if (!rr.doc_id.empty() && !seen_ids.insert(rr.doc_id).second) continue;
+            RawItem item;
+            item.doc_id = std::move(rr.doc_id);
+            item.has_knn_dist = rr.has_knn_dist;
+            item.knn_dist = rr.knn_dist;
+            for (auto& [k, v] : rr.fields) item.row[k] = std::move(v);
+            items.push_back(std::move(item));
+          }
+        }
+        if (plan_copy.is_knn && plan_copy.knn_k > 0) {
+          std::sort(items.begin(), items.end(), [](const RawItem& a, const RawItem& b) {
+            if (a.knn_dist != b.knn_dist) return a.knn_dist < b.knn_dist;
+            return a.doc_id < b.doc_id;
+          });
+          if (items.size() > plan_copy.knn_k) items.resize(plan_copy.knn_k);
+        }
+        rows.reserve(items.size());
+        for (auto& it : items) rows.push_back(std::move(it.row));
+      }
+
+      if (reduce_err.empty() && !plan_copy.reduce_stages.empty()) {
+        int64_t deadline_ms =
+            (plan_copy.timeout_ms > 0) ? SaturatingAddMs(start_ms, plan_copy.timeout_ms) : 0;
+        ExecuteAggPipelineStages(rows, plan_copy.reduce_stages, deadline_ms, reduce_err);
+      }
+
+      RedisModuleBlockedClient* unblock_bc = nullptr;
+      {
+        std::lock_guard<std::mutex> lk(c->mu);
+        if (c->finished || c->cancelled) return;
+        if (!reduce_err.empty()) {
+          c->error_msg = std::move(reduce_err);
+        } else {
+          c->final_rows = std::move(rows);
+        }
+        c->finished = true;
+        unblock_bc = c->bc;
+        c->bc = nullptr;
+      }
+      g_active_aggs.Unblock(c, unblock_bc);
+    });
   };
 
   for (const auto& ep : actx->shards) {
     if (ep.is_myself) {
       GetSearchExecutor().Submit([actx, sidx = ep.shard_idx, nid = ep.node_id, OnDone]() {
         RpcAggMapResponse resp = ExecuteLocalAggMap(actx->plan.map_req);
-        OnDone(actx, sidx, nid, true, "", std::move(resp));
+        OnDone(actx, sidx, nid, true, false, "", std::move(resp));
       });
     } else {
       mgr.RpcClient().SendAsync(
@@ -3266,22 +3635,329 @@ int ExecuteClusterAggregate(RedisModuleCtx* ctx, ClusterAggPlan plan) {
           [actx, sidx = ep.shard_idx, nid = ep.node_id, OnDone](RpcResponse r) {
             if (r.status != RpcStatus::kOk) {
               OnDone(actx, sidx, nid, false,
+                     IsTransientRpcFailure(r.status, r.flags, r.error_msg),
                      std::string(RpcStatusToString(r.status)) +
                          (r.error_msg.empty() ? "" : (": " + r.error_msg)),
                      {});
               return;
             }
             if (r.flags & kRpcFlagError) {
-              OnDone(actx, sidx, nid, false,
-                     r.error_msg.empty() ? "remote aggregate error" : r.error_msg, {});
+              std::string emsg = r.error_msg.empty() ? "remote aggregate error" : r.error_msg;
+              OnDone(actx, sidx, nid, false, IsTransientRpcFailure(r.status, r.flags, emsg), emsg,
+                     {});
               return;
             }
             RpcAggMapResponse aresp;
             if (!DecodeAggMapResponse(r.payload, aresp)) {
-              OnDone(actx, sidx, nid, false, "malformed aggregate response", {});
+              OnDone(actx, sidx, nid, false, false, "malformed aggregate response", {});
               return;
             }
-            OnDone(actx, sidx, nid, true, "", std::move(aresp));
+            OnDone(actx, sidx, nid, true, false, "", std::move(aresp));
+          });
+    }
+  }
+  return REDISMODULE_OK;
+}
+
+namespace {
+
+struct ClusterProfileAggContext {
+  RedisModuleBlockedClient* bc = nullptr;
+  ClusterProfileAggPlan plan;
+  std::vector<SearchShardEndpoint> shards;
+  int64_t start_ms = 0;
+  int64_t scatter_start_us = 0;
+  bool on_timeout_return = false;
+
+  std::mutex mu;
+  size_t pending = 0;
+  bool cancelled = false;
+  bool finished = false;
+  std::string error_msg;
+
+  struct ShardAggRow {
+    uint32_t shard_idx = 0;
+    std::string node_id;
+    double elapsed_us = 0.0;
+    RpcAggMapResponse resp;
+  };
+  std::vector<ShardAggRow> shard_results;
+
+  struct ShardTiming {
+    std::string node_id;
+    uint64_t rows = 0;
+    double elapsed_us = 0.0;
+  };
+  std::vector<ShardTiming> shard_timings;
+  double scatter_time_us = 0.0;
+  double reduce_time_us = 0.0;
+  std::vector<AggRow> final_rows;
+};
+
+BlockedClientRegistry<ClusterProfileAggContext> g_active_profile_aggs;
+
+void ClusterProfileAggDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
+  g_active_profile_aggs.OnDisconnect(bc);
+}
+
+int ClusterProfileAggReplyCallback(RedisModuleCtx* ctx, RedisModuleString** /*argv*/,
+                                   int /*argc*/) {
+  auto* holder = static_cast<std::shared_ptr<ClusterProfileAggContext>*>(
+      RedisModule_GetBlockedClientPrivateData(ctx));
+  if (!holder || !(*holder)) {
+    return RedisModule_ReplyWithError(ctx, "ERR internal cluster profile aggregate state missing");
+  }
+  auto& pctx = **holder;
+  std::lock_guard<std::mutex> lk(pctx.mu);
+  if (!pctx.error_msg.empty()) {
+    return RedisModule_ReplyWithError(ctx, pctx.error_msg.c_str());
+  }
+
+  double total_us = pctx.plan.parse_time_us + pctx.scatter_time_us + pctx.reduce_time_us;
+  RedisModule_ReplyWithArray(ctx, 2);
+
+  // Results
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(pctx.final_rows.size()));
+  for (const auto& row : pctx.final_rows) {
+    std::vector<std::string> keys;
+    keys.reserve(row.size());
+    for (const auto& [k, v] : row) keys.push_back(k);
+    std::sort(keys.begin(), keys.end());
+    RedisModule_ReplyWithArray(ctx, static_cast<long>(keys.size()) * 2);
+    for (const auto& k : keys) {
+      RedisModule_ReplyWithStringBuffer(ctx, k.data(), k.size());
+      const std::string& val = row.at(k);
+      RedisModule_ReplyWithStringBuffer(ctx, val.data(), val.size());
+    }
+  }
+
+  // Profile info
+  RedisModule_ReplyWithArray(ctx, 12);
+  RedisModule_ReplyWithSimpleString(ctx, "parse_time_us");
+  RedisModule_ReplyWithCString(ctx, std::to_string(pctx.plan.parse_time_us).c_str());
+  RedisModule_ReplyWithSimpleString(ctx, "scatter_time_us");
+  RedisModule_ReplyWithCString(ctx, std::to_string(pctx.scatter_time_us).c_str());
+  RedisModule_ReplyWithSimpleString(ctx, "reduce_time_us");
+  RedisModule_ReplyWithCString(ctx, std::to_string(pctx.reduce_time_us).c_str());
+  RedisModule_ReplyWithSimpleString(ctx, "total_time_us");
+  RedisModule_ReplyWithCString(ctx, std::to_string(total_us).c_str());
+  RedisModule_ReplyWithSimpleString(ctx, "result_count");
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(pctx.final_rows.size()));
+  RedisModule_ReplyWithSimpleString(ctx, "shards");
+  std::sort(pctx.shard_timings.begin(), pctx.shard_timings.end(),
+            [](const auto& a, const auto& b) { return a.node_id < b.node_id; });
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(pctx.shard_timings.size()));
+  for (const auto& st : pctx.shard_timings) {
+    RedisModule_ReplyWithArray(ctx, 6);
+    RedisModule_ReplyWithSimpleString(ctx, "node_id");
+    RedisModule_ReplyWithCString(ctx, st.node_id.c_str());
+    RedisModule_ReplyWithSimpleString(ctx, "rows");
+    RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(st.rows));
+    RedisModule_ReplyWithSimpleString(ctx, "time_us");
+    RedisModule_ReplyWithCString(ctx, std::to_string(st.elapsed_us).c_str());
+  }
+  return REDISMODULE_OK;
+}
+
+}  // namespace
+
+int ExecuteClusterProfileAggregate(RedisModuleCtx* ctx, ClusterProfileAggPlan plan) {
+  auto& mgr = ClusterManager::Instance();
+  bool on_timeout_return = IsOnTimeoutReturn();
+  std::vector<SearchShardEndpoint> shards;
+  std::string err;
+  if (!CollectHealthyMasterShards(ctx, on_timeout_return, shards, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
+  }
+  if (shards.empty()) {
+    return RedisModule_ReplyWithError(ctx, "ERR no healthy cluster shards available");
+  }
+
+  auto pctx = std::make_shared<ClusterProfileAggContext>();
+  pctx->plan = std::move(plan);
+  pctx->shards = std::move(shards);
+  pctx->start_ms = ClusterNowMs();
+  pctx->scatter_start_us = MonotonicUs();
+  pctx->on_timeout_return = on_timeout_return;
+  pctx->pending = pctx->shards.size();
+  pctx->shard_results.reserve(pctx->shards.size());
+  pctx->shard_timings.reserve(pctx->shards.size());
+
+  RedisModuleBlockedClient* bc = RedisModule_BlockClient(
+      ctx, ClusterProfileAggReplyCallback, GenericTimeoutCallback,
+      FreeSharedHolder<ClusterProfileAggContext>, 0);
+  if (!bc) {
+    return RedisModule_ReplyWithError(ctx,
+                                      "ERR failed to block client for cluster profile aggregate");
+  }
+  pctx->bc = bc;
+  g_active_profile_aggs.Register(bc, pctx);
+  if (RedisModule_SetDisconnectCallback) {
+    RedisModule_SetDisconnectCallback(bc, ClusterProfileAggDisconnectCallback);
+  }
+
+  std::string encoded;
+  EncodeAggMapRequest(pctx->plan.map_req, encoded);
+  int64_t timeout_ms = pctx->plan.timeout_ms > 0 ? pctx->plan.timeout_ms : 5000;
+
+  auto OnDone = [](const std::shared_ptr<ClusterProfileAggContext>& c, uint32_t sidx,
+                   const std::string& nid, int64_t shard_start_us, bool ok, bool is_transient,
+                   const std::string& e, RpcAggMapResponse&& resp) {
+    int64_t now_us = MonotonicUs();
+    double shard_us = static_cast<double>(std::max<int64_t>(0, now_us - shard_start_us));
+    bool offload_reduce = false;
+    RedisModuleBlockedClient* to_unblock = nullptr;
+    {
+      std::lock_guard<std::mutex> lk(c->mu);
+      if (c->finished || c->cancelled) return;
+      if (!ok || !resp.ok) {
+        bool allow_partial =
+            c->on_timeout_return && (ok ? IsTransientAppError(resp.error_msg) : is_transient);
+        if (!allow_partial) {
+          if (c->error_msg.empty()) {
+            std::string reason = !ok ? e : resp.error_msg;
+            c->error_msg = "ERR cluster profile aggregate shard failed (" +
+                           (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+          }
+        } else {
+          ClusterManager::Instance().RecordPartialResult();
+        }
+      } else {
+        uint64_t rcount = (resp.mode == 1) ? static_cast<uint64_t>(resp.partial_groups.size())
+                                           : static_cast<uint64_t>(resp.raw_rows.size());
+        c->shard_timings.push_back({nid, rcount, shard_us});
+        c->shard_results.push_back({sidx, nid, shard_us, std::move(resp)});
+      }
+      if (c->pending > 0) c->pending--;
+      if (c->pending == 0 && !c->finished) {
+        c->scatter_time_us =
+            static_cast<double>(std::max<int64_t>(0, now_us - c->scatter_start_us));
+        if (!c->error_msg.empty()) {
+          c->finished = true;
+          to_unblock = c->bc;
+          c->bc = nullptr;
+        } else {
+          offload_reduce = true;
+        }
+      }
+    }
+    if (to_unblock) {
+      g_active_profile_aggs.Unblock(c, to_unblock);
+      return;
+    }
+    if (!offload_reduce) return;
+
+    GetSearchExecutor().Submit([c]() {
+      std::vector<ClusterProfileAggContext::ShardAggRow> shard_results;
+      ClusterProfileAggPlan plan_copy;
+      int64_t start_ms = 0;
+      {
+        std::lock_guard<std::mutex> lk(c->mu);
+        if (c->finished || c->cancelled) return;
+        shard_results = std::move(c->shard_results);
+        plan_copy = c->plan;
+        start_ms = c->start_ms;
+      }
+
+      int64_t r_start = MonotonicUs();
+      std::sort(shard_results.begin(), shard_results.end(),
+                [](const auto& a, const auto& b) { return a.shard_idx < b.shard_idx; });
+
+      std::vector<AggRow> rows;
+      std::string reduce_err;
+      if (plan_copy.map_req.mode == 1) {
+        std::vector<std::vector<PartialGroup>> all_groups;
+        all_groups.reserve(shard_results.size());
+        for (auto& sr : shard_results) all_groups.push_back(std::move(sr.resp.partial_groups));
+        MergeAndFinalizeGroups(all_groups, plan_copy.map_req.groupby_stage.reducers,
+                               static_cast<size_t>(plan_copy.map_req.max_groups), rows, reduce_err);
+      } else {
+        struct RawItem {
+          std::string doc_id;
+          double knn_dist = 0.0;
+          AggRow row;
+        };
+        std::unordered_set<std::string> seen_ids;
+        std::vector<RawItem> items;
+        for (auto& sr : shard_results) {
+          for (auto& rr : sr.resp.raw_rows) {
+            if (!rr.doc_id.empty() && !seen_ids.insert(rr.doc_id).second) continue;
+            RawItem item;
+            item.doc_id = std::move(rr.doc_id);
+            item.knn_dist = rr.knn_dist;
+            for (auto& [k, v] : rr.fields) item.row[k] = std::move(v);
+            items.push_back(std::move(item));
+          }
+        }
+        if (plan_copy.is_knn && plan_copy.knn_k > 0) {
+          std::sort(items.begin(), items.end(), [](const RawItem& a, const RawItem& b) {
+            if (a.knn_dist != b.knn_dist) return a.knn_dist < b.knn_dist;
+            return a.doc_id < b.doc_id;
+          });
+          if (items.size() > plan_copy.knn_k) items.resize(plan_copy.knn_k);
+        }
+        rows.reserve(items.size());
+        for (auto& it : items) rows.push_back(std::move(it.row));
+      }
+
+      if (reduce_err.empty() && !plan_copy.reduce_stages.empty()) {
+        int64_t deadline_ms =
+            (plan_copy.timeout_ms > 0) ? SaturatingAddMs(start_ms, plan_copy.timeout_ms) : 0;
+        ExecuteAggPipelineStages(rows, plan_copy.reduce_stages, deadline_ms, reduce_err);
+      }
+      double reduce_us = static_cast<double>(std::max<int64_t>(0, MonotonicUs() - r_start));
+
+      RedisModuleBlockedClient* unblock_bc = nullptr;
+      {
+        std::lock_guard<std::mutex> lk(c->mu);
+        if (c->finished || c->cancelled) return;
+        c->reduce_time_us = reduce_us;
+        if (!reduce_err.empty()) {
+          c->error_msg = std::move(reduce_err);
+        } else {
+          c->final_rows = std::move(rows);
+        }
+        c->finished = true;
+        unblock_bc = c->bc;
+        c->bc = nullptr;
+      }
+      g_active_profile_aggs.Unblock(c, unblock_bc);
+    });
+  };
+
+  for (const auto& ep : pctx->shards) {
+    int64_t st_us = MonotonicUs();
+    if (ep.is_myself) {
+      GetSearchExecutor().Submit([pctx, sidx = ep.shard_idx, nid = ep.node_id, st_us, OnDone]() {
+        RpcAggMapResponse resp = ExecuteLocalAggMap(pctx->plan.map_req);
+        OnDone(pctx, sidx, nid, st_us, true, false, "", std::move(resp));
+      });
+    } else {
+      mgr.RpcClient().SendAsync(
+          ep.node_id, ep.ip, ep.rpc_port, RpcOpCode::kRpcAggMap, encoded, timeout_ms,
+          [pctx, sidx = ep.shard_idx, nid = ep.node_id, st_us, OnDone](RpcResponse r) {
+            if (r.status != RpcStatus::kOk) {
+              OnDone(pctx, sidx, nid, st_us, false,
+                     IsTransientRpcFailure(r.status, r.flags, r.error_msg),
+                     std::string(RpcStatusToString(r.status)) +
+                         (r.error_msg.empty() ? "" : (": " + r.error_msg)),
+                     {});
+              return;
+            }
+            if (r.flags & kRpcFlagError) {
+              std::string emsg =
+                  r.error_msg.empty() ? "remote profile aggregate error" : r.error_msg;
+              OnDone(pctx, sidx, nid, st_us, false, IsTransientRpcFailure(r.status, r.flags, emsg),
+                     emsg, {});
+              return;
+            }
+            RpcAggMapResponse aresp;
+            if (!DecodeAggMapResponse(r.payload, aresp)) {
+              OnDone(pctx, sidx, nid, st_us, false, false, "malformed profile aggregate response",
+                     {});
+              return;
+            }
+            OnDone(pctx, sidx, nid, st_us, true, false, "", std::move(aresp));
           });
     }
   }

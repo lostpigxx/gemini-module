@@ -27,15 +27,73 @@ constexpr size_t kMaxCursorsPerIndex = 128;
 // Global state accessors (defined in search_state.cc)
 std::unordered_map<std::string, std::shared_ptr<IndexEntry>>& GetIndices();
 std::shared_mutex& GetIndicesMutex();
+std::shared_mutex& GetAliasesMutex();
+std::shared_mutex& GetConfigMutex();
 std::shared_mutex& GetTermDictsMutex();
 std::shared_mutex& GetSuggestDictsMutex();
 std::mutex& GetCursorsMutex();
+
+// Race-free synchronization between worker/IO-thread RedisModule_UnblockClient and
+// Redis main-thread DisconnectCallback: holds `mu` across RedisModule_UnblockClient so
+// Redis cannot free `bc` in DisconnectCallback while UnblockClient is executing.
+template <typename CtxT>
+struct BlockedClientRegistry {
+  std::mutex mu;
+  std::unordered_map<RedisModuleBlockedClient*, std::shared_ptr<CtxT>> active;
+
+  void Register(RedisModuleBlockedClient* bc, const std::shared_ptr<CtxT>& ctx) {
+    if (!bc) return;
+    std::lock_guard<std::mutex> lk(mu);
+    active[bc] = ctx;
+  }
+
+  bool Unblock(const std::shared_ptr<CtxT>& ctx, RedisModuleBlockedClient* bc) {
+    if (!bc) return false;
+    std::lock_guard<std::mutex> lk(mu);
+    auto it = active.find(bc);
+    if (it == active.end()) {
+      return false;
+    }
+    active.erase(it);
+    auto* holder = new std::shared_ptr<CtxT>(ctx);
+    RedisModule_UnblockClient(bc, holder);
+    return true;
+  }
+
+  void OnDisconnect(RedisModuleBlockedClient* bc) {
+    std::shared_ptr<CtxT> ctx;
+    {
+      std::lock_guard<std::mutex> lk(mu);
+      auto it = active.find(bc);
+      if (it != active.end()) {
+        ctx = std::move(it->second);
+        active.erase(it);
+      }
+    }
+    if (ctx) {
+      std::lock_guard<std::mutex> lk(ctx->mu);
+      ctx->cancelled = true;
+      ctx->bc = nullptr;
+    }
+  }
+};
+
+// Overflow-safe saturating deadline helper (returns INT64_MAX on overflow).
+inline int64_t SaturatingAddMs(int64_t base_ms, int64_t delta_ms) {
+  if (delta_ms <= 0) return base_ms;
+  if (base_ms > INT64_MAX - delta_ms) return INT64_MAX;
+  return base_ms + delta_ms;
+}
+
+// Reconstructs FT.CREATE / FT.ALTER field arguments from IndexSpec/FieldSpec (for SchemaSync & AOF).
+void AppendFieldSpecArgs(const FieldSpec& f, std::vector<std::string>& out);
+std::vector<std::string> BuildFtCreateArgs(const IndexSpec& spec);
 SearchExecutor& GetSearchExecutor();
 std::unordered_map<uint64_t, AggCursor>& GetCursors();
 uint64_t NextCursorId();
 std::string ResolveAlias(const std::string& name);
 int64_t NowMs();
-void TouchIndex(IndexEntry& entry);
+void TouchIndex(const IndexEntry& entry);
 int GetDefaultDialect();
 size_t GetMaxExpansions();
 size_t GetMinStemLen();
@@ -111,6 +169,11 @@ void OnLoadingEvent(RedisModuleCtx* ctx, RedisModuleEvent eid, uint64_t subevent
 
 // Aggregation cursor & profile helpers (defined in search_agg_cmds.cc)
 void ReplyCursorBatch(RedisModuleCtx* ctx, uint64_t cursor_id, AggCursor& cursor);
+bool ParseAggArgsForProfile(
+    RedisModuleString** argv, int start_arg, int argc,
+    std::vector<gemini_search::PipelineStage>& stages_out,
+    std::unordered_map<std::string, std::string>& params_out,
+    int& dialect_inout, long long& timeout_ms_out, std::string& error_out);
 bool RunAggregateForProfile(
     IndexEntry& entry, const std::vector<std::string>& result_ids,
     RedisModuleString** argv, int start_arg, int argc,

@@ -94,6 +94,8 @@ void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
   auto* name_ptr = static_cast<std::string*>(value);
   auto* entry = GetIndexEntry(*name_ptr);
   if (!entry) return;
+  std::shared_lock<std::shared_mutex> idx_lk(entry->Mutex(), std::defer_lock);
+  if (!IsInForkedChild()) idx_lk.lock();
 
   const auto& spec = entry->spec;
 
@@ -487,12 +489,14 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value) {
   const auto& spec = entry->spec;
 
   std::vector<std::string> create_args;
-  if (!spec.prefixes.empty()) {
+  if (spec.source_type == IndexSourceType::kJson || !spec.prefixes.empty()) {
     create_args.push_back("ON");
     create_args.push_back(spec.source_type == IndexSourceType::kJson ? "JSON" : "HASH");
-    create_args.push_back("PREFIX");
-    create_args.push_back(std::to_string(spec.prefixes.size()));
-    for (const auto& p : spec.prefixes) create_args.push_back(p);
+    if (!spec.prefixes.empty()) {
+      create_args.push_back("PREFIX");
+      create_args.push_back(std::to_string(spec.prefixes.size()));
+      for (const auto& p : spec.prefixes) create_args.push_back(p);
+    }
   }
   if (!spec.language.empty() && spec.language != "english") {
     create_args.push_back("LANGUAGE");
@@ -525,59 +529,7 @@ void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value) {
 
   create_args.push_back("SCHEMA");
   for (const auto& f : spec.fields) {
-    if (!f.json_path.empty()) {
-      create_args.push_back(f.json_path);
-      create_args.push_back("AS");
-    }
-    create_args.push_back(f.name);
-    create_args.push_back(FieldTypeName(f.type));
-    if (f.type == FieldType::kVector) {
-      create_args.push_back(VectorAlgorithmName(f.vector_params.algorithm));
-      if (f.vector_params.data_type != VectorDataType::kFloat32) {
-        create_args.push_back("TYPE");
-        create_args.push_back(VectorDataTypeName(f.vector_params.data_type));
-      }
-      if (f.vector_params.quantization != VectorQuantization::kNone) {
-        create_args.push_back("QUANTIZATION");
-        create_args.push_back(VectorQuantizationName(f.vector_params.quantization));
-      }
-      if (f.vector_params.rerank != VectorRerankType::kNone) {
-        create_args.push_back("RERANK");
-        create_args.push_back(VectorRerankTypeName(f.vector_params.rerank));
-        create_args.push_back("OVERSAMPLE");
-        create_args.push_back(std::to_string(f.vector_params.bq_oversample));
-      }
-      create_args.push_back("DIM");
-      create_args.push_back(std::to_string(f.vector_params.dim));
-      create_args.push_back("DISTANCE_METRIC");
-      create_args.push_back(DistanceMetricName(f.vector_params.metric));
-      if (f.vector_params.algorithm == VectorAlgorithm::kHnsw) {
-        create_args.push_back("M");
-        create_args.push_back(std::to_string(f.vector_params.m));
-        create_args.push_back("EF_CONSTRUCTION");
-        create_args.push_back(std::to_string(f.vector_params.ef_construction));
-      }
-    }
-    if (f.nostem) create_args.push_back("NOSTEM");
-    if (!f.phonetic.empty()) {
-      create_args.push_back("PHONETIC");
-      create_args.push_back(f.phonetic);
-    }
-    if (f.type == FieldType::kTag && f.tag_separator != ',') {
-      create_args.push_back("SEPARATOR");
-      create_args.emplace_back(1, f.tag_separator);
-    }
-    if (f.type == FieldType::kTag && f.case_sensitive) {
-      create_args.push_back("CASESENSITIVE");
-    }
-    if (f.sortable) create_args.push_back("SORTABLE");
-    if (f.noindex) create_args.push_back("NOINDEX");
-    if (f.index_missing) create_args.push_back("INDEXMISSING");
-    if (f.index_empty) create_args.push_back("INDEXEMPTY");
-    if (f.weight != 1.0) {
-      create_args.push_back("WEIGHT");
-      create_args.push_back(std::to_string(f.weight));
-    }
+    AppendFieldSpecArgs(f, create_args);
   }
   EmitAofCommand(aof, "FT.CREATE", key, create_args);
 
@@ -824,67 +776,84 @@ int DefragSearch(RedisModuleDefragCtx* ctx, RedisModuleString* key, void** value
 
 void AuxSaveSearch(RedisModuleIO* rdb, int when) {
   if (when != REDISMODULE_AUX_AFTER_RDB) return;
+  const bool in_child = IsInForkedChild();
 
   RedisModule_SaveUnsigned(rdb, kSearchAuxEncVer);
 
   // 1. Aliases (sorted by alias name)
-  const auto& aliases = GetAliases();
-  std::vector<std::string> alias_keys;
-  alias_keys.reserve(aliases.size());
-  for (const auto& [k, v] : aliases) alias_keys.push_back(k);
-  std::sort(alias_keys.begin(), alias_keys.end());
-  RedisModule_SaveUnsigned(rdb, alias_keys.size());
-  for (const auto& k : alias_keys) {
-    const auto& v = aliases.at(k);
-    RedisModule_SaveStringBuffer(rdb, k.c_str(), k.size());
-    RedisModule_SaveStringBuffer(rdb, v.c_str(), v.size());
+  {
+    std::shared_lock<std::shared_mutex> lk(GetAliasesMutex(), std::defer_lock);
+    if (!in_child) lk.lock();
+    const auto& aliases = GetAliases();
+    std::vector<std::string> alias_keys;
+    alias_keys.reserve(aliases.size());
+    for (const auto& [k, v] : aliases) alias_keys.push_back(k);
+    std::sort(alias_keys.begin(), alias_keys.end());
+    RedisModule_SaveUnsigned(rdb, alias_keys.size());
+    for (const auto& k : alias_keys) {
+      const auto& v = aliases.at(k);
+      RedisModule_SaveStringBuffer(rdb, k.c_str(), k.size());
+      RedisModule_SaveStringBuffer(rdb, v.c_str(), v.size());
+    }
   }
 
   // 2. Suggest dictionaries (sorted by dict name)
-  const auto& suggest_dicts = GetSuggestDicts();
-  std::vector<std::string> sug_names;
-  sug_names.reserve(suggest_dicts.size());
-  for (const auto& [k, v] : suggest_dicts) sug_names.push_back(k);
-  std::sort(sug_names.begin(), sug_names.end());
-  RedisModule_SaveUnsigned(rdb, sug_names.size());
-  for (const auto& dname : sug_names) {
-    RedisModule_SaveStringBuffer(rdb, dname.c_str(), dname.size());
-    auto entries = suggest_dicts.at(dname).DumpAll();
-    RedisModule_SaveUnsigned(rdb, entries.size());
-    for (const auto& e : entries) {
-      RedisModule_SaveStringBuffer(rdb, e.str.c_str(), e.str.size());
-      RedisModule_SaveDouble(rdb, e.score);
-      RedisModule_SaveStringBuffer(rdb, e.payload.c_str(), e.payload.size());
+  {
+    std::shared_lock<std::shared_mutex> lk(GetSuggestDictsMutex(), std::defer_lock);
+    if (!in_child) lk.lock();
+    const auto& suggest_dicts = GetSuggestDicts();
+    std::vector<std::string> sug_names;
+    sug_names.reserve(suggest_dicts.size());
+    for (const auto& [k, v] : suggest_dicts) sug_names.push_back(k);
+    std::sort(sug_names.begin(), sug_names.end());
+    RedisModule_SaveUnsigned(rdb, sug_names.size());
+    for (const auto& dname : sug_names) {
+      RedisModule_SaveStringBuffer(rdb, dname.c_str(), dname.size());
+      auto entries = suggest_dicts.at(dname).DumpAll();
+      RedisModule_SaveUnsigned(rdb, entries.size());
+      for (const auto& e : entries) {
+        RedisModule_SaveStringBuffer(rdb, e.str.c_str(), e.str.size());
+        RedisModule_SaveDouble(rdb, e.score);
+        RedisModule_SaveStringBuffer(rdb, e.payload.c_str(), e.payload.size());
+      }
     }
   }
 
   // 3. Term dictionaries (sorted by dict name)
-  const auto& term_dicts = GetTermDicts();
-  std::vector<std::string> term_names;
-  term_names.reserve(term_dicts.size());
-  for (const auto& [k, v] : term_dicts) term_names.push_back(k);
-  std::sort(term_names.begin(), term_names.end());
-  RedisModule_SaveUnsigned(rdb, term_names.size());
-  for (const auto& dname : term_names) {
-    RedisModule_SaveStringBuffer(rdb, dname.c_str(), dname.size());
-    auto terms = term_dicts.at(dname).Dump();
-    RedisModule_SaveUnsigned(rdb, terms.size());
-    for (const auto& t : terms) {
-      RedisModule_SaveStringBuffer(rdb, t.c_str(), t.size());
+  {
+    std::shared_lock<std::shared_mutex> lk(GetTermDictsMutex(), std::defer_lock);
+    if (!in_child) lk.lock();
+    const auto& term_dicts = GetTermDicts();
+    std::vector<std::string> term_names;
+    term_names.reserve(term_dicts.size());
+    for (const auto& [k, v] : term_dicts) term_names.push_back(k);
+    std::sort(term_names.begin(), term_names.end());
+    RedisModule_SaveUnsigned(rdb, term_names.size());
+    for (const auto& dname : term_names) {
+      RedisModule_SaveStringBuffer(rdb, dname.c_str(), dname.size());
+      auto terms = term_dicts.at(dname).Dump();
+      RedisModule_SaveUnsigned(rdb, terms.size());
+      for (const auto& t : terms) {
+        RedisModule_SaveStringBuffer(rdb, t.c_str(), t.size());
+      }
     }
   }
 
   // 4. Module config (sorted by key)
-  const auto& cfg = GetConfig();
-  std::vector<std::string> cfg_keys;
-  cfg_keys.reserve(cfg.size());
-  for (const auto& [k, v] : cfg) cfg_keys.push_back(k);
-  std::sort(cfg_keys.begin(), cfg_keys.end());
-  RedisModule_SaveUnsigned(rdb, cfg_keys.size());
-  for (const auto& k : cfg_keys) {
-    const auto& v = cfg.at(k);
-    RedisModule_SaveStringBuffer(rdb, k.c_str(), k.size());
-    RedisModule_SaveStringBuffer(rdb, v.c_str(), v.size());
+  {
+    std::shared_lock<std::shared_mutex> lk(GetConfigMutex(), std::defer_lock);
+    if (!in_child) lk.lock();
+    const auto& cfg = GetConfig();
+    std::vector<std::string> cfg_keys;
+    cfg_keys.reserve(cfg.size());
+    for (const auto& [k, v] : cfg) cfg_keys.push_back(k);
+    std::sort(cfg_keys.begin(), cfg_keys.end());
+    RedisModule_SaveUnsigned(rdb, cfg_keys.size());
+    for (const auto& k : cfg_keys) {
+      const auto& v = cfg.at(k);
+      RedisModule_SaveStringBuffer(rdb, k.c_str(), k.size());
+      RedisModule_SaveStringBuffer(rdb, v.c_str(), v.size());
+    }
   }
 
   // 5. Cluster-mode metadata & prebuilt HNSW graphs (kSearchAuxEncVer >= 2).
@@ -897,7 +866,8 @@ void AuxSaveSearch(RedisModuleIO* rdb, int when) {
 
   RedisModule_SaveUnsigned(rdb, GetPersistedSchemaEpoch());
 
-  std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
+  std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex(), std::defer_lock);
+  if (!in_child) tbl_lk.lock();
   const auto& indices = GetIndices();
   std::vector<std::string> idx_names;
   idx_names.reserve(indices.size());
@@ -909,7 +879,8 @@ void AuxSaveSearch(RedisModuleIO* rdb, int when) {
 
   for (const auto& name : idx_names) {
     const auto& entry = *indices.at(name);
-    std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+    std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex(), std::defer_lock);
+    if (!in_child) idx_lk.lock();
     gemini_search::SchemaIndexSnapshot snap;
     snap.spec = entry.spec;
     snap.synonyms = entry.synonyms.Dump();
@@ -1034,7 +1005,7 @@ int AuxLoadSearch(RedisModuleIO* rdb, int encver, int when) {
 
       auto entry = std::make_shared<IndexEntry>();
       entry->spec = std::move(snap.spec);
-      entry->last_access_ms = NowMs();
+      entry->SetLastAccessMs(NowMs());
       for (const auto& [gid, terms] : snap.synonyms) {
         entry->synonyms.Update(gid, terms);
       }
@@ -1063,18 +1034,37 @@ int AuxLoadSearch(RedisModuleIO* rdb, int encver, int when) {
     }
   }
 
-  GetAliases() = std::move(loaded_aliases);
-  GetSuggestDicts() = std::move(loaded_suggest);
-  GetTermDicts() = std::move(loaded_terms);
-  for (auto& [k, v] : loaded_cfg) {
-    GetConfig()[k] = std::move(v);
+  {
+    std::unique_lock<std::shared_mutex> lk(GetAliasesMutex());
+    GetAliases() = std::move(loaded_aliases);
+  }
+  {
+    std::unique_lock<std::shared_mutex> lk(GetSuggestDictsMutex());
+    GetSuggestDicts() = std::move(loaded_suggest);
+  }
+  {
+    std::unique_lock<std::shared_mutex> lk(GetTermDictsMutex());
+    GetTermDicts() = std::move(loaded_terms);
+  }
+  {
+    std::unique_lock<std::shared_mutex> lk(GetConfigMutex());
+    for (auto& [k, v] : loaded_cfg) {
+      GetConfig()[k] = std::move(v);
+    }
   }
 
   if (aux_ver >= 2) {
     SetPersistedSchemaEpoch(loaded_schema_epoch);
-    if (!loaded_cluster_indices.empty()) {
+    // In cluster mode (including Replica PSYNC), AUX is the authoritative snapshot of all
+    // indices: always replace GetIndices() and pending recoveries even when the snapshot
+    // has 0 indices (e.g., Master dropped all indices before PSYNC).
+    if (IsClusterRdbMode() || !loaded_cluster_indices.empty()) {
       std::unique_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
+      if (IsClusterRdbMode()) {
+        GetIndices().clear();
+      }
       auto& pending = GetPendingClusterRecoveries();
+      pending.clear();
       for (auto& entry : loaded_cluster_indices) {
         std::string name = entry->spec.name;
         GetIndices()[name] = std::move(entry);

@@ -465,3 +465,56 @@ TEST(ClusterMergerTest, MigrateDualWriteWindowDedupSearchAndHybrid) {
     }
   }
 }
+
+TEST(ClusterMergerTest, KnnCapGlobalTotalWithSmallerOuterLimit) {
+  // 2 shards with 10 unique docs each (plus 2 overlapping docs) -> 18 unique docs total.
+  // knn_cap = 10, outer LIMIT smaller than knn_cap must STILL report global_total == 10.
+  ShardPhase1Slice s0;
+  s0.shard_idx = 0;
+  s0.total_hits = 10;
+  for (int i = 0; i < 10; i++) {
+    s0.items.push_back({"doc_" + std::to_string(i * 2), 0, 0.1 * (i * 2 + 1), 0, "", false});
+  }
+  ShardPhase1Slice s1;
+  s1.shard_idx = 1;
+  s1.total_hits = 10;
+  for (int i = 0; i < 10; i++) {
+    s1.items.push_back({"doc_" + std::to_string(i * 2 + 1), 1, 0.1 * (i * 2 + 2), 0, "", false});
+  }
+
+  // LIMIT 0 3 with knn_cap = 10 -> 3 winners, global_total == 10
+  auto m1 = MergeSearchShards({s0, s1}, MergeSortMode::kDistanceAsc, 0, 3, /*has_limit=*/true,
+                              /*max_results=*/100, /*knn_cap=*/10);
+  EXPECT_EQ(m1.global_total, 10u);
+  ASSERT_EQ(m1.winners.size(), 3u);
+  EXPECT_EQ(m1.winners[0].doc_id, "doc_0");
+  EXPECT_EQ(m1.winners[2].doc_id, "doc_2");
+
+  // LIMIT 2 3 with knn_cap = 10 -> 3 winners [doc_2, doc_3, doc_4], global_total == 10
+  auto m2 = MergeSearchShards({s0, s1}, MergeSortMode::kDistanceAsc, 2, 3, /*has_limit=*/true,
+                              /*max_results=*/100, /*knn_cap=*/10);
+  EXPECT_EQ(m2.global_total, 10u);
+  ASSERT_EQ(m2.winners.size(), 3u);
+  EXPECT_EQ(m2.winners[0].doc_id, "doc_2");
+  EXPECT_EQ(m2.winners[2].doc_id, "doc_4");
+
+  // LIMIT 8 5 with knn_cap = 10 -> 2 winners [doc_8, doc_9], global_total == 10
+  auto m3 = MergeSearchShards({s0, s1}, MergeSortMode::kDistanceAsc, 8, 5, /*has_limit=*/true,
+                              /*max_results=*/100, /*knn_cap=*/10);
+  EXPECT_EQ(m3.global_total, 10u);
+  ASSERT_EQ(m3.winners.size(), 2u);
+  EXPECT_EQ(m3.winners[0].doc_id, "doc_8");
+  EXPECT_EQ(m3.winners[1].doc_id, "doc_9");
+
+  // LIMIT 15 5 with knn_cap = 10 -> 0 winners, global_total == 10
+  auto m4 = MergeSearchShards({s0, s1}, MergeSortMode::kDistanceAsc, 15, 5, /*has_limit=*/true,
+                              /*max_results=*/100, /*knn_cap=*/10);
+  EXPECT_EQ(m4.global_total, 10u);
+  EXPECT_TRUE(m4.winners.empty());
+
+  // LIMIT 5 0 with knn_cap = 10 -> 0 winners, global_total == 10
+  auto m5 = MergeSearchShards({s0, s1}, MergeSortMode::kDistanceAsc, 5, 0, /*has_limit=*/true,
+                              /*max_results=*/100, /*knn_cap=*/10);
+  EXPECT_EQ(m5.global_total, 10u);
+  EXPECT_TRUE(m5.winners.empty());
+}

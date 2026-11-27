@@ -142,8 +142,10 @@ struct ClusterAggPlanSplit {
   PipelineStage groupby_stage;
   // Stages executed on Coordinator after global merge/reduce
   std::vector<PipelineStage> reduce_stages;
-  // Optional per-shard row cap in kRawRows mode (0 = unlimited)
+  // Optional per-shard row cap in kRawRows mode (0 = unlimited unless raw_zero_limit is true)
   size_t raw_shard_limit = 0;
+  // True when an explicit LIMIT ... 0 forces 0 rows in kRawRows mode
+  bool raw_zero_limit = false;
   // Whether kRawRows mode pushed a SORTBY to shards
   bool raw_has_sortby = false;
   std::vector<std::pair<std::string, bool>> raw_sortby_keys;

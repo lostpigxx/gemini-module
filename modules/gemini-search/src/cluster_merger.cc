@@ -49,8 +49,8 @@ MergedSearchResult MergeSearchShards(const std::vector<ShardPhase1Slice>& shards
     raw_total += s.total_hits;
   }
 
-  // Fast-path: pure count query (LIMIT 0 0) with no items requested
-  if (has_limit && offset == 0 && count == 0 && knn_cap == 0) {
+  // Fast-path: pure count query (LIMIT offset 0) with no items requested and no KNN cap
+  if (has_limit && count == 0 && knn_cap == 0) {
     // Still deduplicate any returned items if shards sent them (normally items are empty)
     std::unordered_set<std::string_view> seen;
     for (const auto& s : shards) {
@@ -84,38 +84,34 @@ MergedSearchResult MergeSearchShards(const std::vector<ShardPhase1Slice>& shards
     }
   }
 
-  // Compute maximum unique items we need to pull from the heap
-  size_t need_unique = max_results;
+  // Compute collection upper bound [offset, collect_end) and heap scan limit
+  size_t collect_end = max_results;
   if (has_limit) {
-    if (offset > max_results && count == 0) {
-      need_unique = 0;
-    } else if (offset <= SIZE_MAX - count) {
-      need_unique = offset + count;
-    }
-    if (count > max_results) {
-      need_unique = (offset <= SIZE_MAX - max_results) ? (offset + max_results) : SIZE_MAX;
+    if (count == 0) {
+      collect_end = 0;
+    } else {
+      size_t eff_count = std::min(count, max_results);
+      collect_end = (offset <= SIZE_MAX - eff_count) ? (offset + eff_count) : SIZE_MAX;
     }
   }
-  if (knn_cap > 0 && need_unique > knn_cap) {
-    need_unique = knn_cap;
+  if (knn_cap > 0 && collect_end > knn_cap) {
+    collect_end = knn_cap;
   }
 
-  // For KNN LIMIT 0 0, we still need to count unique merged hits up to knn_cap
-  bool knn_count_only = (knn_cap > 0 && has_limit && offset == 0 && count == 0);
-  if (knn_count_only) {
-    need_unique = knn_cap;
-  }
+  // For KNN queries, always count unique merged KNN hits up to knn_cap so global_total is exact
+  // even when outer LIMIT is smaller than knn_cap (e.g. KNN 10 LIMIT 0 3 or LIMIT 0 0).
+  size_t scan_limit = (knn_cap > 0) ? knn_cap : collect_end;
 
   std::unordered_set<std::string_view> seen_ids;
   size_t unique_seen = 0;
   std::vector<MergeCandidate> collected;
-  if (!knn_count_only && need_unique > offset) {
-    size_t expected_winners = need_unique - offset;
+  if (collect_end > offset) {
+    size_t expected_winners = collect_end - offset;
     if (expected_winners > max_results) expected_winners = max_results;
     collected.reserve(std::min<size_t>(expected_winners, 1024));
   }
 
-  while (!pq.empty()) {
+  while (!pq.empty() && unique_seen < scan_limit) {
     HeapNode top = pq.top();
     pq.pop();
 
@@ -129,16 +125,11 @@ MergedSearchResult MergeSearchShards(const std::vector<ShardPhase1Slice>& shards
       continue;
     }
 
-    if (unique_seen < need_unique) {
-      if (!knn_count_only && unique_seen >= offset && collected.size() < max_results) {
-        collected.push_back(cand);
-        collected.back().shard_idx = shards[top.slice_pos].shard_idx;
-      }
-      unique_seen++;
-      if (unique_seen >= need_unique) {
-        break;
-      }
+    if (unique_seen < collect_end && unique_seen >= offset && collected.size() < max_results) {
+      collected.push_back(cand);
+      collected.back().shard_idx = shards[top.slice_pos].shard_idx;
     }
+    unique_seen++;
   }
 
   if (knn_cap > 0) {
@@ -149,7 +140,7 @@ MergedSearchResult MergeSearchShards(const std::vector<ShardPhase1Slice>& shards
         (raw_total >= result.duplicate_count) ? (raw_total - result.duplicate_count) : 0;
   }
 
-  if (!knn_count_only) {
+  if (!collected.empty()) {
     result.winners = std::move(collected);
     for (size_t i = 0; i < result.winners.size(); i++) {
       result.winners_by_shard[result.winners[i].shard_idx].push_back(i);

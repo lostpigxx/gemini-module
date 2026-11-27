@@ -102,6 +102,18 @@ struct ClusterProfileSearchPlan {
 
 int ExecuteClusterProfileSearch(RedisModuleCtx* ctx, ClusterProfileSearchPlan plan);
 
+// Cluster FT.PROFILE <idx> AGGREGATE ... with Coordinator + per-shard timing breakdown
+struct ClusterProfileAggPlan {
+  RpcAggMapRequest map_req;
+  std::vector<PipelineStage> reduce_stages;
+  bool is_knn = false;
+  size_t knn_k = 0;
+  double parse_time_us = 0.0;
+  int64_t timeout_ms = 5000;
+};
+
+int ExecuteClusterProfileAggregate(RedisModuleCtx* ctx, ClusterProfileAggPlan plan);
+
 // Phase 70: Distributed FT.AGGREGATE Map-Reduce + Coordinator-hosted cursors
 struct ClusterAggPlan {
   RpcAggMapRequest map_req;

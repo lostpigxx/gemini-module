@@ -3,8 +3,10 @@
 #include "search_internal.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <unordered_set>
 
 namespace gemini_search {
@@ -45,8 +47,7 @@ struct ClusterPingContext {
   bool finished = false;
 };
 
-std::mutex g_active_pings_mu;
-std::unordered_map<RedisModuleBlockedClient*, std::shared_ptr<ClusterPingContext>> g_active_pings;
+BlockedClientRegistry<ClusterPingContext> g_active_pings;
 
 int ClusterPingReplyCallback(RedisModuleCtx* ctx, RedisModuleString** /*argv*/, int /*argc*/) {
   auto* holder = static_cast<std::shared_ptr<ClusterPingContext>*>(
@@ -92,23 +93,38 @@ void ClusterPingFreePrivData(RedisModuleCtx* /*ctx*/, void* privdata) {
 }
 
 void ClusterPingDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
-  std::shared_ptr<ClusterPingContext> ping_ctx;
-  {
-    std::lock_guard<std::mutex> lk(g_active_pings_mu);
-    auto it = g_active_pings.find(bc);
-    if (it != g_active_pings.end()) {
-      ping_ctx = std::move(it->second);
-      g_active_pings.erase(it);
-    }
-  }
-  if (ping_ctx) {
-    std::lock_guard<std::mutex> lk(ping_ctx->mu);
-    ping_ctx->cancelled = true;
-    ping_ctx->bc = nullptr;
-  }
+  g_active_pings.OnDisconnect(bc);
 }
 
 }  // namespace
+
+DetachedCtxGuard::DetachedCtxGuard(ClusterManager& mgr) {
+  while (!mgr.IsShuttingDown()) {
+    {
+      std::lock_guard<std::mutex> lk(mgr.DetachedCtxMutex());
+      if (mgr.IsShuttingDown()) return;
+      RedisModuleCtx* tctx = mgr.DetachedCtx();
+      if (!tctx) return;
+      if (RedisModule_ThreadSafeContextTryLock) {
+        if (RedisModule_ThreadSafeContextTryLock(tctx) == REDISMODULE_OK) {
+          ctx_ = tctx;
+          return;
+        }
+      } else {
+        RedisModule_ThreadSafeContextLock(tctx);
+        ctx_ = tctx;
+        return;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
+DetachedCtxGuard::~DetachedCtxGuard() {
+  if (ctx_) {
+    RedisModule_ThreadSafeContextUnlock(ctx_);
+  }
+}
 
 ClusterManager& ClusterManager::Instance() {
   static ClusterManager instance;
@@ -136,16 +152,23 @@ void ClusterManager::ParseModuleArgs(RedisModuleString** argv, int argc) {
       char* ep = nullptr;
       long off = std::strtol(val.c_str(), &ep, 10);
       if (*ep == '\0' && off >= 0 && off <= 50000) {
+        std::unique_lock<std::shared_mutex> clk(GetConfigMutex());
         GetConfig()["CLUSTER_RPC_PORT_OFFSET"] = val;
       }
     } else if (MatchArg(arg, "CLUSTER_ENABLED") && i + 1 < argc) {
       i++;
       std::string val(ArgView(argv[i]));
       if (val == "0" || MatchArg(val, "FALSE") || MatchArg(val, "NO")) {
-        GetConfig()["CLUSTER_ENABLED"] = "0";
+        {
+          std::unique_lock<std::shared_mutex> clk(GetConfigMutex());
+          GetConfig()["CLUSTER_ENABLED"] = "0";
+        }
         cluster_enabled_.store(false, std::memory_order_release);
       } else if (val == "1" || MatchArg(val, "TRUE") || MatchArg(val, "YES")) {
-        GetConfig()["CLUSTER_ENABLED"] = "1";
+        {
+          std::unique_lock<std::shared_mutex> clk(GetConfigMutex());
+          GetConfig()["CLUSTER_ENABLED"] = "1";
+        }
         cluster_enabled_.store(true, std::memory_order_release);
       }
     } else if (MatchArg(arg, "CLUSTER_AUTH_TOKEN") && i + 1 < argc) {
@@ -155,12 +178,7 @@ void ClusterManager::ParseModuleArgs(RedisModuleString** argv, int argc) {
   }
 }
 
-std::string ClusterManager::DetectBindIp(RedisModuleCtx* ctx, const std::string& node_ip) {
-  if (!explicit_bind_ip_.empty()) return explicit_bind_ip_;
-  if (!node_ip.empty() && node_ip != "0.0.0.0" && node_ip != "::") {
-    return node_ip;
-  }
-
+std::string ClusterManager::DetectConfigBindIp(RedisModuleCtx* ctx) {
   // Query Redis CONFIG GET bind to stay consistent with Redis network binding
   RedisModuleCallReply* rep = RedisModule_Call(ctx, "CONFIG", "cc", "GET", "bind");
   if (rep) {
@@ -192,6 +210,14 @@ std::string ClusterManager::DetectBindIp(RedisModuleCtx* ctx, const std::string&
     RedisModule_FreeCallReply(rep);
   }
   return "0.0.0.0";
+}
+
+std::string ClusterManager::DetectBindIp(RedisModuleCtx* ctx, const std::string& node_ip) {
+  if (!explicit_bind_ip_.empty()) return explicit_bind_ip_;
+  if (!node_ip.empty() && node_ip != "0.0.0.0" && node_ip != "::") {
+    return node_ip;
+  }
+  return DetectConfigBindIp(ctx);
 }
 
 int ClusterManager::Init(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
@@ -268,7 +294,19 @@ int ClusterManager::Init(RedisModuleCtx* ctx, RedisModuleString** argv, int argc
     RedisModule_Log(ctx, "notice", "GeminiSearch cluster: RPC auth token enabled");
   }
 
-  if (!rpc_server_.Start(bind_ip, target_rpc_port, /*allow_ephemeral_fallback=*/true)) {
+  bool started = rpc_server_.Start(bind_ip, target_rpc_port, /*allow_ephemeral_fallback=*/true);
+  if (!started && explicit_bind_ip_.empty()) {
+    std::string cfg_bind = DetectConfigBindIp(ctx);
+    if (cfg_bind != bind_ip) {
+      started = rpc_server_.Start(cfg_bind, target_rpc_port, /*allow_ephemeral_fallback=*/true);
+      if (started) bind_ip = cfg_bind;
+    }
+    if (!started && bind_ip != "0.0.0.0") {
+      started = rpc_server_.Start("0.0.0.0", target_rpc_port, /*allow_ephemeral_fallback=*/true);
+      if (started) bind_ip = "0.0.0.0";
+    }
+  }
+  if (!started) {
     RedisModule_Log(ctx, "warning",
                     "GeminiSearch cluster: failed to start RPC server on %s:%d",
                     bind_ip.c_str(), target_rpc_port);
@@ -306,6 +344,10 @@ void ClusterManager::Shutdown() {
   shutting_down_.store(true, std::memory_order_release);
   rpc_client_.Stop();
   rpc_server_.Stop();
+  // Drain in-flight SearchExecutor workers cleanly before freeing detached_ctx_.
+  // Safe from AB-BA deadlock because all worker GIL acquisitions use DetachedCtxGuard
+  // (RedisModule_ThreadSafeContextTryLock + IsShuttingDown() check).
+  GetSearchExecutor().Shutdown();
   my_rpc_port_.store(0, std::memory_order_release);
   {
     std::lock_guard<std::mutex> lk(detached_ctx_mu_);
@@ -592,10 +634,14 @@ void ClusterManager::RefreshTopology(RedisModuleCtx* ctx) {
   // Mirror owns_slots into topo->nodes, build peer IP whitelist, and collect unhealthy peers
   std::unordered_set<std::string> slot_owner_ids;
   size_t slot_owning_masters = 0;
+  size_t healthy_masters = 0;
+  bool myself_owns_slots = false;
   for (const auto& m : topo->masters) {
+    if (m.is_healthy) healthy_masters++;
     if (m.owns_slots) {
       slot_owner_ids.insert(m.node_id);
       slot_owning_masters++;
+      if (m.is_myself) myself_owns_slots = true;
     }
   }
 
@@ -618,12 +664,17 @@ void ClusterManager::RefreshTopology(RedisModuleCtx* ctx) {
       unhealthy_ids.push_back(n.node_id);
     }
   }
+  bool whitelist_changed = false;
   {
     std::lock_guard<std::mutex> lk(allowed_ips_mu_);
     if (!new_allowed_ips.empty()) {
+      whitelist_changed = !peer_ip_whitelist_ready_ || (allowed_peer_ips_ != new_allowed_ips);
       allowed_peer_ips_ = std::move(new_allowed_ips);
       peer_ip_whitelist_ready_ = true;
     }
+  }
+  if (whitelist_changed && rpc_server_.IsRunning()) {
+    rpc_server_.RevalidatePeers();
   }
 
   uint64_t new_ver = topology_version_.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -631,6 +682,11 @@ void ClusterManager::RefreshTopology(RedisModuleCtx* ctx) {
   size_t effective_masters =
       (topo->has_slot_map && slot_owning_masters > 0) ? slot_owning_masters : topo->masters.size();
   master_count_.store(effective_masters, std::memory_order_release);
+  // Enable cluster scatter whenever >1 healthy masters exist (including 1 slot-owning + 1 empty master),
+  // >1 slot-owning masters exist, or a single slot-owning master exists that is NOT this node.
+  bool scatter = (healthy_masters > 1) || (slot_owning_masters > 1) ||
+                 (slot_owning_masters == 1 && !myself_owns_slots);
+  scatter_enabled_.store(scatter, std::memory_order_release);
 
   {
     std::lock_guard<std::mutex> lk(topo_mu_);
@@ -683,11 +739,19 @@ bool ClusterManager::HasUndiscoveredPeers() const {
 }
 
 uint64_t ClusterManager::AdvanceSchemaEpoch() {
+  // Logical Lamport clock across Master nodes (never uses per-host CLOCK_MONOTONIC,
+  // so replicas or longer-running hosts can never outrank newer Master DDLs).
+  uint64_t max_master_epoch = 0;
+  auto topo = GetTopology();
+  if (topo) {
+    for (const auto& m : topo->masters) {
+      if (m.schema_epoch > max_master_epoch) max_master_epoch = m.schema_epoch;
+    }
+  }
   uint64_t cur = schema_epoch_.load(std::memory_order_acquire);
-  uint64_t now = static_cast<uint64_t>(NowMs());
-  uint64_t next = (now > cur) ? now : (cur + 1);
+  uint64_t next = std::max(cur, max_master_epoch) + 1;
   while (!schema_epoch_.compare_exchange_weak(cur, next, std::memory_order_acq_rel)) {
-    next = (now > cur) ? now : (cur + 1);
+    next = std::max(cur, max_master_epoch) + 1;
   }
   return next;
 }
@@ -751,10 +815,7 @@ int HandleDebugClusterCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int
       return RedisModule_ReplyWithError(ctx, "ERR failed to block client for cluster ping");
     }
     ping_ctx->bc = bc;
-    {
-      std::lock_guard<std::mutex> lk(g_active_pings_mu);
-      g_active_pings[bc] = ping_ctx;
-    }
+    g_active_pings.Register(bc, ping_ctx);
     if (RedisModule_SetDisconnectCallback) {
       RedisModule_SetDisconnectCallback(bc, ClusterPingDisconnectCallback);
     }
@@ -805,12 +866,7 @@ int HandleDebugClusterCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int
               }
             }
             if (to_unblock) {
-              {
-                std::lock_guard<std::mutex> lk(g_active_pings_mu);
-                g_active_pings.erase(to_unblock);
-              }
-              auto* holder = new std::shared_ptr<ClusterPingContext>(ping_ctx);
-              RedisModule_UnblockClient(to_unblock, holder);
+              g_active_pings.Unblock(ping_ctx, to_unblock);
             }
           });
     }

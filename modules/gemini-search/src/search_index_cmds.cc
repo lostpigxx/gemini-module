@@ -334,8 +334,8 @@ bool ParseCreateSpec(const std::vector<std::string>& args, IndexSpec& out_spec,
           if (i + 1 >= argc) { err_out = "ERR M requires a value"; return false; }
           char* endptr = nullptr;
           long m_val = std::strtol(args[i + 1].c_str(), &endptr, 10);
-          if (*endptr != '\0' || m_val <= 0) {
-            err_out = "ERR M must be a positive integer";
+          if (*endptr != '\0' || m_val <= 0 || m_val > 1024) {
+            err_out = "ERR M must be a positive integer (<= 1024)";
             return false;
           }
           fspec.vector_params.m = static_cast<size_t>(m_val);
@@ -344,8 +344,8 @@ bool ParseCreateSpec(const std::vector<std::string>& args, IndexSpec& out_spec,
           if (i + 1 >= argc) { err_out = "ERR EF_CONSTRUCTION requires a value"; return false; }
           char* endptr = nullptr;
           long ef_val = std::strtol(args[i + 1].c_str(), &endptr, 10);
-          if (*endptr != '\0' || ef_val <= 0) {
-            err_out = "ERR EF_CONSTRUCTION must be a positive integer";
+          if (*endptr != '\0' || ef_val <= 0 || ef_val > 100000) {
+            err_out = "ERR EF_CONSTRUCTION must be a positive integer (<= 100000)";
             return false;
           }
           fspec.vector_params.ef_construction = static_cast<size_t>(ef_val);
@@ -534,14 +534,17 @@ bool ApplyLocalDropIndex(RedisModuleCtx* ctx, const std::vector<std::string>& ar
     }
     StopBackgroundIndexing(ctx, idx_str);
     GetIndices().erase(it);
-    for (auto ait = GetAliases().begin(); ait != GetAliases().end(); ) {
-      if (ait->second == idx_str) ait = GetAliases().erase(ait);
-      else ++ait;
+    {
+      std::unique_lock<std::shared_mutex> alk(GetAliasesMutex());
+      for (auto ait = GetAliases().begin(); ait != GetAliases().end(); ) {
+        if (ait->second == idx_str) ait = GetAliases().erase(ait);
+        else ++ait;
+      }
     }
   }
 
   if (SearchModuleType && !is_cluster_mode) {
-    RedisModuleString* key_rms = RedisModule_CreateString(ctx, args[0].data(), args[0].size());
+    RedisModuleString* key_rms = RedisModule_CreateString(ctx, idx_str.data(), idx_str.size());
     auto* key = static_cast<RedisModuleKey*>(
         RedisModule_OpenKey(ctx, key_rms, REDISMODULE_WRITE));
     if (key) {
@@ -589,6 +592,9 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
   bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  bool is_replica_or_replay = (ctx_flags & (REDISMODULE_CTX_FLAGS_REPLICATED |
+                                            REDISMODULE_CTX_FLAGS_SLAVE |
+                                            REDISMODULE_CTX_FLAGS_LOADING)) != 0;
   auto& mgr = gemini_search::ClusterManager::Instance();
   if (!is_replicated && mgr.IsClusterScatterEnabled()) {
     return gemini_search::ExecuteClusterDdl(
@@ -599,7 +605,7 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, err.c_str());
   }
   RedisModule_ReplicateVerbatim(ctx);
-  if (mgr.IsClusterMode()) {
+  if (mgr.IsClusterMode() && !is_replica_or_replay) {
     SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
   }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
@@ -629,6 +635,9 @@ int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
   bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  bool is_replica_or_replay = (ctx_flags & (REDISMODULE_CTX_FLAGS_REPLICATED |
+                                            REDISMODULE_CTX_FLAGS_SLAVE |
+                                            REDISMODULE_CTX_FLAGS_LOADING)) != 0;
   auto& mgr = gemini_search::ClusterManager::Instance();
   if (!is_replicated && mgr.IsClusterScatterEnabled()) {
     return gemini_search::ExecuteClusterDdl(
@@ -640,7 +649,7 @@ int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, err.c_str());
   }
   RedisModule_ReplicateVerbatim(ctx);
-  if (mgr.IsClusterMode()) {
+  if (mgr.IsClusterMode() && !is_replica_or_replay) {
     SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
   }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
@@ -895,9 +904,12 @@ int FtListCommand(RedisModuleCtx* ctx, RedisModuleString** /*argv*/,
   RedisModule_AutoMemory(ctx);
 
   std::vector<std::string> names;
-  names.reserve(GetIndices().size());
-  for (auto& [k, v] : GetIndices()) {
-    names.push_back(k);
+  {
+    std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+    names.reserve(GetIndices().size());
+    for (auto& [k, v] : GetIndices()) {
+      names.push_back(k);
+    }
   }
   std::sort(names.begin(), names.end());
 
@@ -916,8 +928,9 @@ int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
-  if ((ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) == 0 &&
-      gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+  bool is_replay = (ctx_flags & (REDISMODULE_CTX_FLAGS_REPLICATED |
+                                 REDISMODULE_CTX_FLAGS_LOADING)) != 0;
+  if (!is_replay && gemini_search::ClusterManager::Instance().IsClusterMode()) {
     return RedisModule_ReplyWithError(
         ctx, "ERR FT.ADD/FT.DEL not supported in cluster mode, use HSET/JSON.SET");
   }
@@ -997,8 +1010,9 @@ int FtDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
-  if ((ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) == 0 &&
-      gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+  bool is_replay = (ctx_flags & (REDISMODULE_CTX_FLAGS_REPLICATED |
+                                 REDISMODULE_CTX_FLAGS_LOADING)) != 0;
+  if (!is_replay && gemini_search::ClusterManager::Instance().IsClusterMode()) {
     return RedisModule_ReplyWithError(
         ctx, "ERR FT.ADD/FT.DEL not supported in cluster mode, use HSET/JSON.SET");
   }
@@ -1129,6 +1143,7 @@ bool ApplyLocalAliasAdd(const std::vector<std::string>& args, std::string& err_o
     err_out = "ERR index not found";
     return false;
   }
+  std::unique_lock<std::shared_mutex> alk(GetAliasesMutex());
   if (GetAliases().find(alias) != GetAliases().end()) {
     err_out = "ERR alias already exists";
     return false;
@@ -1143,6 +1158,7 @@ bool ApplyLocalAliasDel(const std::vector<std::string>& args, bool idempotent_mi
     err_out = "ERR wrong number of arguments for 'FT.ALIASDEL' command";
     return false;
   }
+  std::unique_lock<std::shared_mutex> alk(GetAliasesMutex());
   if (GetAliases().erase(args[0]) == 0) {
     if (idempotent_missing) return true;
     err_out = "ERR alias not found";
@@ -1163,6 +1179,7 @@ bool ApplyLocalAliasUpdate(const std::vector<std::string>& args, std::string& er
     err_out = "ERR index not found";
     return false;
   }
+  std::unique_lock<std::shared_mutex> alk(GetAliasesMutex());
   GetAliases()[alias] = idx;
   return true;
 }
@@ -1240,6 +1257,9 @@ int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
   bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  bool is_replica_or_replay = (ctx_flags & (REDISMODULE_CTX_FLAGS_REPLICATED |
+                                            REDISMODULE_CTX_FLAGS_SLAVE |
+                                            REDISMODULE_CTX_FLAGS_LOADING)) != 0;
   auto& mgr = gemini_search::ClusterManager::Instance();
   if (!is_replicated && mgr.IsClusterScatterEnabled()) {
     return gemini_search::ExecuteClusterDdl(
@@ -1250,7 +1270,7 @@ int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, err.c_str());
   }
   RedisModule_ReplicateVerbatim(ctx);
-  if (mgr.IsClusterMode()) {
+  if (mgr.IsClusterMode() && !is_replica_or_replay) {
     SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
   }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
@@ -1263,15 +1283,24 @@ int FtAliasAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::vector<std::string> args = {ArgStr(argv[1]), ArgStr(argv[2])};
-  if (GetIndices().find(args[1]) == GetIndices().end()) {
-    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  {
+    std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+    if (GetIndices().find(args[1]) == GetIndices().end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR index not found");
+    }
   }
-  if (GetAliases().find(args[0]) != GetAliases().end()) {
-    return RedisModule_ReplyWithError(ctx, "ERR alias already exists");
+  {
+    std::shared_lock<std::shared_mutex> alk(GetAliasesMutex());
+    if (GetAliases().find(args[0]) != GetAliases().end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR alias already exists");
+    }
   }
 
   int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
   bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  bool is_replica_or_replay = (ctx_flags & (REDISMODULE_CTX_FLAGS_REPLICATED |
+                                            REDISMODULE_CTX_FLAGS_SLAVE |
+                                            REDISMODULE_CTX_FLAGS_LOADING)) != 0;
   auto& mgr = gemini_search::ClusterManager::Instance();
   if (!is_replicated && mgr.IsClusterScatterEnabled()) {
     return gemini_search::ExecuteClusterDdl(
@@ -1283,7 +1312,7 @@ int FtAliasAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, err.c_str());
   }
   RedisModule_ReplicateVerbatim(ctx);
-  if (mgr.IsClusterMode()) {
+  if (mgr.IsClusterMode() && !is_replica_or_replay) {
     SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
   }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
@@ -1296,12 +1325,18 @@ int FtAliasDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::vector<std::string> args = {ArgStr(argv[1])};
-  if (GetAliases().find(args[0]) == GetAliases().end()) {
-    return RedisModule_ReplyWithError(ctx, "ERR alias not found");
+  {
+    std::shared_lock<std::shared_mutex> alk(GetAliasesMutex());
+    if (GetAliases().find(args[0]) == GetAliases().end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR alias not found");
+    }
   }
 
   int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
   bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  bool is_replica_or_replay = (ctx_flags & (REDISMODULE_CTX_FLAGS_REPLICATED |
+                                            REDISMODULE_CTX_FLAGS_SLAVE |
+                                            REDISMODULE_CTX_FLAGS_LOADING)) != 0;
   auto& mgr = gemini_search::ClusterManager::Instance();
   if (!is_replicated && mgr.IsClusterScatterEnabled()) {
     return gemini_search::ExecuteClusterDdl(
@@ -1313,7 +1348,7 @@ int FtAliasDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, err.c_str());
   }
   RedisModule_ReplicateVerbatim(ctx);
-  if (mgr.IsClusterMode()) {
+  if (mgr.IsClusterMode() && !is_replica_or_replay) {
     SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
   }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
@@ -1326,12 +1361,18 @@ int FtAliasUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::vector<std::string> args = {ArgStr(argv[1]), ArgStr(argv[2])};
-  if (GetIndices().find(args[1]) == GetIndices().end()) {
-    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  {
+    std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+    if (GetIndices().find(args[1]) == GetIndices().end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR index not found");
+    }
   }
 
   int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
   bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  bool is_replica_or_replay = (ctx_flags & (REDISMODULE_CTX_FLAGS_REPLICATED |
+                                            REDISMODULE_CTX_FLAGS_SLAVE |
+                                            REDISMODULE_CTX_FLAGS_LOADING)) != 0;
   auto& mgr = gemini_search::ClusterManager::Instance();
   if (!is_replicated && mgr.IsClusterScatterEnabled()) {
     return gemini_search::ExecuteClusterDdl(
@@ -1344,7 +1385,7 @@ int FtAliasUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, err.c_str());
   }
   RedisModule_ReplicateVerbatim(ctx);
-  if (mgr.IsClusterMode()) {
+  if (mgr.IsClusterMode() && !is_replica_or_replay) {
     SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
   }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");

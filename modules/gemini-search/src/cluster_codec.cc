@@ -1,7 +1,9 @@
 #include "cluster_codec.h"
 
+#include <array>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace gemini_search {
 
@@ -41,9 +43,8 @@ void StoreLe64(uint8_t* p, uint64_t v) {
 }
 
 const uint32_t* GetCrc32Table() {
-  static uint32_t table[256];
-  static bool initialized = false;
-  if (!initialized) {
+  static const std::array<uint32_t, 256> kTable = []() {
+    std::array<uint32_t, 256> table{};
     for (uint32_t i = 0; i < 256; i++) {
       uint32_t c = i;
       for (int bit = 0; bit < 8; bit++) {
@@ -51,9 +52,9 @@ const uint32_t* GetCrc32Table() {
       }
       table[i] = c;
     }
-    initialized = true;
-  }
-  return table;
+    return table;
+  }();
+  return kTable.data();
 }
 
 }  // namespace
@@ -1275,6 +1276,8 @@ bool DecodeHybridPhase1Response(std::string_view data, RpcHybridPhase1Response& 
     std::string doc_id;
     double dist = 0.0;
     if (!r.ReadString(doc_id, kMaxErrorMsgBytes) || !r.ReadDouble(dist)) return false;
+    constexpr double kMaxFloat = static_cast<double>(std::numeric_limits<float>::max());
+    if (dist > kMaxFloat || dist < -kMaxFloat) return false;
     out.vec_hits.emplace_back(std::move(doc_id), static_cast<float>(dist));
   }
   return r.AtEnd();
@@ -1719,7 +1722,11 @@ bool ReadPartialReducerState(BinaryReader& r, PartialReducerState& out) {
       for (uint64_t i = 0; i < n; i++) {
         uint16_t idx = 0;
         uint8_t rho = 0;
-        if (!r.ReadU16(idx) || !r.ReadU8(rho) || idx >= HllSketch::kNumRegs) return false;
+        constexpr uint8_t kMaxRho = static_cast<uint8_t>(64 - HllSketch::kPrecision + 1);
+        if (!r.ReadU16(idx) || !r.ReadU8(rho) || idx >= HllSketch::kNumRegs || rho == 0 ||
+            rho > kMaxRho) {
+          return false;
+        }
         out.hll.sparse.emplace_back(idx, rho);
       }
       return true;
@@ -1782,6 +1789,9 @@ void EncodeAggMapRequest(const RpcAggMapRequest& req, std::string& out) {
       w.WriteBool(desc);
     }
   }
+  if (req.raw_zero_limit) {
+    w.WriteBool(true);
+  }
   out = w.TakeBuffer();
 }
 
@@ -1834,6 +1844,9 @@ bool DecodeAggMapRequest(std::string_view data, RpcAggMapRequest& out) {
       if (!r.ReadString(f, kMaxErrorMsgBytes) || !r.ReadBool(desc)) return false;
       out.raw_sortby_keys.emplace_back(std::move(f), desc);
     }
+  }
+  if (!r.AtEnd()) {
+    if (!r.ReadBool(out.raw_zero_limit)) return false;
   }
   return r.AtEnd();
 }

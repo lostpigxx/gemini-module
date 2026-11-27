@@ -29,7 +29,7 @@ bool ApplyLocalSuggestCommand(const std::string& cmd_name,
     }
     char* ep = nullptr;
     double score = std::strtod(args[2].c_str(), &ep);
-    if (*ep != '\0') {
+    if (args[2].empty() || *ep != '\0' || !std::isfinite(score)) {
       resp.error_msg = "ERR invalid score";
       return false;
     }
@@ -121,8 +121,10 @@ int FtSugAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::string dict_name(ArgView(argv[1]));
   std::string score_str(ArgView(argv[3]));
   char* ep = nullptr;
-  (void)std::strtod(score_str.c_str(), &ep);
-  if (score_str.empty() || *ep != '\0') return RedisModule_ReplyWithError(ctx, "ERR invalid score");
+  double score_check = std::strtod(score_str.c_str(), &ep);
+  if (score_str.empty() || *ep != '\0' || !std::isfinite(score_check)) {
+    return RedisModule_ReplyWithError(ctx, "ERR invalid score");
+  }
 
   std::vector<std::string> args;
   args.reserve(static_cast<size_t>(argc - 1));
@@ -309,6 +311,9 @@ int FtDictAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
   bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  bool is_replica_or_replay = (ctx_flags & (REDISMODULE_CTX_FLAGS_REPLICATED |
+                                            REDISMODULE_CTX_FLAGS_SLAVE |
+                                            REDISMODULE_CTX_FLAGS_LOADING)) != 0;
   if (!is_replicated && gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
     return gemini_search::ExecuteClusterDdl(
         ctx, gemini_search::RpcOpCode::kRpcDdlDict, "FT.DICTADD", args, /*reply_integer=*/true);
@@ -321,7 +326,7 @@ int FtDictAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   if (added > 0) {
     RedisModule_ReplicateVerbatim(ctx);
-    if (gemini_search::ClusterManager::Instance().IsClusterMode()) {
+    if (gemini_search::ClusterManager::Instance().IsClusterMode() && !is_replica_or_replay) {
       SetPersistedSchemaEpoch(gemini_search::ClusterManager::Instance().AdvanceSchemaEpoch());
     }
   }
@@ -340,6 +345,9 @@ int FtDictDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
   bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  bool is_replica_or_replay = (ctx_flags & (REDISMODULE_CTX_FLAGS_REPLICATED |
+                                            REDISMODULE_CTX_FLAGS_SLAVE |
+                                            REDISMODULE_CTX_FLAGS_LOADING)) != 0;
   if (!is_replicated && gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
     return gemini_search::ExecuteClusterDdl(
         ctx, gemini_search::RpcOpCode::kRpcDdlDict, "FT.DICTDEL", args, /*reply_integer=*/true);
@@ -352,7 +360,7 @@ int FtDictDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   if (removed > 0) {
     RedisModule_ReplicateVerbatim(ctx);
-    if (gemini_search::ClusterManager::Instance().IsClusterMode()) {
+    if (gemini_search::ClusterManager::Instance().IsClusterMode() && !is_replica_or_replay) {
       SetPersistedSchemaEpoch(gemini_search::ClusterManager::Instance().AdvanceSchemaEpoch());
     }
   }
@@ -366,12 +374,16 @@ int FtDictDumpCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string dict_name(ArgView(argv[1]));
-  auto it = GetTermDicts().find(dict_name);
-  if (it == GetTermDicts().end()) {
-    RedisModule_ReplyWithArray(ctx, 0);
-    return REDISMODULE_OK;
+  std::vector<std::string> terms;
+  {
+    std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
+    auto it = GetTermDicts().find(dict_name);
+    if (it == GetTermDicts().end()) {
+      RedisModule_ReplyWithArray(ctx, 0);
+      return REDISMODULE_OK;
+    }
+    terms = it->second.Dump();
   }
-  auto terms = it->second.Dump();
   RedisModule_ReplyWithArray(ctx, static_cast<long>(terms.size()));
   for (auto& t : terms) RedisModule_ReplyWithCString(ctx, t.c_str());
   return REDISMODULE_OK;
@@ -388,12 +400,18 @@ int FtSynUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   for (int i = 1; i < argc; i++) args.emplace_back(ArgView(argv[i]));
 
   std::string idx_str = ResolveAlias(args[0]);
-  if (GetIndices().find(idx_str) == GetIndices().end()) {
-    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  {
+    std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+    if (GetIndices().find(idx_str) == GetIndices().end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR index not found");
+    }
   }
 
   int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
   bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  bool is_replica_or_replay = (ctx_flags & (REDISMODULE_CTX_FLAGS_REPLICATED |
+                                            REDISMODULE_CTX_FLAGS_SLAVE |
+                                            REDISMODULE_CTX_FLAGS_LOADING)) != 0;
   if (!is_replicated && gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
     return gemini_search::ExecuteClusterDdl(
         ctx, gemini_search::RpcOpCode::kRpcDdlSyn, "FT.SYNUPDATE", args, /*reply_integer=*/false);
@@ -404,7 +422,7 @@ int FtSynUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     return RedisModule_ReplyWithError(ctx, err.c_str());
   }
   RedisModule_ReplicateVerbatim(ctx);
-  if (gemini_search::ClusterManager::Instance().IsClusterMode()) {
+  if (gemini_search::ClusterManager::Instance().IsClusterMode() && !is_replica_or_replay) {
     SetPersistedSchemaEpoch(gemini_search::ClusterManager::Instance().AdvanceSchemaEpoch());
   }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
@@ -416,11 +434,14 @@ int FtSynDumpCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc != 2) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
-  auto it = GetIndices().find(idx_str);
-  if (it == GetIndices().end()) return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  auto entry_ptr = GetIndexEntryShared(std::string(ArgView(argv[1])));
+  if (!entry_ptr) return RedisModule_ReplyWithError(ctx, "ERR index not found");
 
-  auto groups = it->second->synonyms.Dump();
+  std::vector<std::pair<std::string, std::vector<std::string>>> groups;
+  {
+    std::shared_lock<std::shared_mutex> idx_lk(entry_ptr->Mutex());
+    groups = entry_ptr->synonyms.Dump();
+  }
   long total = 0;
   for (auto& [gid, terms] : groups) total += 1 + static_cast<long>(terms.size());
   RedisModule_ReplyWithArray(ctx, total);
@@ -461,8 +482,8 @@ gemini_search::RpcSpellCheckResponse ExecuteLocalSpellCheck(
     for (const auto& dname : req.exclude_dicts) {
       auto dit = GetTermDicts().find(dname);
       if (dit != GetTermDicts().end()) {
-        for (const auto& term : terms) {
-          if (dit->second.Contains(term)) excluded.insert(term);
+        for (auto& dt : dit->second.Dump()) {
+          excluded.insert(std::move(dt));
         }
       }
     }
@@ -506,9 +527,9 @@ int FtSpellCheckCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
-  auto it = GetIndices().find(idx_str);
-  if (it == GetIndices().end()) return RedisModule_ReplyWithError(ctx, "ERR index not found");
-  auto& entry = *it->second;
+  auto entry_ptr = GetIndexEntryShared(idx_str);
+  if (!entry_ptr) return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  auto& entry = *entry_ptr;
 
   std::string query_str(ArgView(argv[2]));
   int max_dist = 1;
@@ -543,6 +564,8 @@ int FtSpellCheckCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   // Tokenize query
   auto terms = TextIndex::Tokenize(query_str);
 
+  std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+
   // Collect known terms from index
   std::unordered_set<std::string> index_terms;
   for (auto& f : entry.spec.fields) {
@@ -555,28 +578,33 @@ int FtSpellCheckCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
   }
 
-  // Collect terms from include dicts
-  for (auto& dname : include_dicts) {
-    auto dit = GetTermDicts().find(dname);
-    if (dit != GetTermDicts().end()) {
-      for (auto& term : terms) {
-        if (dit->second.Contains(term)) index_terms.insert(term);
-      }
-    }
-  }
-
-  // Collect terms to exclude
+  // Snapshot include & exclude dictionary terms under shared_lock
+  std::vector<std::string> include_terms;
   std::unordered_set<std::string> excluded;
-  for (auto& dname : exclude_dicts) {
-    auto dit = GetTermDicts().find(dname);
-    if (dit != GetTermDicts().end()) {
-      for (auto& term : terms) {
-        if (dit->second.Contains(term)) excluded.insert(term);
+  {
+    std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
+    for (const auto& dname : include_dicts) {
+      auto dit = GetTermDicts().find(dname);
+      if (dit != GetTermDicts().end()) {
+        for (const auto& term : terms) {
+          if (dit->second.Contains(term)) index_terms.insert(term);
+        }
+        for (auto& dt : dit->second.Dump()) {
+          include_terms.push_back(std::move(dt));
+        }
+      }
+    }
+    for (const auto& dname : exclude_dicts) {
+      auto dit = GetTermDicts().find(dname);
+      if (dit != GetTermDicts().end()) {
+        for (auto& dt : dit->second.Dump()) {
+          excluded.insert(std::move(dt));
+        }
       }
     }
   }
 
-  // For each misspelled term, find suggestions from index
+  // For each misspelled term, find suggestions from index & include dicts, excluding exclude_dicts
   struct SpellSuggestion {
     std::string term;
     std::vector<std::pair<double, std::string>> suggestions;
@@ -589,27 +617,6 @@ int FtSpellCheckCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     SpellSuggestion ss;
     ss.term = term;
 
-    for (auto& f : entry.spec.fields) {
-      if (f.type != FieldType::kText) continue;
-      const auto* tidx = entry.text_indices.Get(f.name);
-      if (!tidx) continue;
-      auto fuzzy_docs = tidx->FuzzyLookup(term, max_dist);
-      (void)fuzzy_docs;
-    }
-
-    // Use fuzzy lookup on the text index to find candidate terms
-    std::unordered_set<std::string> seen;
-    for (auto& f : entry.spec.fields) {
-      if (f.type != FieldType::kText) continue;
-      const auto* tidx = entry.text_indices.Get(f.name);
-      if (!tidx) continue;
-      auto candidates = tidx->FuzzyLookup(term, max_dist);
-      for (auto& doc_id : candidates) {
-        (void)doc_id;
-      }
-    }
-
-    // Simpler approach: collect all suggestions via StemLookup and FuzzyLookup
     std::unordered_map<std::string, double> suggestion_scores;
     for (auto& f : entry.spec.fields) {
       if (f.type != FieldType::kText) continue;
@@ -621,15 +628,11 @@ int FtSpellCheckCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       for (auto& r : fuzzy_results) suggestion_scores[r.doc_id] += r.score;
     }
 
-    // Include suggestions from include dicts
-    for (auto& dname : include_dicts) {
-      auto dit = GetTermDicts().find(dname);
-      if (dit == GetTermDicts().end()) continue;
-      for (auto& dt : dit->second.Dump()) {
-        int dist = TextIndex::LevenshteinDistance(term, dt);
-        if (dist <= max_dist && dist > 0) {
-          suggestion_scores[dt] += 1.0 / static_cast<double>(dist);
-        }
+    for (const auto& dt : include_terms) {
+      if (excluded.count(dt)) continue;
+      int dist = TextIndex::LevenshteinDistance(term, dt);
+      if (dist <= max_dist && dist > 0) {
+        suggestion_scores[dt] += 1.0 / static_cast<double>(dist);
       }
     }
 
@@ -638,7 +641,10 @@ int FtSpellCheckCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         ss.suggestions.emplace_back(score, sug);
     }
     std::sort(ss.suggestions.begin(), ss.suggestions.end(),
-              [](const auto& a, const auto& b) { return a.first > b.first; });
+              [](const auto& a, const auto& b) {
+                if (a.first != b.first) return a.first > b.first;
+                return a.second < b.second;
+              });
 
     results.push_back(std::move(ss));
   }
@@ -668,6 +674,7 @@ int FtConfigCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   for (auto& c : param) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
 
   if (MatchArg(sub, "GET")) {
+    std::shared_lock<std::shared_mutex> lk(GetConfigMutex());
     if (param == "*") {
       RedisModule_ReplyWithArray(ctx, static_cast<long>(GetConfig().size()) * 2);
       for (auto& [k, v] : GetConfig()) {
@@ -688,11 +695,13 @@ int FtConfigCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
   if (MatchArg(sub, "SET")) {
     if (argc < 4) return RedisModule_WrongArity(ctx);
-    auto it = GetConfig().find(param);
-    if (it == GetConfig().end()) {
-      return RedisModule_ReplyWithError(ctx, "ERR unknown config parameter");
-    }
     std::string val(ArgView(argv[3]));
+    {
+      std::shared_lock<std::shared_mutex> lk(GetConfigMutex());
+      if (GetConfig().find(param) == GetConfig().end()) {
+        return RedisModule_ReplyWithError(ctx, "ERR unknown config parameter");
+      }
+    }
     if (param == "ON_TIMEOUT") {
       if (MatchArg(val, "FAIL")) val = "FAIL";
       else if (MatchArg(val, "RETURN")) val = "RETURN";
@@ -729,7 +738,10 @@ int FtConfigCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         gemini_search::ClusterManager::Instance().SetClusterEnabled(val == "1");
       }
     }
-    it->second = std::move(val);
+    {
+      std::unique_lock<std::shared_mutex> lk(GetConfigMutex());
+      GetConfig()[param] = std::move(val);
+    }
     return RedisModule_ReplyWithSimpleString(ctx, "OK");
   }
 

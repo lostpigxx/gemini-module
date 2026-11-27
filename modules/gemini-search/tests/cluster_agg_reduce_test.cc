@@ -360,3 +360,179 @@ TEST(ClusterAggReduceTest, PlannerSplitAndMaxGroupsProtection) {
   EXPECT_FALSE(BuildPartialGroups(many_groups, {"k"}, {}, /*max_groups=*/10, out_g, err));
   EXPECT_NE(err.find("CLUSTER_AGG_MAX_GROUPS"), std::string::npos);
 }
+
+TEST(ClusterAggReduceTest, SortbyStrictWeakOrderingMixedTypes) {
+  std::vector<std::string> vals = {
+      "", "2", "10", "1a", "1.0", "1", "NaN", "inf", "-inf", "-5", "0", "abc", "2b", "100", ""};
+  std::vector<AggRow> rows;
+  for (int rep = 0; rep < 4; rep++) {
+    for (const auto& v : vals) rows.push_back({{"k", v}});
+  }
+
+  // ASC full sort: rank 0 (empty) < rank 1 (finite numeric) < rank 2 (non-numeric)
+  std::vector<AggRow> asc = rows;
+  ApplyAggSortby(asc, {{"k", false}});
+  ASSERT_EQ(asc.size(), rows.size());
+  EXPECT_EQ(asc.front().at("k"), "");
+  // First non-empty must be -5 (smallest finite numeric)
+  size_t idx = 0;
+  while (idx < asc.size() && asc[idx].at("k").empty()) idx++;
+  ASSERT_LT(idx, asc.size());
+  EXPECT_EQ(asc[idx].at("k"), "-5");
+  // Verify numeric monotonicity before non-numeric tail
+  bool in_non_numeric = false;
+  double prev_num = -std::numeric_limits<double>::infinity();
+  std::string prev_str;
+  for (size_t i = idx; i < asc.size(); i++) {
+    const std::string& s = asc[i].at("k");
+    char* ep = nullptr;
+    double d = std::strtod(s.c_str(), &ep);
+    bool is_num = (!s.empty() && ep != s.c_str() && *ep == '\0' && std::isfinite(d));
+    if (!in_non_numeric && !is_num) {
+      in_non_numeric = true;
+      prev_str = s;
+    } else if (!in_non_numeric) {
+      EXPECT_LE(prev_num, d);
+      prev_num = d;
+    } else {
+      EXPECT_FALSE(is_num);
+      EXPECT_LE(prev_str, s);
+      prev_str = s;
+    }
+  }
+
+  // DESC partial_sort with max_rows
+  std::vector<AggRow> desc = rows;
+  ApplyAggSortby(desc, {{"k", true}}, /*max_rows=*/10);
+  ASSERT_EQ(desc.size(), 10u);
+  EXPECT_EQ(desc.front().at("k"), "inf");
+}
+
+TEST(ClusterAggReduceTest, LimitOverflowAndSplitPipelineEdgeCases) {
+  std::vector<AggRow> rows = {{{"id", "0"}}, {{"id", "1"}}, {{"id", "2"}}, {{"id", "3"}}};
+
+  // Negative offset clamped to 0
+  auto r1 = rows;
+  ApplyAggLimit(r1, -5, 2);
+  ASSERT_EQ(r1.size(), 2u);
+  EXPECT_EQ(r1[0]["id"], "0");
+  EXPECT_EQ(r1[1]["id"], "1");
+
+  // count == 0 clears
+  auto r2 = rows;
+  ApplyAggLimit(r2, 1, 0);
+  EXPECT_TRUE(r2.empty());
+
+  // Signed overflow in offset + count
+  auto r3 = rows;
+  ApplyAggLimit(r3, 2, std::numeric_limits<int64_t>::max());
+  ASSERT_EQ(r3.size(), 2u);
+  EXPECT_EQ(r3[0]["id"], "2");
+  EXPECT_EQ(r3[1]["id"], "3");
+
+  auto r4 = rows;
+  ApplyAggLimit(r4, std::numeric_limits<int64_t>::max(), 10);
+  EXPECT_TRUE(r4.empty());
+
+  // SplitAggPipeline with LIMIT 0 0 sets raw_zero_limit = true
+  PipelineStage lim_zero;
+  lim_zero.type = PipelineStageType::kLimit;
+  lim_zero.limit_offset = 0;
+  lim_zero.limit_count = 0;
+  auto split_zero = SplitAggPipeline({lim_zero}, false);
+  EXPECT_EQ(split_zero.mode, ClusterAggPlanSplit::Mode::kRawRows);
+  EXPECT_TRUE(split_zero.raw_zero_limit);
+
+  // SplitAggPipeline with signed-int64-overflowing LIMIT computes exact uint64 sum without UB
+  PipelineStage lim_ovf;
+  lim_ovf.type = PipelineStageType::kLimit;
+  lim_ovf.limit_offset = std::numeric_limits<int64_t>::max();
+  lim_ovf.limit_count = 10;
+  auto split_ovf = SplitAggPipeline({lim_ovf}, false);
+  EXPECT_EQ(split_ovf.raw_shard_limit,
+            static_cast<size_t>(std::numeric_limits<int64_t>::max()) + 10u);
+  EXPECT_FALSE(split_ovf.raw_zero_limit);
+
+  // SORTBY ... MAX N before GROUPBY blocks Map-Reduce pushdown
+  PipelineStage sort_max;
+  sort_max.type = PipelineStageType::kSortby;
+  sort_max.sortby_keys = {{"price", true}};
+  sort_max.sortby_max = 5;
+  PipelineStage gb_count;
+  gb_count.type = PipelineStageType::kGroupby;
+  gb_count.groupby_fields = {"cat"};
+  ReduceOp cnt_op;
+  cnt_op.func = ReduceFunc::kCount;
+  cnt_op.alias = "c";
+  gb_count.reducers = {cnt_op};
+  auto split_smax = SplitAggPipeline({sort_max, gb_count}, false);
+  EXPECT_EQ(split_smax.mode, ClusterAggPlanSplit::Mode::kRawRows);
+
+  // SORTBY (without MAX) before GROUPBY with FIRST_VALUE lacking BY blocks pushdown
+  PipelineStage sort_nomax;
+  sort_nomax.type = PipelineStageType::kSortby;
+  sort_nomax.sortby_keys = {{"price", true}};
+  PipelineStage gb_fv;
+  gb_fv.type = PipelineStageType::kGroupby;
+  gb_fv.groupby_fields = {"cat"};
+  ReduceOp fv_op;
+  fv_op.func = ReduceFunc::kFirstValue;
+  fv_op.field = "sku";
+  fv_op.alias = "fv";
+  gb_fv.reducers = {fv_op};
+  auto split_fv = SplitAggPipeline({sort_nomax, gb_fv}, false);
+  EXPECT_EQ(split_fv.mode, ClusterAggPlanSplit::Mode::kRawRows);
+
+  // FIRST_VALUE WITH BY field is safe to push down
+  fv_op.first_value_by = "price";
+  gb_fv.reducers = {fv_op};
+  auto split_fv_by = SplitAggPipeline({sort_nomax, gb_fv}, false);
+  EXPECT_EQ(split_fv_by.mode, ClusterAggPlanSplit::Mode::kMapReduceGroupby);
+}
+
+TEST(ClusterAggReduceTest, GroupKeyNoCollisionAndCountDistinctDedup) {
+  // Verify multi-field group keys cannot collide on values containing '\x01'
+  ReduceOp cnt_op;
+  cnt_op.func = ReduceFunc::kCount;
+  cnt_op.alias = "c";
+  std::vector<AggRow> rows = {
+      {{"a", "x\x01y"}, {"b", "z"}},
+      {{"a", "x"}, {"b", "y\x01z"}},
+  };
+  std::vector<PartialGroup> pgs;
+  std::string err;
+  ASSERT_TRUE(BuildPartialGroups(rows, {"a", "b"}, {cnt_op}, 100, pgs, err));
+  ASSERT_EQ(pgs.size(), 2u);
+  std::vector<AggRow> merged_keys;
+  ASSERT_TRUE(MergeAndFinalizeGroups({pgs}, {cnt_op}, 100, merged_keys, err));
+  EXPECT_EQ(merged_keys.size(), 2u);
+
+  // COUNT_DISTINCT across many shards with heavy duplicate overlap must dedup before capping
+  ReduceOp cd_op;
+  cd_op.func = ReduceFunc::kCountDistinct;
+  cd_op.field = "u";
+  cd_op.alias = "cd";
+
+  std::vector<std::vector<PartialGroup>> shard_groups(5);
+  for (size_t s = 0; s < 5; s++) {
+    std::vector<AggRow> srows;
+    // All 5 shards contain the same 50 users + 10 unique-per-shard users -> 100 total distinct
+    for (int u = 0; u < 50; u++) srows.push_back({{"g", "all"}, {"u", "shared_" + std::to_string(u)}});
+    for (int u = 0; u < 10; u++) {
+      srows.push_back({{"g", "all"}, {"u", "s" + std::to_string(s) + "_" + std::to_string(u)}});
+    }
+    ASSERT_TRUE(BuildPartialGroups(srows, {"g"}, {cd_op}, 100, shard_groups[s], err));
+  }
+  std::vector<AggRow> merged;
+  ASSERT_TRUE(MergeAndFinalizeGroups(shard_groups, {cd_op}, 100, merged, err));
+  ASSERT_EQ(merged.size(), 1u);
+  EXPECT_EQ(merged[0]["cd"], "100");
+
+  // HLL defensive estimate with corrupted rho == 0 entry does not produce NaN/Inf
+  HllSketch hll;
+  hll.sparse.push_back({42, 0});
+  hll.sparse.push_back({43, 1});
+  double est = hll.Estimate();
+  EXPECT_TRUE(std::isfinite(est));
+  EXPECT_GE(est, 0.0);
+}

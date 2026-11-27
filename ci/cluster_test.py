@@ -15,6 +15,8 @@ Usage:
   python3 ci/cluster_test.py [bloom.so] [json.so]
 """
 
+from __future__ import annotations
+
 import math
 import os
 import random
@@ -41,17 +43,19 @@ def find_free_ports(count: int) -> list[int]:
     """Find `count` free ports whose cluster bus (port + 10000) and search RPC (port + 20000) are free."""
     ports: list[int] = []
     sockets: list[socket.socket] = []
+    # Probe disjoint port ranges: base [20000, 29999], bus [30000, 39999], RPC [40000, 49999].
+    # Works reliably on macOS where ephemeral bind(0) always returns ports >= 49152.
+    candidates = list(range(20000, 30000))
+    random.shuffle(candidates)
     try:
-        while len(ports) < count:
+        for p in candidates:
+            if len(ports) >= count:
+                break
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.bind(("127.0.0.1", 0))
-            p = s.getsockname()[1]
-            if p >= 40000 or p in ports:
-                s.close()
-                continue
             bus = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             rpc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
+                s.bind(("127.0.0.1", p))
                 bus.bind(("127.0.0.1", p + 10000))
                 rpc.bind(("127.0.0.1", p + 20000))
             except OSError:
@@ -61,6 +65,8 @@ def find_free_ports(count: int) -> list[int]:
                 continue
             sockets.extend([s, bus, rpc])
             ports.append(p)
+        if len(ports) < count:
+            raise RuntimeError(f"Could not find {count} free port triplets in [20000, 29999]")
     finally:
         for s in sockets:
             s.close()

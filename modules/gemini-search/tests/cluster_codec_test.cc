@@ -2,11 +2,14 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace gemini_search;
@@ -934,4 +937,84 @@ TEST(ClusterCodecTest, Phase70AggMapAndCursorCodecsAndFuzz) {
   FuzzTrunc(aresp_buf, [](std::string_view v) { RpcAggMapResponse o; return DecodeAggMapResponse(v, o); });
   FuzzTrunc(creq_buf, [](std::string_view v) { RpcCursorRequest o; return DecodeCursorRequest(v, o); });
   FuzzTrunc(cresp_buf, [](std::string_view v) { RpcCursorResponse o; return DecodeCursorResponse(v, o); });
+}
+
+TEST(ClusterCodecTest, HybridDistanceOutOfFloatRangeAndInvalidHllRhoRejected) {
+  // 1. Craft RpcHybridPhase1Response with double distance > FLT_MAX (would be UB casting to float)
+  auto MakeHybridRespWire = [](double bad_dist) {
+    RpcHybridPhase1Response r;
+    r.ok = true;
+    r.vec_hits.push_back({"d1", 1.0f});
+    std::string wire;
+    EncodeHybridPhase1Response(r, wire);
+    // Last 8 bytes are the double distance of vec_hits[0]
+    uint64_t bits = 0;
+    std::memcpy(&bits, &bad_dist, sizeof(bits));
+    for (size_t i = 0; i < 8; i++) {
+      wire[wire.size() - 8 + i] = static_cast<char>((bits >> (8 * i)) & 0xFF);
+    }
+    return wire;
+  };
+  {
+    RpcHybridPhase1Response out;
+    EXPECT_FALSE(DecodeHybridPhase1Response(MakeHybridRespWire(1e100), out));
+    EXPECT_FALSE(DecodeHybridPhase1Response(MakeHybridRespWire(-1e100), out));
+    EXPECT_FALSE(DecodeHybridPhase1Response(
+        MakeHybridRespWire(std::numeric_limits<double>::infinity()), out));
+    EXPECT_FALSE(DecodeHybridPhase1Response(
+        MakeHybridRespWire(std::numeric_limits<double>::quiet_NaN()), out));
+  }
+
+  // 2. Reject HLL sparse entry with rho == 0 or rho > 51 (64 - 14 + 1)
+  auto TestBadRho = [](uint8_t bad_rho) {
+    RpcAggMapResponse resp;
+    resp.ok = true;
+    resp.mode = 1;
+    PartialGroup pg;
+    pg.group_key = "g1";
+    pg.key_fields = {{"g", "g1"}};
+    PartialReducerState st;
+    st.func = ReduceFunc::kCountDistinctish;
+    st.hll.is_dense = false;
+    st.hll.sparse.push_back({100, bad_rho});
+    pg.reducers.push_back(std::move(st));
+    resp.partial_groups.push_back(std::move(pg));
+    std::string wire;
+    EncodeAggMapResponse(resp, wire);
+    RpcAggMapResponse out;
+    return DecodeAggMapResponse(wire, out);
+  };
+  EXPECT_FALSE(TestBadRho(0));
+  EXPECT_FALSE(TestBadRho(52));
+  EXPECT_TRUE(TestBadRho(1));
+  EXPECT_TRUE(TestBadRho(51));
+
+  // 3. RpcAggMapRequest raw_zero_limit round-trip
+  RpcAggMapRequest req;
+  req.index_name = "idx";
+  req.query_str = "*";
+  req.raw_zero_limit = true;
+  std::string wire;
+  EncodeAggMapRequest(req, wire);
+  RpcAggMapRequest out_req;
+  ASSERT_TRUE(DecodeAggMapRequest(wire, out_req));
+  EXPECT_TRUE(out_req.raw_zero_limit);
+
+  // 4. Thread-safe concurrent ComputeCrc32
+  std::vector<std::thread> threads;
+  std::atomic<int> mismatches{0};
+  const std::string payload = "gemini-search-cluster-crc32-concurrent-test";
+  uint32_t expected_crc = ComputeCrc32(reinterpret_cast<const uint8_t*>(payload.data()),
+                                       payload.size());
+  for (int t = 0; t < 16; t++) {
+    threads.emplace_back([&]() {
+      for (int i = 0; i < 1000; i++) {
+        uint32_t c = ComputeCrc32(reinterpret_cast<const uint8_t*>(payload.data()),
+                                  payload.size());
+        if (c != expected_crc) mismatches.fetch_add(1);
+      }
+    });
+  }
+  for (auto& th : threads) th.join();
+  EXPECT_EQ(mismatches.load(), 0);
 }

@@ -2,7 +2,55 @@
 #include "search_internal.h"
 #include "search_rdb.h"
 
+#include <pthread.h>
+
+#include <mutex>
 #include <vector>
+
+namespace {
+
+// BGSAVE fork safety: lock all global & per-index shared_mutexes exclusively across fork()
+// so no SearchExecutor reader thread can leave an internal shared_mutex lock permanently
+// wedged in the forked child process when AuxSaveSearch / RdbSaveSearch runs.
+std::vector<std::shared_ptr<IndexEntry>> g_fork_locked_entries;
+
+void SearchAtForkPrepare() {
+  GetIndicesMutex().lock();
+  GetAliasesMutex().lock();
+  GetTermDictsMutex().lock();
+  GetSuggestDictsMutex().lock();
+  GetConfigMutex().lock();
+  g_fork_locked_entries.clear();
+  for (const auto& [name, entry_ptr] : GetIndices()) {
+    if (entry_ptr) {
+      entry_ptr->Mutex().lock();
+      g_fork_locked_entries.push_back(entry_ptr);
+    }
+  }
+}
+
+void SearchAtForkParent() {
+  for (auto it = g_fork_locked_entries.rbegin(); it != g_fork_locked_entries.rend(); ++it) {
+    (*it)->Mutex().unlock();
+  }
+  g_fork_locked_entries.clear();
+  GetConfigMutex().unlock();
+  GetSuggestDictsMutex().unlock();
+  GetTermDictsMutex().unlock();
+  GetAliasesMutex().unlock();
+  GetIndicesMutex().unlock();
+}
+
+void SearchAtForkChild() {
+  // Do NOT unlock std::shared_mutex (pthread_rwlock_t) or free heap memory in the forked child:
+  // unlocking a parent-owned rwlock in a child is UB and deadlocks on Linux glibc.
+  // The forked child is strictly single-threaded and holds a consistent point-in-time snapshot
+  // guaranteed by SearchAtForkPrepare(); RDB/AOF save paths bypass shared_mutex locks when
+  // IsInForkedChild() is true.
+  MarkForkedChild();
+}
+
+}  // namespace
 
 static void MaintenanceTimerCallback(RedisModuleCtx* ctx, void* /*data*/) {
   int64_t now_ms = NowMs();
@@ -12,24 +60,32 @@ static void MaintenanceTimerCallback(RedisModuleCtx* ctx, void* /*data*/) {
 
   // 2. Drop expired TEMPORARY indices
   std::vector<std::string> expired;
-  for (const auto& [name, entry_ptr] : GetIndices()) {
-    if (!entry_ptr) continue;
-    const auto& entry = *entry_ptr;
-    if (entry.spec.temporary_ttl > 0 && entry.last_access_ms > 0 &&
-        now_ms - entry.last_access_ms >=
-            static_cast<int64_t>(entry.spec.temporary_ttl) * 1000LL) {
-      expired.push_back(name);
+  {
+    std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+    for (const auto& [name, entry_ptr] : GetIndices()) {
+      if (!entry_ptr) continue;
+      const auto& entry = *entry_ptr;
+      int64_t last_access = entry.LastAccessMs();
+      if (entry.spec.temporary_ttl > 0 && last_access > 0 &&
+          now_ms - last_access >=
+              static_cast<int64_t>(entry.spec.temporary_ttl) * 1000LL) {
+        expired.push_back(name);
+      }
     }
   }
   for (const auto& name : expired) {
+    StopBackgroundIndexing(ctx, name);
     {
       std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
       GetIndices().erase(name);
     }
-    auto& aliases = GetAliases();
-    for (auto ait = aliases.begin(); ait != aliases.end(); ) {
-      if (ait->second == name) ait = aliases.erase(ait);
-      else ++ait;
+    {
+      std::unique_lock<std::shared_mutex> alk(GetAliasesMutex());
+      auto& aliases = GetAliases();
+      for (auto ait = aliases.begin(); ait != aliases.end(); ) {
+        if (ait->second == name) ait = aliases.erase(ait);
+        else ++ait;
+      }
     }
     if (SearchModuleType && !gemini_search::ClusterManager::Instance().IsClusterMode()) {
       RedisModuleString* kstr = RedisModule_CreateString(ctx, name.data(), name.size());
@@ -108,6 +164,11 @@ int RegisterSearchCommands(RedisModuleCtx* ctx) {
     RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_FlushDB, OnFlushDbEvent);
     RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_Loading, OnLoadingEvent);
   }
+
+  static std::once_flag atfork_once;
+  std::call_once(atfork_once, []() {
+    pthread_atfork(SearchAtForkPrepare, SearchAtForkParent, SearchAtForkChild);
+  });
 
   if (RedisModule_CreateTimer) {
     RedisModule_CreateTimer(ctx, 1000, MaintenanceTimerCallback, nullptr);

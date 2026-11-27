@@ -1099,3 +1099,56 @@ TEST_F(SearchRdbTest, RoundTripEncver15BqRerankAndAof) {
   }
   delete loaded_name;
 }
+
+TEST_F(SearchRdbTest, ClusterAuxLoadClearsStaleIndicesEvenWhenEmpty) {
+  // 1. Save an empty Cluster AUX snapshot (0 cluster indices)
+  ClearAllGlobalState();
+  SetClusterRdbMode(true);
+  MockRdbStream empty_cluster_aux;
+  AuxSaveSearch(empty_cluster_aux.IO(), REDISMODULE_AUX_AFTER_RDB);
+
+  // 2. Populate a stale index (simulating Replica before PSYNC full resync)
+  IndexSpec stale_spec;
+  stale_spec.name = "stale_idx";
+  stale_spec.fields = {{"t", FieldType::kTag, {}}};
+  ASSERT_TRUE(CreateIndexFromRdb("stale_idx", stale_spec, {{"d1", {{"t", "v1"}}}}));
+  ASSERT_NE(GetIndexEntry("stale_idx"), nullptr);
+
+  // Loading empty cluster AUX snapshot in cluster mode MUST clear stale indices
+  empty_cluster_aux.Rewind();
+  ASSERT_EQ(AuxLoadSearch(empty_cluster_aux.IO(), kSearchAuxEncVer, REDISMODULE_AUX_AFTER_RDB),
+            REDISMODULE_OK);
+  EXPECT_EQ(GetIndexEntry("stale_idx"), nullptr);
+
+  // 3. In standalone mode, AuxLoadSearch (0 cluster indices) MUST preserve per-key loaded indices
+  SetClusterRdbMode(false);
+  ASSERT_TRUE(CreateIndexFromRdb("standalone_idx", stale_spec, {{"d1", {{"t", "v1"}}}}));
+  empty_cluster_aux.Rewind();
+  ASSERT_EQ(AuxLoadSearch(empty_cluster_aux.IO(), kSearchAuxEncVer, REDISMODULE_AUX_AFTER_RDB),
+            REDISMODULE_OK);
+  EXPECT_NE(GetIndexEntry("standalone_idx"), nullptr);
+}
+
+TEST_F(SearchRdbTest, AofRewriteEmitsOnJsonWithoutPrefix) {
+  IndexSpec spec;
+  spec.name = "json_nopfx";
+  spec.source_type = IndexSourceType::kJson;
+  FieldSpec f;
+  f.name = "title";
+  f.type = FieldType::kText;
+  f.json_path = "$.title";
+  spec.fields = {f};
+  ASSERT_TRUE(CreateIndexFromRdb("json_nopfx", spec, {}));
+
+  MockRdbStream dummy_aof;
+  MockRmString key{"json_nopfx"};
+  std::string val("json_nopfx");
+  AofRewriteSearch(dummy_aof.IO(), reinterpret_cast<RedisModuleString*>(&key), &val);
+  ASSERT_GE(g_emitted_aof.size(), 1u);
+  const auto& cargs = g_emitted_aof[0].second;
+  bool found_on_json = false;
+  for (size_t i = 0; i + 1 < cargs.size(); i++) {
+    if (cargs[i] == "ON" && cargs[i + 1] == "JSON") found_on_json = true;
+  }
+  EXPECT_TRUE(found_on_json);
+}
