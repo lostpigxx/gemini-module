@@ -1,3 +1,6 @@
+#include "cluster_agg_reduce.h"
+#include "cluster_coordinator.h"
+#include "cluster_topology.h"
 #include "search_internal.h"
 #include "expr_engine.h"
 #include "query_parser.h"
@@ -13,6 +16,101 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+using gemini_search::AggRow;
+using gemini_search::PipelineStage;
+using gemini_search::PipelineStageType;
+using gemini_search::ReduceFunc;
+using gemini_search::ReduceOp;
+
+namespace {
+
+bool ParseAggLong(RedisModuleString* arg, long long& out) {
+  std::string s(ArgView(arg));
+  if (s.empty()) return false;
+  char* ep = nullptr;
+  out = std::strtoll(s.c_str(), &ep, 10);
+  return ep != s.c_str() && *ep == '\0';
+}
+
+bool ParseAggU64(RedisModuleString* arg, uint64_t& out) {
+  std::string s(ArgView(arg));
+  if (s.empty() || s[0] == '-') return false;
+  char* ep = nullptr;
+  out = static_cast<uint64_t>(std::strtoull(s.c_str(), &ep, 10));
+  return ep != s.c_str() && *ep == '\0';
+}
+
+bool ParseAggDouble(RedisModuleString* arg, double& out) {
+  std::string s(ArgView(arg));
+  if (s.empty()) return false;
+  char* ep = nullptr;
+  out = std::strtod(s.c_str(), &ep);
+  return ep != s.c_str() && *ep == '\0' && std::isfinite(out);
+}
+
+constexpr const char* kInternalDocIdKey = "\x01__doc_id";
+constexpr const char* kInternalKnnDistKey = "\x01__knn_dist";
+
+}  // namespace
+
+gemini_search::RpcCursorResponse ExecuteLocalCursorOp(
+    const gemini_search::RpcCursorRequest& req) {
+  gemini_search::RpcCursorResponse resp;
+  int64_t now_ms = NowMs();
+
+  std::lock_guard<std::mutex> lk(GetCursorsMutex());
+  PurgeExpiredCursorsLocked(now_ms);
+
+  if (req.op == gemini_search::kRpcCursorOpDel) {
+    if (GetCursors().erase(req.cursor_id) == 0) {
+      resp.ok = false;
+      resp.error_msg = "ERR cursor not found";
+      return resp;
+    }
+    resp.ok = true;
+    return resp;
+  }
+
+  auto it = GetCursors().find(req.cursor_id);
+  if (it == GetCursors().end()) {
+    resp.ok = false;
+    resp.error_msg = "ERR cursor not found";
+    return resp;
+  }
+
+  AggCursor& cursor = it->second;
+  cursor.last_access_ms = now_ms;
+  if (req.has_count && req.count > 0) {
+    cursor.batch_size = static_cast<size_t>(req.count);
+  }
+
+  size_t end = std::min(cursor.pos + cursor.batch_size, cursor.rows.size());
+  resp.rows.reserve(end - cursor.pos);
+  for (size_t ri = cursor.pos; ri < end; ri++) {
+    const auto& row = cursor.rows[ri];
+    std::vector<std::string> keys;
+    keys.reserve(row.size());
+    for (const auto& [k, v] : row) keys.push_back(k);
+    std::sort(keys.begin(), keys.end());
+    std::vector<std::pair<std::string, std::string>> out_row;
+    out_row.reserve(keys.size());
+    for (const auto& k : keys) {
+      out_row.emplace_back(k, row.at(k));
+    }
+    resp.rows.push_back(std::move(out_row));
+  }
+
+  cursor.pos = end;
+  if (cursor.pos >= cursor.rows.size()) {
+    GetCursors().erase(it);
+    resp.next_cursor_id = 0;
+  } else {
+    resp.next_cursor_id = req.cursor_id;
+  }
+  resp.ok = true;
+  return resp;
+}
 
 void ReplyCursorBatch(RedisModuleCtx* ctx, uint64_t cursor_id,
                              AggCursor& cursor) {
@@ -30,8 +128,9 @@ void ReplyCursorBatch(RedisModuleCtx* ctx, uint64_t cursor_id,
     std::sort(keys.begin(), keys.end());
     RedisModule_ReplyWithArray(ctx, static_cast<long>(keys.size()) * 2);
     for (auto& k : keys) {
-      RedisModule_ReplyWithCString(ctx, k.c_str());
-      RedisModule_ReplyWithCString(ctx, row.at(k).c_str());
+      RedisModule_ReplyWithStringBuffer(ctx, k.data(), k.size());
+      const std::string& val = row.at(k);
+      RedisModule_ReplyWithStringBuffer(ctx, val.data(), val.size());
     }
   }
 
@@ -51,398 +150,250 @@ int FtCursorCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc < 4) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  int64_t now_ms = NowMs();
-  PurgeExpiredCursors(now_ms);
-
   auto sub = ArgView(argv[1]);
+  bool is_read = MatchArg(sub, "READ");
+  bool is_del = MatchArg(sub, "DEL");
+  if (!is_read && !is_del) {
+    return RedisModule_ReplyWithError(ctx, "ERR unknown CURSOR subcommand, expected READ or DEL");
+  }
 
-  if (MatchArg(sub, "READ")) {
-    if (argc < 4) return RedisModule_WrongArity(ctx);
-    char* ep = nullptr;
-    uint64_t cid = static_cast<uint64_t>(
-        std::strtoull(std::string(ArgView(argv[3])).c_str(), &ep, 10));
-    if (*ep != '\0') return RedisModule_ReplyWithError(ctx, "ERR invalid cursor id");
+  uint64_t cid = 0;
+  if (!ParseAggU64(argv[3], cid)) {
+    return RedisModule_ReplyWithError(ctx, "ERR invalid cursor id");
+  }
 
-    auto it = GetCursors().find(cid);
-    if (it == GetCursors().end()) {
-      return RedisModule_ReplyWithError(ctx, "ERR cursor not found");
+  gemini_search::RpcCursorRequest req;
+  req.op = is_read ? gemini_search::kRpcCursorOpRead : gemini_search::kRpcCursorOpDel;
+  req.index_name = ResolveAlias(std::string(ArgView(argv[2])));
+  req.cursor_id = cid;
+  if (is_read && argc >= 6 && MatchArg(ArgView(argv[4]), "COUNT")) {
+    long long cnt = 0;
+    if (ParseAggLong(argv[5], cnt) && cnt > 0) {
+      req.has_count = true;
+      req.count = static_cast<uint64_t>(cnt);
     }
+  }
 
-    it->second.last_access_ms = now_ms;
-    if (argc >= 6 && MatchArg(ArgView(argv[4]), "COUNT")) {
-      char* ep2 = nullptr;
-      long cnt = std::strtol(std::string(ArgView(argv[5])).c_str(), &ep2, 10);
-      if (*ep2 == '\0' && cnt > 0)
-        it->second.batch_size = static_cast<size_t>(cnt);
+  // First try local cursor map (handles standalone and same-node cluster cursors)
+  auto local_resp = ExecuteLocalCursorOp(req);
+  if (local_resp.ok) {
+    if (is_del) {
+      return RedisModule_ReplyWithSimpleString(ctx, "OK");
     }
-
-    ReplyCursorBatch(ctx, cid, it->second);
+    RedisModule_ReplyWithArray(ctx, 2);
+    RedisModule_ReplyWithArray(ctx, static_cast<long>(local_resp.rows.size()));
+    for (const auto& row : local_resp.rows) {
+      RedisModule_ReplyWithArray(ctx, static_cast<long>(row.size()) * 2);
+      for (const auto& [k, v] : row) {
+        RedisModule_ReplyWithStringBuffer(ctx, k.data(), k.size());
+        RedisModule_ReplyWithStringBuffer(ctx, v.data(), v.size());
+      }
+    }
+    RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(local_resp.next_cursor_id));
     return REDISMODULE_OK;
   }
 
-  if (MatchArg(sub, "DEL")) {
-    if (argc < 4) return RedisModule_WrongArity(ctx);
-    char* ep = nullptr;
-    uint64_t cid = static_cast<uint64_t>(
-        std::strtoull(std::string(ArgView(argv[3])).c_str(), &ep, 10));
-    if (*ep != '\0') return RedisModule_ReplyWithError(ctx, "ERR invalid cursor id");
-
-    if (GetCursors().erase(cid) == 0) {
-      return RedisModule_ReplyWithError(ctx, "ERR cursor not found");
-    }
-    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+  // Phase 70: If not found locally in cluster mode, forward to Coordinator owner encoded in cursor_id
+  if (gemini_search::ClusterManager::Instance().IsClusterScatterEnabled() &&
+      gemini_search::ExtractCursorNodeTag(cid) != 0) {
+    return gemini_search::ExecuteClusterCursor(ctx, std::move(req));
   }
 
-  return RedisModule_ReplyWithError(ctx, "ERR unknown CURSOR subcommand, expected READ or DEL");
+  return RedisModule_ReplyWithError(ctx, local_resp.error_msg.c_str());
 }
-
 
 // =============================================================
-// FT.AGGREGATE pipeline
+// FT.AGGREGATE pipeline (delegates to cluster_agg_reduce.cc)
 // =============================================================
-
-enum class ReduceFunc {
-  kCount, kSum, kAvg, kMin, kMax, kCountDistinct,
-  kStddev, kQuantile, kTolist, kFirstValue, kRandomSample, kCountDistinctish
-};
-
-struct ReduceOp {
-  ReduceFunc func;
-  std::string field;
-  std::string alias;
-  double quantile_pct = 0.0;
-  std::string first_value_by;
-  bool first_value_desc = false;
-  long random_sample_count = 0;
-};
-
-enum class PipelineStageType {
-  kLoad, kApply, kFilter, kGroupby, kSortby, kLimit
-};
-
-struct PipelineStage {
-  PipelineStageType type;
-  // LOAD
-  std::vector<std::string> load_fields;
-  // APPLY
-  std::string apply_expr;
-  std::string apply_alias;
-  // FILTER
-  std::string filter_expr;
-  // GROUPBY + REDUCE
-  std::vector<std::string> groupby_fields;
-  std::vector<ReduceOp> reducers;
-  // SORTBY (multi-key + optional MAX)
-  std::vector<std::pair<std::string, bool>> sortby_keys;
-  long long sortby_max = -1;
-  // LIMIT
-  long long limit_offset = 0;
-  long long limit_count = 0;
-};
-
-using AggRow = std::unordered_map<std::string, std::string>;
-
-static void ApplyLimit(std::vector<AggRow>& rows, long long offset, long long count) {
-  long long total = static_cast<long long>(rows.size());
-  if (offset >= total) { rows.clear(); return; }
-  auto begin = rows.begin() + offset;
-  auto end = (count >= 0 && offset + count < total)
-                 ? rows.begin() + offset + count : rows.end();
-  rows = std::vector<AggRow>(begin, end);
-}
-
-static void ApplySortby(std::vector<AggRow>& rows,
-                        const std::vector<std::pair<std::string, bool>>& keys,
-                        long long max_rows = -1) {
-  if (keys.empty()) return;
-  auto cmp = [&](const AggRow& a, const AggRow& b) {
-    for (const auto& [field, desc] : keys) {
-      auto ait = a.find(field);
-      auto bit = b.find(field);
-      std::string va = (ait != a.end()) ? ait->second : "";
-      std::string vb = (bit != b.end()) ? bit->second : "";
-      if (va == vb) continue;
-      double na = 0, nb = 0;
-      bool num = TryParseDouble(va, na) && TryParseDouble(vb, nb);
-      if (num) {
-        if (na == nb) continue;
-        return desc ? na > nb : na < nb;
-      }
-      return desc ? va > vb : va < vb;
-    }
-    return false;
-  };
-  if (max_rows > 0 && static_cast<size_t>(max_rows) < rows.size()) {
-    std::partial_sort(rows.begin(),
-                      rows.begin() + static_cast<ptrdiff_t>(max_rows),
-                      rows.end(), cmp);
-    rows.resize(static_cast<size_t>(max_rows));
-  } else {
-    std::sort(rows.begin(), rows.end(), cmp);
-  }
-}
-
-static void ApplyGroupby(std::vector<AggRow>& rows,
-                          const std::vector<std::string>& gb_fields,
-                          const std::vector<ReduceOp>& reducers) {
-  struct GroupAccum {
-    long long count = 0;
-    std::unordered_map<std::string, double> sum;
-    std::unordered_map<std::string, double> sum_sq;
-    std::unordered_map<std::string, long long> field_count;
-    std::unordered_map<std::string, double> min_val;
-    std::unordered_map<std::string, double> max_val;
-    std::unordered_map<std::string, std::unordered_set<std::string>> distinct;
-    std::unordered_map<std::string, std::vector<double>> values;
-    std::unordered_map<std::string, std::vector<std::string>> str_values;
-    std::unordered_map<std::string, std::string> first_val;
-    std::unordered_map<std::string, double> first_sort_val;
-    std::unordered_map<std::string, bool> first_set;
-  };
-
-  auto MakeKey = [&](const AggRow& row) -> std::string {
-    std::string key;
-    for (size_t i = 0; i < gb_fields.size(); i++) {
-      if (i > 0) key += "\x01";
-      auto fit = row.find(gb_fields[i]);
-      if (fit != row.end()) key += fit->second;
-    }
-    return key;
-  };
-
-  std::unordered_map<std::string, GroupAccum> groups;
-  std::unordered_map<std::string, AggRow> group_key_values;
-
-  for (auto& row : rows) {
-    std::string gk = MakeKey(row);
-    auto& accum = groups[gk];
-    accum.count++;
-
-    if (group_key_values.find(gk) == group_key_values.end()) {
-      AggRow kv;
-      for (auto& gf : gb_fields) {
-        auto fit = row.find(gf);
-        kv[gf] = (fit != row.end()) ? fit->second : "";
-      }
-      group_key_values[gk] = std::move(kv);
-    }
-
-    for (auto& r : reducers) {
-      if (r.func == ReduceFunc::kCount) continue;
-
-      auto fit = row.find(r.field);
-      if (fit == row.end()) continue;
-      const auto& fval = fit->second;
-
-      if (r.func == ReduceFunc::kCountDistinct || r.func == ReduceFunc::kCountDistinctish) {
-        accum.distinct[r.alias].insert(fval);
-        continue;
-      }
-      if (r.func == ReduceFunc::kTolist) {
-        accum.str_values[r.alias].push_back(fval);
-        continue;
-      }
-      if (r.func == ReduceFunc::kFirstValue) {
-        if (!r.first_value_by.empty()) {
-          auto sort_it = row.find(r.first_value_by);
-          double sv = 0;
-          if (sort_it != row.end()) TryParseDouble(sort_it->second, sv);
-          if (!accum.first_set[r.alias] ||
-              (r.first_value_desc ? sv > accum.first_sort_val[r.alias]
-                                  : sv < accum.first_sort_val[r.alias])) {
-            accum.first_val[r.alias] = fval;
-            accum.first_sort_val[r.alias] = sv;
-            accum.first_set[r.alias] = true;
-          }
-        } else if (!accum.first_set[r.alias]) {
-          accum.first_val[r.alias] = fval;
-          accum.first_set[r.alias] = true;
-        }
-        continue;
-      }
-      if (r.func == ReduceFunc::kRandomSample) {
-        accum.str_values[r.alias].push_back(fval);
-        continue;
-      }
-
-      double val = 0;
-      if (!TryParseDouble(fval, val)) continue;
-
-      accum.sum[r.alias] += val;
-      accum.sum_sq[r.alias] += val * val;
-      accum.field_count[r.alias]++;
-
-      if (r.func == ReduceFunc::kQuantile) {
-        accum.values[r.alias].push_back(val);
-      }
-
-      auto min_it = accum.min_val.find(r.alias);
-      if (min_it == accum.min_val.end() || val < min_it->second)
-        accum.min_val[r.alias] = val;
-      auto max_it = accum.max_val.find(r.alias);
-      if (max_it == accum.max_val.end() || val > max_it->second)
-        accum.max_val[r.alias] = val;
-    }
-  }
-
-  std::vector<AggRow> result;
-  result.reserve(groups.size());
-  for (auto& [gk, accum] : groups) {
-    AggRow row = group_key_values[gk];
-    for (auto& r : reducers) {
-      switch (r.func) {
-        case ReduceFunc::kCount:
-          row[r.alias] = std::to_string(accum.count);
-          break;
-        case ReduceFunc::kSum: {
-          auto sit = accum.sum.find(r.alias);
-          row[r.alias] = (sit != accum.sum.end()) ? std::to_string(sit->second) : "0";
-          break;
-        }
-        case ReduceFunc::kAvg: {
-          auto sit = accum.sum.find(r.alias);
-          auto cit = accum.field_count.find(r.alias);
-          if (sit != accum.sum.end() && cit != accum.field_count.end() && cit->second > 0)
-            row[r.alias] = std::to_string(sit->second / static_cast<double>(cit->second));
-          else
-            row[r.alias] = "0";
-          break;
-        }
-        case ReduceFunc::kMin: {
-          auto mit = accum.min_val.find(r.alias);
-          row[r.alias] = (mit != accum.min_val.end()) ? std::to_string(mit->second) : "0";
-          break;
-        }
-        case ReduceFunc::kMax: {
-          auto mit = accum.max_val.find(r.alias);
-          row[r.alias] = (mit != accum.max_val.end()) ? std::to_string(mit->second) : "0";
-          break;
-        }
-        case ReduceFunc::kCountDistinct:
-        case ReduceFunc::kCountDistinctish: {
-          auto dit = accum.distinct.find(r.alias);
-          long long dc = (dit != accum.distinct.end()) ? static_cast<long long>(dit->second.size()) : 0;
-          row[r.alias] = std::to_string(dc);
-          break;
-        }
-        case ReduceFunc::kStddev: {
-          auto sit = accum.sum.find(r.alias);
-          auto sqit = accum.sum_sq.find(r.alias);
-          auto cit = accum.field_count.find(r.alias);
-          if (sit != accum.sum.end() && sqit != accum.sum_sq.end() &&
-              cit != accum.field_count.end() && cit->second > 1) {
-            double n = static_cast<double>(cit->second);
-            double mean = sit->second / n;
-            double variance = (sqit->second / n) - (mean * mean);
-            if (variance < 0) variance = 0;
-            row[r.alias] = std::to_string(std::sqrt(variance));
-          } else {
-            row[r.alias] = "0";
-          }
-          break;
-        }
-        case ReduceFunc::kQuantile: {
-          auto vit = accum.values.find(r.alias);
-          if (vit != accum.values.end() && !vit->second.empty()) {
-            auto& vals = vit->second;
-            std::sort(vals.begin(), vals.end());
-            size_t idx = static_cast<size_t>(r.quantile_pct * static_cast<double>(vals.size() - 1));
-            if (idx >= vals.size()) idx = vals.size() - 1;
-            row[r.alias] = std::to_string(vals[idx]);
-          } else {
-            row[r.alias] = "0";
-          }
-          break;
-        }
-        case ReduceFunc::kTolist: {
-          auto lit = accum.str_values.find(r.alias);
-          if (lit != accum.str_values.end()) {
-            std::string joined;
-            for (size_t i = 0; i < lit->second.size(); i++) {
-              if (i > 0) joined += ",";
-              joined += lit->second[i];
-            }
-            row[r.alias] = std::move(joined);
-          } else {
-            row[r.alias] = "";
-          }
-          break;
-        }
-        case ReduceFunc::kFirstValue: {
-          auto fit = accum.first_val.find(r.alias);
-          row[r.alias] = (fit != accum.first_val.end()) ? fit->second : "";
-          break;
-        }
-        case ReduceFunc::kRandomSample: {
-          auto lit = accum.str_values.find(r.alias);
-          if (lit != accum.str_values.end() && !lit->second.empty()) {
-            long count = r.random_sample_count;
-            auto& vals = lit->second;
-            // Deterministic sampling: take evenly spaced elements
-            std::string sampled;
-            for (long si = 0; si < count && si < static_cast<long>(vals.size()); si++) {
-              size_t idx = static_cast<size_t>(
-                  si * static_cast<long>(vals.size()) / count);
-              if (si > 0) sampled += ",";
-              sampled += vals[idx];
-            }
-            row[r.alias] = std::move(sampled);
-          } else {
-            row[r.alias] = "";
-          }
-          break;
-        }
-      }
-    }
-    result.push_back(std::move(row));
-  }
-  rows = std::move(result);
-}
 
 static bool ExecuteAggPipeline(std::vector<AggRow>& rows,
                                const std::vector<PipelineStage>& stages,
                                int64_t deadline_ms, std::string& error_out) {
-  for (const auto& stage : stages) {
-    if (deadline_ms > 0 && NowMs() > deadline_ms) {
-      error_out = "ERR query timeout";
-      return false;
-    }
-    switch (stage.type) {
-      case PipelineStageType::kLoad:
-        break;
-      case PipelineStageType::kApply: {
-        ExprNode expr;
-        if (!ParseExpr(stage.apply_expr, expr, error_out)) return false;
-        for (auto& row : rows) {
-          auto val = EvalExpr(expr, row);
-          row[stage.apply_alias] = val.AsString();
-        }
-        break;
-      }
-      case PipelineStageType::kFilter: {
-        ExprNode expr;
-        if (!ParseExpr(stage.filter_expr, expr, error_out)) return false;
-        rows.erase(
-            std::remove_if(rows.begin(), rows.end(),
-                           [&](const AggRow& row) {
-                             return !EvalExpr(expr, row).Truthy();
-                           }),
-            rows.end());
-        break;
-      }
-      case PipelineStageType::kGroupby:
-        if (stage.groupby_fields.empty() && stage.reducers.empty()) break;
-        ApplyGroupby(rows, stage.groupby_fields, stage.reducers);
-        break;
-      case PipelineStageType::kSortby:
-        ApplySortby(rows, stage.sortby_keys, stage.sortby_max);
-        break;
-      case PipelineStageType::kLimit:
-        ApplyLimit(rows, stage.limit_offset, stage.limit_count);
-        break;
+  return gemini_search::ExecuteAggPipelineStages(rows, stages, deadline_ms, error_out);
+}
+
+// Phase 70: Lock-only shard Map execution for distributed FT.AGGREGATE (zero Redis GIL!)
+gemini_search::RpcAggMapResponse ExecuteLocalAggMap(
+    const gemini_search::RpcAggMapRequest& req) {
+  gemini_search::RpcAggMapResponse resp;
+  resp.mode = req.mode;
+
+  auto entry_ptr = GetIndexEntryShared(req.index_name);
+  if (!entry_ptr) {
+    resp.ok = false;
+    resp.error_msg = "ERR index not found";
+    return resp;
+  }
+
+  const auto& entry = *entry_ptr;
+  std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+
+  std::unordered_map<std::string, std::string> params;
+  params.reserve(req.params.size());
+  for (const auto& [k, v] : req.params) params[k] = v;
+
+  QueryOptions qopts;
+  qopts.language = entry.spec.language;
+  qopts.dialect = req.dialect;
+  qopts.max_expansions = GetMaxExpansions();
+  qopts.min_stem_len = GetMinStemLen();
+
+  std::unordered_set<std::string> custom_dict_copy;
+  if (!entry.spec.custom_dict.empty()) {
+    std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
+    auto dit = GetTermDicts().find(entry.spec.custom_dict);
+    if (dit != GetTermDicts().end()) {
+      custom_dict_copy = dit->second.Terms();
+      qopts.custom_dict = &custom_dict_copy;
     }
   }
-  return true;
+  int64_t deadline_ms = 0;
+  if (req.remaining_timeout_ms > 0) {
+    deadline_ms = NowMs() + req.remaining_timeout_ms;
+    qopts.deadline_ms = deadline_ms;
+  }
+
+  ParsedQuery parsed;
+  std::string parse_err;
+  if (!ParseQuery(req.query_str, parsed, parse_err, qopts)) {
+    resp.ok = false;
+    resp.error_msg = std::move(parse_err);
+    return resp;
+  }
+
+  std::vector<std::string> result_ids;
+  std::unordered_map<std::string, double> knn_dists;
+  std::string knn_score_field =
+      parsed.knn_score_alias.empty() ? "__vec_score" : parsed.knn_score_alias;
+
+  if (parsed.has_knn) {
+    const auto* fspec = entry.spec.FindField(parsed.knn_field);
+    if (!fspec || fspec->type != FieldType::kVector) {
+      resp.ok = false;
+      resp.error_msg = "ERR KNN field is not a VECTOR field";
+      return resp;
+    }
+    auto pit = params.find(parsed.knn_param_name);
+    if (pit == params.end()) {
+      resp.ok = false;
+      resp.error_msg = "ERR KNN param not found in PARAMS";
+      return resp;
+    }
+    std::vector<float> qvec;
+    if (!DecodeVectorBlob(pit->second, fspec->vector_params.dim, fspec->vector_params.data_type,
+                          qvec)) {
+      resp.ok = false;
+      resp.error_msg = "ERR query vector dimension mismatch";
+      return resp;
+    }
+    if (const auto* vidx = entry.vector_indices.Get(parsed.knn_field)) {
+      std::vector<KnnResult> knn_hits;
+      if (parsed.root.type != QueryNode::Type::kMatchAll) {
+        std::string ferr;
+        auto cands = EvaluateQuery(parsed.root, entry.spec, entry.doc_store, entry.tag_indices,
+                                   entry.numeric_indices, entry.text_indices, entry.geo_indices,
+                                   ferr, qopts, &entry.geoshape_indices, &params,
+                                   &entry.vector_indices, &entry.synonyms);
+        if (!ferr.empty()) {
+          resp.ok = false;
+          resp.error_msg = std::move(ferr);
+          return resp;
+        }
+        knn_hits = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands, parsed.knn_ef_runtime,
+                                          parsed.knn_oversample);
+      } else {
+        knn_hits = vidx->KnnQueryEf(qvec.data(), parsed.knn_k, parsed.knn_ef_runtime,
+                                    parsed.knn_oversample);
+      }
+      result_ids.reserve(knn_hits.size());
+      for (const auto& h : knn_hits) {
+        result_ids.push_back(h.doc_id);
+        knn_dists[h.doc_id] = static_cast<double>(h.score);
+      }
+    }
+  } else {
+    std::string eval_err;
+    result_ids = EvaluateQuery(parsed.root, entry.spec, entry.doc_store, entry.tag_indices,
+                               entry.numeric_indices, entry.text_indices, entry.geo_indices,
+                               eval_err, qopts, &entry.geoshape_indices, &params,
+                               &entry.vector_indices, &entry.synonyms);
+    if (!eval_err.empty()) {
+      resp.ok = false;
+      resp.error_msg = std::move(eval_err);
+      return resp;
+    }
+  }
+
+  std::vector<AggRow> rows;
+  rows.reserve(result_ids.size());
+  for (const auto& doc_id : result_ids) {
+    const auto* doc = entry.doc_store.Get(doc_id);
+    if (!doc) continue;
+    AggRow r = doc->fields;
+    if (parsed.has_knn) {
+      auto sit = knn_dists.find(doc_id);
+      if (sit != knn_dists.end()) {
+        r[knn_score_field] = std::to_string(static_cast<float>(sit->second));
+        if (req.mode == 0) r[kInternalKnnDistKey] = std::to_string(sit->second);
+      }
+    }
+    if (req.mode == 0) r[kInternalDocIdKey] = doc_id;
+    rows.push_back(std::move(r));
+  }
+
+  std::string pipe_err;
+  if (!req.map_stages.empty() &&
+      !gemini_search::ExecuteAggPipelineStages(rows, req.map_stages, deadline_ms, pipe_err)) {
+    resp.ok = false;
+    resp.error_msg = std::move(pipe_err);
+    return resp;
+  }
+
+  if (req.mode == 1) {
+    // Two-phase Map-Reduce: partial GROUPBY reduction on shard with max_groups quota
+    size_t max_g = static_cast<size_t>(req.max_groups);
+    if (!gemini_search::BuildPartialGroups(rows, req.groupby_stage.groupby_fields,
+                                           req.groupby_stage.reducers, max_g, resp.partial_groups,
+                                           pipe_err)) {
+      resp.ok = false;
+      resp.error_msg = std::move(pipe_err);
+      return resp;
+    }
+    resp.ok = true;
+    return resp;
+  }
+
+  // Raw rows mode: optional pushed-down local SORTBY & top-K truncation
+  if (req.raw_has_sortby && !req.raw_sortby_keys.empty()) {
+    long long max_r = (req.raw_shard_limit > 0) ? static_cast<long long>(req.raw_shard_limit) : -1;
+    gemini_search::ApplyAggSortby(rows, req.raw_sortby_keys, max_r);
+  } else if (req.raw_shard_limit > 0 && rows.size() > static_cast<size_t>(req.raw_shard_limit)) {
+    rows.resize(static_cast<size_t>(req.raw_shard_limit));
+  }
+
+  resp.raw_rows.reserve(rows.size());
+  for (auto& r : rows) {
+    gemini_search::RpcAggRawRow out_r;
+    auto dit = r.find(kInternalDocIdKey);
+    if (dit != r.end()) {
+      out_r.doc_id = std::move(dit->second);
+      r.erase(dit);
+    }
+    auto kit = r.find(kInternalKnnDistKey);
+    if (kit != r.end()) {
+      double dv = 0.0;
+      if (gemini_search::TryParseAggDouble(kit->second, dv)) {
+        out_r.has_knn_dist = true;
+        out_r.knn_dist = dv;
+      }
+      r.erase(kit);
+    }
+    out_r.fields.reserve(r.size());
+    for (auto& [k, v] : r) out_r.fields.emplace_back(k, std::move(v));
+    resp.raw_rows.push_back(std::move(out_r));
+  }
+  resp.ok = true;
+  return resp;
 }
 
 int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
@@ -481,12 +432,12 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
       ci++;
     } else if (MatchArg(kw, "PARAMS") && ci + 1 < argc) {
-      char* ep = nullptr;
-      long pcount = std::strtol(std::string(ArgView(argv[ci + 1])).c_str(), &ep, 10);
-      if (*ep != '\0' || pcount < 0 || pcount % 2 != 0 || ci + 2 + pcount > argc) {
+      long long pcount = 0;
+      if (!ParseAggLong(argv[ci + 1], pcount) || pcount < 0 || pcount % 2 != 0 ||
+          ci + 2 + pcount > argc) {
         return RedisModule_ReplyWithError(ctx, "ERR invalid PARAMS specification");
       }
-      for (long p = 0; p < pcount; p += 2) {
+      for (long long p = 0; p < pcount; p += 2) {
         std::string pname(ArgView(argv[ci + 2 + p]));
         std::string pval = ArgStr(argv[ci + 3 + p]);
         params[std::move(pname)] = std::move(pval);
@@ -539,14 +490,12 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         stages.push_back(std::move(st));
         continue;
       }
-      char* endptr = nullptr;
-      long ld_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
-      arg_i++;
-      if (*endptr != '\0' || ld_count < 0)
+      long long ld_count = 0;
+      if (!ParseAggLong(argv[arg_i++], ld_count) || ld_count < 0)
         return RedisModule_ReplyWithError(ctx, "ERR LOAD count must be non-negative");
       PipelineStage st;
       st.type = PipelineStageType::kLoad;
-      for (long li = 0; li < ld_count; li++) {
+      for (long long li = 0; li < ld_count; li++) {
         if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough LOAD fields");
         auto fv = ArgView(argv[arg_i]);
         arg_i++;
@@ -584,14 +533,12 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     } else if (MatchArg(kw, "GROUPBY")) {
       arg_i++;
       if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR GROUPBY requires count");
-      char* endptr = nullptr;
-      long gb_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
-      arg_i++;
-      if (*endptr != '\0' || gb_count < 0)
+      long long gb_count = 0;
+      if (!ParseAggLong(argv[arg_i++], gb_count) || gb_count < 0)
         return RedisModule_ReplyWithError(ctx, "ERR GROUPBY count must be non-negative");
       PipelineStage st;
       st.type = PipelineStageType::kGroupby;
-      for (long g = 0; g < gb_count; g++) {
+      for (long long g = 0; g < gb_count; g++) {
         if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough GROUPBY fields");
         auto fv = ArgView(argv[arg_i]);
         arg_i++;
@@ -638,13 +585,11 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
 
       if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR REDUCE requires nargs");
-      char* endptr = nullptr;
-      long nargs = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
-      arg_i++;
-      if (*endptr != '\0' || nargs < 0)
+      long long nargs = 0;
+      if (!ParseAggLong(argv[arg_i++], nargs) || nargs < 0)
         return RedisModule_ReplyWithError(ctx, "ERR REDUCE nargs must be non-negative");
 
-      long consumed = 0;
+      long long consumed = 0;
       if (needs_field && nargs >= 1) {
         if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR REDUCE missing field argument");
         auto rf = ArgView(argv[arg_i]);
@@ -657,9 +602,8 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       // Parse extra args for specific reducers
       if (rop.func == ReduceFunc::kQuantile && consumed < nargs) {
         if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR QUANTILE requires percentile");
-        char* ep = nullptr;
-        rop.quantile_pct = std::strtod(std::string(ArgView(argv[arg_i])).c_str(), &ep);
-        arg_i++; consumed++;
+        ParseAggDouble(argv[arg_i++], rop.quantile_pct);
+        consumed++;
       }
       if (rop.func == ReduceFunc::kFirstValue && consumed < nargs) {
         if (arg_i < argc && MatchArg(ArgView(argv[arg_i]), "BY")) {
@@ -679,13 +623,14 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
       if (rop.func == ReduceFunc::kRandomSample && consumed < nargs) {
         if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR RANDOM_SAMPLE requires count");
-        char* ep = nullptr;
-        rop.random_sample_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &ep, 10);
-        arg_i++; consumed++;
+        long long rsc = 0;
+        ParseAggLong(argv[arg_i++], rsc);
+        rop.random_sample_count = static_cast<long>(rsc);
+        consumed++;
       }
 
       // Skip any remaining args
-      for (long skip = consumed; skip < nargs; skip++) {
+      for (long long skip = consumed; skip < nargs; skip++) {
         if (arg_i < argc) arg_i++;
       }
 
@@ -710,10 +655,8 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       pending_groupby = nullptr;
       arg_i++;
       if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SORTBY requires count");
-      char* endptr = nullptr;
-      long sb_count = std::strtol(std::string(ArgView(argv[arg_i])).c_str(), &endptr, 10);
-      arg_i++;
-      if (*endptr != '\0' || sb_count < 1 || arg_i + sb_count > argc)
+      long long sb_count = 0;
+      if (!ParseAggLong(argv[arg_i++], sb_count) || sb_count < 1 || arg_i + sb_count > argc)
         return RedisModule_ReplyWithError(ctx, "ERR SORTBY count invalid");
       PipelineStage st;
       st.type = PipelineStageType::kSortby;
@@ -731,9 +674,8 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         st.sortby_keys.emplace_back(std::string(sf.substr(1)), desc);
       }
       if (arg_i + 1 < argc && MatchArg(ArgView(argv[arg_i]), "MAX")) {
-        char* mep = nullptr;
-        long long m = std::strtoll(std::string(ArgView(argv[arg_i + 1])).c_str(), &mep, 10);
-        if (*mep != '\0' || m < 0)
+        long long m = 0;
+        if (!ParseAggLong(argv[arg_i + 1], m) || m < 0)
           return RedisModule_ReplyWithError(ctx, "ERR SORTBY MAX must be a non-negative integer");
         st.sortby_max = m;
         arg_i += 2;
@@ -743,9 +685,8 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       pending_groupby = nullptr;
       arg_i++;
       if (arg_i >= argc) return RedisModule_ReplyWithError(ctx, "ERR PARAMS requires count");
-      char* ep = nullptr;
-      long pcount = std::strtol(std::string(ArgView(argv[arg_i++])).c_str(), &ep, 10);
-      if (*ep != '\0' || pcount < 0 || arg_i + pcount > argc)
+      long long pcount = 0;
+      if (!ParseAggLong(argv[arg_i++], pcount) || pcount < 0 || arg_i + pcount > argc)
         return RedisModule_ReplyWithError(ctx, "ERR invalid PARAMS count");
       arg_i += static_cast<int>(pcount);
     } else if (MatchArg(kw, "LIMIT")) {
@@ -805,17 +746,50 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     if (MatchArg(ArgView(argv[ci]), "WITHCURSOR")) {
       with_cursor = true;
     } else if (MatchArg(ArgView(argv[ci]), "COUNT") && ci + 1 < argc) {
-      char* ep = nullptr;
-      long cv = std::strtol(std::string(ArgView(argv[ci + 1])).c_str(), &ep, 10);
-      if (*ep == '\0' && cv > 0) cursor_count = static_cast<size_t>(cv);
+      long long cv = 0;
+      if (ParseAggLong(argv[ci + 1], cv) && cv > 0) cursor_count = static_cast<size_t>(cv);
     } else if (MatchArg(ArgView(argv[ci]), "MAXIDLE") && ci + 1 < argc) {
-      char* ep = nullptr;
-      long long mv = std::strtoll(std::string(ArgView(argv[ci + 1])).c_str(), &ep, 10);
-      if (*ep != '\0' || mv < 0) {
+      long long mv = 0;
+      if (!ParseAggLong(argv[ci + 1], mv) || mv < 0) {
         return RedisModule_ReplyWithError(ctx, "ERR MAXIDLE must be a non-negative integer");
       }
       cursor_max_idle_ms = static_cast<int64_t>(mv);
     }
+  }
+
+  // Phase 70: Cluster Two-Phase Map-Reduce FT.AGGREGATE & Coordinator-hosted cursors
+  if (gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    int64_t cluster_timeout_ms =
+        (timeout_ms > 0) ? static_cast<int64_t>(timeout_ms)
+                         : static_cast<int64_t>(GetClusterQueryTimeoutMs());
+
+    auto split = gemini_search::SplitAggPipeline(stages, parsed.has_knn);
+
+    gemini_search::ClusterAggPlan aplan;
+    aplan.is_knn = parsed.has_knn;
+    aplan.knn_k = parsed.knn_k;
+    aplan.with_cursor = with_cursor;
+    aplan.cursor_count = cursor_count;
+    aplan.cursor_max_idle_ms = cursor_max_idle_ms;
+    aplan.timeout_ms = cluster_timeout_ms;
+    aplan.reduce_stages = std::move(split.reduce_stages);
+
+    auto& mreq = aplan.map_req;
+    mreq.index_name = idx_str;
+    mreq.query_str = std::string(ArgView(argv[2]));
+    mreq.params.reserve(params.size());
+    for (const auto& [k, v] : params) mreq.params.emplace_back(k, v);
+    mreq.dialect = qopts.dialect;
+    mreq.remaining_timeout_ms = cluster_timeout_ms;
+    mreq.mode = (split.mode == gemini_search::ClusterAggPlanSplit::Mode::kMapReduceGroupby) ? 1 : 0;
+    mreq.map_stages = std::move(split.map_stages);
+    mreq.groupby_stage = std::move(split.groupby_stage);
+    mreq.max_groups = static_cast<uint64_t>(GetClusterAggMaxGroups());
+    mreq.raw_shard_limit = static_cast<uint64_t>(split.raw_shard_limit);
+    mreq.raw_has_sortby = split.raw_has_sortby;
+    mreq.raw_sortby_keys = std::move(split.raw_sortby_keys);
+
+    return gemini_search::ExecuteClusterAggregate(ctx, std::move(aplan));
   }
 
   // Phase 53: Non-blocking async offload for non-cursor FT.AGGREGATE
@@ -993,24 +967,42 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   // Reply
   if (with_cursor) {
     int64_t now_ms = NowMs();
-    PurgeExpiredCursors(now_ms);
-    size_t idx_cursors = 0;
-    for (const auto& [id, c] : GetCursors()) {
-      if (c.index_name == idx_str) idx_cursors++;
+    uint64_t cid = 0;
+    {
+      std::lock_guard<std::mutex> clk(GetCursorsMutex());
+      PurgeExpiredCursorsLocked(now_ms);
+      size_t idx_cursors = 0;
+      for (const auto& [id, c] : GetCursors()) {
+        if (c.index_name == idx_str) idx_cursors++;
+      }
+      if (idx_cursors >= kMaxCursorsPerIndex) {
+        return RedisModule_ReplyWithError(ctx, "ERR too many active cursors");
+      }
+      cid = NextCursorId();
+      AggCursor cursor;
+      cursor.index_name = idx_str;
+      cursor.rows = std::move(rows);
+      cursor.pos = 0;
+      cursor.batch_size = cursor_count;
+      cursor.last_access_ms = now_ms;
+      cursor.max_idle_ms = cursor_max_idle_ms;
+      GetCursors()[cid] = std::move(cursor);
     }
-    if (idx_cursors >= kMaxCursorsPerIndex) {
-      return RedisModule_ReplyWithError(ctx, "ERR too many active cursors");
+    gemini_search::RpcCursorRequest rreq;
+    rreq.op = gemini_search::kRpcCursorOpRead;
+    rreq.index_name = idx_str;
+    rreq.cursor_id = cid;
+    auto bresp = ExecuteLocalCursorOp(rreq);
+    RedisModule_ReplyWithArray(ctx, 2);
+    RedisModule_ReplyWithArray(ctx, static_cast<long>(bresp.rows.size()));
+    for (const auto& row : bresp.rows) {
+      RedisModule_ReplyWithArray(ctx, static_cast<long>(row.size()) * 2);
+      for (const auto& [k, v] : row) {
+        RedisModule_ReplyWithStringBuffer(ctx, k.data(), k.size());
+        RedisModule_ReplyWithStringBuffer(ctx, v.data(), v.size());
+      }
     }
-    uint64_t cid = NextCursorId();
-    AggCursor cursor;
-    cursor.index_name = idx_str;
-    cursor.rows = std::move(rows);
-    cursor.pos = 0;
-    cursor.batch_size = cursor_count;
-    cursor.last_access_ms = now_ms;
-    cursor.max_idle_ms = cursor_max_idle_ms;
-    GetCursors()[cid] = std::move(cursor);
-    ReplyCursorBatch(ctx, cid, GetCursors()[cid]);
+    RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(bresp.next_cursor_id));
   } else {
     RedisModule_ReplyWithArray(ctx, static_cast<long>(rows.size()));
     for (auto& row : rows) {
@@ -1176,41 +1168,5 @@ bool RunAggregateForProfile(
     }
   }
 
-  for (auto& stage : stages) {
-    if (deadline_ms > 0 && NowMs() > deadline_ms) {
-      error_msg = "ERR query timeout";
-      return false;
-    }
-    switch (stage.type) {
-      case PipelineStageType::kLoad:
-        break;
-      case PipelineStageType::kApply: {
-        ExprNode expr;
-        if (!ParseExpr(stage.apply_expr, expr, error_msg)) return false;
-        for (auto& row : out_rows) row[stage.apply_alias] = EvalExpr(expr, row).AsString();
-        break;
-      }
-      case PipelineStageType::kFilter: {
-        ExprNode expr;
-        if (!ParseExpr(stage.filter_expr, expr, error_msg)) return false;
-        out_rows.erase(
-            std::remove_if(out_rows.begin(), out_rows.end(),
-                           [&](const AggRow& row) { return !EvalExpr(expr, row).Truthy(); }),
-            out_rows.end());
-        break;
-      }
-      case PipelineStageType::kGroupby:
-        if (!stage.groupby_fields.empty() || !stage.reducers.empty()) {
-          ApplyGroupby(out_rows, stage.groupby_fields, stage.reducers);
-        }
-        break;
-      case PipelineStageType::kSortby:
-        ApplySortby(out_rows, stage.sortby_keys, stage.sortby_max);
-        break;
-      case PipelineStageType::kLimit:
-        ApplyLimit(out_rows, stage.limit_offset, stage.limit_count);
-        break;
-    }
-  }
-  return true;
+  return ExecuteAggPipeline(out_rows, stages, deadline_ms, error_msg);
 }

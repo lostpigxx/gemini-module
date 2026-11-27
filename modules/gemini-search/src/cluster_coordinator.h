@@ -102,4 +102,21 @@ struct ClusterProfileSearchPlan {
 
 int ExecuteClusterProfileSearch(RedisModuleCtx* ctx, ClusterProfileSearchPlan plan);
 
+// Phase 70: Distributed FT.AGGREGATE Map-Reduce + Coordinator-hosted cursors
+struct ClusterAggPlan {
+  RpcAggMapRequest map_req;
+  std::vector<PipelineStage> reduce_stages;
+  bool is_knn = false;
+  size_t knn_k = 0;
+  bool with_cursor = false;
+  size_t cursor_count = 1000;
+  int64_t cursor_max_idle_ms = 300000;
+  int64_t timeout_ms = 5000;
+};
+
+int ExecuteClusterAggregate(RedisModuleCtx* ctx, ClusterAggPlan plan);
+
+// Phase 70: Cluster FT.CURSOR cross-node READ/DEL forwarding
+int ExecuteClusterCursor(RedisModuleCtx* ctx, RpcCursorRequest req);
+
 }  // namespace gemini_search

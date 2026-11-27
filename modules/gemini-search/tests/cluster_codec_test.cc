@@ -793,3 +793,145 @@ TEST(ClusterCodecTest, Phase69PayloadsAndClusterHashSlotRoundTrip) {
   FuzzTrunc(sug_req_buf, [](std::string_view v) { RpcSuggestRequest o; return DecodeSuggestRequest(v, o); });
   FuzzTrunc(sug_resp_buf, [](std::string_view v) { RpcSuggestResponse o; return DecodeSuggestResponse(v, o); });
 }
+
+TEST(ClusterCodecTest, Phase70AggMapAndCursorCodecsAndFuzz) {
+  // Cluster cursor ID node tag encoding
+  std::string n0 = "0123456789abcdef0123456789abcdef01234567";
+  std::string n1 = "fedcba9876543210fedcba9876543210fedcba98";
+  uint64_t c0 = MakeClusterCursorId(n0, 42);
+  uint64_t c1 = MakeClusterCursorId(n1, 42);
+  EXPECT_GT(c0, 0u);
+  EXPECT_LT(c0, static_cast<uint64_t>(INT64_MAX));
+  EXPECT_EQ(ExtractCursorNodeTag(c0), ComputeCursorNodeTag(n0));
+  EXPECT_EQ(ExtractCursorNodeTag(c1), ComputeCursorNodeTag(n1));
+  EXPECT_NE(ExtractCursorNodeTag(c0), ExtractCursorNodeTag(c1));
+
+  // RpcAggMapRequest with pre-stages + GROUPBY + all reducer params
+  RpcAggMapRequest areq;
+  areq.index_name = "agg_idx";
+  areq.query_str = "@cat:{tech}";
+  areq.params = {{"qv", std::string("\x00\x01\x02\x03", 4)}};
+  areq.dialect = 2;
+  areq.remaining_timeout_ms = 4000;
+  areq.mode = 1;
+  {
+    PipelineStage st;
+    st.type = PipelineStageType::kApply;
+    st.apply_expr = "@price * 1.1";
+    st.apply_alias = "taxed";
+    areq.map_stages.push_back(st);
+  }
+  areq.groupby_stage.type = PipelineStageType::kGroupby;
+  areq.groupby_stage.groupby_fields = {"cat", "tier"};
+  for (uint8_t f = 0; f <= static_cast<uint8_t>(ReduceFunc::kCountDistinctish); f++) {
+    ReduceOp op;
+    op.func = static_cast<ReduceFunc>(f);
+    op.field = "price";
+    op.alias = "r_" + std::to_string(f);
+    op.quantile_pct = 0.95;
+    op.first_value_by = "ts";
+    op.first_value_desc = true;
+    op.random_sample_count = 5;
+    areq.groupby_stage.reducers.push_back(op);
+  }
+  areq.max_groups = 100000;
+
+  std::string areq_buf;
+  EncodeAggMapRequest(areq, areq_buf);
+  RpcAggMapRequest areq_out;
+  ASSERT_TRUE(DecodeAggMapRequest(areq_buf, areq_out));
+  EXPECT_EQ(areq_out.index_name, areq.index_name);
+  EXPECT_EQ(areq_out.mode, 1u);
+  EXPECT_EQ(areq_out.map_stages.size(), 1u);
+  EXPECT_EQ(areq_out.groupby_stage.reducers.size(), 12u);
+
+  // RpcAggMapResponse mode=1 with all 12 reducer intermediate states (sparse & dense HLL, exact & centroid quantile)
+  RpcAggMapResponse aresp;
+  aresp.ok = true;
+  aresp.mode = 1;
+  PartialGroup pg;
+  pg.group_key = "tech\x01t1";
+  pg.key_fields = {{"cat", "tech"}, {"tier", "t1"}};
+  {
+    PartialReducerState s;
+    s.func = ReduceFunc::kCount;
+    s.count = 42;
+    pg.reducers.push_back(s);
+  }
+  {
+    PartialReducerState s;
+    s.func = ReduceFunc::kStddev;
+    s.count = 100;
+    s.mean = 50.5;
+    s.m2 = 1234.56;
+    pg.reducers.push_back(s);
+  }
+  {
+    PartialReducerState s;
+    s.func = ReduceFunc::kCountDistinctish;
+    s.hll.is_dense = false;
+    s.hll.sparse = {{10, 3}, {500, 7}, {16383, 1}};
+    pg.reducers.push_back(s);
+  }
+  {
+    PartialReducerState s;
+    s.func = ReduceFunc::kQuantile;
+    s.quantile.is_compressed = true;
+    s.quantile.centroids = {{1.5, 10.0}, {50.0, 200.0}, {99.5, 5.0}};
+    pg.reducers.push_back(s);
+  }
+  {
+    PartialReducerState s;
+    s.func = ReduceFunc::kFirstValue;
+    s.has_val = true;
+    s.first_val = "sku:99";
+    s.first_sort_val = 999.0;
+    pg.reducers.push_back(s);
+  }
+  aresp.partial_groups.push_back(std::move(pg));
+
+  std::string aresp_buf;
+  EncodeAggMapResponse(aresp, aresp_buf);
+  RpcAggMapResponse aresp_out;
+  ASSERT_TRUE(DecodeAggMapResponse(aresp_buf, aresp_out));
+  ASSERT_TRUE(aresp_out.ok);
+  ASSERT_EQ(aresp_out.partial_groups.size(), 1u);
+  ASSERT_EQ(aresp_out.partial_groups[0].reducers.size(), 5u);
+  EXPECT_EQ(aresp_out.partial_groups[0].reducers[0].count, 42u);
+  EXPECT_DOUBLE_EQ(aresp_out.partial_groups[0].reducers[1].m2, 1234.56);
+  EXPECT_EQ(aresp_out.partial_groups[0].reducers[2].hll.sparse.size(), 3u);
+  EXPECT_EQ(aresp_out.partial_groups[0].reducers[3].quantile.centroids.size(), 3u);
+  EXPECT_EQ(aresp_out.partial_groups[0].reducers[4].first_val, "sku:99");
+
+  // RpcCursorRequest & RpcCursorResponse
+  RpcCursorRequest creq{kRpcCursorOpRead, "agg_idx", c0, true, 25};
+  std::string creq_buf;
+  EncodeCursorRequest(creq, creq_buf);
+  RpcCursorRequest creq_out;
+  ASSERT_TRUE(DecodeCursorRequest(creq_buf, creq_out));
+  EXPECT_EQ(creq_out.cursor_id, c0);
+  EXPECT_TRUE(creq_out.has_count);
+  EXPECT_EQ(creq_out.count, 25u);
+
+  RpcCursorResponse cresp;
+  cresp.ok = true;
+  cresp.next_cursor_id = c0;
+  cresp.rows = {{{"cat", "tech"}, {"cnt", "10"}}, {{"cat", "books"}, {"cnt", "5"}}};
+  std::string cresp_buf;
+  EncodeCursorResponse(cresp, cresp_buf);
+  RpcCursorResponse cresp_out;
+  ASSERT_TRUE(DecodeCursorResponse(cresp_buf, cresp_out));
+  EXPECT_TRUE(cresp_out.ok);
+  EXPECT_EQ(cresp_out.next_cursor_id, c0);
+  ASSERT_EQ(cresp_out.rows.size(), 2u);
+
+  auto FuzzTrunc = [](const std::string& buf, auto decode_fn) {
+    for (size_t cut = 0; cut < buf.size(); cut++) {
+      EXPECT_FALSE(decode_fn(std::string_view(buf.data(), cut)));
+    }
+  };
+  FuzzTrunc(areq_buf, [](std::string_view v) { RpcAggMapRequest o; return DecodeAggMapRequest(v, o); });
+  FuzzTrunc(aresp_buf, [](std::string_view v) { RpcAggMapResponse o; return DecodeAggMapResponse(v, o); });
+  FuzzTrunc(creq_buf, [](std::string_view v) { RpcCursorRequest o; return DecodeCursorRequest(v, o); });
+  FuzzTrunc(cresp_buf, [](std::string_view v) { RpcCursorResponse o; return DecodeCursorResponse(v, o); });
+}

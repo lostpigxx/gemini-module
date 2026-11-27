@@ -1221,6 +1221,245 @@ def test_search_cluster_phase69(
             sa_proc.kill()
 
 
+def test_search_cluster_phase70(
+    rc: RedisCluster,
+    nodes: list[redis.Redis],
+    ports: list[int],
+    modules: list[str],
+    workdir: str,
+) -> None:
+    """Phase 70: FT.AGGREGATE Two-Phase Map-Reduce (all 12 reducers + pre/post APPLY/FILTER/SORTBY/LIMIT
+    + 2-level GROUPBY + KNN aggregate), cross-node FT.CURSOR READ/DEL & MAXIDLE, CLUSTER_AGG_MAX_GROUPS."""
+    print("[8/8] Testing gemini-search Phase 70 (FT.AGGREGATE 12-reducer Map-Reduce & Cluster FT.CURSOR)...")
+
+    sa_port = find_free_ports(1)[0]
+    sa_dir = os.path.join(workdir, "standalone_p70")
+    sa_proc = start_standalone_node(sa_port, modules, sa_dir)
+    sa = redis.Redis(host="127.0.0.1", port=sa_port, decode_responses=True)
+    sa_raw = redis.Redis(host="127.0.0.1", port=sa_port, decode_responses=False)
+    rc_raw = RedisCluster(host="127.0.0.1", port=ports[0], decode_responses=False)
+    nodes_raw = [redis.Redis(host="127.0.0.1", port=p, decode_responses=False) for p in ports]
+
+    def rows_to_dicts(raw_rows):
+        out = []
+        for row in raw_rows:
+            d = {}
+            for i in range(0, len(row), 2):
+                k = row[i].decode() if isinstance(row[i], bytes) else str(row[i])
+                if k == "emb":
+                    d[k] = row[i + 1]
+                else:
+                    v = row[i + 1].decode() if isinstance(row[i + 1], bytes) else str(row[i + 1])
+                    d[k] = v
+            out.append(d)
+        return out
+
+    try:
+        create_cmd = [
+            "FT.CREATE", "p70_agg", "ON", "HASH", "PREFIX", "1", "p70:",
+            "SCHEMA",
+            "cat", "TAG",
+            "region", "TAG",
+            "user", "TAG",
+            "sku", "TAG",
+            "price", "NUMERIC", "SORTABLE",
+            "qty", "NUMERIC",
+            "rank", "NUMERIC",
+            "emb", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "8", "DISTANCE_METRIC", "L2",
+        ]
+        assert sa.execute_command(*create_cmd) == "OK"
+        assert nodes[0].execute_command(*create_cmd) == "OK"
+
+        rng = random.Random(707070)
+        cats = ["electronics", "books", "home", "sports", "toys", "cloud"]
+        regions = ["us", "eu", "apac"]
+        vecs = {}
+        for i in range(1200):
+            k = f"p70:{i:04d}"
+            v = [rng.uniform(-1.0, 1.0) for _ in range(8)]
+            vblob = struct.pack("<8f", *v)
+            vecs[i] = vblob
+            mapping = {
+                b"cat": cats[i % len(cats)].encode(),
+                b"region": regions[(i // len(cats)) % len(regions)].encode(),
+                b"user": f"u_{i % 80}".encode(),
+                b"sku": f"sku_{i:04d}".encode(),
+                b"price": str(round(10.0 + (i * 13.7) % 500.0, 2)).encode(),
+                b"qty": str(1 + (i % 9)).encode(),
+                b"rank": str((i * 41) % 5000).encode(),
+                b"emb": vblob,
+            }
+            sa_raw.hset(k, mapping=mapping)
+            rc_raw.hset(k, mapping=mapping)
+
+        # ── 1. All 12 REDUCE functions + Pre-APPLY/Pre-FILTER + Post-APPLY/Post-FILTER/SORTBY/LIMIT ──
+        full_agg_cmd = [
+            "FT.AGGREGATE", "p70_agg", "*",
+            "APPLY", "@price * @qty", "AS", "rev",
+            "FILTER", "@qty >= 2",
+            "GROUPBY", "1", "@cat",
+            "REDUCE", "COUNT", "0", "AS", "cnt",
+            "REDUCE", "SUM", "1", "@rev", "AS", "sum_rev",
+            "REDUCE", "AVG", "1", "@price", "AS", "avg_p",
+            "REDUCE", "MIN", "1", "@price", "AS", "min_p",
+            "REDUCE", "MAX", "1", "@price", "AS", "max_p",
+            "REDUCE", "STDDEV", "1", "@price", "AS", "std_p",
+            "REDUCE", "COUNT_DISTINCT", "1", "@user", "AS", "cd_u",
+            "REDUCE", "COUNT_DISTINCTISH", "1", "@user", "AS", "cdi_u",
+            "REDUCE", "TOLIST", "1", "@sku", "AS", "skus",
+            "REDUCE", "FIRST_VALUE", "4", "@sku", "BY", "@rank", "DESC", "AS", "top_sku",
+            "REDUCE", "QUANTILE", "2", "@price", "0.90", "AS", "p90",
+            "REDUCE", "RANDOM_SAMPLE", "2", "@sku", "5", "AS", "samp",
+            "APPLY", "@sum_rev / @cnt", "AS", "rev_per_doc",
+            "FILTER", "@cnt > 50",
+            "SORTBY", "2", "@cat", "ASC",
+        ]
+        exp_full = rows_to_dicts(sa.execute_command(*full_agg_cmd))
+        got_full = rows_to_dicts(nodes[1].execute_command(*full_agg_cmd))
+        assert len(got_full) == len(exp_full) == 6, f"Row count mismatch: {len(got_full)} vs {len(exp_full)}"
+        for g, e in zip(got_full, exp_full):
+            assert g["cat"] == e["cat"]
+            assert g["cnt"] == e["cnt"]
+            assert abs(float(g["sum_rev"]) - float(e["sum_rev"])) <= 1e-3
+            assert abs(float(g["avg_p"]) - float(e["avg_p"])) <= 1e-4
+            assert abs(float(g["min_p"]) - float(e["min_p"])) <= 1e-5
+            assert abs(float(g["max_p"]) - float(e["max_p"])) <= 1e-5
+            assert abs(float(g["std_p"]) - float(e["std_p"])) <= 1e-3
+            assert g["cd_u"] == e["cd_u"]
+            assert abs(float(g["cdi_u"]) - float(e["cd_u"])) <= max(4.0, float(e["cd_u"]) * 0.05)
+            assert sorted(g["skus"].split(",")) == sorted(e["skus"].split(","))
+            assert g["top_sku"] == e["top_sku"]
+            assert abs(float(g["p90"]) - float(e["p90"])) <= 1e-5
+            assert abs(float(g["rev_per_doc"]) - float(e["rev_per_doc"])) <= 1e-3
+            samp_items = g["samp"].split(",")
+            sku_pool = set(e["skus"].split(","))
+            assert len(samp_items) == 5 and all(s in sku_pool for s in samp_items)
+
+        # ── 2. Pure projection / APPLY / FILTER / SORTBY / LIMIT without GROUPBY ──
+        raw_cmd = [
+            "FT.AGGREGATE", "p70_agg", "@cat:{electronics|books}",
+            "LOAD", "3", "@sku", "@price", "@qty",
+            "APPLY", "@price * @qty", "AS", "total",
+            "FILTER", "@total > 1000",
+            "SORTBY", "4", "@total", "DESC", "@sku", "ASC",
+            "LIMIT", "5", "15",
+        ]
+        exp_raw = rows_to_dicts(sa_raw.execute_command(*raw_cmd))
+        got_raw = rows_to_dicts(nodes_raw[2].execute_command(*raw_cmd))
+        assert len(got_raw) == len(exp_raw) == 15
+        for g, e in zip(got_raw, exp_raw):
+            assert g["sku"] == e["sku"] and abs(float(g["total"]) - float(e["total"])) <= 1e-4
+
+        # ── 3. Multi-level chained GROUPBY (GROUPBY cat,region -> GROUPBY cat) ──
+        chained_cmd = [
+            "FT.AGGREGATE", "p70_agg", "*",
+            "GROUPBY", "2", "@cat", "@region",
+            "REDUCE", "SUM", "1", "@price", "AS", "reg_sum",
+            "GROUPBY", "1", "@cat",
+            "REDUCE", "MAX", "1", "@reg_sum", "AS", "best_reg_sum",
+            "SORTBY", "2", "@cat", "ASC",
+        ]
+        exp_ch = rows_to_dicts(sa.execute_command(*chained_cmd))
+        got_ch = rows_to_dicts(nodes[0].execute_command(*chained_cmd))
+        assert len(got_ch) == len(exp_ch) == 6
+        for g, e in zip(got_ch, exp_ch):
+            assert g["cat"] == e["cat"]
+            assert abs(float(g["best_reg_sum"]) - float(e["best_reg_sum"])) <= 1e-3
+
+        # ── 4. KNN inside FT.AGGREGATE with GROUPBY ──
+        knn_agg_cmd = [
+            "FT.AGGREGATE", "p70_agg", "*=>[KNN 25 @emb $qv AS dist]",
+            "PARAMS", "2", "qv", vecs[42],
+            "GROUPBY", "1", "@cat",
+            "REDUCE", "COUNT", "0", "AS", "cnt",
+            "REDUCE", "AVG", "1", "@dist", "AS", "avg_d",
+            "SORTBY", "4", "@cnt", "DESC", "@cat", "ASC",
+            "DIALECT", "2",
+        ]
+        exp_knn = rows_to_dicts(sa_raw.execute_command(*knn_agg_cmd))
+        got_knn = rows_to_dicts(nodes_raw[1].execute_command(*knn_agg_cmd))
+        assert len(got_knn) == len(exp_knn)
+        for g, e in zip(got_knn, exp_knn):
+            assert g["cat"] == e["cat"] and g["cnt"] == e["cnt"]
+            assert abs(float(g["avg_d"]) - float(e["avg_d"])) <= 1e-5
+
+        # ── 5. Cluster FT.CURSOR cross-node READ / DEL & MAXIDLE expiry ──
+        cur_cmd = [
+            "FT.AGGREGATE", "p70_agg", "*",
+            "GROUPBY", "1", "@cat",
+            "REDUCE", "COUNT", "0", "AS", "cnt",
+            "SORTBY", "2", "@cat", "ASC",
+            "WITHCURSOR", "COUNT", "2", "MAXIDLE", "5000",
+        ]
+        # Open cursor on node 0
+        first_batch, cid = nodes[0].execute_command(*cur_cmd)
+        assert cid > 0 and len(first_batch) == 2
+        collected = rows_to_dicts(first_batch)
+        # Read batch 2 from node 1 (transparent cross-node RPC forward to node 0)
+        b2, cid2 = nodes[1].execute_command("FT.CURSOR", "READ", "p70_agg", str(cid), "COUNT", "2")
+        assert cid2 == cid and len(b2) == 2
+        collected.extend(rows_to_dicts(b2))
+        # Read batch 3 from node 2 -> exhausts cursor -> returns next_cid == 0
+        b3, cid3 = nodes[2].execute_command("FT.CURSOR", "READ", "p70_agg", str(cid), "COUNT", "5")
+        assert cid3 == 0 and len(b3) == 2
+        collected.extend(rows_to_dicts(b3))
+        assert [r["cat"] for r in collected] == sorted(cats)
+        assert all(int(r["cnt"]) == 200 for r in collected)
+
+        # Cross-node FT.CURSOR DEL
+        _, del_cid = nodes[0].execute_command(*cur_cmd)
+        assert del_cid > 0
+        assert nodes[2].execute_command("FT.CURSOR", "DEL", "p70_agg", str(del_cid)) == "OK"
+        try:
+            nodes[1].execute_command("FT.CURSOR", "READ", "p70_agg", str(del_cid))
+            raise AssertionError("Expected cursor not found after cross-node DEL")
+        except ResponseError as e:
+            assert "cursor not found" in str(e)
+
+        # Cross-node MAXIDLE expiry
+        exp_cmd = cur_cmd[:-1] + ["150"]  # MAXIDLE 150ms
+        _, exp_cid = nodes[0].execute_command(*exp_cmd)
+        assert exp_cid > 0
+        time.sleep(0.25)
+        try:
+            nodes[1].execute_command("FT.CURSOR", "READ", "p70_agg", str(exp_cid))
+            raise AssertionError("Expected cursor not found after MAXIDLE expiry")
+        except ResponseError as e:
+            assert "cursor not found" in str(e)
+
+        # ── 6. CLUSTER_AGG_MAX_GROUPS protection ──
+        try:
+            for n in nodes:
+                assert n.execute_command("FT.CONFIG", "SET", "CLUSTER_AGG_MAX_GROUPS", "10") == "OK"
+            try:
+                nodes[0].execute_command(
+                    "FT.AGGREGATE", "p70_agg", "*", "GROUPBY", "1", "@sku", "REDUCE", "COUNT", "0", "AS", "c"
+                )
+                raise AssertionError("Expected CLUSTER_AGG_MAX_GROUPS error")
+            except ResponseError as e:
+                assert "CLUSTER_AGG_MAX_GROUPS" in str(e), f"Unexpected error: {e}"
+        finally:
+            for n in nodes:
+                n.execute_command("FT.CONFIG", "SET", "CLUSTER_AGG_MAX_GROUPS", "100000")
+
+        assert nodes[0].execute_command("FT.DROPINDEX", "p70_agg") == "OK"
+        print(
+            "  PASS: gemini-search Phase 70 (FT.AGGREGATE all 12 reducers + pre/post pipeline + 2-level GROUPBY "
+            "+ KNN aggregate + cross-node FT.CURSOR READ/DEL/MAXIDLE + CLUSTER_AGG_MAX_GROUPS)"
+        )
+    finally:
+        for nr in nodes_raw:
+            nr.close()
+        rc_raw.close()
+        sa_raw.close()
+        sa.close()
+        sa_proc.terminate()
+        try:
+            sa_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            sa_proc.kill()
+
+
 def main() -> int:
     bloom_so = sys.argv[1] if len(sys.argv) > 1 else "./build/redis_bloom.so"
     json_so = sys.argv[2] if len(sys.argv) > 2 else "./build/redis_json.so"
@@ -1254,6 +1493,7 @@ def main() -> int:
             test_search_cluster_phase67(rc, nodes, procs, ports, modules, workdir)
             test_search_cluster_phase68_golden_parity(rc, nodes, ports, modules, workdir)
             test_search_cluster_phase69(rc, nodes, ports, modules, workdir)
+            test_search_cluster_phase70(rc, nodes, ports, modules, workdir)
         print("\nAll Redis 7 Cluster integration tests PASSED!")
         return 0
     finally:

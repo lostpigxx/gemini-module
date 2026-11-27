@@ -5,6 +5,7 @@
 #include "search_executor.h"
 
 #include <cstdint>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
@@ -28,6 +29,7 @@ std::unordered_map<std::string, std::shared_ptr<IndexEntry>>& GetIndices();
 std::shared_mutex& GetIndicesMutex();
 std::shared_mutex& GetTermDictsMutex();
 std::shared_mutex& GetSuggestDictsMutex();
+std::mutex& GetCursorsMutex();
 SearchExecutor& GetSearchExecutor();
 std::unordered_map<uint64_t, AggCursor>& GetCursors();
 uint64_t NextCursorId();
@@ -53,6 +55,7 @@ bool IsOnTimeoutReturn();
 uint64_t GetTotalCursorsCreated();
 uint64_t GetTotalCursorsExpired();
 void PurgeExpiredCursors(int64_t now_ms);
+void PurgeExpiredCursorsLocked(int64_t now_ms);
 
 // Shared argument & indexing helpers (defined in search_state.cc)
 bool TryParseDouble(const std::string& s, double& out);
@@ -153,6 +156,10 @@ bool ApplyLocalSuggestCommand(const std::string& cmd_name,
                               const std::vector<std::string>& args,
                               bool& out_mutated,
                               gemini_search::RpcSuggestResponse& resp);
+gemini_search::RpcAggMapResponse ExecuteLocalAggMap(
+    const gemini_search::RpcAggMapRequest& req);
+gemini_search::RpcCursorResponse ExecuteLocalCursorOp(
+    const gemini_search::RpcCursorRequest& req);
 
 // Shared FT.INFO reply formatter (used by standalone and cluster FT.INFO)
 void ReplyWithIndexInfo(

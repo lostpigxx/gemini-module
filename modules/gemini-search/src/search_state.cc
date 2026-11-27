@@ -17,6 +17,7 @@ static std::unordered_map<std::string, std::shared_ptr<IndexEntry>> g_indices;
 static std::shared_mutex g_indices_mutex;
 static std::shared_mutex g_term_dicts_mutex;
 static std::shared_mutex g_suggest_dicts_mutex;
+static std::mutex g_cursors_mutex;
 static SearchExecutor g_executor(2);
 static std::unordered_map<std::string, std::string> g_aliases;
 static std::unordered_map<uint64_t, AggCursor> g_cursors;
@@ -52,6 +53,7 @@ std::unordered_map<std::string, std::shared_ptr<IndexEntry>>& GetIndices() { ret
 std::shared_mutex& GetIndicesMutex() { return g_indices_mutex; }
 std::shared_mutex& GetTermDictsMutex() { return g_term_dicts_mutex; }
 std::shared_mutex& GetSuggestDictsMutex() { return g_suggest_dicts_mutex; }
+std::mutex& GetCursorsMutex() { return g_cursors_mutex; }
 SearchExecutor& GetSearchExecutor() { return g_executor; }
 std::unordered_map<uint64_t, AggCursor>& GetCursors() { return g_cursors; }
 uint64_t NextCursorId() {
@@ -216,7 +218,7 @@ bool IsOnTimeoutReturn() {
   return false;
 }
 
-void PurgeExpiredCursors(int64_t now_ms) {
+void PurgeExpiredCursorsLocked(int64_t now_ms) {
   for (auto it = g_cursors.begin(); it != g_cursors.end(); ) {
     if (it->second.max_idle_ms > 0 && it->second.last_access_ms > 0 &&
         now_ms - it->second.last_access_ms >= it->second.max_idle_ms) {
@@ -226,6 +228,11 @@ void PurgeExpiredCursors(int64_t now_ms) {
       ++it;
     }
   }
+}
+
+void PurgeExpiredCursors(int64_t now_ms) {
+  std::lock_guard<std::mutex> lk(g_cursors_mutex);
+  PurgeExpiredCursorsLocked(now_ms);
 }
 
 std::string ResolveAlias(const std::string& name) {

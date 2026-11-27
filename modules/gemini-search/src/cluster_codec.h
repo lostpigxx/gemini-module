@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cluster_agg_reduce.h"
 #include "index_spec.h"
 
 #include <cstddef>
@@ -109,6 +110,11 @@ uint32_t ComputeCrc32(std::string_view data);
 
 // Standard Redis Cluster CRC16-CCITT hash slot (0..16383) with {hashtag} support
 uint16_t ComputeClusterHashSlot(std::string_view key);
+
+// Phase 70: Cluster cursor ID encoding (24-bit coordinator node tag + 36-bit local sequence)
+uint32_t ComputeCursorNodeTag(std::string_view node_id);
+uint64_t MakeClusterCursorId(std::string_view node_id, uint64_t local_seq);
+uint32_t ExtractCursorNodeTag(uint64_t cursor_id);
 
 // Little-endian binary writer
 class BinaryWriter {
@@ -528,5 +534,65 @@ void EncodeSuggestRequest(const RpcSuggestRequest& req, std::string& out);
 bool DecodeSuggestRequest(std::string_view data, RpcSuggestRequest& out);
 void EncodeSuggestResponse(const RpcSuggestResponse& resp, std::string& out);
 bool DecodeSuggestResponse(std::string_view data, RpcSuggestResponse& out);
+
+// Phase 70: Distributed FT.AGGREGATE Map-Reduce payloads
+struct RpcAggRawRow {
+  std::string doc_id;
+  bool has_knn_dist = false;
+  double knn_dist = 0.0;
+  std::vector<std::pair<std::string, std::string>> fields;
+};
+
+struct RpcAggMapRequest {
+  std::string index_name;
+  std::string query_str;
+  std::vector<std::pair<std::string, std::string>> params;
+  int32_t dialect = 2;
+  int64_t remaining_timeout_ms = 5000;
+  uint8_t mode = 0;  // 0 = kRawRows, 1 = kMapReduceGroupby
+  std::vector<PipelineStage> map_stages;
+  PipelineStage groupby_stage;
+  uint64_t max_groups = 100000;
+  uint64_t raw_shard_limit = 0;
+  bool raw_has_sortby = false;
+  std::vector<std::pair<std::string, bool>> raw_sortby_keys;
+};
+
+struct RpcAggMapResponse {
+  bool ok = false;
+  std::string error_msg;
+  uint8_t mode = 0;  // 0 = kRawRows, 1 = kMapReduceGroupby
+  std::vector<RpcAggRawRow> raw_rows;
+  std::vector<PartialGroup> partial_groups;
+};
+
+void EncodeAggMapRequest(const RpcAggMapRequest& req, std::string& out);
+bool DecodeAggMapRequest(std::string_view data, RpcAggMapRequest& out);
+void EncodeAggMapResponse(const RpcAggMapResponse& resp, std::string& out);
+bool DecodeAggMapResponse(std::string_view data, RpcAggMapResponse& out);
+
+// Phase 70: Cluster FT.CURSOR cross-node forwarding payloads
+constexpr uint8_t kRpcCursorOpRead = 0;
+constexpr uint8_t kRpcCursorOpDel = 1;
+
+struct RpcCursorRequest {
+  uint8_t op = kRpcCursorOpRead;
+  std::string index_name;
+  uint64_t cursor_id = 0;
+  bool has_count = false;
+  uint64_t count = 0;
+};
+
+struct RpcCursorResponse {
+  bool ok = false;
+  std::string error_msg;
+  uint64_t next_cursor_id = 0;
+  std::vector<std::vector<std::pair<std::string, std::string>>> rows;
+};
+
+void EncodeCursorRequest(const RpcCursorRequest& req, std::string& out);
+bool DecodeCursorRequest(std::string_view data, RpcCursorRequest& out);
+void EncodeCursorResponse(const RpcCursorResponse& resp, std::string& out);
+bool DecodeCursorResponse(std::string_view data, RpcCursorResponse& out);
 
 }  // namespace gemini_search

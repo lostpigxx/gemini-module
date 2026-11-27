@@ -1929,6 +1929,195 @@ int ClusterProfileReplyCallback(RedisModuleCtx* ctx, RedisModuleString** /*argv*
   return REDISMODULE_OK;
 }
 
+// ============================================================================
+// Phase 70: FT.AGGREGATE Two-Phase Map-Reduce & FT.CURSOR Forwarding Handlers
+// ============================================================================
+
+void HandleAggMapRequest(const RpcFrame& req_frame, const std::string& /*peer_ip*/,
+                         ClusterRpcServer::ResponseSender send_resp) {
+  RpcAggMapRequest req;
+  if (!DecodeAggMapRequest(req_frame.payload, req)) {
+    RpcAggMapResponse resp;
+    resp.ok = false;
+    resp.error_msg = "malformed AggMap request";
+    std::string out;
+    EncodeAggMapResponse(resp, out);
+    send_resp(RpcOpCode::kRpcAggMapResp, kRpcFlagNone, std::move(out));
+    return;
+  }
+  GetSearchExecutor().Submit(
+      [req = std::move(req), send_resp = std::move(send_resp)]() mutable {
+        RpcAggMapResponse resp = ExecuteLocalAggMap(req);
+        std::string out;
+        EncodeAggMapResponse(resp, out);
+        send_resp(RpcOpCode::kRpcAggMapResp, kRpcFlagNone, std::move(out));
+      });
+}
+
+void HandleCursorRequest(const RpcFrame& req_frame, const std::string& /*peer_ip*/,
+                         ClusterRpcServer::ResponseSender send_resp) {
+  RpcCursorRequest req;
+  if (!DecodeCursorRequest(req_frame.payload, req)) {
+    RpcCursorResponse resp;
+    resp.ok = false;
+    resp.error_msg = "malformed Cursor request";
+    std::string out;
+    EncodeCursorResponse(resp, out);
+    send_resp(RpcOpCode::kRpcCursorResp, kRpcFlagNone, std::move(out));
+    return;
+  }
+  GetSearchExecutor().Submit(
+      [req = std::move(req), send_resp = std::move(send_resp)]() mutable {
+        RpcCursorResponse resp = ExecuteLocalCursorOp(req);
+        std::string out;
+        EncodeCursorResponse(resp, out);
+        send_resp(RpcOpCode::kRpcCursorResp, kRpcFlagNone, std::move(out));
+      });
+}
+
+struct ClusterAggContext {
+  RedisModuleBlockedClient* bc = nullptr;
+  ClusterAggPlan plan;
+  std::vector<SearchShardEndpoint> shards;
+  int64_t start_ms = 0;
+  bool on_timeout_return = false;
+
+  std::mutex mu;
+  size_t pending = 0;
+  bool cancelled = false;
+  bool finished = false;
+  std::string error_msg;
+
+  struct ShardAggResult {
+    uint32_t shard_idx = 0;
+    RpcAggMapResponse resp;
+  };
+  std::vector<ShardAggResult> shard_results;
+
+  // Final post-Reduce rows
+  std::vector<AggRow> final_rows;
+};
+
+BlockedRegistry<ClusterAggContext> g_active_aggs;
+
+void ClusterAggDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
+  g_active_aggs.OnDisconnect(bc);
+}
+
+int ClusterAggReplyCallback(RedisModuleCtx* ctx, RedisModuleString** /*argv*/, int /*argc*/) {
+  auto* holder = static_cast<std::shared_ptr<ClusterAggContext>*>(
+      RedisModule_GetBlockedClientPrivateData(ctx));
+  if (!holder || !(*holder)) {
+    return RedisModule_ReplyWithError(ctx, "ERR internal cluster aggregate state missing");
+  }
+  auto& actx = **holder;
+  std::lock_guard<std::mutex> lk(actx.mu);
+  if (!actx.error_msg.empty()) {
+    return RedisModule_ReplyWithError(ctx, actx.error_msg.c_str());
+  }
+
+  if (actx.plan.with_cursor) {
+    int64_t now_ms = NowMs();
+    uint64_t cid = 0;
+    {
+      std::lock_guard<std::mutex> clk(GetCursorsMutex());
+      PurgeExpiredCursorsLocked(now_ms);
+      size_t idx_cursors = 0;
+      for (const auto& [id, c] : GetCursors()) {
+        if (c.index_name == actx.plan.map_req.index_name) idx_cursors++;
+      }
+      if (idx_cursors >= kMaxCursorsPerIndex) {
+        return RedisModule_ReplyWithError(ctx, "ERR too many active cursors");
+      }
+      cid = MakeClusterCursorId(ClusterManager::Instance().MyNodeId(), NextCursorId());
+      AggCursor cursor;
+      cursor.index_name = actx.plan.map_req.index_name;
+      cursor.rows = std::move(actx.final_rows);
+      cursor.pos = 0;
+      cursor.batch_size = actx.plan.cursor_count;
+      cursor.last_access_ms = now_ms;
+      cursor.max_idle_ms = actx.plan.cursor_max_idle_ms;
+      GetCursors()[cid] = std::move(cursor);
+    }
+
+    RpcCursorRequest rreq;
+    rreq.op = kRpcCursorOpRead;
+    rreq.index_name = actx.plan.map_req.index_name;
+    rreq.cursor_id = cid;
+    auto bresp = ExecuteLocalCursorOp(rreq);
+    RedisModule_ReplyWithArray(ctx, 2);
+    RedisModule_ReplyWithArray(ctx, static_cast<long>(bresp.rows.size()));
+    for (const auto& row : bresp.rows) {
+      RedisModule_ReplyWithArray(ctx, static_cast<long>(row.size()) * 2);
+      for (const auto& [k, v] : row) {
+        RedisModule_ReplyWithStringBuffer(ctx, k.data(), k.size());
+        RedisModule_ReplyWithStringBuffer(ctx, v.data(), v.size());
+      }
+    }
+    RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(bresp.next_cursor_id));
+    return REDISMODULE_OK;
+  }
+
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(actx.final_rows.size()));
+  for (const auto& row : actx.final_rows) {
+    std::vector<std::string> keys;
+    keys.reserve(row.size());
+    for (const auto& [k, v] : row) keys.push_back(k);
+    std::sort(keys.begin(), keys.end());
+    RedisModule_ReplyWithArray(ctx, static_cast<long>(keys.size()) * 2);
+    for (const auto& k : keys) {
+      RedisModule_ReplyWithStringBuffer(ctx, k.data(), k.size());
+      const std::string& val = row.at(k);
+      RedisModule_ReplyWithStringBuffer(ctx, val.data(), val.size());
+    }
+  }
+  return REDISMODULE_OK;
+}
+
+struct ClusterCursorContext {
+  RedisModuleBlockedClient* bc = nullptr;
+  uint8_t op = kRpcCursorOpRead;
+
+  std::mutex mu;
+  bool cancelled = false;
+  bool finished = false;
+  std::string error_msg;
+  RpcCursorResponse resp;
+};
+
+BlockedRegistry<ClusterCursorContext> g_active_cursors;
+
+void ClusterCursorDisconnectCallback(RedisModuleCtx* /*ctx*/, RedisModuleBlockedClient* bc) {
+  g_active_cursors.OnDisconnect(bc);
+}
+
+int ClusterCursorReplyCallback(RedisModuleCtx* ctx, RedisModuleString** /*argv*/, int /*argc*/) {
+  auto* holder = static_cast<std::shared_ptr<ClusterCursorContext>*>(
+      RedisModule_GetBlockedClientPrivateData(ctx));
+  if (!holder || !(*holder)) {
+    return RedisModule_ReplyWithError(ctx, "ERR internal cluster cursor state missing");
+  }
+  auto& cctx = **holder;
+  std::lock_guard<std::mutex> lk(cctx.mu);
+  if (!cctx.error_msg.empty()) {
+    return RedisModule_ReplyWithError(ctx, cctx.error_msg.c_str());
+  }
+  if (cctx.op == kRpcCursorOpDel) {
+    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+  }
+  RedisModule_ReplyWithArray(ctx, 2);
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(cctx.resp.rows.size()));
+  for (const auto& row : cctx.resp.rows) {
+    RedisModule_ReplyWithArray(ctx, static_cast<long>(row.size()) * 2);
+    for (const auto& [k, v] : row) {
+      RedisModule_ReplyWithStringBuffer(ctx, k.data(), k.size());
+      RedisModule_ReplyWithStringBuffer(ctx, v.data(), v.size());
+    }
+  }
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(cctx.resp.next_cursor_id));
+  return REDISMODULE_OK;
+}
+
 }  // namespace
 
 void RegisterClusterCoordinatorHandlers() {
@@ -1948,6 +2137,8 @@ void RegisterClusterCoordinatorHandlers() {
   mgr.RegisterRpcHandler(RpcOpCode::kRpcTagVals, HandleTagValsRequest);
   mgr.RegisterRpcHandler(RpcOpCode::kRpcSpellCheck, HandleSpellCheckRequest);
   mgr.RegisterRpcHandler(RpcOpCode::kRpcSuggest, HandleSuggestRequest);
+  mgr.RegisterRpcHandler(RpcOpCode::kRpcAggMap, HandleAggMapRequest);
+  mgr.RegisterRpcHandler(RpcOpCode::kRpcCursor, HandleCursorRequest);
 }
 
 int ExecuteClusterDdl(RedisModuleCtx* ctx, RpcOpCode opcode, const std::string& cmd_name,
@@ -2886,6 +3077,244 @@ int ExecuteClusterProfileSearch(RedisModuleCtx* ctx, ClusterProfileSearchPlan pl
           });
     }
   }
+  return REDISMODULE_OK;
+}
+
+int ExecuteClusterAggregate(RedisModuleCtx* ctx, ClusterAggPlan plan) {
+  auto& mgr = ClusterManager::Instance();
+  bool on_timeout_return = IsOnTimeoutReturn();
+  std::vector<SearchShardEndpoint> shards;
+  std::string err;
+  if (!CollectHealthyMasterShards(ctx, on_timeout_return, shards, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
+  }
+  if (shards.empty()) {
+    if (plan.with_cursor) {
+      RedisModule_ReplyWithArray(ctx, 2);
+      RedisModule_ReplyWithArray(ctx, 0);
+      RedisModule_ReplyWithLongLong(ctx, 0);
+    } else {
+      RedisModule_ReplyWithArray(ctx, 0);
+    }
+    return REDISMODULE_OK;
+  }
+
+  auto actx = std::make_shared<ClusterAggContext>();
+  actx->plan = std::move(plan);
+  actx->shards = std::move(shards);
+  actx->start_ms = ClusterNowMs();
+  actx->on_timeout_return = on_timeout_return;
+  actx->pending = actx->shards.size();
+  actx->shard_results.reserve(actx->shards.size());
+
+  RedisModuleBlockedClient* bc = RedisModule_BlockClient(
+      ctx, ClusterAggReplyCallback, GenericTimeoutCallback, FreeSharedHolder<ClusterAggContext>, 0);
+  if (!bc) {
+    return RedisModule_ReplyWithError(ctx, "ERR failed to block client for cluster aggregate");
+  }
+  actx->bc = bc;
+  g_active_aggs.Register(bc, actx);
+  if (RedisModule_SetDisconnectCallback) {
+    RedisModule_SetDisconnectCallback(bc, ClusterAggDisconnectCallback);
+  }
+
+  std::string encoded;
+  EncodeAggMapRequest(actx->plan.map_req, encoded);
+  int64_t timeout_ms = actx->plan.timeout_ms > 0 ? actx->plan.timeout_ms : 5000;
+
+  auto OnDone = [](const std::shared_ptr<ClusterAggContext>& c, uint32_t sidx,
+                   const std::string& nid, bool ok, const std::string& e,
+                   RpcAggMapResponse&& resp) {
+    RedisModuleBlockedClient* to_unblock = nullptr;
+    {
+      std::lock_guard<std::mutex> lk(c->mu);
+      if (c->finished || c->cancelled) return;
+      if (!ok || !resp.ok) {
+        if (!c->on_timeout_return && c->error_msg.empty()) {
+          std::string reason = !ok ? e : resp.error_msg;
+          c->error_msg = "ERR cluster aggregate shard failed (" +
+                         (nid.size() > 8 ? nid.substr(0, 8) : nid) + "): " + reason;
+        }
+      } else {
+        c->shard_results.push_back({sidx, std::move(resp)});
+      }
+
+      if (c->pending > 0) c->pending--;
+      if (c->pending == 0 && !c->finished) {
+        if (c->error_msg.empty()) {
+          // Sort shard results deterministically by shard_idx
+          std::sort(c->shard_results.begin(), c->shard_results.end(),
+                    [](const auto& a, const auto& b) { return a.shard_idx < b.shard_idx; });
+
+          std::vector<AggRow> rows;
+          std::string reduce_err;
+          if (c->plan.map_req.mode == 1) {
+            std::vector<std::vector<PartialGroup>> all_groups;
+            all_groups.reserve(c->shard_results.size());
+            for (auto& sr : c->shard_results) {
+              all_groups.push_back(std::move(sr.resp.partial_groups));
+            }
+            if (!MergeAndFinalizeGroups(all_groups, c->plan.map_req.groupby_stage.reducers,
+                                        static_cast<size_t>(c->plan.map_req.max_groups), rows,
+                                        reduce_err)) {
+              c->error_msg = std::move(reduce_err);
+            }
+          } else {
+            // Raw rows mode: deduplicate by doc_id (for live MIGRATE safety), optional KNN top-K
+            struct RawItem {
+              std::string doc_id;
+              bool has_knn_dist = false;
+              double knn_dist = 0.0;
+              AggRow row;
+            };
+            std::unordered_set<std::string> seen_ids;
+            std::vector<RawItem> items;
+            for (auto& sr : c->shard_results) {
+              for (auto& rr : sr.resp.raw_rows) {
+                if (!rr.doc_id.empty() && !seen_ids.insert(rr.doc_id).second) continue;
+                RawItem item;
+                item.doc_id = std::move(rr.doc_id);
+                item.has_knn_dist = rr.has_knn_dist;
+                item.knn_dist = rr.knn_dist;
+                for (auto& [k, v] : rr.fields) item.row[k] = std::move(v);
+                items.push_back(std::move(item));
+              }
+            }
+            if (c->plan.is_knn && c->plan.knn_k > 0) {
+              std::sort(items.begin(), items.end(), [](const RawItem& a, const RawItem& b) {
+                if (a.knn_dist != b.knn_dist) return a.knn_dist < b.knn_dist;
+                return a.doc_id < b.doc_id;
+              });
+              if (items.size() > c->plan.knn_k) items.resize(c->plan.knn_k);
+            }
+            rows.reserve(items.size());
+            for (auto& it : items) rows.push_back(std::move(it.row));
+          }
+
+          if (c->error_msg.empty() && !c->plan.reduce_stages.empty()) {
+            int64_t deadline_ms =
+                (c->plan.timeout_ms > 0) ? (c->start_ms + c->plan.timeout_ms) : 0;
+            if (!ExecuteAggPipelineStages(rows, c->plan.reduce_stages, deadline_ms, reduce_err)) {
+              c->error_msg = std::move(reduce_err);
+            }
+          }
+          if (c->error_msg.empty()) {
+            c->final_rows = std::move(rows);
+          }
+        }
+        c->finished = true;
+        to_unblock = c->bc;
+        c->bc = nullptr;
+      }
+    }
+    g_active_aggs.Unblock(c, to_unblock);
+  };
+
+  for (const auto& ep : actx->shards) {
+    if (ep.is_myself) {
+      GetSearchExecutor().Submit([actx, sidx = ep.shard_idx, nid = ep.node_id, OnDone]() {
+        RpcAggMapResponse resp = ExecuteLocalAggMap(actx->plan.map_req);
+        OnDone(actx, sidx, nid, true, "", std::move(resp));
+      });
+    } else {
+      mgr.RpcClient().SendAsync(
+          ep.node_id, ep.ip, ep.rpc_port, RpcOpCode::kRpcAggMap, encoded, timeout_ms,
+          [actx, sidx = ep.shard_idx, nid = ep.node_id, OnDone](RpcResponse r) {
+            if (r.status != RpcStatus::kOk) {
+              OnDone(actx, sidx, nid, false,
+                     std::string(RpcStatusToString(r.status)) +
+                         (r.error_msg.empty() ? "" : (": " + r.error_msg)),
+                     {});
+              return;
+            }
+            if (r.flags & kRpcFlagError) {
+              OnDone(actx, sidx, nid, false,
+                     r.error_msg.empty() ? "remote aggregate error" : r.error_msg, {});
+              return;
+            }
+            RpcAggMapResponse aresp;
+            if (!DecodeAggMapResponse(r.payload, aresp)) {
+              OnDone(actx, sidx, nid, false, "malformed aggregate response", {});
+              return;
+            }
+            OnDone(actx, sidx, nid, true, "", std::move(aresp));
+          });
+    }
+  }
+  return REDISMODULE_OK;
+}
+
+int ExecuteClusterCursor(RedisModuleCtx* ctx, RpcCursorRequest req) {
+  auto& mgr = ClusterManager::Instance();
+  mgr.RefreshTopology(ctx);
+  auto topo = mgr.GetTopology();
+
+  uint32_t target_tag = ExtractCursorNodeTag(req.cursor_id);
+  const ShardNodeInfo* owner = nullptr;
+  if (topo && target_tag != 0) {
+    for (const auto& n : topo->nodes) {
+      if (n.is_myself) continue;
+      if (ComputeCursorNodeTag(n.node_id) == target_tag) {
+        owner = &n;
+        break;
+      }
+    }
+  }
+
+  if (!owner) {
+    return RedisModule_ReplyWithError(ctx, "ERR cursor not found");
+  }
+  if (!owner->is_healthy || !owner->rpc_port_discovered || owner->rpc_port <= 0 ||
+      owner->ip.empty()) {
+    return RedisModule_ReplyWithError(ctx, "ERR cluster cursor owner unavailable");
+  }
+
+  auto cctx = std::make_shared<ClusterCursorContext>();
+  cctx->op = req.op;
+
+  RedisModuleBlockedClient* bc = RedisModule_BlockClient(
+      ctx, ClusterCursorReplyCallback, GenericTimeoutCallback,
+      FreeSharedHolder<ClusterCursorContext>, 0);
+  if (!bc) {
+    return RedisModule_ReplyWithError(ctx, "ERR failed to block client for cluster cursor");
+  }
+  cctx->bc = bc;
+  g_active_cursors.Register(bc, cctx);
+  if (RedisModule_SetDisconnectCallback) {
+    RedisModule_SetDisconnectCallback(bc, ClusterCursorDisconnectCallback);
+  }
+
+  std::string encoded;
+  EncodeCursorRequest(req, encoded);
+  int64_t timeout_ms = static_cast<int64_t>(GetClusterQueryTimeoutMs());
+  std::string target_id = owner->node_id;
+
+  mgr.RpcClient().SendAsync(
+      owner->node_id, owner->ip, owner->rpc_port, RpcOpCode::kRpcCursor, encoded, timeout_ms,
+      [cctx, target_id](RpcResponse r) {
+        RedisModuleBlockedClient* to_unblock = nullptr;
+        {
+          std::lock_guard<std::mutex> lk(cctx->mu);
+          if (cctx->finished || cctx->cancelled) return;
+          if (r.status != RpcStatus::kOk) {
+            cctx->error_msg = "ERR cluster cursor RPC failed (" +
+                              (target_id.size() > 8 ? target_id.substr(0, 8) : target_id) + "): " +
+                              std::string(RpcStatusToString(r.status)) +
+                              (r.error_msg.empty() ? "" : (": " + r.error_msg));
+          } else if (r.flags & kRpcFlagError) {
+            cctx->error_msg = r.error_msg.empty() ? "ERR remote cursor error" : r.error_msg;
+          } else if (!DecodeCursorResponse(r.payload, cctx->resp)) {
+            cctx->error_msg = "ERR malformed cursor response";
+          } else if (!cctx->resp.ok) {
+            cctx->error_msg =
+                cctx->resp.error_msg.empty() ? "ERR cursor not found" : cctx->resp.error_msg;
+          }
+          cctx->finished = true;
+          to_unblock = cctx->bc;
+          cctx->bc = nullptr;
+        }
+        g_active_cursors.Unblock(cctx, to_unblock);
+      });
   return REDISMODULE_OK;
 }
 

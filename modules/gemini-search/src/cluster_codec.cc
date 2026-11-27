@@ -134,6 +134,22 @@ uint16_t ComputeClusterHashSlot(std::string_view key) {
   return static_cast<uint16_t>(crc & 0x3FFFu);
 }
 
+uint32_t ComputeCursorNodeTag(std::string_view node_id) {
+  uint32_t h = ComputeCrc32(node_id);
+  return ((h >> 8) & 0xFFFFFFu) | 1u;  // 24-bit non-zero tag
+}
+
+uint64_t MakeClusterCursorId(std::string_view node_id, uint64_t local_seq) {
+  uint64_t tag = static_cast<uint64_t>(ComputeCursorNodeTag(node_id)) & 0xFFFFFFULL;
+  uint64_t seq = local_seq & 0xFFFFFFFFFULL;  // 36-bit local sequence
+  if (seq == 0) seq = 1;
+  return (tag << 36) | seq;
+}
+
+uint32_t ExtractCursorNodeTag(uint64_t cursor_id) {
+  return static_cast<uint32_t>((cursor_id >> 36) & 0xFFFFFFULL);
+}
+
 BinaryWriter::BinaryWriter(size_t reserve_bytes) { buf_.reserve(reserve_bytes); }
 
 void BinaryWriter::WriteU8(uint8_t v) { buf_.push_back(static_cast<char>(v)); }
@@ -1454,6 +1470,525 @@ bool DecodeSuggestResponse(std::string_view data, RpcSuggestResponse& out) {
       return false;
     }
     out.entries.push_back(std::move(e));
+  }
+  return r.AtEnd();
+}
+
+// ============================================================================
+// Phase 70: FT.AGGREGATE Map-Reduce & FT.CURSOR Forwarding Codecs
+// ============================================================================
+
+namespace {
+
+void WriteReduceOp(BinaryWriter& w, const ReduceOp& op) {
+  w.WriteU8(static_cast<uint8_t>(op.func));
+  w.WriteString(op.field);
+  w.WriteString(op.alias);
+  w.WriteDouble(op.quantile_pct);
+  w.WriteString(op.first_value_by);
+  w.WriteBool(op.first_value_desc);
+  w.WriteVarInt(static_cast<int64_t>(op.random_sample_count));
+}
+
+bool ReadReduceOp(BinaryReader& r, ReduceOp& out) {
+  uint8_t raw_fn = 0;
+  if (!r.ReadU8(raw_fn) || raw_fn > static_cast<uint8_t>(ReduceFunc::kCountDistinctish)) {
+    return false;
+  }
+  out.func = static_cast<ReduceFunc>(raw_fn);
+  if (!r.ReadString(out.field, kMaxErrorMsgBytes) || !r.ReadString(out.alias, kMaxErrorMsgBytes)) {
+    return false;
+  }
+  if (!r.ReadDouble(out.quantile_pct)) return false;
+  if (!r.ReadString(out.first_value_by, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadBool(out.first_value_desc)) return false;
+  int64_t rs = 0;
+  if (!r.ReadVarInt(rs) || rs < 0 || rs > 1000000) return false;
+  out.random_sample_count = static_cast<long>(rs);
+  return true;
+}
+
+void WritePipelineStage(BinaryWriter& w, const PipelineStage& st) {
+  w.WriteU8(static_cast<uint8_t>(st.type));
+  switch (st.type) {
+    case PipelineStageType::kLoad:
+      w.WriteStringVec(st.load_fields);
+      break;
+    case PipelineStageType::kApply:
+      w.WriteString(st.apply_expr);
+      w.WriteString(st.apply_alias);
+      break;
+    case PipelineStageType::kFilter:
+      w.WriteString(st.filter_expr);
+      break;
+    case PipelineStageType::kGroupby:
+      w.WriteStringVec(st.groupby_fields);
+      w.WriteVarUint(static_cast<uint64_t>(st.reducers.size()));
+      for (const auto& op : st.reducers) WriteReduceOp(w, op);
+      break;
+    case PipelineStageType::kSortby:
+      w.WriteVarUint(static_cast<uint64_t>(st.sortby_keys.size()));
+      for (const auto& [f, desc] : st.sortby_keys) {
+        w.WriteString(f);
+        w.WriteBool(desc);
+      }
+      w.WriteVarInt(static_cast<int64_t>(st.sortby_max));
+      break;
+    case PipelineStageType::kLimit:
+      w.WriteVarInt(static_cast<int64_t>(st.limit_offset));
+      w.WriteVarInt(static_cast<int64_t>(st.limit_count));
+      break;
+  }
+}
+
+bool ReadPipelineStage(BinaryReader& r, PipelineStage& out) {
+  out = PipelineStage{};
+  uint8_t raw_type = 0;
+  if (!r.ReadU8(raw_type) || raw_type > static_cast<uint8_t>(PipelineStageType::kLimit)) {
+    return false;
+  }
+  out.type = static_cast<PipelineStageType>(raw_type);
+  switch (out.type) {
+    case PipelineStageType::kLoad:
+      return r.ReadStringVec(out.load_fields, 4096, kMaxErrorMsgBytes);
+    case PipelineStageType::kApply:
+      return r.ReadString(out.apply_expr, kMaxRpcPayloadBytes) &&
+             r.ReadString(out.apply_alias, kMaxErrorMsgBytes);
+    case PipelineStageType::kFilter:
+      return r.ReadString(out.filter_expr, kMaxRpcPayloadBytes);
+    case PipelineStageType::kGroupby: {
+      if (!r.ReadStringVec(out.groupby_fields, 1024, kMaxErrorMsgBytes)) return false;
+      uint64_t rc = 0;
+      if (!r.ReadVarUint(rc) || rc > 1024 || rc > r.Remaining()) return false;
+      out.reducers.reserve(static_cast<size_t>(rc));
+      for (uint64_t i = 0; i < rc; i++) {
+        ReduceOp op;
+        if (!ReadReduceOp(r, op)) return false;
+        out.reducers.push_back(std::move(op));
+      }
+      return true;
+    }
+    case PipelineStageType::kSortby: {
+      uint64_t kc = 0;
+      if (!r.ReadVarUint(kc) || kc > 256 || kc > r.Remaining()) return false;
+      out.sortby_keys.reserve(static_cast<size_t>(kc));
+      for (uint64_t i = 0; i < kc; i++) {
+        std::string f;
+        bool desc = false;
+        if (!r.ReadString(f, kMaxErrorMsgBytes) || !r.ReadBool(desc)) return false;
+        out.sortby_keys.emplace_back(std::move(f), desc);
+      }
+      int64_t mx = -1;
+      if (!r.ReadVarInt(mx) || mx < -1) return false;
+      out.sortby_max = static_cast<long long>(mx);
+      return true;
+    }
+    case PipelineStageType::kLimit: {
+      int64_t off = 0, cnt = 0;
+      if (!r.ReadVarInt(off) || !r.ReadVarInt(cnt) || off < 0 || cnt < 0) return false;
+      out.limit_offset = static_cast<long long>(off);
+      out.limit_count = static_cast<long long>(cnt);
+      return true;
+    }
+  }
+  return false;
+}
+
+void WritePartialReducerState(BinaryWriter& w, const PartialReducerState& st) {
+  w.WriteU8(static_cast<uint8_t>(st.func));
+  switch (st.func) {
+    case ReduceFunc::kCount:
+      w.WriteVarUint(st.count);
+      break;
+    case ReduceFunc::kSum:
+      w.WriteBool(st.has_val);
+      if (st.has_val) w.WriteDouble(st.sum);
+      break;
+    case ReduceFunc::kAvg:
+      w.WriteVarUint(st.count);
+      w.WriteDouble(st.sum);
+      break;
+    case ReduceFunc::kMin:
+      w.WriteBool(st.has_val);
+      if (st.has_val) w.WriteDouble(st.min_val);
+      break;
+    case ReduceFunc::kMax:
+      w.WriteBool(st.has_val);
+      if (st.has_val) w.WriteDouble(st.max_val);
+      break;
+    case ReduceFunc::kStddev:
+      w.WriteVarUint(st.count);
+      w.WriteDouble(st.mean);
+      w.WriteDouble(st.m2);
+      break;
+    case ReduceFunc::kCountDistinct:
+    case ReduceFunc::kTolist:
+      w.WriteStringVec(st.str_vals);
+      break;
+    case ReduceFunc::kRandomSample:
+      w.WriteVarUint(st.count);
+      w.WriteStringVec(st.str_vals);
+      break;
+    case ReduceFunc::kFirstValue:
+      w.WriteBool(st.has_val);
+      if (st.has_val) {
+        w.WriteString(st.first_val);
+        w.WriteDouble(st.first_sort_val);
+      }
+      break;
+    case ReduceFunc::kCountDistinctish:
+      w.WriteBool(st.hll.is_dense);
+      if (st.hll.is_dense) {
+        w.WriteVarUint(static_cast<uint64_t>(st.hll.dense.size()));
+        if (!st.hll.dense.empty()) {
+          w.WriteRawBytes(st.hll.dense.data(), st.hll.dense.size());
+        }
+      } else {
+        w.WriteVarUint(static_cast<uint64_t>(st.hll.sparse.size()));
+        for (const auto& [idx, rho] : st.hll.sparse) {
+          w.WriteU16(idx);
+          w.WriteU8(rho);
+        }
+      }
+      break;
+    case ReduceFunc::kQuantile:
+      w.WriteBool(st.quantile.is_compressed);
+      if (!st.quantile.is_compressed) {
+        w.WriteVarUint(static_cast<uint64_t>(st.quantile.exact_vals.size()));
+        for (double v : st.quantile.exact_vals) w.WriteDouble(v);
+      } else {
+        w.WriteVarUint(static_cast<uint64_t>(st.quantile.centroids.size()));
+        for (const auto& [m, wt] : st.quantile.centroids) {
+          w.WriteDouble(m);
+          w.WriteDouble(wt);
+        }
+      }
+      break;
+  }
+}
+
+bool ReadPartialReducerState(BinaryReader& r, PartialReducerState& out) {
+  out = PartialReducerState{};
+  uint8_t raw_fn = 0;
+  if (!r.ReadU8(raw_fn) || raw_fn > static_cast<uint8_t>(ReduceFunc::kCountDistinctish)) {
+    return false;
+  }
+  out.func = static_cast<ReduceFunc>(raw_fn);
+  switch (out.func) {
+    case ReduceFunc::kCount:
+      return r.ReadVarUint(out.count);
+    case ReduceFunc::kSum:
+      if (!r.ReadBool(out.has_val)) return false;
+      return !out.has_val || r.ReadDouble(out.sum);
+    case ReduceFunc::kAvg:
+      return r.ReadVarUint(out.count) && r.ReadDouble(out.sum);
+    case ReduceFunc::kMin:
+      if (!r.ReadBool(out.has_val)) return false;
+      return !out.has_val || r.ReadDouble(out.min_val);
+    case ReduceFunc::kMax:
+      if (!r.ReadBool(out.has_val)) return false;
+      return !out.has_val || r.ReadDouble(out.max_val);
+    case ReduceFunc::kStddev:
+      return r.ReadVarUint(out.count) && r.ReadDouble(out.mean) && r.ReadDouble(out.m2) &&
+             out.m2 >= 0.0;
+    case ReduceFunc::kCountDistinct:
+    case ReduceFunc::kTolist:
+      return r.ReadStringVec(out.str_vals, kMaxRpcVecItems, kMaxRpcPayloadBytes);
+    case ReduceFunc::kRandomSample:
+      return r.ReadVarUint(out.count) &&
+             r.ReadStringVec(out.str_vals, kMaxRpcVecItems, kMaxRpcPayloadBytes);
+    case ReduceFunc::kFirstValue:
+      if (!r.ReadBool(out.has_val)) return false;
+      if (out.has_val) {
+        if (!r.ReadString(out.first_val, kMaxRpcPayloadBytes) || !r.ReadDouble(out.first_sort_val)) {
+          return false;
+        }
+      }
+      return true;
+    case ReduceFunc::kCountDistinctish: {
+      if (!r.ReadBool(out.hll.is_dense)) return false;
+      if (out.hll.is_dense) {
+        uint64_t n = 0;
+        if (!r.ReadVarUint(n) || n != HllSketch::kNumRegs || n > r.Remaining()) return false;
+        out.hll.dense.resize(static_cast<size_t>(n));
+        return r.ReadRawBytes(out.hll.dense.data(), static_cast<size_t>(n));
+      }
+      uint64_t n = 0;
+      if (!r.ReadVarUint(n) || n > HllSketch::kNumRegs || n * 3 > r.Remaining()) return false;
+      out.hll.sparse.reserve(static_cast<size_t>(n));
+      for (uint64_t i = 0; i < n; i++) {
+        uint16_t idx = 0;
+        uint8_t rho = 0;
+        if (!r.ReadU16(idx) || !r.ReadU8(rho) || idx >= HllSketch::kNumRegs) return false;
+        out.hll.sparse.emplace_back(idx, rho);
+      }
+      return true;
+    }
+    case ReduceFunc::kQuantile: {
+      if (!r.ReadBool(out.quantile.is_compressed)) return false;
+      if (!out.quantile.is_compressed) {
+        uint64_t n = 0;
+        if (!r.ReadVarUint(n) || n > QuantileSketch::kExactLimit || n * 8 > r.Remaining()) {
+          return false;
+        }
+        out.quantile.exact_vals.reserve(static_cast<size_t>(n));
+        for (uint64_t i = 0; i < n; i++) {
+          double v = 0.0;
+          if (!r.ReadDouble(v)) return false;
+          out.quantile.exact_vals.push_back(v);
+        }
+        return true;
+      }
+      uint64_t n = 0;
+      if (!r.ReadVarUint(n) || n > 4096 || n * 16 > r.Remaining()) return false;
+      out.quantile.centroids.reserve(static_cast<size_t>(n));
+      for (uint64_t i = 0; i < n; i++) {
+        double m = 0.0, wt = 0.0;
+        if (!r.ReadDouble(m) || !r.ReadDouble(wt) || wt < 0.0) return false;
+        out.quantile.centroids.emplace_back(m, wt);
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+void EncodeAggMapRequest(const RpcAggMapRequest& req, std::string& out) {
+  BinaryWriter w(256);
+  w.WriteString(req.index_name);
+  w.WriteString(req.query_str);
+  w.WriteVarUint(static_cast<uint64_t>(req.params.size()));
+  for (const auto& [k, v] : req.params) {
+    w.WriteString(k);
+    w.WriteString(v);
+  }
+  w.WriteVarInt(static_cast<int64_t>(req.dialect));
+  w.WriteI64(req.remaining_timeout_ms);
+  w.WriteU8(req.mode);
+  w.WriteVarUint(static_cast<uint64_t>(req.map_stages.size()));
+  for (const auto& st : req.map_stages) WritePipelineStage(w, st);
+  if (req.mode == 1) {
+    WritePipelineStage(w, req.groupby_stage);
+  }
+  w.WriteVarUint(req.max_groups);
+  w.WriteVarUint(req.raw_shard_limit);
+  w.WriteBool(req.raw_has_sortby);
+  if (req.raw_has_sortby) {
+    w.WriteVarUint(static_cast<uint64_t>(req.raw_sortby_keys.size()));
+    for (const auto& [f, desc] : req.raw_sortby_keys) {
+      w.WriteString(f);
+      w.WriteBool(desc);
+    }
+  }
+  out = w.TakeBuffer();
+}
+
+bool DecodeAggMapRequest(std::string_view data, RpcAggMapRequest& out) {
+  out = RpcAggMapRequest{};
+  BinaryReader r(data);
+  if (!r.ReadString(out.index_name, kMaxErrorMsgBytes) || out.index_name.empty()) return false;
+  if (!r.ReadString(out.query_str, kMaxRpcPayloadBytes)) return false;
+
+  uint64_t pcount = 0;
+  if (!r.ReadVarUint(pcount) || pcount > 10000 || pcount > r.Remaining()) return false;
+  out.params.reserve(static_cast<size_t>(pcount));
+  for (uint64_t i = 0; i < pcount; i++) {
+    std::string k, v;
+    if (!r.ReadString(k, kMaxErrorMsgBytes) || !r.ReadString(v, kMaxRpcPayloadBytes)) return false;
+    out.params.emplace_back(std::move(k), std::move(v));
+  }
+
+  int64_t dialect = 2;
+  if (!r.ReadVarInt(dialect) || dialect < 0 || dialect > 100) return false;
+  out.dialect = static_cast<int32_t>(dialect);
+  if (!r.ReadI64(out.remaining_timeout_ms)) return false;
+  if (!r.ReadU8(out.mode) || out.mode > 1) return false;
+
+  uint64_t scount = 0;
+  if (!r.ReadVarUint(scount) || scount > 256 || scount > r.Remaining()) return false;
+  out.map_stages.reserve(static_cast<size_t>(scount));
+  for (uint64_t i = 0; i < scount; i++) {
+    PipelineStage st;
+    if (!ReadPipelineStage(r, st)) return false;
+    out.map_stages.push_back(std::move(st));
+  }
+
+  if (out.mode == 1) {
+    if (!ReadPipelineStage(r, out.groupby_stage) ||
+        out.groupby_stage.type != PipelineStageType::kGroupby) {
+      return false;
+    }
+  }
+
+  if (!r.ReadVarUint(out.max_groups) || !r.ReadVarUint(out.raw_shard_limit)) return false;
+  if (!r.ReadBool(out.raw_has_sortby)) return false;
+  if (out.raw_has_sortby) {
+    uint64_t kc = 0;
+    if (!r.ReadVarUint(kc) || kc > 256 || kc > r.Remaining()) return false;
+    out.raw_sortby_keys.reserve(static_cast<size_t>(kc));
+    for (uint64_t i = 0; i < kc; i++) {
+      std::string f;
+      bool desc = false;
+      if (!r.ReadString(f, kMaxErrorMsgBytes) || !r.ReadBool(desc)) return false;
+      out.raw_sortby_keys.emplace_back(std::move(f), desc);
+    }
+  }
+  return r.AtEnd();
+}
+
+void EncodeAggMapResponse(const RpcAggMapResponse& resp, std::string& out) {
+  BinaryWriter w(256);
+  w.WriteBool(resp.ok);
+  w.WriteString(resp.error_msg);
+  w.WriteU8(resp.mode);
+  if (resp.mode == 0) {
+    w.WriteVarUint(static_cast<uint64_t>(resp.raw_rows.size()));
+    for (const auto& row : resp.raw_rows) {
+      w.WriteString(row.doc_id);
+      w.WriteBool(row.has_knn_dist);
+      if (row.has_knn_dist) w.WriteDouble(row.knn_dist);
+      w.WriteVarUint(static_cast<uint64_t>(row.fields.size()));
+      for (const auto& [k, v] : row.fields) {
+        w.WriteString(k);
+        w.WriteString(v);
+      }
+    }
+  } else {
+    w.WriteVarUint(static_cast<uint64_t>(resp.partial_groups.size()));
+    for (const auto& pg : resp.partial_groups) {
+      w.WriteString(pg.group_key);
+      w.WriteVarUint(static_cast<uint64_t>(pg.key_fields.size()));
+      for (const auto& [k, v] : pg.key_fields) {
+        w.WriteString(k);
+        w.WriteString(v);
+      }
+      w.WriteVarUint(static_cast<uint64_t>(pg.reducers.size()));
+      for (const auto& st : pg.reducers) WritePartialReducerState(w, st);
+    }
+  }
+  out = w.TakeBuffer();
+}
+
+bool DecodeAggMapResponse(std::string_view data, RpcAggMapResponse& out) {
+  out = RpcAggMapResponse{};
+  BinaryReader r(data);
+  if (!r.ReadBool(out.ok)) return false;
+  if (!r.ReadString(out.error_msg, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadU8(out.mode) || out.mode > 1) return false;
+
+  if (out.mode == 0) {
+    uint64_t rcount = 0;
+    if (!r.ReadVarUint(rcount) || rcount > kMaxRpcVecItems || rcount > r.Remaining()) return false;
+    out.raw_rows.reserve(static_cast<size_t>(rcount));
+    for (uint64_t i = 0; i < rcount; i++) {
+      RpcAggRawRow row;
+      if (!r.ReadString(row.doc_id, kMaxErrorMsgBytes)) return false;
+      if (!r.ReadBool(row.has_knn_dist)) return false;
+      if (row.has_knn_dist && !r.ReadDouble(row.knn_dist)) return false;
+      uint64_t fcount = 0;
+      if (!r.ReadVarUint(fcount) || fcount > 65536 || fcount > r.Remaining()) return false;
+      row.fields.reserve(static_cast<size_t>(fcount));
+      for (uint64_t f = 0; f < fcount; f++) {
+        std::string k, v;
+        if (!r.ReadString(k, kMaxErrorMsgBytes) || !r.ReadString(v, kMaxRpcPayloadBytes)) {
+          return false;
+        }
+        row.fields.emplace_back(std::move(k), std::move(v));
+      }
+      out.raw_rows.push_back(std::move(row));
+    }
+  } else {
+    uint64_t gcount = 0;
+    if (!r.ReadVarUint(gcount) || gcount > kMaxRpcVecItems || gcount > r.Remaining()) return false;
+    out.partial_groups.reserve(static_cast<size_t>(gcount));
+    for (uint64_t i = 0; i < gcount; i++) {
+      PartialGroup pg;
+      if (!r.ReadString(pg.group_key, kMaxRpcPayloadBytes)) return false;
+      uint64_t kfcount = 0;
+      if (!r.ReadVarUint(kfcount) || kfcount > 1024 || kfcount > r.Remaining()) return false;
+      pg.key_fields.reserve(static_cast<size_t>(kfcount));
+      for (uint64_t kf = 0; kf < kfcount; kf++) {
+        std::string k, v;
+        if (!r.ReadString(k, kMaxErrorMsgBytes) || !r.ReadString(v, kMaxRpcPayloadBytes)) {
+          return false;
+        }
+        pg.key_fields.emplace_back(std::move(k), std::move(v));
+      }
+      uint64_t rdc = 0;
+      if (!r.ReadVarUint(rdc) || rdc > 1024 || rdc > r.Remaining()) return false;
+      pg.reducers.reserve(static_cast<size_t>(rdc));
+      for (uint64_t ri = 0; ri < rdc; ri++) {
+        PartialReducerState st;
+        if (!ReadPartialReducerState(r, st)) return false;
+        pg.reducers.push_back(std::move(st));
+      }
+      out.partial_groups.push_back(std::move(pg));
+    }
+  }
+  return r.AtEnd();
+}
+
+void EncodeCursorRequest(const RpcCursorRequest& req, std::string& out) {
+  BinaryWriter w(64);
+  w.WriteU8(req.op);
+  w.WriteString(req.index_name);
+  w.WriteU64(req.cursor_id);
+  w.WriteBool(req.has_count);
+  if (req.has_count) w.WriteVarUint(req.count);
+  out = w.TakeBuffer();
+}
+
+bool DecodeCursorRequest(std::string_view data, RpcCursorRequest& out) {
+  out = RpcCursorRequest{};
+  BinaryReader r(data);
+  if (!r.ReadU8(out.op) || out.op > kRpcCursorOpDel) return false;
+  if (!r.ReadString(out.index_name, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadU64(out.cursor_id)) return false;
+  if (!r.ReadBool(out.has_count)) return false;
+  if (out.has_count && !r.ReadVarUint(out.count)) return false;
+  return r.AtEnd();
+}
+
+void EncodeCursorResponse(const RpcCursorResponse& resp, std::string& out) {
+  BinaryWriter w(128);
+  w.WriteBool(resp.ok);
+  w.WriteString(resp.error_msg);
+  w.WriteU64(resp.next_cursor_id);
+  w.WriteVarUint(static_cast<uint64_t>(resp.rows.size()));
+  for (const auto& row : resp.rows) {
+    w.WriteVarUint(static_cast<uint64_t>(row.size()));
+    for (const auto& [k, v] : row) {
+      w.WriteString(k);
+      w.WriteString(v);
+    }
+  }
+  out = w.TakeBuffer();
+}
+
+bool DecodeCursorResponse(std::string_view data, RpcCursorResponse& out) {
+  out = RpcCursorResponse{};
+  BinaryReader r(data);
+  if (!r.ReadBool(out.ok)) return false;
+  if (!r.ReadString(out.error_msg, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadU64(out.next_cursor_id)) return false;
+  uint64_t rcount = 0;
+  if (!r.ReadVarUint(rcount) || rcount > kMaxRpcVecItems || rcount > r.Remaining()) return false;
+  out.rows.reserve(static_cast<size_t>(rcount));
+  for (uint64_t i = 0; i < rcount; i++) {
+    uint64_t fcount = 0;
+    if (!r.ReadVarUint(fcount) || fcount > 65536 || fcount > r.Remaining()) return false;
+    std::vector<std::pair<std::string, std::string>> row;
+    row.reserve(static_cast<size_t>(fcount));
+    for (uint64_t f = 0; f < fcount; f++) {
+      std::string k, v;
+      if (!r.ReadString(k, kMaxErrorMsgBytes) || !r.ReadString(v, kMaxRpcPayloadBytes)) {
+        return false;
+      }
+      row.emplace_back(std::move(k), std::move(v));
+    }
+    out.rows.push_back(std::move(row));
   }
   return r.AtEnd();
 }

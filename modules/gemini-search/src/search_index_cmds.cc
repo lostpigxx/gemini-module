@@ -843,9 +843,12 @@ gemini_search::RpcInfoStatsResponse ExecuteLocalInfoStats(
   resp.bg_scanned_keys = static_cast<uint64_t>(entry.bg_scanned_keys);
   resp.bg_total_keys = static_cast<uint64_t>(entry.bg_total_keys);
   resp.percent_indexed = entry.percent_indexed;
-  resp.cursor_idle = static_cast<uint64_t>(GetCursors().size());
-  resp.cursor_total_created = GetTotalCursorsCreated();
-  resp.cursor_total_expired = GetTotalCursorsExpired();
+  {
+    std::lock_guard<std::mutex> clk(GetCursorsMutex());
+    resp.cursor_idle = static_cast<uint64_t>(GetCursors().size());
+    resp.cursor_total_created = GetTotalCursorsCreated();
+    resp.cursor_total_expired = GetTotalCursorsExpired();
+  }
   return resp;
 }
 
