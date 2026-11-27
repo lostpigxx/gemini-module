@@ -42,7 +42,7 @@ Clean-room search engine targeting **Redis 7**, indexing Redis Hash (`ON HASH`) 
 
 Field types: `TEXT` (BM25 + WAND Top-K pruning, TFIDF/DISMAX/DOCSCORE scoring, English/French/German/Spanish stemming, UTF-8 CJK bigram + custom dictionary FMM segmentation, phonetic matching), `TAG` (`SEPARATOR`, `CASESENSITIVE`), `NUMERIC`, `VECTOR` (`FLAT` / thread-safe dense-ID `HNSW` with direct RDB graph persistence `encver 14`, ARM NEON / AVX2 SIMD kernels, `FLOAT32`/`FLOAT64`/`FLOAT16`/`BFLOAT16`, `QUANTIZATION SQ8` & 1-bit `BQ` with two-stage `RERANK FP16|SQ8` + `OVERSAMPLE` `encver 15`, and selectivity-aware **Adaptive Filtered HNSW**), `GEO` (0.5° spatial grid), `GEOSHAPE` (`FLAT`/`SPHERICAL`).
 
-Query & indexing features: boolean combinations (`DIALECT 1/2`), prefix / suffix / infix / fuzzy / optional terms, synonyms, exact phrase with `SLOP` / `INORDER`, `ismissing(@f)` / `isempty(@f)`, numeric ranges, `GEOFILTER`, KNN (`EF_RUNTIME`, `OVERSAMPLE`, `AS`), `VECTOR_RANGE`, **`FT.HYBRID` (BM25 + Vector RRF/LINEAR fusion)**, per-index fine-grained `shared_mutex` + full-path non-blocking async offload (`FT.SEARCH`, `FT.HYBRID`, `FT.AGGREGATE` via `RedisModule_BlockClient`), timer-driven **background incremental indexing** (`FT.CREATE` via `RedisModule_CreateTimer` + `RedisModule_ScanCursor`, `FT.INFO` `indexing`/`percent_indexed`), `HIGHLIGHT` / `SUMMARIZE`, `SORTBY` / `LIMIT 0 0` / `RETURN AS` / `WITHPAYLOADS` / `WITHSORTKEYS` / `EXPLAINSCORE`, and full Master-Replica `PSYNC` replication.
+Query & indexing features: boolean combinations (`DIALECT 1/2`), prefix / suffix / infix / fuzzy / optional terms, synonyms, exact phrase with `SLOP` / `INORDER`, `ismissing(@f)` / `isempty(@f)`, numeric ranges, `GEOFILTER`, KNN (`EF_RUNTIME`, `OVERSAMPLE`, `AS`), `VECTOR_RANGE`, **`FT.HYBRID` (BM25 + Vector RRF/LINEAR fusion)**, per-index fine-grained `shared_mutex` + full-path non-blocking async offload (`FT.SEARCH`, `FT.HYBRID`, `FT.AGGREGATE` via `RedisModule_BlockClient`), timer-driven **background incremental indexing** (`FT.CREATE` via `RedisModule_CreateTimer` + `RedisModule_ScanCursor`, `FT.INFO` `indexing`/`percent_indexed`), `HIGHLIGHT` / `SUMMARIZE`, `SORTBY` / `LIMIT 0 0` / `RETURN AS` / `WITHPAYLOADS` / `WITHSORTKEYS` / `EXPLAINSCORE`, full Master-Replica `PSYNC` replication, and **Redis Cluster Distributed Scatter-Gather (Phases 66–72)** (automatic Cluster Bus topology discovery, binary TCP RPC with optional `CLUSTER_AUTH_TOKEN` MAC auth & inflight quotas, two-step DDL broadcast/rollback & `aux_save2` v2 persistence + SchemaSync self-healing, `FT.SEARCH` Query-Then-Fetch + $M$-way merger, `FT.HYBRID` global fusion + optional 2-Phase BM25 DFS, `FT.AGGREGATE` two-phase Map-Reduce across all 12 reducers + cross-node `FT.CURSOR`, live `MIGRATE` dedup, and slot-aware Master-Replica failover).
 
 | Category | Commands |
 |---|---|
@@ -51,7 +51,7 @@ Query & indexing features: boolean combinations (`DIALECT 1/2`), prefix / suffix
 | Query | `FT.SEARCH`, `FT.HYBRID`, `FT.AGGREGATE` (multi-key `SORTBY MAX`, KNN, rich `APPLY` functions), `FT.CURSOR`, `FT.EXPLAIN`, `FT.EXPLAINCLI`, `FT.PROFILE` |
 | Autocomplete | `FT.SUGADD`, `FT.SUGGET`, `FT.SUGDEL`, `FT.SUGLEN` |
 | Spellcheck / dictionaries / synonyms | `FT.SPELLCHECK`, `FT.DICTADD`, `FT.DICTDEL`, `FT.DICTDUMP`, `FT.SYNUPDATE`, `FT.SYNDUMP` |
-| Configuration / debug | `FT.CONFIG` (`ON_TIMEOUT`, `MAXSEARCHRESULTS`, `ASYNC_MIN_DOCS`, `BG_INDEX_MIN_KEYS`, ...), `FT._DEBUG` |
+| Configuration / debug | `FT.CONFIG` (`ON_TIMEOUT`, `MAXSEARCHRESULTS`, `ASYNC_MIN_DOCS`, `BG_INDEX_MIN_KEYS`, `CLUSTER_*`, ...), `FT._DEBUG` (`CLUSTER [PING]`) |
 
 Design doc: [modules/gemini-search/DESIGN.md](modules/gemini-search/DESIGN.md). Roadmaps & plans:
 [Project Roadmap](doc/roadmap.md),
@@ -167,7 +167,7 @@ bash ci/run_benchmarks.sh
 
 ## Docker CI
 
-Docker CI 统一面向 **Redis 7**（离线构建，支持无外网环境；`ci/run_tests.sh` 在 Stage 1 完成 Normal + ASan 并行编译后，Stage 2 并行运行全部 **21 个**测试任务，短时长 soak 下约 45 秒完成）：
+Docker CI 统一面向 **Redis 7**（离线构建，支持无外网环境；`ci/run_tests.sh` 在 Stage 1 完成 Normal + ASan 并行编译后，Stage 2 并行运行全部 **22 个**测试任务，60s soak 配置下约 60 秒完成）：
 
 | 环境 | Redis | RedisBloom | Dockerfile |
 |---|---|---|---|
@@ -177,13 +177,13 @@ CI 运行以下全量测试：
 
 | 测试项 | 说明 |
 |---|---|
-| GTest + Fuzz（普通 & ASan） | `bloom_test`（13 套，含 `bloom_fuzz_test`）、`json_test`（6 套，含 `json_stress_test`）、`search_test`（17 套） |
+| GTest + Fuzz（普通 & ASan） | `bloom_test`（13 套，含 `bloom_fuzz_test`）、`json_test`（6 套，含 `json_stress_test`）、`search_test`（21 套，含 `cluster_codec`/`cluster_rpc`/`cluster_merger`/`cluster_agg_reduce`） |
 | Tcl 集成测试 | 启动 Redis 7.2 加载模块，验证 `BF.*`、`CF.*`、`CMS.*`、`TOPK.*`、`TDIGEST.*`、`JSON.*`、`FT.*` |
 | Compat 对比测试 | 同时启动 gemini-bloom 和 RedisBloom 2.6.25，对比所有 `BF.*` 命令返回值（RESP3 + RESP2） |
 | RDB 迁移测试 | 4 方向 RDB 迁入迁出（RB→GB、GB→RB、GB→GB、RB→RB）及多跳链式迁移，验证 `BF.EXISTS` 100% 一致（RESP3 + RESP2） |
 | SDK 兼容测试 | `ci/sdk_compat_test.py`，使用 `redis-py` 高层 API 端到端验证三模块（RESP3 + RESP2） |
-| Cluster 集成测试 | `ci/cluster_test.py`，3 节点 Redis 7 Cluster 验证跨分片路由、`MOVED`、`CROSSSLOT` 与全部 6 种模块类型的在线 `MIGRATE` |
-| Soak 长稳测试 | 持续运行 `gemini-bloom`（BF/CF/CMS/Top-K/T-Digest 全子模块）、`gemini-json`、`gemini-search` 验证不变量与内存无泄漏（RESP3 + RESP2） |
+| Cluster 集成测试 | `ci/cluster_test.py`（9 阶段）：3 节点路由/`MOVED`/`CROSSSLOT`/6 类型 `MIGRATE`，以及 `gemini-search` Phases 66–71（拓扑发现、RPC、DDL 回滚/自愈、3,000 文档单机黄金对拍、`FT.HYBRID`/BM25 DFS、`FT.AGGREGATE` 全 12 Reducer + 跨节点游标、500-slot 并发 `MIGRATE`、6 节点主从 `SIGKILL` Failover 与 `CLUSTER_AUTH_TOKEN`） |
+| Soak 长稳测试 | 持续运行 `gemini-bloom`、`gemini-json`、`gemini-search`（单机 RESP3/RESP2）及 `ci/search_cluster_soak_test.py`（3 节点 Cluster 混合读写/查询/游标/`MIGRATE`）验证不变量与内存无泄漏 |
 
 ### 运行 Redis 7 CI
 

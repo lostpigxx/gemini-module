@@ -37,11 +37,17 @@
 
 ---
 
-## 三、v2.0 — 架构跃迁与深度优化（长期按需）
+## 三、v2.0 — 架构跃迁与深度优化
 
-1. **`gemini-search` 分布式集群查询（Cluster Scatter-Gather，Phases 66–72）**
-   - 在 Redis Cluster 多分片架构下支持跨节点分发与归并排序（`FT.SEARCH` / `FT.HYBRID` / `FT.AGGREGATE`）。
-   - 完整架构设计报告与 Phase 66–72 规划见 [cluster-scatter-gather-design.md](./gemini-search/cluster-scatter-gather-design.md)（待审计）。
+1. **✅ `gemini-search` 分布式集群查询（Cluster Scatter-Gather，Phases 66–72，已完成）**
+   - 完整落地 [cluster-scatter-gather-design.md](./gemini-search/cluster-scatter-gather-design.md) 全部 7 个阶段（Phases 66–72）：
+     - **P66**：Cluster Bus 自动拓扑与 RPC 端口发现、非阻塞二进制 TCP RPC 框架（`GMSC` 双 CRC32）、`FT._DEBUG CLUSTER [PING]`、`CLUSTER_*` 配置与 `std::shared_ptr<IndexEntry>` 并发安全生命周期。
+     - **P67**：两阶段 DDL 广播与冲突补偿回滚、`aux_save2` v2 集群持久化（无 DB 裸 key）、HNSW 重启恢复与新节点加入自动 SchemaSync 自愈。
+     - **P68**：`FT.SEARCH` Query-Then-Fetch + $M$-way 归并堆（远端零 Redis 主线程锁竞争），3,000 文档 / 33 组合查询与单机 100% 黄金对拍一致。
+     - **P69**：`FT.HYBRID` 全局 RRF/LINEAR 融合、可选 2-Phase BM25 DFS 全局精确 IDF、`FT.INFO` / `FT.TAGVALS` / `FT.SPELLCHECK` / `FT.SUG*` / `FT.PROFILE` 集群化。
+     - **P70**：`FT.AGGREGATE` 两阶段 Map-Reduce（全 12 种 `REDUCE` 并行合并）与 24-bit 节点标签跨节点透明 `FT.CURSOR` + `CLUSTER_AGG_MAX_GROUPS` 配额防护。
+     - **P71**：在线 500-slot 并发 `MIGRATE` 零重复一致性、6 节点（3M+3R）主从 `SIGKILL` Failover 自动恢复、`ON_TIMEOUT FAIL/RETURN` + `cluster_partial_results_total` 观测、`CLUSTER_AUTH_TOKEN` 鉴权与 IP 白名单 / 并发配额加固。
+     - **P72**：新增 `ci/search_cluster_soak_test.py` 接入 Docker 22 项并行 CI（60s 内全通过）、新增 `ci/search_cluster_bench.py`（3 节点吞吐扩展 `4.2×–5.9×`、Query-Then-Fetch 带宽节省 `65%–98%`）并完成文档收口。
 2. **`gemini-search` 千万级向量扩展（按需）**
    - **Product Quantization (PQ，乘积量化)**：面向千万级高维向量（如 768d/1536d）提供 64× 压缩（子空间 k-means 码本 + ADC 查表距离），以及评估 mmap / 磁盘混合存储。
    - 多语言分词增强（统计/HMM 分词、更多语种词干与音似编码）。

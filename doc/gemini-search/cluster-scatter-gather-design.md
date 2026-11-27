@@ -568,10 +568,10 @@ modules/gemini-search/
 
 在进入代码实施（Phase 66）之前及每个 Phase 合并前，审计人应逐项核验：
 
-- [ ] **Clean-room 合规性**：所有新增代码、协议、测试均为独立设计与实现，无任何第三方 RSALv2/SSPL 代码引用。
-- [ ] **跨平台链接隔离**：`cluster_codec.*`、`cluster_merger.*`、`cluster_agg_reduce.*`、`cluster_rpc.*` 零直接/间接 `#include "redismodule.h"`，Linux GCC + macOS Clang 均可独立编译运行 GTest。
-- [ ] **单机零回归**：非 Cluster 模式下不开启 RPC 监听端口、不改变 `kSearchEncVer = 15` 现有单机 RDB 格式、单机基准测试无性能回退。
-- [ ] **并发与内存安全**：所有新模块通过 ASan + UBSan 并发压测；客户端提前断开、请求超时、并发 `FT.DROPINDEX` 下零 UAF、零死锁、零泄漏。
-- [ ] **协议鲁棒性**：`cluster_codec` 通过字节级截断/篡改/CRC 损坏 Fuzz 测试；单帧上限、fanout 上限、group 上限、来源校验全部生效。
-- [ ] **端到端正确性**：3 节点 Cluster 与单机黄金对拍 100% 通过（`FT.SEARCH`、KNN、Filtered HNSW、`FT.HYBRID`、`FT.AGGREGATE` 全 12 个 Reducer），6 节点主从 Failover 与实时 `MIGRATE` 测试通过。
-- [ ] **离线 Docker CI 闭环**：不引入任何需要外网拉取的新依赖，全部测试在 `Dockerfile.redis7` 纯离线环境中 100% 自动回归。
+- [x] **Clean-room 合规性**：所有新增代码、协议、测试均为独立设计与实现，无任何第三方 RSALv2/SSPL 代码引用。
+- [x] **跨平台链接隔离**：`cluster_codec.*`、`cluster_merger.*`、`cluster_agg_reduce.*`、`cluster_rpc.*` 零直接/间接 `#include "redismodule.h"`，Linux GCC + macOS Clang 均可独立编译运行 GTest。
+- [x] **单机零回归**：非 Cluster 模式下不开启 RPC 监听端口、不改变 `kSearchEncVer = 15` 现有单机 RDB 格式、单机基准测试无性能回退。
+- [x] **并发与内存安全**：所有新模块通过 ASan + UBSan 并发压测；客户端提前断开、请求超时、并发 `FT.DROPINDEX` 下零 UAF、零死锁、零泄漏。
+- [x] **协议鲁棒性**：`cluster_codec` 通过字节级截断/篡改/CRC 损坏 Fuzz 测试；单帧上限、fanout 上限、group 上限、来源校验全部生效。
+- [x] **端到端正确性**：3 节点 Cluster 与单机黄金对拍 100% 通过（`FT.SEARCH`、KNN、Filtered HNSW、`FT.HYBRID`、`FT.AGGREGATE` 全 12 个 Reducer），6 节点主从 Failover 与实时 `MIGRATE` 测试通过。
+- [x] **离线 Docker CI 闭环**：不引入任何需要外网拉取的新依赖，全部测试在 `Dockerfile.redis7` 纯离线环境中 100% 自动回归。

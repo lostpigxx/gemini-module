@@ -118,6 +118,8 @@ if [ "$REDIS_MAJOR" -ge 7 ]; then
     env SOAK_DURATION_SEC="${SEARCH_SOAK_DURATION_SEC:-60}" python3 ci/search_soak_test.py "./$BUILD_DIR/redis_search.so"
   launch_job "Soak: gemini-search (${SEARCH_SOAK_DURATION_SEC:-60}s, RESP2)" \
     env SOAK_DURATION_SEC="${SEARCH_SOAK_DURATION_SEC:-60}" RESP_PROTOCOL=2 python3 ci/search_soak_test.py "./$BUILD_DIR/redis_search.so"
+  launch_job "Soak: gemini-search Cluster (${CLUSTER_SOAK_DURATION_SEC:-30}s)" \
+    env SOAK_DURATION_SEC="${CLUSTER_SOAK_DURATION_SEC:-30}" python3 ci/search_cluster_soak_test.py "./$BUILD_DIR/redis_json.so" "./$BUILD_DIR/redis_search.so"
 fi
 
 wait_all_jobs
