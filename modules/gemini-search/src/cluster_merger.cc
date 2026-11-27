@@ -158,4 +158,142 @@ MergedSearchResult MergeSearchShards(const std::vector<ShardPhase1Slice>& shards
   return result;
 }
 
+MergedHybridResult MergeHybridShards(const std::vector<ShardHybridSlice>& shards,
+                                     int64_t text_limit, size_t knn_k, const HybridConfig& hcfg,
+                                     size_t offset, size_t count, bool has_limit) {
+  MergedHybridResult out;
+
+  // Deterministic owner shard per doc_id (smallest shard_idx wins on duplicate during MIGRATE)
+  std::unordered_map<std::string, uint32_t> doc_owner;
+  std::unordered_map<std::string, double> text_best;
+  std::unordered_map<std::string, float> vec_best;
+
+  // Process shards in deterministic shard_idx order
+  std::vector<const ShardHybridSlice*> ordered;
+  ordered.reserve(shards.size());
+  for (const auto& s : shards) ordered.push_back(&s);
+  std::sort(ordered.begin(), ordered.end(),
+            [](const ShardHybridSlice* a, const ShardHybridSlice* b) {
+              return a->shard_idx < b->shard_idx;
+            });
+
+  for (const auto* s : ordered) {
+    for (const auto& th : s->text_hits) {
+      doc_owner.try_emplace(th.doc_id, s->shard_idx);
+      auto it = text_best.find(th.doc_id);
+      if (it == text_best.end()) {
+        text_best.emplace(th.doc_id, th.score);
+      } else if (th.score > it->second) {
+        it->second = th.score;
+      }
+    }
+    for (const auto& vh : s->vec_hits) {
+      doc_owner.try_emplace(vh.doc_id, s->shard_idx);
+      auto it = vec_best.find(vh.doc_id);
+      if (it == vec_best.end()) {
+        vec_best.emplace(vh.doc_id, vh.score);
+      } else if (vh.score < it->second) {
+        it->second = vh.score;
+      }
+    }
+  }
+
+  std::vector<ScoredResult> global_text;
+  global_text.reserve(text_best.size());
+  for (const auto& [doc_id, sc] : text_best) {
+    global_text.push_back({doc_id, sc});
+  }
+  std::sort(global_text.begin(), global_text.end(),
+            [](const ScoredResult& a, const ScoredResult& b) {
+              if (a.score != b.score) return a.score > b.score;
+              return a.doc_id < b.doc_id;
+            });
+  if (text_limit > 0 && static_cast<int64_t>(global_text.size()) > text_limit) {
+    global_text.resize(static_cast<size_t>(text_limit));
+  }
+
+  std::vector<KnnResult> global_vec;
+  global_vec.reserve(vec_best.size());
+  for (const auto& [doc_id, dist] : vec_best) {
+    global_vec.push_back({doc_id, dist});
+  }
+  std::sort(global_vec.begin(), global_vec.end(),
+            [](const KnnResult& a, const KnnResult& b) {
+              if (a.score != b.score) return a.score < b.score;
+              return a.doc_id < b.doc_id;
+            });
+  if (knn_k > 0 && global_vec.size() > knn_k) {
+    global_vec.resize(knn_k);
+  }
+
+  std::vector<HybridHit> fused = FuseHybridResults(global_text, global_vec, hcfg);
+  out.total_fused = static_cast<uint64_t>(fused.size());
+
+  if (has_limit && offset == 0 && count == 0) {
+    return out;
+  }
+
+  if (has_limit) {
+    if (offset >= fused.size()) {
+      fused.clear();
+    } else {
+      size_t end_pos = fused.size();
+      if (offset <= SIZE_MAX - count && offset + count < end_pos) {
+        end_pos = offset + count;
+      }
+      fused = std::vector<HybridHit>(fused.begin() + static_cast<ptrdiff_t>(offset),
+                                     fused.begin() + static_cast<ptrdiff_t>(end_pos));
+    }
+  }
+
+  out.winners = std::move(fused);
+  for (size_t i = 0; i < out.winners.size(); i++) {
+    auto oit = doc_owner.find(out.winners[i].doc_id);
+    if (oit != doc_owner.end()) {
+      out.winners_by_shard[oit->second].push_back(i);
+    }
+  }
+  return out;
+}
+
+std::vector<RpcFieldBm25Stats> AggregateGlobalBm25FieldStats(
+    const std::vector<std::vector<RpcFieldBm25Stats>>& shard_stats) {
+  struct Acc {
+    uint64_t live_docs = 0;
+    uint64_t total_doc_len = 0;
+    std::unordered_map<std::string, uint64_t> term_df;
+  };
+  std::unordered_map<std::string, Acc> by_field;
+  for (const auto& shard : shard_stats) {
+    for (const auto& fs : shard) {
+      auto& acc = by_field[fs.field_name];
+      acc.live_docs += fs.live_docs;
+      acc.total_doc_len += fs.total_doc_len;
+      for (const auto& [term, df] : fs.term_df) {
+        acc.term_df[term] += df;
+      }
+    }
+  }
+  std::vector<RpcFieldBm25Stats> out;
+  out.reserve(by_field.size());
+  for (auto& [fname, acc] : by_field) {
+    RpcFieldBm25Stats st;
+    st.field_name = fname;
+    st.live_docs = acc.live_docs;
+    st.total_doc_len = acc.total_doc_len;
+    st.term_df.reserve(acc.term_df.size());
+    for (auto& [t, df] : acc.term_df) {
+      st.term_df.emplace_back(t, df);
+    }
+    std::sort(st.term_df.begin(), st.term_df.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    out.push_back(std::move(st));
+  }
+  std::sort(out.begin(), out.end(),
+            [](const RpcFieldBm25Stats& a, const RpcFieldBm25Stats& b) {
+              return a.field_name < b.field_name;
+            });
+  return out;
+}
+
 }  // namespace gemini_search

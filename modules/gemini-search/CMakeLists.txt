@@ -368,11 +368,27 @@ if(GTest_FOUND)
   add_executable(cluster_merger_test EXCLUDE_FROM_ALL
     tests/cluster_merger_test.cc
     src/cluster_merger.cc
+    src/cluster_codec.cc
+    src/hybrid_fusion.cc
+    src/text_index.cc
+    src/stemmer.cc
+    src/phonetic.cc
+    src/query_parser.cc
+    src/index_spec.cc
+    src/document_store.cc
+    src/tag_index.cc
+    src/numeric_index.cc
+    src/vector_index.cc
+    src/hnsw_index.cc
+    src/geo_index.cc
+    src/geoshape_index.cc
+    src/suggest_dict.cc
   )
   target_include_directories(cluster_merger_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
   )
   target_link_libraries(cluster_merger_test PRIVATE
+    redis_module_api
     GTest::gtest_main
   )
   target_compile_definitions(cluster_merger_test PRIVATE GEMINI_SEARCH_TESTING)

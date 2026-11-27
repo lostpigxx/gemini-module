@@ -8,6 +8,7 @@
 #include <shared_mutex>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -26,6 +27,7 @@ constexpr size_t kMaxCursorsPerIndex = 128;
 std::unordered_map<std::string, std::shared_ptr<IndexEntry>>& GetIndices();
 std::shared_mutex& GetIndicesMutex();
 std::shared_mutex& GetTermDictsMutex();
+std::shared_mutex& GetSuggestDictsMutex();
 SearchExecutor& GetSearchExecutor();
 std::unordered_map<uint64_t, AggCursor>& GetCursors();
 uint64_t NextCursorId();
@@ -132,11 +134,32 @@ int FtExplainCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
 int FtExplainCliCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
 int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);
 
-// Lock-only shard search & doc fetch helpers (no RedisModuleCtx needed; safe on SearchExecutor)
+// Lock-only shard search, doc fetch, DFS, hybrid & auxiliary helpers (no Redis GIL needed)
 gemini_search::RpcSearchPhase1Response ExecuteLocalSearchPhase1(
     const gemini_search::RpcSearchPhase1Request& req);
 gemini_search::RpcFetchDocsResponse ExecuteLocalFetchDocs(
     const gemini_search::RpcFetchDocsRequest& req);
+gemini_search::RpcDfsTermStatsResponse ExecuteLocalDfsTermStats(
+    const gemini_search::RpcDfsTermStatsRequest& req);
+gemini_search::RpcHybridPhase1Response ExecuteLocalHybridPhase1(
+    const gemini_search::RpcHybridPhase1Request& req);
+gemini_search::RpcInfoStatsResponse ExecuteLocalInfoStats(
+    const gemini_search::RpcInfoStatsRequest& req);
+gemini_search::RpcTagValsResponse ExecuteLocalTagVals(
+    const gemini_search::RpcTagValsRequest& req);
+gemini_search::RpcSpellCheckResponse ExecuteLocalSpellCheck(
+    const gemini_search::RpcSpellCheckRequest& req);
+bool ApplyLocalSuggestCommand(const std::string& cmd_name,
+                              const std::vector<std::string>& args,
+                              bool& out_mutated,
+                              gemini_search::RpcSuggestResponse& resp);
+
+// Shared FT.INFO reply formatter (used by standalone and cluster FT.INFO)
+void ReplyWithIndexInfo(
+    RedisModuleCtx* ctx, const IndexEntry& entry, uint64_t num_docs, uint64_t num_terms,
+    uint64_t inverted_bytes, uint64_t vector_bytes, bool bg_indexing, double percent_indexed,
+    uint64_t cursor_idle, uint64_t cursor_created, uint64_t cursor_expired,
+    const std::vector<std::tuple<std::string, uint64_t, bool, double>>* cluster_shards = nullptr);
 
 // Aggregation & cursor commands (search_agg_cmds.cc)
 int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc);

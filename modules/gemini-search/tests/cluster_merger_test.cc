@@ -200,3 +200,209 @@ TEST(ClusterMergerTest, KnnCapAndLimitZeroZero) {
   EXPECT_EQ(m3.global_total, 300u);
   EXPECT_TRUE(m3.winners.empty());
 }
+
+TEST(ClusterMergerTest, HybridGlobalRrfAndLinearParityAcross3Shards) {
+  std::mt19937 rng(2026069);
+  std::uniform_real_distribution<double> text_dist(0.5, 25.0);
+  std::uniform_real_distribution<float> vec_dist(0.01f, 2.0f);
+
+  std::vector<ScoredResult> all_text;
+  std::vector<KnnResult> all_vec;
+  std::vector<ShardHybridSlice> shards(3);
+  for (uint32_t s = 0; s < 3; s++) shards[s].shard_idx = s;
+
+  // Distribute 600 docs across 3 shards; some only in text, some only in vec, some in both
+  for (int i = 0; i < 600; i++) {
+    char id_buf[32];
+    std::snprintf(id_buf, sizeof(id_buf), "hdoc:%04d", i);
+    std::string id(id_buf);
+    uint32_t s = static_cast<uint32_t>(i % 3);
+    if (i % 5 != 0) {
+      double tscore = text_dist(rng);
+      all_text.push_back({id, tscore});
+      shards[s].text_hits.push_back({id, tscore});
+    }
+    if (i % 4 != 0) {
+      float vscore = vec_dist(rng);
+      all_vec.push_back({id, vscore});
+      shards[s].vec_hits.push_back({id, vscore});
+    }
+  }
+
+  // Simulate per-shard top-K truncation (each shard keeps top text_limit=50 and top knn_k=30)
+  const int64_t text_limit = 50;
+  const size_t knn_k = 30;
+  for (auto& sh : shards) {
+    std::sort(sh.text_hits.begin(), sh.text_hits.end(),
+              [](const ScoredResult& a, const ScoredResult& b) {
+                if (a.score != b.score) return a.score > b.score;
+                return a.doc_id < b.doc_id;
+              });
+    if (static_cast<int64_t>(sh.text_hits.size()) > text_limit) {
+      sh.text_hits.resize(static_cast<size_t>(text_limit));
+    }
+    std::sort(sh.vec_hits.begin(), sh.vec_hits.end(), [](const KnnResult& a, const KnnResult& b) {
+      if (a.score != b.score) return a.score < b.score;
+      return a.doc_id < b.doc_id;
+    });
+    if (sh.vec_hits.size() > knn_k) sh.vec_hits.resize(knn_k);
+  }
+
+  // Standalone reference: sort + truncate to text_limit / knn_k, then FuseHybridResults
+  std::sort(all_text.begin(), all_text.end(), [](const ScoredResult& a, const ScoredResult& b) {
+    if (a.score != b.score) return a.score > b.score;
+    return a.doc_id < b.doc_id;
+  });
+  all_text.resize(static_cast<size_t>(text_limit));
+  std::sort(all_vec.begin(), all_vec.end(), [](const KnnResult& a, const KnnResult& b) {
+    if (a.score != b.score) return a.score < b.score;
+    return a.doc_id < b.doc_id;
+  });
+  all_vec.resize(knn_k);
+
+  for (FusionMethod method : {FusionMethod::kRrf, FusionMethod::kLinear}) {
+    HybridConfig hcfg;
+    hcfg.method = method;
+    hcfg.rrf_k = 60.0;
+    hcfg.text_weight = 1.5;
+    hcfg.vector_weight = 0.8;
+    hcfg.alpha = 0.35;
+
+    auto ref = FuseHybridResults(all_text, all_vec, hcfg);
+    auto merged = MergeHybridShards(shards, text_limit, knn_k, hcfg, /*offset=*/5, /*count=*/20,
+                                    /*has_limit=*/true);
+
+    ASSERT_EQ(merged.total_fused, ref.size());
+    ASSERT_EQ(merged.winners.size(), 20u);
+    for (size_t i = 0; i < 20; i++) {
+      EXPECT_EQ(merged.winners[i].doc_id, ref[5 + i].doc_id);
+      EXPECT_NEAR(merged.winners[i].score, ref[5 + i].score, 1e-12);
+      EXPECT_EQ(merged.winners[i].text_rank, ref[5 + i].text_rank);
+      EXPECT_EQ(merged.winners[i].vector_rank, ref[5 + i].vector_rank);
+    }
+
+    // Verify LIMIT 0 0 count-only
+    auto cnt_only = MergeHybridShards(shards, text_limit, knn_k, hcfg, 0, 0, /*has_limit=*/true);
+    EXPECT_EQ(cnt_only.total_fused, ref.size());
+    EXPECT_TRUE(cnt_only.winners.empty());
+  }
+}
+
+TEST(ClusterMergerTest, TwoPhaseDfsBm25ExactParityUnder90PercentSkew) {
+  // Construct a heavily skewed 3-shard corpus where 90% of "hotterm" docs live on shard 0
+  // while shard 1 & shard 2 have very few "hotterm" docs and different doc lengths.
+  IndexSpec spec;
+  spec.name = "skew_idx";
+  FieldSpec f;
+  f.name = "body";
+  f.type = FieldType::kText;
+  spec.fields.push_back(f);
+
+  DocumentStore standalone_docs;
+  TextFieldIndices standalone_text;
+  TagFieldIndices empty_tags;
+  NumericFieldIndices empty_nums;
+  GeoFieldIndices empty_geos;
+
+  std::vector<DocumentStore> shard_docs(3);
+  std::vector<TextFieldIndices> shard_text(3);
+
+  auto AddDoc = [&](int shard_idx, const std::string& doc_id, const std::string& body) {
+    standalone_docs.Add(doc_id, {{"body", body}});
+    standalone_text.GetOrCreate("body").Add(doc_id, body);
+    shard_docs[static_cast<size_t>(shard_idx)].Add(doc_id, {{"body", body}});
+    shard_text[static_cast<size_t>(shard_idx)].GetOrCreate("body").Add(doc_id, body);
+  };
+
+  // Shard 0: 90 docs containing "hotterm" + "common" with longer text
+  for (int i = 0; i < 90; i++) {
+    std::string id = "s0_doc_" + std::to_string(i);
+    std::string body = "hotterm common alpha beta gamma delta";
+    if (i % 7 == 0) body += " hotterm rareterm";
+    AddDoc(0, id, body);
+  }
+  // Shard 1: 5 docs with "hotterm", 95 background docs without "hotterm"
+  for (int i = 0; i < 100; i++) {
+    std::string id = "s1_doc_" + std::to_string(i);
+    std::string body = (i < 5) ? "hotterm rareterm short" : "background filler words here";
+    AddDoc(1, id, body);
+  }
+  // Shard 2: 5 docs with "hotterm", 95 very long background docs
+  for (int i = 0; i < 100; i++) {
+    std::string id = "s2_doc_" + std::to_string(i);
+    std::string body =
+        (i < 5) ? "hotterm common"
+                : "very long background document containing many unrelated filler tokens alpha beta";
+    AddDoc(2, id, body);
+  }
+
+  QueryOptions qopts;
+  qopts.scorer = ScorerType::kBm25;
+  ParsedQuery pq;
+  std::string err;
+  ASSERT_TRUE(ParseQuery("hotterm | rareterm", pq, err, qopts));
+
+  // Standalone reference scores
+  auto ref_scores = EvaluateQueryScored(pq.root, spec, standalone_docs, empty_tags, empty_nums,
+                                        standalone_text, empty_geos, err, qopts);
+  ASSERT_TRUE(err.empty());
+  std::sort(ref_scores.begin(), ref_scores.end(), [](const ScoredResult& a, const ScoredResult& b) {
+    if (a.score != b.score) return a.score > b.score;
+    return a.doc_id < b.doc_id;
+  });
+
+  // Phase 0: collect local term stats from each shard
+  std::vector<std::vector<RpcFieldBm25Stats>> all_shard_stats(3);
+  for (size_t s = 0; s < 3; s++) {
+    auto local_stats = CollectQueryTermStats(pq.root, spec, shard_text[s], qopts);
+    for (auto& ls : local_stats) {
+      RpcFieldBm25Stats fs;
+      fs.field_name = ls.field_name;
+      fs.live_docs = ls.live_docs;
+      fs.total_doc_len = ls.total_doc_len;
+      for (const auto& [t, df] : ls.term_df) fs.term_df.emplace_back(t, df);
+      all_shard_stats[s].push_back(std::move(fs));
+    }
+  }
+
+  // Coordinator aggregates global BM25 stats
+  auto global_vec = AggregateGlobalBm25FieldStats(all_shard_stats);
+  std::unordered_map<std::string, GlobalBm25Stats> global_map;
+  for (const auto& fs : global_vec) {
+    GlobalBm25Stats g;
+    g.total_docs = fs.live_docs;
+    g.avg_doc_len =
+        fs.live_docs > 0 ? (static_cast<double>(fs.total_doc_len) / static_cast<double>(fs.live_docs))
+                         : 0.0;
+    for (const auto& [t, df] : fs.term_df) g.term_df[t] = df;
+    global_map[fs.field_name] = std::move(g);
+  }
+
+  // Phase 1 with global stats injected
+  QueryOptions dfs_qopts = qopts;
+  dfs_qopts.global_bm25_stats = &global_map;
+
+  std::vector<ShardPhase1Slice> slices(3);
+  for (size_t s = 0; s < 3; s++) {
+    slices[s].shard_idx = static_cast<uint32_t>(s);
+    auto sr = EvaluateQueryScored(pq.root, spec, shard_docs[s], empty_tags, empty_nums,
+                                  shard_text[s], empty_geos, err, dfs_qopts);
+    ASSERT_TRUE(err.empty());
+    std::sort(sr.begin(), sr.end(), [](const ScoredResult& a, const ScoredResult& b) {
+      if (a.score != b.score) return a.score > b.score;
+      return a.doc_id < b.doc_id;
+    });
+    slices[s].total_hits = sr.size();
+    for (auto& r : sr) {
+      slices[s].items.push_back({r.doc_id, static_cast<uint32_t>(s), r.score, 0.0, "", false});
+    }
+  }
+
+  auto merged = MergeSearchShards(slices, MergeSortMode::kScoreDesc, 0, ref_scores.size(),
+                                  /*has_limit=*/true, /*max_results=*/10000);
+  ASSERT_EQ(merged.winners.size(), ref_scores.size());
+  for (size_t i = 0; i < ref_scores.size(); i++) {
+    EXPECT_EQ(merged.winners[i].doc_id, ref_scores[i].doc_id);
+    EXPECT_NEAR(merged.winners[i].score, ref_scores[i].score, 1e-12);
+  }
+}

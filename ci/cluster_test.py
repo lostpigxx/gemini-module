@@ -434,8 +434,6 @@ def test_search_cluster_phase67(
         "SCHEMA", "$.name", "AS", "name", "TEXT", "$.score", "AS", "score", "NUMERIC",
     ) == "OK"
 
-    total_hash_docs = 0
-    total_json_docs = 0
     for idx, n in enumerate(nodes):
         listed = sorted(n.execute_command("FT._LIST"))
         assert listed == ["p67_hash", "p67_json"], f"Node{idx} FT._LIST mismatch: {listed}"
@@ -444,13 +442,15 @@ def test_search_cluster_phase67(
         assert n.execute_command("KEYS", "p67_json") == []
         hinfo = kv_list_to_dict(n.execute_command("FT.INFO", "p67_hash"))
         jinfo = kv_list_to_dict(n.execute_command("FT.INFO", "p67_json"))
-        assert int(hinfo["num_docs"]) == 1, f"Node{idx} expected 1 hash doc, got {hinfo}"
-        assert int(jinfo["num_docs"]) == 1, f"Node{idx} expected 1 json doc, got {jinfo}"
-        total_hash_docs += int(hinfo["num_docs"])
-        total_json_docs += int(jinfo["num_docs"])
+        # Phase 69: FT.INFO aggregates globally (3 total docs, 1 per shard in cluster_shards)
+        assert int(hinfo["num_docs"]) == 3, f"Node{idx} expected 3 global hash docs, got {hinfo}"
+        assert int(jinfo["num_docs"]) == 3, f"Node{idx} expected 3 global json docs, got {jinfo}"
+        h_shards = [kv_list_to_dict(s) for s in hinfo["cluster_shards"]]
+        j_shards = [kv_list_to_dict(s) for s in jinfo["cluster_shards"]]
+        assert len(h_shards) == 3 and all(int(s["num_docs"]) == 1 for s in h_shards), f"Bad h_shards: {h_shards}"
+        assert len(j_shards) == 3 and all(int(s["num_docs"]) == 1 for s in j_shards), f"Bad j_shards: {j_shards}"
     assert rc.execute_command("EXISTS", "p67_hash") == 0
     assert rc.execute_command("EXISTS", "p67_json") == 0
-    assert total_hash_docs == 3 and total_json_docs == 3
 
     # 3. Broadcast FT.ALTER, FT.ALIAS*, FT.SYNUPDATE, FT.DICTADD across all 3 nodes
     assert nodes[2].execute_command("FT.ALTER", "p67_hash", "SCHEMA", "ADD", "brand", "TAG") == "OK"
@@ -522,17 +522,21 @@ def test_search_cluster_phase67(
         time.sleep(0.05)
 
     assert sorted(nodes[1].execute_command("FT._LIST")) == ["p67_hash", "p67_json"]
+    n1_id = nodes[1].execute_command("CLUSTER", "MYID")
     n1_hinfo = kv_list_to_dict(nodes[1].execute_command("FT.INFO", "p67_hash"))
-    assert int(n1_hinfo["num_docs"]) == 1, f"Restarted node1 lost hash doc: {n1_hinfo}"
+    n1_hshards = {kv_list_to_dict(s)["node_id"]: int(kv_list_to_dict(s)["num_docs"]) for s in n1_hinfo["cluster_shards"]}
+    assert int(n1_hinfo["num_docs"]) == 3 and n1_hshards.get(n1_id) == 1, f"Restarted node1 lost hash doc: {n1_hinfo}"
     # ON JSON recovery triggers right after cluster_state:ok (<= 50ms timer)
     n1_jinfo = {}
+    n1_jshards = {}
     j_deadline = time.time() + 2.0
     while time.time() < j_deadline:
         n1_jinfo = kv_list_to_dict(nodes[1].execute_command("FT.INFO", "p67_json"))
-        if int(n1_jinfo["num_docs"]) == 1:
+        n1_jshards = {kv_list_to_dict(s)["node_id"]: int(kv_list_to_dict(s)["num_docs"]) for s in n1_jinfo["cluster_shards"]}
+        if int(n1_jinfo["num_docs"]) == 3 and n1_jshards.get(n1_id) == 1:
             break
         time.sleep(0.05)
-    assert int(n1_jinfo["num_docs"]) == 1, f"Restarted node1 lost json doc: {n1_jinfo}"
+    assert int(n1_jinfo["num_docs"]) == 3 and n1_jshards.get(n1_id) == 1, f"Restarted node1 lost json doc: {n1_jinfo}"
     assert sorted(nodes[1].execute_command("FT.DICTDUMP", "p67_dict")) == ["gemini", "redis"]
     assert "fast" in nodes[1].execute_command("FT.SYNDUMP", "p67_alias")
     # Verify HNSW KNN still works on restarted node1 (deserialized directly from aux_save2)
@@ -754,15 +758,13 @@ def test_search_cluster_phase68_golden_parity(
             sa_raw.hset(key, mapping=mapping)
             rc_raw.hset(key, mapping=mapping)
 
-        # Verify all 3,000 docs landed across all 3 cluster shards
-        shard_hash_counts = [
-            int(kv_list_to_dict(n.execute_command("FT.INFO", "p68_hash"))["num_docs"])
-            for n in nodes
-        ]
-        shard_json_counts = [
-            int(kv_list_to_dict(n.execute_command("FT.INFO", "p68_json"))["num_docs"])
-            for n in nodes
-        ]
+        # Verify all 3,000 docs landed across all 3 cluster shards (Phase 69 FT.INFO reports global + per-shard)
+        h_info = kv_list_to_dict(nodes[0].execute_command("FT.INFO", "p68_hash"))
+        j_info = kv_list_to_dict(nodes[1].execute_command("FT.INFO", "p68_json"))
+        assert int(h_info["num_docs"]) == 2000, h_info
+        assert int(j_info["num_docs"]) == 1000, j_info
+        shard_hash_counts = [int(kv_list_to_dict(s)["num_docs"]) for s in h_info["cluster_shards"]]
+        shard_json_counts = [int(kv_list_to_dict(s)["num_docs"]) for s in j_info["cluster_shards"]]
         assert sum(shard_hash_counts) == 2000 and all(c > 400 for c in shard_hash_counts), shard_hash_counts
         assert sum(shard_json_counts) == 1000 and all(c > 200 for c in shard_json_counts), shard_json_counts
 
@@ -873,6 +875,352 @@ def test_search_cluster_phase68_golden_parity(
             sa_proc.kill()
 
 
+def test_search_cluster_phase69(
+    rc: RedisCluster,
+    nodes: list[redis.Redis],
+    ports: list[int],
+    modules: list[str],
+    workdir: str,
+) -> None:
+    """Phase 69: FT.HYBRID global RRF/LINEAR parity, 2-Phase BM25 DFS under 90% skew,
+    FT.INFO (+ background indexing progress), FT.TAGVALS, FT.SPELLCHECK, FT.SUG*, FT.PROFILE."""
+    print("[7/7] Testing gemini-search Phase 69 (FT.HYBRID, BM25 DFS, INFO/TAGVALS/SPELLCHECK/SUG/PROFILE)...")
+
+    sa_port = find_free_ports(1)[0]
+    sa_dir = os.path.join(workdir, "standalone_p69")
+    sa_proc = start_standalone_node(sa_port, modules, sa_dir)
+    sa = redis.Redis(host="127.0.0.1", port=sa_port, decode_responses=True)
+    sa_raw = redis.Redis(host="127.0.0.1", port=sa_port, decode_responses=False)
+    rc_raw = RedisCluster(host="127.0.0.1", port=ports[0], decode_responses=False)
+    nodes_raw = [redis.Redis(host="127.0.0.1", port=p, decode_responses=False) for p in ports]
+
+    def parse_kv_list(flat):
+        return {flat[i]: flat[i + 1] for i in range(0, len(flat), 2)}
+
+    def parse_hybrid_rows(raw_resp, with_scores=True):
+        """Returns (count, [(doc_id_str, score_float_or_None, fields_dict)])"""
+        assert isinstance(raw_resp, list) and len(raw_resp) >= 1
+        cnt = raw_resp[0]
+        if len(raw_resp) == 1:
+            return cnt, []
+        rows = []
+        i = 1
+        while i < len(raw_resp):
+            doc_id = raw_resp[i].decode() if isinstance(raw_resp[i], bytes) else str(raw_resp[i])
+            i += 1
+            fdict = {}
+            score = None
+            if i < len(raw_resp) and isinstance(raw_resp[i], list):
+                flist = raw_resp[i]
+                i += 1
+                for j in range(0, len(flist), 2):
+                    k = flist[j].decode() if isinstance(flist[j], bytes) else str(flist[j])
+                    v = flist[j + 1]
+                    if k == "__hybrid_score" and with_scores:
+                        score = float(v.decode() if isinstance(v, bytes) else v)
+                    else:
+                        fdict[k] = v
+            rows.append((doc_id, score, fdict))
+        return cnt, rows
+
+    try:
+        # Discover one deterministic hash tag per master shard via CLUSTER SLOTS
+        slots_info = nodes[0].execute_command("CLUSTER", "SLOTS")
+        slot_to_node = {}
+        for r in slots_info:
+            lo, hi, owner_port = r[0], r[1], r[2][1]
+            s_idx = ports.index(owner_port)
+            slot_to_node[(lo, hi)] = s_idx
+        shard_tags = {}
+        for cand_i in range(5000):
+            tag = f"t{cand_i}"
+            slot = nodes[0].execute_command("CLUSTER", "KEYSLOT", f"{{{tag}}}")
+            for (lo, hi), s_idx in slot_to_node.items():
+                if lo <= slot <= hi and s_idx not in shard_tags:
+                    shard_tags[s_idx] = tag
+            if len(shard_tags) == 3:
+                break
+        assert len(shard_tags) == 3, f"Failed to find tags for all 3 shards: {shard_tags}"
+
+        # ── 1. FT.HYBRID global RRF & LINEAR golden parity vs standalone ──
+        create_hyb = [
+            "FT.CREATE", "p69_hyb", "ON", "HASH", "PREFIX", "1", "p69h:",
+            "SCHEMA",
+            "title", "TEXT",
+            "body", "TEXT",
+            "cat", "TAG",
+            "price", "NUMERIC",
+            "emb", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "16", "DISTANCE_METRIC", "COSINE",
+        ]
+        assert sa.execute_command(*create_hyb) == "OK"
+        assert nodes[0].execute_command(*create_hyb) == "OK"
+
+        rng = random.Random(696969)
+        vocab = [
+            "redis", "cluster", "vector", "hybrid", "fusion", "search",
+            "distributed", "memory", "engine", "ranking", "neural", "index",
+        ]
+        cats = ["tech", "science", "finance", "health", "gaming", "cloud"]
+        vecs = {}
+        for i in range(600):
+            k = f"p69h:{i:04d}"
+            w1 = vocab[i % len(vocab)]
+            w2 = vocab[(i * 7 + 3) % len(vocab)]
+            w3 = vocab[(i * 11 + 5) % len(vocab)]
+            cat = cats[i % len(cats)]
+            v = [rng.gauss(0.0, 1.0) for _ in range(16)]
+            norm = math.sqrt(sum(x * x for x in v)) or 1.0
+            v = [x / norm for x in v]
+            vblob = struct.pack("<16f", *v)
+            vecs[i] = vblob
+            mapping = {
+                b"title": f"{w1} {w2} item {i}".encode(),
+                b"body": f"{w1} {w2} {w3} benchmark document number {i}".encode(),
+                b"cat": f"{cat},tier{i % 3}".encode(),
+                b"price": str(10 + (i % 500)).encode(),
+                b"emb": vblob,
+            }
+            sa_raw.hset(k, mapping=mapping)
+            rc_raw.hset(k, mapping=mapping)
+
+        # Enable CLUSTER_BM25_DFS on cluster for exact BM25 score parity inside FT.HYBRID
+        for n in nodes:
+            assert n.execute_command("FT.CONFIG", "SET", "CLUSTER_BM25_DFS", "1") == "OK"
+
+        qv = vecs[17]
+        hybrid_queries = [
+            (
+                "hybrid_rrf_default",
+                ["FT.HYBRID", "p69_hyb", "SEARCH", "redis cluster", "VSIM", "@emb", "$qv", "KNN", "30",
+                 "COMBINE", "RRF", "PARAMS", "2", "qv", qv, "WITHSCORES", "EXPLAINSCORE",
+                 "RETURN", "3", "title", "AS", "t", "LIMIT", "0", "15", "DIALECT", "2"],
+                0,
+            ),
+            (
+                "hybrid_rrf_weighted_slice",
+                ["FT.HYBRID", "p69_hyb", "SEARCH", "vector search", "TEXT_LIMIT", "80",
+                 "VSIM", "@emb", "$qv", "KNN", "40", "FILTER", "@cat:{tech|cloud}",
+                 "COMBINE", "RRF", "CONSTANT", "30", "TEXT_WEIGHT", "1.5", "VECTOR_WEIGHT", "0.8",
+                 "PARAMS", "2", "qv", qv, "WITHSCORES", "LIMIT", "5", "12", "DIALECT", "2"],
+                1,
+            ),
+            (
+                "hybrid_linear_alpha",
+                ["FT.HYBRID", "p69_hyb", "SEARCH", "distributed ranking", "VSIM", "@emb", "$qv", "KNN", "35",
+                 "COMBINE", "LINEAR", "ALPHA", "0.4", "PARAMS", "2", "qv", qv,
+                 "WITHSCORES", "EXPLAINSCORE", "RETURN", "2", "title", "price", "LIMIT", "0", "15", "DIALECT", "2"],
+                2,
+            ),
+            (
+                "hybrid_limit_0_0",
+                ["FT.HYBRID", "p69_hyb", "SEARCH", "redis", "VSIM", "@emb", "$qv", "KNN", "25",
+                 "COMBINE", "RRF", "PARAMS", "2", "qv", qv, "LIMIT", "0", "0", "DIALECT", "2"],
+                0,
+            ),
+            (
+                "hybrid_nocontent",
+                ["FT.HYBRID", "p69_hyb", "SEARCH", "hybrid fusion", "VSIM", "@emb", "$qv", "KNN", "20",
+                 "COMBINE", "RRF", "PARAMS", "2", "qv", qv, "NOCONTENT", "LIMIT", "0", "10", "DIALECT", "2"],
+                1,
+            ),
+        ]
+
+        for label, cmd, nidx in hybrid_queries:
+            exp_raw = sa_raw.execute_command(*cmd)
+            got_raw = nodes_raw[nidx].execute_command(*cmd)
+            exp_cnt, exp_rows = parse_hybrid_rows(exp_raw, with_scores=("WITHSCORES" in cmd))
+            got_cnt, got_rows = parse_hybrid_rows(got_raw, with_scores=("WITHSCORES" in cmd))
+            assert got_cnt == exp_cnt, f"[{label}] count mismatch: got={got_cnt} exp={exp_cnt}"
+            assert len(got_rows) == len(exp_rows), f"[{label}] row len mismatch"
+            for idx_r, (gr, er) in enumerate(zip(got_rows, exp_rows)):
+                assert gr[0] == er[0], f"[{label}] row {idx_r} doc_id mismatch: got={gr[0]} exp={er[0]}"
+                if er[1] is not None:
+                    assert gr[1] is not None and abs(gr[1] - er[1]) <= 1e-6, (
+                        f"[{label}] row {idx_r} score diff > 1e-6: got={gr[1]} exp={er[1]}"
+                    )
+                for fk, fv in er[2].items():
+                    if fk == "__score_explanation":
+                        assert fk in gr[2], f"[{label}] missing __score_explanation"
+                    else:
+                        assert gr[2].get(fk) == fv, (
+                            f"[{label}] row {idx_r} field {fk} mismatch: got={gr[2].get(fk)} exp={fv}"
+                        )
+
+        # ── 2. Skewed 90% single-shard hot-term BM25 DFS exact parity ──
+        create_skew = [
+            "FT.CREATE", "p69_skew", "ON", "HASH", "PREFIX", "1", "p69s:",
+            "SCHEMA", "body", "TEXT",
+        ]
+        assert sa.execute_command(*create_skew) == "OK"
+        assert nodes[1].execute_command(*create_skew) == "OK"
+
+        # 90% of hotterm docs forced onto shard 0 via shard_tags[0]
+        for i in range(90):
+            k = f"p69s:{{{shard_tags[0]}}}:s0_{i:03d}"
+            body = "hotterm common alpha beta gamma delta"
+            if i % 6 == 0:
+                body += " hotterm rareterm"
+            if i == 0:
+                body += " shardzero"
+            sa.hset(k, mapping={"body": body})
+            rc.hset(k, mapping={"body": body})
+
+        # 5 hotterm docs + 95 short filler docs on shard 1
+        for i in range(100):
+            k = f"p69s:{{{shard_tags[1]}}}:s1_{i:03d}"
+            body = "hotterm rareterm short" if i < 5 else "background filler words here"
+            if i == 0:
+                body += " shardone"
+            sa.hset(k, mapping={"body": body})
+            rc.hset(k, mapping={"body": body})
+
+        # 5 hotterm docs + 95 long filler docs on shard 2
+        for i in range(100):
+            k = f"p69s:{{{shard_tags[2]}}}:s2_{i:03d}"
+            body = (
+                "hotterm common"
+                if i < 5
+                else "very long background document containing many unrelated filler tokens alpha beta"
+            )
+            if i == 0:
+                body += " shardtwo"
+            sa.hset(k, mapping={"body": body})
+            rc.hset(k, mapping={"body": body})
+
+        # Verify CLUSTER_BM25_DFS 1 yields exact standalone BM25 scores & ranking under 90% skew
+        skew_cmd = ["FT.SEARCH", "p69_skew", "hotterm | rareterm", "WITHSCORES", "LIMIT", "0", "30", "DIALECT", "2"]
+        exp_skew = sa.execute_command(*skew_cmd)
+        got_skew = nodes[2].execute_command(*skew_cmd)
+        assert got_skew[0] == exp_skew[0] == 30, f"Skew count mismatch: {got_skew[0]} vs {exp_skew[0]}"
+        for ri in range(30):
+            exp_id = exp_skew[1 + ri * 2]
+            got_id = got_skew[1 + ri * 2]
+            exp_fields = parse_kv_list(exp_skew[2 + ri * 2])
+            got_fields = parse_kv_list(got_skew[2 + ri * 2])
+            assert got_id == exp_id, f"[BM25 DFS skew] rank {ri} doc_id mismatch: got={got_id} exp={exp_id}"
+            assert abs(float(got_fields["__search_score"]) - float(exp_fields["__search_score"])) <= 1e-6, (
+                f"[BM25 DFS skew] rank {ri} score mismatch: {got_fields['__search_score']} vs {exp_fields['__search_score']}"
+            )
+
+        # Reset CLUSTER_BM25_DFS back to default 0
+        for n in nodes:
+            assert n.execute_command("FT.CONFIG", "SET", "CLUSTER_BM25_DFS", "0") == "OK"
+
+        # ── 3. FT.INFO cluster aggregation + background indexing progress ──
+        for nidx in range(3):
+            info = parse_kv_list(nodes[nidx].execute_command("FT.INFO", "p69_hyb"))
+            assert info["num_docs"] == 600, f"Node {nidx} FT.INFO num_docs={info['num_docs']}, expected 600"
+            assert info["indexing"] == 0
+            assert info["percent_indexed"] == "1.00"
+            assert info["num_terms"] > 0
+            assert float(info["inverted_sz_mb"]) > 0.0
+            assert float(info["vector_index_sz_mb"]) > 0.0
+            shards_info = info["cluster_shards"]
+            assert len(shards_info) == 3
+            assert sum(parse_kv_list(s)["num_docs"] for s in shards_info) == 600
+
+        # Background indexing progress across 3 shards
+        for i in range(180):
+            rc.hset(f"p69bg:{i:04d}", mapping={"title": f"background doc {i}"})
+        try:
+            for n in nodes:
+                assert n.execute_command("FT.CONFIG", "SET", "BG_INDEX_MIN_KEYS", "1") == "OK"
+                assert n.execute_command("FT.CONFIG", "SET", "BG_INDEX_BATCH_KEYS", "2") == "OK"
+                assert n.execute_command("FT.CONFIG", "SET", "BG_INDEX_TICK_MS", "15") == "OK"
+            assert nodes[0].execute_command(
+                "FT.CREATE", "p69_bg", "ON", "HASH", "PREFIX", "1", "p69bg:", "SCHEMA", "title", "TEXT"
+            ) == "OK"
+            saw_indexing = False
+            deadline = time.time() + 15.0
+            final_info = None
+            while time.time() < deadline:
+                binfo = parse_kv_list(nodes[1].execute_command("FT.INFO", "p69_bg"))
+                if binfo["indexing"] == 1:
+                    saw_indexing = True
+                    pct = float(binfo["percent_indexed"])
+                    assert 0.0 <= pct < 1.0, f"Unexpected mid-indexing percent_indexed={pct}"
+                else:
+                    final_info = binfo
+                    break
+                time.sleep(0.02)
+            assert saw_indexing, "Expected to observe indexing=1 during multi-shard background indexing"
+            assert final_info is not None and final_info["num_docs"] == 180, f"Final bg info: {final_info}"
+            assert final_info["percent_indexed"] == "1.00"
+        finally:
+            for n in nodes:
+                n.execute_command("FT.CONFIG", "SET", "BG_INDEX_MIN_KEYS", "1000")
+                n.execute_command("FT.CONFIG", "SET", "BG_INDEX_BATCH_KEYS", "128")
+                n.execute_command("FT.CONFIG", "SET", "BG_INDEX_TICK_MS", "1")
+
+        # ── 4. FT.TAGVALS global union & dedup ──
+        exp_tags = sorted(sa.execute_command("FT.TAGVALS", "p69_hyb", "cat"))
+        for nidx in range(3):
+            got_tags = nodes[nidx].execute_command("FT.TAGVALS", "p69_hyb", "cat")
+            assert got_tags == exp_tags, f"Node {nidx} TAGVALS mismatch: got={got_tags} exp={exp_tags}"
+
+        # ── 5. FT.SPELLCHECK global known-term union & suggestion aggregation ──
+        # "shardzero", "shardone", "shardtwo" live on 3 different shards; "shardzro" is misspelled
+        sc_res = nodes[2].execute_command(
+            "FT.SPELLCHECK", "p69_skew", "shardzero shardone shardtwo shardzro", "DISTANCE", "1"
+        )
+        flagged_terms = [entry[1] for entry in sc_res]
+        assert "shardzero" not in flagged_terms, f"Remote known term flagged: {sc_res}"
+        assert "shardone" not in flagged_terms, f"Remote known term flagged: {sc_res}"
+        assert "shardtwo" not in flagged_terms, f"Remote known term flagged: {sc_res}"
+        assert flagged_terms == ["shardzro"], f"Unexpected spellcheck result: {sc_res}"
+        assert len(sc_res[0]) > 2, f"Expected suggestions for misspelled term: {sc_res}"
+
+        # ── 6. FT.SUG* transparent slot-based routing across all 3 nodes ──
+        for s_idx in range(3):
+            dname = f"p69_ac:{{{shard_tags[s_idx]}}}"
+            # Add via node 0, check len via node 1, get via node 2, del via node 1, check len via node 0
+            assert nodes[0].execute_command("FT.SUGADD", dname, "redis cluster", "10.0", "PAYLOAD", "rc") == 1
+            assert nodes[2].execute_command("FT.SUGADD", dname, "redis search", "8.0", "PAYLOAD", "rs") == 2
+            assert nodes[1].execute_command("FT.SUGLEN", dname) == 2
+            got_sug = nodes[2].execute_command("FT.SUGGET", dname, "red", "WITHSCORES", "WITHPAYLOADS", "MAX", "5")
+            assert got_sug[0] == "redis cluster" and got_sug[2] == "rc", f"Unexpected SUGGET: {got_sug}"
+            assert got_sug[3] == "redis search" and got_sug[5] == "rs", f"Unexpected SUGGET: {got_sug}"
+            assert nodes[1].execute_command("FT.SUGDEL", dname, "redis search") == 1
+            assert nodes[0].execute_command("FT.SUGLEN", dname) == 1
+            assert nodes[2].execute_command("FT.SUGDEL", dname, "redis cluster") == 1
+            assert nodes[0].execute_command("FT.SUGLEN", dname) == 0
+
+        # ── 7. FT.PROFILE <idx> SEARCH cluster breakdown ──
+        prof_res = nodes[1].execute_command(
+            "FT.PROFILE", "p69_hyb", "SEARCH", "QUERY", "@cat:{tech}", "LIMIT", "0", "10"
+        )
+        assert isinstance(prof_res, list) and len(prof_res) == 2
+        prof_ids, prof_kv_raw = prof_res[0], prof_res[1]
+        assert len(prof_ids) == 10
+        pkv = parse_kv_list(prof_kv_raw)
+        for req_key in ("parse_time_us", "scatter_time_us", "merge_time_us", "total_time_us", "total_docs", "result_count", "shards"):
+            assert req_key in pkv, f"Missing profile key {req_key}: {pkv}"
+        assert pkv["result_count"] == 10
+        assert pkv["total_docs"] == 100  # 600 / 6 categories
+        assert len(pkv["shards"]) == 3
+        assert sum(parse_kv_list(s)["hits"] for s in pkv["shards"]) == pkv["total_docs"]
+
+        # Cleanup Phase 69 indices
+        for idx_name in ("p69_hyb", "p69_skew", "p69_bg"):
+            assert nodes[0].execute_command("FT.DROPINDEX", idx_name) == "OK"
+
+        print(
+            "  PASS: gemini-search Phase 69 (FT.HYBRID RRF/LINEAR parity, 90%-skew BM25 DFS parity, "
+            "FT.INFO + bg indexing, FT.TAGVALS, FT.SPELLCHECK, FT.SUG*, FT.PROFILE)"
+        )
+    finally:
+        for nr in nodes_raw:
+            nr.close()
+        rc_raw.close()
+        sa_raw.close()
+        sa.close()
+        sa_proc.terminate()
+        try:
+            sa_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            sa_proc.kill()
+
+
 def main() -> int:
     bloom_so = sys.argv[1] if len(sys.argv) > 1 else "./build/redis_bloom.so"
     json_so = sys.argv[2] if len(sys.argv) > 2 else "./build/redis_json.so"
@@ -905,6 +1253,7 @@ def main() -> int:
             test_search_cluster_phase66(nodes, ports)
             test_search_cluster_phase67(rc, nodes, procs, ports, modules, workdir)
             test_search_cluster_phase68_golden_parity(rc, nodes, ports, modules, workdir)
+            test_search_cluster_phase69(rc, nodes, ports, modules, workdir)
         print("\nAll Redis 7 Cluster integration tests PASSED!")
         return 0
     finally:

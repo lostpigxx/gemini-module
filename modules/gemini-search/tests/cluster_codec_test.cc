@@ -629,3 +629,167 @@ TEST(ClusterCodecTest, SearchPhase1AndFetchDocsRoundTripAndFuzz) {
     EXPECT_FALSE(DecodeFetchDocsResponse(std::string_view(f_resp_buf.data(), cut), tmp));
   }
 }
+
+TEST(ClusterCodecTest, Phase69PayloadsAndClusterHashSlotRoundTrip) {
+  // Known Redis Cluster CRC16 slot test vectors
+  EXPECT_EQ(ComputeClusterHashSlot("123456789"), 12739u);
+  EXPECT_EQ(ComputeClusterHashSlot("foo"), 12182u);
+  EXPECT_EQ(ComputeClusterHashSlot("user:{foo}:profile"), ComputeClusterHashSlot("foo"));
+  EXPECT_EQ(ComputeClusterHashSlot("a{}b"), ComputeClusterHashSlot("a{}b"));
+
+  // DFS Term Stats
+  RpcDfsTermStatsRequest dfs_req;
+  dfs_req.index_name = "idx_dfs";
+  dfs_req.query_str = "@title:redis cluster";
+  dfs_req.verbatim = true;
+  dfs_req.nostopwords = false;
+  dfs_req.dialect = 2;
+  dfs_req.has_language = true;
+  dfs_req.language = "english";
+  dfs_req.infields = {"title", "body"};
+  std::string dfs_req_buf;
+  EncodeDfsTermStatsRequest(dfs_req, dfs_req_buf);
+  RpcDfsTermStatsRequest dfs_req_out;
+  ASSERT_TRUE(DecodeDfsTermStatsRequest(dfs_req_buf, dfs_req_out));
+  EXPECT_EQ(dfs_req_out.index_name, dfs_req.index_name);
+  EXPECT_EQ(dfs_req_out.query_str, dfs_req.query_str);
+  EXPECT_EQ(dfs_req_out.infields, dfs_req.infields);
+
+  RpcDfsTermStatsResponse dfs_resp;
+  dfs_resp.ok = true;
+  dfs_resp.fields = {{"body", 1000, 14500, {{"cluster", 25}, {"redis", 90}}}};
+  std::string dfs_resp_buf;
+  EncodeDfsTermStatsResponse(dfs_resp, dfs_resp_buf);
+  RpcDfsTermStatsResponse dfs_resp_out;
+  ASSERT_TRUE(DecodeDfsTermStatsResponse(dfs_resp_buf, dfs_resp_out));
+  ASSERT_TRUE(dfs_resp_out.ok);
+  ASSERT_EQ(dfs_resp_out.fields.size(), 1u);
+  EXPECT_EQ(dfs_resp_out.fields[0].live_docs, 1000u);
+  EXPECT_EQ(dfs_resp_out.fields[0].total_doc_len, 14500u);
+  EXPECT_EQ(dfs_resp_out.fields[0].term_df.size(), 2u);
+
+  // Hybrid Phase 1
+  RpcHybridPhase1Request h_req;
+  h_req.index_name = "idx_hyb";
+  h_req.text_query = "distributed search";
+  h_req.scorer = 0;
+  h_req.text_limit = 50;
+  h_req.vec_field = "emb";
+  h_req.vec_param = "qvec";
+  h_req.knn_k = 20;
+  h_req.ef_runtime = 64;
+  h_req.oversample = 4;
+  h_req.vec_filter_query = "@cat:{tech}";
+  h_req.params = {{"qvec", std::string("\x01\x02\x00\x03", 4)}};
+  h_req.dialect = 2;
+  h_req.remaining_timeout_ms = 3500;
+  h_req.global_bm25_stats = dfs_resp.fields;
+  std::string h_req_buf;
+  EncodeHybridPhase1Request(h_req, h_req_buf);
+  RpcHybridPhase1Request h_req_out;
+  ASSERT_TRUE(DecodeHybridPhase1Request(h_req_buf, h_req_out));
+  EXPECT_EQ(h_req_out.text_query, h_req.text_query);
+  EXPECT_EQ(h_req_out.knn_k, 20u);
+  EXPECT_EQ(h_req_out.global_bm25_stats.size(), 1u);
+
+  RpcHybridPhase1Response h_resp;
+  h_resp.ok = true;
+  h_resp.text_hits = {{"doc:1", 4.5}, {"doc:2", 2.1}};
+  h_resp.vec_hits = {{"doc:2", 0.12f}, {"doc:3", 0.34f}};
+  std::string h_resp_buf;
+  EncodeHybridPhase1Response(h_resp, h_resp_buf);
+  RpcHybridPhase1Response h_resp_out;
+  ASSERT_TRUE(DecodeHybridPhase1Response(h_resp_buf, h_resp_out));
+  ASSERT_TRUE(h_resp_out.ok);
+  EXPECT_EQ(h_resp_out.text_hits.size(), 2u);
+  EXPECT_EQ(h_resp_out.vec_hits.size(), 2u);
+
+  // InfoStats
+  RpcInfoStatsRequest info_req{"idx_info"};
+  std::string info_req_buf;
+  EncodeInfoStatsRequest(info_req, info_req_buf);
+  RpcInfoStatsRequest info_req_out;
+  ASSERT_TRUE(DecodeInfoStatsRequest(info_req_buf, info_req_out));
+  EXPECT_EQ(info_req_out.index_name, "idx_info");
+
+  RpcInfoStatsResponse info_resp{true, "", 500, 1200, 65536, 131072, true, 250, 500, 0.50, 2, 10, 8};
+  std::string info_resp_buf;
+  EncodeInfoStatsResponse(info_resp, info_resp_buf);
+  RpcInfoStatsResponse info_resp_out;
+  ASSERT_TRUE(DecodeInfoStatsResponse(info_resp_buf, info_resp_out));
+  EXPECT_EQ(info_resp_out.num_docs, 500u);
+  EXPECT_TRUE(info_resp_out.bg_indexing);
+  EXPECT_DOUBLE_EQ(info_resp_out.percent_indexed, 0.50);
+
+  // TagVals
+  RpcTagValsRequest tv_req{"idx_tv", "tags"};
+  std::string tv_req_buf;
+  EncodeTagValsRequest(tv_req, tv_req_buf);
+  RpcTagValsRequest tv_req_out;
+  ASSERT_TRUE(DecodeTagValsRequest(tv_req_buf, tv_req_out));
+  EXPECT_EQ(tv_req_out.field_name, "tags");
+
+  RpcTagValsResponse tv_resp{true, "", {"alpha", "beta", "gamma"}};
+  std::string tv_resp_buf;
+  EncodeTagValsResponse(tv_resp, tv_resp_buf);
+  RpcTagValsResponse tv_resp_out;
+  ASSERT_TRUE(DecodeTagValsResponse(tv_resp_buf, tv_resp_out));
+  EXPECT_EQ(tv_resp_out.tags, tv_resp.tags);
+
+  // SpellCheck
+  RpcSpellCheckRequest sp_req{"idx_sp", "redsi serch", 2, {"inc_d"}, {"exc_d"}};
+  std::string sp_req_buf;
+  EncodeSpellCheckRequest(sp_req, sp_req_buf);
+  RpcSpellCheckRequest sp_req_out;
+  ASSERT_TRUE(DecodeSpellCheckRequest(sp_req_buf, sp_req_out));
+  EXPECT_EQ(sp_req_out.max_dist, 2);
+  EXPECT_EQ(sp_req_out.include_dicts, sp_req.include_dicts);
+
+  RpcSpellCheckResponse sp_resp;
+  sp_resp.ok = true;
+  sp_resp.known_terms = {"redis"};
+  sp_resp.term_suggestions = {{"serch", {{"doc:1", 2.5}, {"search", 1.0}}}};
+  std::string sp_resp_buf;
+  EncodeSpellCheckResponse(sp_resp, sp_resp_buf);
+  RpcSpellCheckResponse sp_resp_out;
+  ASSERT_TRUE(DecodeSpellCheckResponse(sp_resp_buf, sp_resp_out));
+  EXPECT_EQ(sp_resp_out.known_terms, sp_resp.known_terms);
+  ASSERT_EQ(sp_resp_out.term_suggestions.size(), 1u);
+
+  // Suggest
+  RpcSuggestRequest sug_req{"FT.SUGGET", {"ac", "red", "FUZZY", "MAX", "5"}};
+  std::string sug_req_buf;
+  EncodeSuggestRequest(sug_req, sug_req_buf);
+  RpcSuggestRequest sug_req_out;
+  ASSERT_TRUE(DecodeSuggestRequest(sug_req_buf, sug_req_out));
+  EXPECT_EQ(sug_req_out.cmd_name, "FT.SUGGET");
+  EXPECT_EQ(sug_req_out.args, sug_req.args);
+
+  RpcSuggestResponse sug_resp{true, "", 3, {{"redis", 10.5, "p1"}, {"redwood", 3.0, ""}}};
+  std::string sug_resp_buf;
+  EncodeSuggestResponse(sug_resp, sug_resp_buf);
+  RpcSuggestResponse sug_resp_out;
+  ASSERT_TRUE(DecodeSuggestResponse(sug_resp_buf, sug_resp_out));
+  EXPECT_EQ(sug_resp_out.int_reply, 3);
+  ASSERT_EQ(sug_resp_out.entries.size(), 2u);
+  EXPECT_EQ(sug_resp_out.entries[0].payload, "p1");
+
+  // Truncation fuzzing on all Phase 69 codecs
+  auto FuzzTrunc = [](const std::string& buf, auto decode_fn) {
+    for (size_t cut = 0; cut < buf.size(); cut++) {
+      EXPECT_FALSE(decode_fn(std::string_view(buf.data(), cut)));
+    }
+  };
+  FuzzTrunc(dfs_req_buf, [](std::string_view v) { RpcDfsTermStatsRequest o; return DecodeDfsTermStatsRequest(v, o); });
+  FuzzTrunc(dfs_resp_buf, [](std::string_view v) { RpcDfsTermStatsResponse o; return DecodeDfsTermStatsResponse(v, o); });
+  FuzzTrunc(h_req_buf, [](std::string_view v) { RpcHybridPhase1Request o; return DecodeHybridPhase1Request(v, o); });
+  FuzzTrunc(h_resp_buf, [](std::string_view v) { RpcHybridPhase1Response o; return DecodeHybridPhase1Response(v, o); });
+  FuzzTrunc(info_req_buf, [](std::string_view v) { RpcInfoStatsRequest o; return DecodeInfoStatsRequest(v, o); });
+  FuzzTrunc(info_resp_buf, [](std::string_view v) { RpcInfoStatsResponse o; return DecodeInfoStatsResponse(v, o); });
+  FuzzTrunc(tv_req_buf, [](std::string_view v) { RpcTagValsRequest o; return DecodeTagValsRequest(v, o); });
+  FuzzTrunc(tv_resp_buf, [](std::string_view v) { RpcTagValsResponse o; return DecodeTagValsResponse(v, o); });
+  FuzzTrunc(sp_req_buf, [](std::string_view v) { RpcSpellCheckRequest o; return DecodeSpellCheckRequest(v, o); });
+  FuzzTrunc(sp_resp_buf, [](std::string_view v) { RpcSpellCheckResponse o; return DecodeSpellCheckResponse(v, o); });
+  FuzzTrunc(sug_req_buf, [](std::string_view v) { RpcSuggestRequest o; return DecodeSuggestRequest(v, o); });
+  FuzzTrunc(sug_resp_buf, [](std::string_view v) { RpcSuggestResponse o; return DecodeSuggestResponse(v, o); });
+}

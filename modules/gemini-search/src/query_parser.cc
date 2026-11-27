@@ -423,17 +423,23 @@ std::vector<ScoredResult> EvaluateQueryScored(
     }
 
     case QueryNode::Type::kTextMatch: {
+      auto LookupGlobalStats = [&qopts](const std::string& fname) -> const GlobalBm25Stats* {
+        if (!qopts.global_bm25_stats) return nullptr;
+        auto git = qopts.global_bm25_stats->find(fname);
+        return (git != qopts.global_bm25_stats->end()) ? &git->second : nullptr;
+      };
       auto SearchWithMod = [&qopts, synonyms](const TextIndex* idx, const std::string& term,
                                      const TextTermModifier& mod,
-                                     bool nostem, bool phonetic) -> std::vector<TextSearchResult> {
-        if (mod.is_infix) return idx->InfixSearch(term, qopts.max_expansions);
-        if (mod.is_suffix) return idx->SuffixSearch(term, qopts.max_expansions);
-        if (mod.is_prefix) return idx->PrefixSearch(term, qopts.max_expansions);
-        if (mod.fuzzy_dist > 0) return idx->FuzzySearch(term, mod.fuzzy_dist, qopts.max_expansions);
+                                     bool nostem, bool phonetic,
+                                     const GlobalBm25Stats* gstats) -> std::vector<TextSearchResult> {
+        if (mod.is_infix) return idx->InfixSearch(term, qopts.max_expansions, gstats);
+        if (mod.is_suffix) return idx->SuffixSearch(term, qopts.max_expansions, gstats);
+        if (mod.is_prefix) return idx->PrefixSearch(term, qopts.max_expansions, gstats);
+        if (mod.fuzzy_dist > 0) return idx->FuzzySearch(term, mod.fuzzy_dist, qopts.max_expansions, gstats);
         auto SearchOne = [&](const std::string& t) {
           return (qopts.stem && !nostem && IsSupportedStemLanguage(qopts.language))
-                     ? idx->StemSearch(t, qopts.language, qopts.min_stem_len)
-                     : idx->Search({t});
+                     ? idx->StemSearch(t, qopts.language, qopts.min_stem_len, gstats)
+                     : idx->Search({t}, gstats);
         };
         std::vector<TextSearchResult> base = SearchOne(term);
         if (synonyms && qopts.stem) {
@@ -450,7 +456,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
           }
         }
         if (phonetic && qopts.stem) {
-          auto ph = idx->PhoneticSearch(term);
+          auto ph = idx->PhoneticSearch(term, gstats);
           if (!ph.empty()) {
             std::unordered_map<std::string, double> sc;
             for (const auto& r : base) sc[r.doc_id] = std::max(sc[r.doc_id], r.score);
@@ -476,8 +482,9 @@ std::vector<ScoredResult> EvaluateQueryScored(
         }
         const auto* idx = text_indices.Get(node.field_name);
         if (!idx) return {};
+        const GlobalBm25Stats* gstats = LookupGlobalStats(node.field_name);
         if (node.is_phrase) {
-          auto results = idx->PhraseSearch(node.text_terms, qopts.slop, qopts.inorder);
+          auto results = idx->PhraseSearch(node.text_terms, qopts.slop, qopts.inorder, gstats);
           std::vector<ScoredResult> out;
           out.reserve(results.size());
           for (auto& r : results) out.push_back({r.doc_id, r.score});
@@ -492,7 +499,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
         for (size_t i = 0; i < node.text_terms.size(); i++) {
           const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
           auto results = SearchWithMod(idx, node.text_terms[i], mod, fspec->nostem,
-                                       !fspec->phonetic.empty());
+                                       !fspec->phonetic.empty(), gstats);
           for (auto& r : results) {
             double contrib = (qopts.scorer == ScorerType::kDocScore) ? 1.0 : (r.score * field_w);
             if (qopts.scorer == ScorerType::kDismax) {
@@ -518,8 +525,9 @@ std::vector<ScoredResult> EvaluateQueryScored(
         if (!infield_set.empty() && infield_set.find(f.name) == infield_set.end()) continue;
         const auto* idx = text_indices.Get(f.name);
         if (!idx) continue;
+        const GlobalBm25Stats* gstats = LookupGlobalStats(f.name);
         if (node.is_phrase) {
-          auto results = idx->PhraseSearch(node.text_terms, qopts.slop, qopts.inorder);
+          auto results = idx->PhraseSearch(node.text_terms, qopts.slop, qopts.inorder, gstats);
           for (auto& r : results) {
             double contrib = (qopts.scorer == ScorerType::kDocScore) ? 1.0 : (r.score * f.weight);
             if (qopts.scorer == ScorerType::kDismax) {
@@ -532,7 +540,7 @@ std::vector<ScoredResult> EvaluateQueryScored(
           for (size_t i = 0; i < node.text_terms.size(); i++) {
             const auto& mod = (i < node.text_term_mods.size()) ? node.text_term_mods[i] : default_mod;
             auto results = SearchWithMod(idx, node.text_terms[i], mod, f.nostem,
-                                         !f.phonetic.empty());
+                                         !f.phonetic.empty(), gstats);
             for (auto& r : results) {
               double contrib = (qopts.scorer == ScorerType::kDocScore) ? 1.0 : (r.score * f.weight);
               if (qopts.scorer == ScorerType::kDismax) {
@@ -668,6 +676,98 @@ std::vector<ScoredResult> EvaluateQueryScored(
   }
   error_msg = "ERR internal: unknown query node type";
   return {};
+}
+
+std::vector<LocalFieldBm25Stats> CollectQueryTermStats(
+    const QueryNode& node, const IndexSpec& spec, const TextFieldIndices& text_indices,
+    const QueryOptions& qopts, const SynonymMap* synonyms) {
+  std::unordered_map<std::string, std::unordered_set<std::string>> field_terms;
+  std::unordered_set<std::string> infield_set(qopts.infields.begin(), qopts.infields.end());
+
+  auto CollectField = [&](const FieldSpec& fspec, const QueryNode& qn) {
+    const auto* idx = text_indices.Get(fspec.name);
+    auto& tset = field_terms[fspec.name];
+    if (!idx) return;
+    if (qn.is_phrase) {
+      for (const auto& t : qn.text_terms) tset.insert(t);
+      return;
+    }
+    TextTermModifier default_mod;
+    for (size_t i = 0; i < qn.text_terms.size(); i++) {
+      const auto& term = qn.text_terms[i];
+      const auto& mod = (i < qn.text_term_mods.size()) ? qn.text_term_mods[i] : default_mod;
+      if (mod.is_infix) {
+        for (const auto& t : idx->ExpandInfixTerms(term, qopts.max_expansions)) tset.insert(t);
+      } else if (mod.is_suffix) {
+        for (const auto& t : idx->ExpandSuffixTerms(term, qopts.max_expansions)) tset.insert(t);
+      } else if (mod.is_prefix) {
+        for (const auto& t : idx->ExpandPrefixTerms(term, qopts.max_expansions)) tset.insert(t);
+      } else if (mod.fuzzy_dist > 0) {
+        for (const auto& t : idx->ExpandFuzzyTerms(term, mod.fuzzy_dist, qopts.max_expansions)) {
+          tset.insert(t);
+        }
+      } else {
+        auto ExpandOne = [&](const std::string& t) {
+          if (qopts.stem && !fspec.nostem && IsSupportedStemLanguage(qopts.language)) {
+            for (const auto& et : idx->ExpandStemTerms(t, qopts.language, qopts.min_stem_len)) {
+              tset.insert(et);
+            }
+          } else {
+            tset.insert(t);
+          }
+        };
+        ExpandOne(term);
+        if (synonyms && qopts.stem) {
+          for (const auto& syn : synonyms->Expand(term)) ExpandOne(syn);
+        }
+        if (!fspec.phonetic.empty() && qopts.stem) {
+          for (const auto& pt : idx->ExpandPhoneticTerms(term)) tset.insert(pt);
+        }
+      }
+    }
+  };
+
+  auto Walk = [&](auto& self, const QueryNode& cur) -> void {
+    if (cur.type == QueryNode::Type::kTextMatch) {
+      if (!cur.field_name.empty()) {
+        const auto* fspec = spec.FindField(cur.field_name);
+        if (fspec && fspec->type == FieldType::kText) {
+          CollectField(*fspec, cur);
+        }
+      } else {
+        for (const auto& f : spec.fields) {
+          if (f.type != FieldType::kText) continue;
+          if (!infield_set.empty() && infield_set.find(f.name) == infield_set.end()) continue;
+          CollectField(f, cur);
+        }
+      }
+      return;
+    }
+    for (const auto& ch : cur.children) self(self, ch);
+  };
+
+  Walk(Walk, node);
+
+  std::vector<LocalFieldBm25Stats> result;
+  result.reserve(field_terms.size());
+  for (const auto& [fname, terms] : field_terms) {
+    LocalFieldBm25Stats st;
+    st.field_name = fname;
+    if (const auto* idx = text_indices.Get(fname)) {
+      st.live_docs = static_cast<uint64_t>(idx->NumDocs());
+      st.total_doc_len = idx->TotalDocLen();
+      for (const auto& t : terms) {
+        uint64_t df = idx->TermDocFreq(t);
+        if (df > 0) st.term_df[t] = df;
+      }
+    }
+    result.push_back(std::move(st));
+  }
+  std::sort(result.begin(), result.end(),
+            [](const LocalFieldBm25Stats& a, const LocalFieldBm25Stats& b) {
+              return a.field_name < b.field_name;
+            });
+  return result;
 }
 
 // =============================================================

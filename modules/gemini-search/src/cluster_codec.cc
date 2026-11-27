@@ -110,6 +110,30 @@ uint32_t ComputeCrc32(std::string_view data) {
   return ComputeCrc32(reinterpret_cast<const uint8_t*>(data.data()), data.size());
 }
 
+uint16_t ComputeClusterHashSlot(std::string_view key) {
+  // Redis Cluster hash-tag rule: hash content between first '{' and first '}' after it if non-empty
+  std::string_view to_hash = key;
+  size_t s = key.find('{');
+  if (s != std::string_view::npos) {
+    size_t e = key.find('}', s + 1);
+    if (e != std::string_view::npos && e > s + 1) {
+      to_hash = key.substr(s + 1, e - s - 1);
+    }
+  }
+  uint16_t crc = 0;
+  for (unsigned char ch : to_hash) {
+    crc ^= static_cast<uint16_t>(ch) << 8;
+    for (int bit = 0; bit < 8; bit++) {
+      if (crc & 0x8000u) {
+        crc = static_cast<uint16_t>((crc << 1) ^ 0x1021u);
+      } else {
+        crc = static_cast<uint16_t>(crc << 1);
+      }
+    }
+  }
+  return static_cast<uint16_t>(crc & 0x3FFFu);
+}
+
 BinaryWriter::BinaryWriter(size_t reserve_bytes) { buf_.reserve(reserve_bytes); }
 
 void BinaryWriter::WriteU8(uint8_t v) { buf_.push_back(static_cast<char>(v)); }
@@ -778,6 +802,43 @@ bool DecodeSchemaSyncResponse(std::string_view data, RpcSchemaSyncResponse& out)
   return r.AtEnd();
 }
 
+static void WriteFieldBm25StatsVec(BinaryWriter& w, const std::vector<RpcFieldBm25Stats>& stats) {
+  w.WriteVarUint(static_cast<uint64_t>(stats.size()));
+  for (const auto& st : stats) {
+    w.WriteString(st.field_name);
+    w.WriteVarUint(st.live_docs);
+    w.WriteVarUint(st.total_doc_len);
+    w.WriteVarUint(static_cast<uint64_t>(st.term_df.size()));
+    for (const auto& [term, df] : st.term_df) {
+      w.WriteString(term);
+      w.WriteVarUint(df);
+    }
+  }
+}
+
+static bool ReadFieldBm25StatsVec(BinaryReader& r, std::vector<RpcFieldBm25Stats>& out) {
+  uint64_t fcount = 0;
+  if (!r.ReadVarUint(fcount) || fcount > 4096 || fcount > r.Remaining()) return false;
+  out.clear();
+  out.reserve(static_cast<size_t>(fcount));
+  for (uint64_t i = 0; i < fcount; i++) {
+    RpcFieldBm25Stats st;
+    if (!r.ReadString(st.field_name, kMaxErrorMsgBytes)) return false;
+    if (!r.ReadVarUint(st.live_docs) || !r.ReadVarUint(st.total_doc_len)) return false;
+    uint64_t tcount = 0;
+    if (!r.ReadVarUint(tcount) || tcount > kMaxRpcVecItems || tcount > r.Remaining()) return false;
+    st.term_df.reserve(static_cast<size_t>(tcount));
+    for (uint64_t j = 0; j < tcount; j++) {
+      std::string term;
+      uint64_t df = 0;
+      if (!r.ReadString(term, kMaxErrorMsgBytes) || !r.ReadVarUint(df)) return false;
+      st.term_df.emplace_back(std::move(term), df);
+    }
+    out.push_back(std::move(st));
+  }
+  return true;
+}
+
 void EncodeSearchPhase1Request(const RpcSearchPhase1Request& req, std::string& out) {
   BinaryWriter w(256);
   w.WriteString(req.index_name);
@@ -823,6 +884,7 @@ void EncodeSearchPhase1Request(const RpcSearchPhase1Request& req, std::string& o
     w.WriteDouble(req.geofilter_radius);
     w.WriteU8(req.geofilter_unit);
   }
+  WriteFieldBm25StatsVec(w, req.global_bm25_stats);
   out = w.TakeBuffer();
 }
 
@@ -888,6 +950,7 @@ bool DecodeSearchPhase1Request(std::string_view data, RpcSearchPhase1Request& ou
       return false;
     }
   }
+  if (!ReadFieldBm25StatsVec(r, out.global_bm25_stats)) return false;
   return r.AtEnd();
 }
 
@@ -1054,6 +1117,343 @@ bool DecodeFetchDocsResponse(std::string_view data, RpcFetchDocsResponse& out) {
       doc.fields.emplace_back(std::move(k), std::move(v));
     }
     out.docs.push_back(std::move(doc));
+  }
+  return r.AtEnd();
+}
+
+// ============================================================================
+// Phase 69: BM25 DFS, Hybrid Phase 1, Info, TagVals, SpellCheck, Suggest Codecs
+// ============================================================================
+
+void EncodeDfsTermStatsRequest(const RpcDfsTermStatsRequest& req, std::string& out) {
+  BinaryWriter w(128);
+  w.WriteString(req.index_name);
+  w.WriteString(req.query_str);
+  w.WriteBool(req.verbatim);
+  w.WriteBool(req.nostopwords);
+  w.WriteVarInt(static_cast<int64_t>(req.dialect));
+  w.WriteBool(req.has_language);
+  if (req.has_language) w.WriteString(req.language);
+  w.WriteStringVec(req.infields);
+  out = w.TakeBuffer();
+}
+
+bool DecodeDfsTermStatsRequest(std::string_view data, RpcDfsTermStatsRequest& out) {
+  out = RpcDfsTermStatsRequest{};
+  BinaryReader r(data);
+  if (!r.ReadString(out.index_name, kMaxErrorMsgBytes) || out.index_name.empty()) return false;
+  if (!r.ReadString(out.query_str, kMaxRpcPayloadBytes)) return false;
+  if (!r.ReadBool(out.verbatim) || !r.ReadBool(out.nostopwords)) return false;
+  int64_t dialect = 0;
+  if (!r.ReadVarInt(dialect) || dialect < 0 || dialect > 100) return false;
+  out.dialect = static_cast<int32_t>(dialect);
+  if (!r.ReadBool(out.has_language)) return false;
+  if (out.has_language && !r.ReadString(out.language, 128)) return false;
+  if (!r.ReadStringVec(out.infields, 4096, kMaxErrorMsgBytes)) return false;
+  return r.AtEnd();
+}
+
+void EncodeDfsTermStatsResponse(const RpcDfsTermStatsResponse& resp, std::string& out) {
+  BinaryWriter w(128);
+  w.WriteBool(resp.ok);
+  w.WriteString(resp.error_msg);
+  WriteFieldBm25StatsVec(w, resp.fields);
+  out = w.TakeBuffer();
+}
+
+bool DecodeDfsTermStatsResponse(std::string_view data, RpcDfsTermStatsResponse& out) {
+  out = RpcDfsTermStatsResponse{};
+  BinaryReader r(data);
+  if (!r.ReadBool(out.ok)) return false;
+  if (!r.ReadString(out.error_msg, kMaxErrorMsgBytes)) return false;
+  if (!ReadFieldBm25StatsVec(r, out.fields)) return false;
+  return r.AtEnd();
+}
+
+void EncodeHybridPhase1Request(const RpcHybridPhase1Request& req, std::string& out) {
+  BinaryWriter w(256);
+  w.WriteString(req.index_name);
+  w.WriteString(req.text_query);
+  w.WriteU8(req.scorer);
+  w.WriteVarInt(req.text_limit);
+  w.WriteString(req.vec_field);
+  w.WriteString(req.vec_param);
+  w.WriteVarUint(req.knn_k);
+  w.WriteVarUint(req.ef_runtime);
+  w.WriteVarUint(req.oversample);
+  w.WriteString(req.vec_filter_query);
+  w.WriteVarUint(static_cast<uint64_t>(req.params.size()));
+  for (const auto& [k, v] : req.params) {
+    w.WriteString(k);
+    w.WriteString(v);
+  }
+  w.WriteVarInt(static_cast<int64_t>(req.dialect));
+  w.WriteI64(req.remaining_timeout_ms);
+  WriteFieldBm25StatsVec(w, req.global_bm25_stats);
+  out = w.TakeBuffer();
+}
+
+bool DecodeHybridPhase1Request(std::string_view data, RpcHybridPhase1Request& out) {
+  out = RpcHybridPhase1Request{};
+  BinaryReader r(data);
+  if (!r.ReadString(out.index_name, kMaxErrorMsgBytes) || out.index_name.empty()) return false;
+  if (!r.ReadString(out.text_query, kMaxRpcPayloadBytes)) return false;
+  if (!r.ReadU8(out.scorer)) return false;
+  if (!r.ReadVarInt(out.text_limit) || out.text_limit < -1) return false;
+  if (!r.ReadString(out.vec_field, kMaxErrorMsgBytes) || out.vec_field.empty()) return false;
+  if (!r.ReadString(out.vec_param, kMaxErrorMsgBytes) || out.vec_param.empty()) return false;
+  if (!r.ReadVarUint(out.knn_k) || out.knn_k == 0 || out.knn_k > kMaxRpcVecItems) return false;
+  if (!r.ReadVarUint(out.ef_runtime) || !r.ReadVarUint(out.oversample)) return false;
+  if (!r.ReadString(out.vec_filter_query, kMaxRpcPayloadBytes)) return false;
+  uint64_t pcount = 0;
+  if (!r.ReadVarUint(pcount) || pcount > 10000 || pcount > r.Remaining()) return false;
+  out.params.reserve(static_cast<size_t>(pcount));
+  for (uint64_t i = 0; i < pcount; i++) {
+    std::string k, v;
+    if (!r.ReadString(k, kMaxErrorMsgBytes) || !r.ReadString(v, kMaxRpcPayloadBytes)) return false;
+    out.params.emplace_back(std::move(k), std::move(v));
+  }
+  int64_t dialect = 0;
+  if (!r.ReadVarInt(dialect) || dialect < 0 || dialect > 100) return false;
+  out.dialect = static_cast<int32_t>(dialect);
+  if (!r.ReadI64(out.remaining_timeout_ms)) return false;
+  if (!ReadFieldBm25StatsVec(r, out.global_bm25_stats)) return false;
+  return r.AtEnd();
+}
+
+void EncodeHybridPhase1Response(const RpcHybridPhase1Response& resp, std::string& out) {
+  BinaryWriter w(64 + (resp.text_hits.size() + resp.vec_hits.size()) * 24);
+  w.WriteBool(resp.ok);
+  w.WriteString(resp.error_msg);
+  w.WriteVarUint(static_cast<uint64_t>(resp.text_hits.size()));
+  for (const auto& [doc_id, score] : resp.text_hits) {
+    w.WriteString(doc_id);
+    w.WriteDouble(score);
+  }
+  w.WriteVarUint(static_cast<uint64_t>(resp.vec_hits.size()));
+  for (const auto& [doc_id, dist] : resp.vec_hits) {
+    w.WriteString(doc_id);
+    w.WriteDouble(static_cast<double>(dist));
+  }
+  out = w.TakeBuffer();
+}
+
+bool DecodeHybridPhase1Response(std::string_view data, RpcHybridPhase1Response& out) {
+  out = RpcHybridPhase1Response{};
+  BinaryReader r(data);
+  if (!r.ReadBool(out.ok)) return false;
+  if (!r.ReadString(out.error_msg, kMaxErrorMsgBytes)) return false;
+  uint64_t tcount = 0;
+  if (!r.ReadVarUint(tcount) || tcount > kMaxRpcVecItems || tcount > r.Remaining()) return false;
+  out.text_hits.reserve(static_cast<size_t>(tcount));
+  for (uint64_t i = 0; i < tcount; i++) {
+    std::string doc_id;
+    double score = 0.0;
+    if (!r.ReadString(doc_id, kMaxErrorMsgBytes) || !r.ReadDouble(score)) return false;
+    out.text_hits.emplace_back(std::move(doc_id), score);
+  }
+  uint64_t vcount = 0;
+  if (!r.ReadVarUint(vcount) || vcount > kMaxRpcVecItems || vcount > r.Remaining()) return false;
+  out.vec_hits.reserve(static_cast<size_t>(vcount));
+  for (uint64_t i = 0; i < vcount; i++) {
+    std::string doc_id;
+    double dist = 0.0;
+    if (!r.ReadString(doc_id, kMaxErrorMsgBytes) || !r.ReadDouble(dist)) return false;
+    out.vec_hits.emplace_back(std::move(doc_id), static_cast<float>(dist));
+  }
+  return r.AtEnd();
+}
+
+void EncodeInfoStatsRequest(const RpcInfoStatsRequest& req, std::string& out) {
+  BinaryWriter w(64);
+  w.WriteString(req.index_name);
+  out = w.TakeBuffer();
+}
+
+bool DecodeInfoStatsRequest(std::string_view data, RpcInfoStatsRequest& out) {
+  out = RpcInfoStatsRequest{};
+  BinaryReader r(data);
+  if (!r.ReadString(out.index_name, kMaxErrorMsgBytes) || out.index_name.empty()) return false;
+  return r.AtEnd();
+}
+
+void EncodeInfoStatsResponse(const RpcInfoStatsResponse& resp, std::string& out) {
+  BinaryWriter w(128);
+  w.WriteBool(resp.ok);
+  w.WriteString(resp.error_msg);
+  w.WriteVarUint(resp.num_docs);
+  w.WriteVarUint(resp.num_terms);
+  w.WriteVarUint(resp.inverted_bytes);
+  w.WriteVarUint(resp.vector_bytes);
+  w.WriteBool(resp.bg_indexing);
+  w.WriteVarUint(resp.bg_scanned_keys);
+  w.WriteVarUint(resp.bg_total_keys);
+  w.WriteDouble(resp.percent_indexed);
+  w.WriteVarUint(resp.cursor_idle);
+  w.WriteVarUint(resp.cursor_total_created);
+  w.WriteVarUint(resp.cursor_total_expired);
+  out = w.TakeBuffer();
+}
+
+bool DecodeInfoStatsResponse(std::string_view data, RpcInfoStatsResponse& out) {
+  out = RpcInfoStatsResponse{};
+  BinaryReader r(data);
+  if (!r.ReadBool(out.ok)) return false;
+  if (!r.ReadString(out.error_msg, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadVarUint(out.num_docs) || !r.ReadVarUint(out.num_terms) ||
+      !r.ReadVarUint(out.inverted_bytes) || !r.ReadVarUint(out.vector_bytes) ||
+      !r.ReadBool(out.bg_indexing) || !r.ReadVarUint(out.bg_scanned_keys) ||
+      !r.ReadVarUint(out.bg_total_keys) || !r.ReadDouble(out.percent_indexed) ||
+      !r.ReadVarUint(out.cursor_idle) || !r.ReadVarUint(out.cursor_total_created) ||
+      !r.ReadVarUint(out.cursor_total_expired)) {
+    return false;
+  }
+  return r.AtEnd();
+}
+
+void EncodeTagValsRequest(const RpcTagValsRequest& req, std::string& out) {
+  BinaryWriter w(64);
+  w.WriteString(req.index_name);
+  w.WriteString(req.field_name);
+  out = w.TakeBuffer();
+}
+
+bool DecodeTagValsRequest(std::string_view data, RpcTagValsRequest& out) {
+  out = RpcTagValsRequest{};
+  BinaryReader r(data);
+  if (!r.ReadString(out.index_name, kMaxErrorMsgBytes) || out.index_name.empty()) return false;
+  if (!r.ReadString(out.field_name, kMaxErrorMsgBytes) || out.field_name.empty()) return false;
+  return r.AtEnd();
+}
+
+void EncodeTagValsResponse(const RpcTagValsResponse& resp, std::string& out) {
+  BinaryWriter w(64 + resp.tags.size() * 16);
+  w.WriteBool(resp.ok);
+  w.WriteString(resp.error_msg);
+  w.WriteStringVec(resp.tags);
+  out = w.TakeBuffer();
+}
+
+bool DecodeTagValsResponse(std::string_view data, RpcTagValsResponse& out) {
+  out = RpcTagValsResponse{};
+  BinaryReader r(data);
+  if (!r.ReadBool(out.ok)) return false;
+  if (!r.ReadString(out.error_msg, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadStringVec(out.tags, kMaxRpcVecItems, kMaxErrorMsgBytes)) return false;
+  return r.AtEnd();
+}
+
+void EncodeSpellCheckRequest(const RpcSpellCheckRequest& req, std::string& out) {
+  BinaryWriter w(128);
+  w.WriteString(req.index_name);
+  w.WriteString(req.query_str);
+  w.WriteVarInt(static_cast<int64_t>(req.max_dist));
+  w.WriteStringVec(req.include_dicts);
+  w.WriteStringVec(req.exclude_dicts);
+  out = w.TakeBuffer();
+}
+
+bool DecodeSpellCheckRequest(std::string_view data, RpcSpellCheckRequest& out) {
+  out = RpcSpellCheckRequest{};
+  BinaryReader r(data);
+  if (!r.ReadString(out.index_name, kMaxErrorMsgBytes) || out.index_name.empty()) return false;
+  if (!r.ReadString(out.query_str, kMaxRpcPayloadBytes)) return false;
+  int64_t md = 1;
+  if (!r.ReadVarInt(md) || md < 0 || md > 10) return false;
+  out.max_dist = static_cast<int32_t>(md);
+  if (!r.ReadStringVec(out.include_dicts, 1024, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadStringVec(out.exclude_dicts, 1024, kMaxErrorMsgBytes)) return false;
+  return r.AtEnd();
+}
+
+void EncodeSpellCheckResponse(const RpcSpellCheckResponse& resp, std::string& out) {
+  BinaryWriter w(128);
+  w.WriteBool(resp.ok);
+  w.WriteString(resp.error_msg);
+  w.WriteStringVec(resp.known_terms);
+  w.WriteVarUint(static_cast<uint64_t>(resp.term_suggestions.size()));
+  for (const auto& ts : resp.term_suggestions) {
+    w.WriteString(ts.term);
+    w.WriteVarUint(static_cast<uint64_t>(ts.suggestions.size()));
+    for (const auto& [sug, score] : ts.suggestions) {
+      w.WriteString(sug);
+      w.WriteDouble(score);
+    }
+  }
+  out = w.TakeBuffer();
+}
+
+bool DecodeSpellCheckResponse(std::string_view data, RpcSpellCheckResponse& out) {
+  out = RpcSpellCheckResponse{};
+  BinaryReader r(data);
+  if (!r.ReadBool(out.ok)) return false;
+  if (!r.ReadString(out.error_msg, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadStringVec(out.known_terms, kMaxRpcVecItems, kMaxErrorMsgBytes)) return false;
+  uint64_t tcount = 0;
+  if (!r.ReadVarUint(tcount) || tcount > 10000 || tcount > r.Remaining()) return false;
+  out.term_suggestions.reserve(static_cast<size_t>(tcount));
+  for (uint64_t i = 0; i < tcount; i++) {
+    RpcSpellCheckTermSugs ts;
+    if (!r.ReadString(ts.term, kMaxErrorMsgBytes)) return false;
+    uint64_t scount = 0;
+    if (!r.ReadVarUint(scount) || scount > kMaxRpcVecItems || scount > r.Remaining()) return false;
+    ts.suggestions.reserve(static_cast<size_t>(scount));
+    for (uint64_t j = 0; j < scount; j++) {
+      std::string sug;
+      double score = 0.0;
+      if (!r.ReadString(sug, kMaxErrorMsgBytes) || !r.ReadDouble(score)) return false;
+      ts.suggestions.emplace_back(std::move(sug), score);
+    }
+    out.term_suggestions.push_back(std::move(ts));
+  }
+  return r.AtEnd();
+}
+
+void EncodeSuggestRequest(const RpcSuggestRequest& req, std::string& out) {
+  BinaryWriter w(128);
+  w.WriteString(req.cmd_name);
+  w.WriteStringVec(req.args);
+  out = w.TakeBuffer();
+}
+
+bool DecodeSuggestRequest(std::string_view data, RpcSuggestRequest& out) {
+  out = RpcSuggestRequest{};
+  BinaryReader r(data);
+  if (!r.ReadString(out.cmd_name, 64) || out.cmd_name.empty()) return false;
+  if (!r.ReadStringVec(out.args, 1024, kMaxRpcPayloadBytes)) return false;
+  return r.AtEnd();
+}
+
+void EncodeSuggestResponse(const RpcSuggestResponse& resp, std::string& out) {
+  BinaryWriter w(64 + resp.entries.size() * 32);
+  w.WriteBool(resp.ok);
+  w.WriteString(resp.error_msg);
+  w.WriteI64(resp.int_reply);
+  w.WriteVarUint(static_cast<uint64_t>(resp.entries.size()));
+  for (const auto& e : resp.entries) {
+    w.WriteString(e.str);
+    w.WriteDouble(e.score);
+    w.WriteString(e.payload);
+  }
+  out = w.TakeBuffer();
+}
+
+bool DecodeSuggestResponse(std::string_view data, RpcSuggestResponse& out) {
+  out = RpcSuggestResponse{};
+  BinaryReader r(data);
+  if (!r.ReadBool(out.ok)) return false;
+  if (!r.ReadString(out.error_msg, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadI64(out.int_reply)) return false;
+  uint64_t ecount = 0;
+  if (!r.ReadVarUint(ecount) || ecount > kMaxRpcVecItems || ecount > r.Remaining()) return false;
+  out.entries.reserve(static_cast<size_t>(ecount));
+  for (uint64_t i = 0; i < ecount; i++) {
+    RpcSuggestEntry e;
+    if (!r.ReadString(e.str, kMaxRpcPayloadBytes) || !r.ReadDouble(e.score) ||
+        !r.ReadString(e.payload, kMaxRpcPayloadBytes)) {
+      return false;
+    }
+    out.entries.push_back(std::move(e));
   }
   return r.AtEnd();
 }

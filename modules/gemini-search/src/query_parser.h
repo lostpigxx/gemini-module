@@ -93,7 +93,22 @@ struct QueryOptions {
   size_t max_expansions = 200;
   size_t min_stem_len = 3;
   const std::unordered_set<std::string>* custom_dict = nullptr;
+  // Phase 69: Optional per-field global BM25 statistics for 2-Phase DFS scoring
+  const std::unordered_map<std::string, GlobalBm25Stats>* global_bm25_stats = nullptr;
 };
+
+struct LocalFieldBm25Stats {
+  std::string field_name;
+  uint64_t live_docs = 0;
+  uint64_t total_doc_len = 0;
+  std::unordered_map<std::string, uint64_t> term_df;
+};
+
+// Phase 69: Collects local (live_docs, total_doc_len, term_df) per referenced text field
+// for 2-Phase DFS global BM25 scoring.
+std::vector<LocalFieldBm25Stats> CollectQueryTermStats(
+    const QueryNode& node, const IndexSpec& spec, const TextFieldIndices& text_indices,
+    const QueryOptions& qopts = {}, const SynonymMap* synonyms = nullptr);
 
 bool ParseQuery(const std::string& input, ParsedQuery& out,
                 std::string& error_msg,

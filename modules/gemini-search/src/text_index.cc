@@ -318,10 +318,16 @@ void TextIndex::Remove(const std::string& doc_id) {
 }
 
 std::vector<TextSearchResult> TextIndex::Search(
-    const std::vector<std::string>& terms) const {
+    const std::vector<std::string>& terms,
+    const GlobalBm25Stats* global_stats) const {
   if (live_docs_ == 0) return {};
 
   double N = static_cast<double>(live_docs_);
+  double avgdl = avg_doc_len_;
+  if (global_stats && global_stats->total_docs > 0 && global_stats->avg_doc_len > 0.0) {
+    N = static_cast<double>(global_stats->total_docs);
+    avgdl = global_stats->avg_doc_len;
+  }
   double k1 = 1.2;
   double b = 0.75;
 
@@ -332,12 +338,18 @@ std::vector<TextSearchResult> TextIndex::Search(
     if (it == postings_.end()) continue;
     auto& posts = it->second;
     double df = static_cast<double>(posts.size());
+    if (global_stats) {
+      auto gdit = global_stats->term_df.find(term);
+      if (gdit != global_stats->term_df.end() && gdit->second > 0) {
+        df = static_cast<double>(gdit->second);
+      }
+    }
     double idf = std::log((N - df + 0.5) / (df + 0.5) + 1.0);
 
     for (auto& p : posts) {
       double tf = static_cast<double>(p.tf);
       double dl = static_cast<double>(doc_lengths_[p.doc_id]);
-      double tf_norm = (tf * (k1 + 1.0)) / (tf + k1 * (1.0 - b + b * dl / avg_doc_len_));
+      double tf_norm = (tf * (k1 + 1.0)) / (tf + k1 * (1.0 - b + b * dl / avgdl));
       scores[p.doc_id] += idf * tf_norm;
     }
   }
@@ -604,8 +616,8 @@ std::vector<std::string> TextIndex::FuzzyLookup(const std::string& term, int max
   return result;
 }
 
-std::vector<TextSearchResult> TextIndex::PrefixSearch(const std::string& prefix,
-                                                       size_t max_expansions) const {
+std::vector<std::string> TextIndex::ExpandPrefixTerms(const std::string& prefix,
+                                                      size_t max_expansions) const {
   if (prefix.size() < 2 || live_docs_ == 0) return {};
   std::vector<std::string> matching_terms;
   for (auto it = sorted_terms_.lower_bound(prefix); it != sorted_terms_.end(); ++it) {
@@ -613,11 +625,11 @@ std::vector<TextSearchResult> TextIndex::PrefixSearch(const std::string& prefix,
     matching_terms.push_back(*it);
     if (matching_terms.size() >= max_expansions) break;
   }
-  return Search(matching_terms);
+  return matching_terms;
 }
 
-std::vector<TextSearchResult> TextIndex::SuffixSearch(const std::string& suffix,
-                                                       size_t max_expansions) const {
+std::vector<std::string> TextIndex::ExpandSuffixTerms(const std::string& suffix,
+                                                      size_t max_expansions) const {
   if (suffix.size() < 2 || live_docs_ == 0) return {};
   std::string rev_suf(suffix.rbegin(), suffix.rend());
   std::vector<std::string> matching_terms;
@@ -626,11 +638,11 @@ std::vector<TextSearchResult> TextIndex::SuffixSearch(const std::string& suffix,
     matching_terms.emplace_back(it->rbegin(), it->rend());
     if (matching_terms.size() >= max_expansions) break;
   }
-  return Search(matching_terms);
+  return matching_terms;
 }
 
-std::vector<TextSearchResult> TextIndex::InfixSearch(const std::string& infix,
-                                                      size_t max_expansions) const {
+std::vector<std::string> TextIndex::ExpandInfixTerms(const std::string& infix,
+                                                     size_t max_expansions) const {
   if (infix.size() < 2 || live_docs_ == 0) return {};
   std::vector<std::string> matching_terms;
   for (const auto& [term, posts] : postings_) {
@@ -639,11 +651,11 @@ std::vector<TextSearchResult> TextIndex::InfixSearch(const std::string& infix,
       if (matching_terms.size() >= max_expansions) break;
     }
   }
-  return Search(matching_terms);
+  return matching_terms;
 }
 
-std::vector<TextSearchResult> TextIndex::FuzzySearch(const std::string& term, int max_dist,
-                                                      size_t max_expansions) const {
+std::vector<std::string> TextIndex::ExpandFuzzyTerms(const std::string& term, int max_dist,
+                                                     size_t max_expansions) const {
   if (max_dist < 1 || max_dist > 3 || live_docs_ == 0) return {};
   std::vector<std::string> matching_terms;
   for (auto& [posting_term, posts] : postings_) {
@@ -652,7 +664,31 @@ std::vector<TextSearchResult> TextIndex::FuzzySearch(const std::string& term, in
       if (matching_terms.size() >= max_expansions) break;
     }
   }
-  return Search(matching_terms);
+  return matching_terms;
+}
+
+std::vector<TextSearchResult> TextIndex::PrefixSearch(
+    const std::string& prefix, size_t max_expansions,
+    const GlobalBm25Stats* global_stats) const {
+  return Search(ExpandPrefixTerms(prefix, max_expansions), global_stats);
+}
+
+std::vector<TextSearchResult> TextIndex::SuffixSearch(
+    const std::string& suffix, size_t max_expansions,
+    const GlobalBm25Stats* global_stats) const {
+  return Search(ExpandSuffixTerms(suffix, max_expansions), global_stats);
+}
+
+std::vector<TextSearchResult> TextIndex::InfixSearch(
+    const std::string& infix, size_t max_expansions,
+    const GlobalBm25Stats* global_stats) const {
+  return Search(ExpandInfixTerms(infix, max_expansions), global_stats);
+}
+
+std::vector<TextSearchResult> TextIndex::FuzzySearch(
+    const std::string& term, int max_dist, size_t max_expansions,
+    const GlobalBm25Stats* global_stats) const {
+  return Search(ExpandFuzzyTerms(term, max_dist, max_expansions), global_stats);
 }
 
 static bool CheckPhrasePositions(
@@ -734,15 +770,16 @@ std::vector<std::string> TextIndex::PhraseLookup(
 }
 
 std::vector<TextSearchResult> TextIndex::PhraseSearch(
-    const std::vector<std::string>& terms, int slop, bool inorder) const {
+    const std::vector<std::string>& terms, int slop, bool inorder,
+    const GlobalBm25Stats* global_stats) const {
   if (terms.empty() || live_docs_ == 0) return {};
-  if (terms.size() == 1) return Search(terms);
+  if (terms.size() == 1) return Search(terms, global_stats);
 
   auto phrase_docs = PhraseLookup(terms, slop, inorder);
   if (phrase_docs.empty()) return {};
 
   std::unordered_set<std::string> phrase_set(phrase_docs.begin(), phrase_docs.end());
-  auto all_results = Search(terms);
+  auto all_results = Search(terms, global_stats);
 
   std::vector<TextSearchResult> filtered;
   for (auto& r : all_results) {
@@ -775,10 +812,10 @@ std::vector<std::string> TextIndex::StemLookup(const std::string& term,
   return {result.begin(), result.end()};
 }
 
-std::vector<TextSearchResult> TextIndex::StemSearch(const std::string& term,
-                                                     const std::string& language,
-                                                     size_t min_stem_len) const {
-  if (term.size() < min_stem_len) return Search({term});
+std::vector<std::string> TextIndex::ExpandStemTerms(const std::string& term,
+                                                    const std::string& language,
+                                                    size_t min_stem_len) const {
+  if (term.size() < min_stem_len) return {term};
   auto stemmed = StemWord(term, language);
   std::vector<std::string> search_terms = {term};
   auto it = stem_map_.find(stemmed);
@@ -786,7 +823,13 @@ std::vector<TextSearchResult> TextIndex::StemSearch(const std::string& term,
     for (auto& orig : it->second) search_terms.push_back(orig);
   }
   if (stemmed != term) search_terms.push_back(stemmed);
-  return Search(search_terms);
+  return search_terms;
+}
+
+std::vector<TextSearchResult> TextIndex::StemSearch(
+    const std::string& term, const std::string& language, size_t min_stem_len,
+    const GlobalBm25Stats* global_stats) const {
+  return Search(ExpandStemTerms(term, language, min_stem_len), global_stats);
 }
 
 std::vector<std::string> TextIndex::PhoneticLookup(const std::string& term) const {
@@ -806,7 +849,7 @@ std::vector<std::string> TextIndex::PhoneticLookup(const std::string& term) cons
   return {result.begin(), result.end()};
 }
 
-std::vector<TextSearchResult> TextIndex::PhoneticSearch(const std::string& term) const {
+std::vector<std::string> TextIndex::ExpandPhoneticTerms(const std::string& term) const {
   auto [p1, p2] = DoubleMetaphone(term);
   std::vector<std::string> search_terms = {term};
   for (auto& code : {p1, p2}) {
@@ -815,7 +858,17 @@ std::vector<TextSearchResult> TextIndex::PhoneticSearch(const std::string& term)
     if (it == phonetic_map_.end()) continue;
     for (auto& orig : it->second) search_terms.push_back(orig);
   }
-  return Search(search_terms);
+  return search_terms;
+}
+
+std::vector<TextSearchResult> TextIndex::PhoneticSearch(
+    const std::string& term, const GlobalBm25Stats* global_stats) const {
+  return Search(ExpandPhoneticTerms(term), global_stats);
+}
+
+uint64_t TextIndex::TermDocFreq(const std::string& term) const {
+  auto it = postings_.find(term);
+  return (it != postings_.end()) ? static_cast<uint64_t>(it->second.size()) : 0;
 }
 
 int TextIndex::LevenshteinDistance(const std::string& a, const std::string& b) {

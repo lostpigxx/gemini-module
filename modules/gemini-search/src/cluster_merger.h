@@ -1,5 +1,8 @@
 #pragma once
 
+#include "cluster_codec.h"
+#include "hybrid_fusion.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -49,5 +52,27 @@ bool CompareMergeCandidates(const MergeCandidate& a, const MergeCandidate& b, Me
 MergedSearchResult MergeSearchShards(const std::vector<ShardPhase1Slice>& shards,
                                      MergeSortMode mode, size_t offset, size_t count,
                                      bool has_limit, size_t max_results, size_t knn_cap = 0);
+
+// Phase 69: Global FT.HYBRID merge + RRF/LINEAR fusion across shards
+struct ShardHybridSlice {
+  uint32_t shard_idx = 0;
+  std::vector<ScoredResult> text_hits;
+  std::vector<KnnResult> vec_hits;
+};
+
+struct MergedHybridResult {
+  uint64_t total_fused = 0;
+  std::vector<HybridHit> winners;
+  // Maps shard_idx -> indices into `winners` for Phase 2 targeted Fetch
+  std::unordered_map<uint32_t, std::vector<size_t>> winners_by_shard;
+};
+
+MergedHybridResult MergeHybridShards(const std::vector<ShardHybridSlice>& shards,
+                                     int64_t text_limit, size_t knn_k, const HybridConfig& hcfg,
+                                     size_t offset, size_t count, bool has_limit);
+
+// Phase 69: Aggregates per-shard local BM25 statistics into global per-field BM25 stats
+std::vector<RpcFieldBm25Stats> AggregateGlobalBm25FieldStats(
+    const std::vector<std::vector<RpcFieldBm25Stats>>& shard_stats);
 
 }  // namespace gemini_search

@@ -336,7 +336,7 @@ static void ReplyWithDocFields(RedisModuleCtx* ctx, const Document* doc,
       if (do_hl && !query_terms.empty()) {
         val = ApplyHighlight(val, query_terms, opts.highlight_open, opts.highlight_close);
       }
-      RedisModule_ReplyWithCString(ctx, val.c_str());
+      RedisModule_ReplyWithStringBuffer(ctx, val.data(), val.size());
     } else {
       RedisModule_ReplyWithCString(ctx, "");
     }
@@ -2011,6 +2011,22 @@ gemini_search::RpcSearchPhase1Response ExecuteLocalSearchPhase1(
     qopts.deadline_ms = NowMs() + req.remaining_timeout_ms;
   }
 
+  std::unordered_map<std::string, GlobalBm25Stats> global_bm25_map;
+  if (!req.global_bm25_stats.empty()) {
+    for (const auto& fs : req.global_bm25_stats) {
+      GlobalBm25Stats g;
+      g.total_docs = fs.live_docs;
+      g.avg_doc_len = (fs.live_docs > 0)
+                          ? (static_cast<double>(fs.total_doc_len) / static_cast<double>(fs.live_docs))
+                          : 0.0;
+      for (const auto& [term, df] : fs.term_df) {
+        g.term_df[term] = df;
+      }
+      global_bm25_map[fs.field_name] = std::move(g);
+    }
+    qopts.global_bm25_stats = &global_bm25_map;
+  }
+
   ParsedQuery parsed;
   std::string parse_err;
   if (!ParseQuery(req.query_str, parsed, parse_err, qopts)) {
@@ -2104,7 +2120,7 @@ gemini_search::RpcSearchPhase1Response ExecuteLocalSearchPhase1(
   if (req.withscores) {
     bool used_wand = false;
     if (!req.count_only && !req.has_sortby && !req.has_inkeys && req.numeric_filters.empty() &&
-        !req.has_geofilter && req.limit_k > 0) {
+        !req.has_geofilter && req.limit_k > 0 && qopts.global_bm25_stats == nullptr) {
       SearchOptions wand_opts;
       wand_opts.withscores = true;
       wand_opts.has_limit = true;
@@ -2427,6 +2443,214 @@ gemini_search::RpcFetchDocsResponse ExecuteLocalFetchDocs(
   return resp;
 }
 
+// ============================================================================
+// Phase 69: Lock-only Shard DFS Term Stats & Hybrid Phase 1 helpers
+// ============================================================================
+
+gemini_search::RpcDfsTermStatsResponse ExecuteLocalDfsTermStats(
+    const gemini_search::RpcDfsTermStatsRequest& req) {
+  gemini_search::RpcDfsTermStatsResponse resp;
+
+  auto entry_ptr = GetIndexEntryShared(req.index_name);
+  if (!entry_ptr) {
+    resp.ok = false;
+    resp.error_msg = "ERR index not found";
+    return resp;
+  }
+
+  const auto& entry = *entry_ptr;
+  std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+
+  QueryOptions qopts;
+  qopts.nostopwords = req.nostopwords || req.verbatim;
+  qopts.infields = req.infields;
+  qopts.stem = !req.verbatim;
+  qopts.language = req.has_language ? req.language : entry.spec.language;
+  qopts.dialect = req.dialect;
+  qopts.max_expansions = GetMaxExpansions();
+  qopts.min_stem_len = GetMinStemLen();
+
+  std::unordered_set<std::string> custom_dict_copy;
+  if (!entry.spec.custom_dict.empty()) {
+    std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
+    auto dit = GetTermDicts().find(entry.spec.custom_dict);
+    if (dit != GetTermDicts().end()) {
+      custom_dict_copy = dit->second.Terms();
+      qopts.custom_dict = &custom_dict_copy;
+    }
+  }
+
+  ParsedQuery parsed;
+  std::string parse_err;
+  if (!ParseQuery(req.query_str, parsed, parse_err, qopts)) {
+    resp.ok = false;
+    resp.error_msg = std::move(parse_err);
+    return resp;
+  }
+
+  auto local_stats =
+      CollectQueryTermStats(parsed.root, entry.spec, entry.text_indices, qopts, &entry.synonyms);
+  resp.ok = true;
+  resp.fields.reserve(local_stats.size());
+  for (auto& ls : local_stats) {
+    gemini_search::RpcFieldBm25Stats fs;
+    fs.field_name = std::move(ls.field_name);
+    fs.live_docs = ls.live_docs;
+    fs.total_doc_len = ls.total_doc_len;
+    fs.term_df.reserve(ls.term_df.size());
+    for (const auto& [term, df] : ls.term_df) {
+      fs.term_df.emplace_back(term, df);
+    }
+    std::sort(fs.term_df.begin(), fs.term_df.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    resp.fields.push_back(std::move(fs));
+  }
+  return resp;
+}
+
+gemini_search::RpcHybridPhase1Response ExecuteLocalHybridPhase1(
+    const gemini_search::RpcHybridPhase1Request& req) {
+  gemini_search::RpcHybridPhase1Response resp;
+
+  auto entry_ptr = GetIndexEntryShared(req.index_name);
+  if (!entry_ptr) {
+    resp.ok = false;
+    resp.error_msg = "ERR index not found";
+    return resp;
+  }
+
+  const auto& entry = *entry_ptr;
+  std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+
+  std::unordered_map<std::string, std::string> params;
+  params.reserve(req.params.size());
+  for (const auto& [k, v] : req.params) params[k] = v;
+
+  QueryOptions qopts;
+  qopts.language = entry.spec.language;
+  qopts.dialect = req.dialect;
+  qopts.scorer = static_cast<ScorerType>(req.scorer);
+  qopts.max_expansions = GetMaxExpansions();
+  qopts.min_stem_len = GetMinStemLen();
+
+  std::unordered_set<std::string> custom_dict_copy;
+  if (!entry.spec.custom_dict.empty()) {
+    std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
+    auto dit = GetTermDicts().find(entry.spec.custom_dict);
+    if (dit != GetTermDicts().end()) {
+      custom_dict_copy = dit->second.Terms();
+      qopts.custom_dict = &custom_dict_copy;
+    }
+  }
+  if (req.remaining_timeout_ms > 0) {
+    qopts.deadline_ms = NowMs() + req.remaining_timeout_ms;
+  }
+
+  std::unordered_map<std::string, GlobalBm25Stats> global_bm25_map;
+  if (!req.global_bm25_stats.empty()) {
+    for (const auto& fs : req.global_bm25_stats) {
+      GlobalBm25Stats g;
+      g.total_docs = fs.live_docs;
+      g.avg_doc_len = (fs.live_docs > 0)
+                          ? (static_cast<double>(fs.total_doc_len) / static_cast<double>(fs.live_docs))
+                          : 0.0;
+      for (const auto& [term, df] : fs.term_df) {
+        g.term_df[term] = df;
+      }
+      global_bm25_map[fs.field_name] = std::move(g);
+    }
+    qopts.global_bm25_stats = &global_bm25_map;
+  }
+
+  const auto* fspec = entry.spec.FindField(req.vec_field);
+  if (!fspec) {
+    resp.ok = false;
+    resp.error_msg = "ERR VSIM field not in schema";
+    return resp;
+  }
+  if (fspec->type != FieldType::kVector) {
+    resp.ok = false;
+    resp.error_msg = "ERR VSIM field is not a VECTOR field";
+    return resp;
+  }
+  auto pit = params.find(req.vec_param);
+  if (pit == params.end()) {
+    resp.ok = false;
+    resp.error_msg = "ERR VSIM param not found in PARAMS";
+    return resp;
+  }
+  std::vector<float> qvec;
+  if (!DecodeVectorBlob(pit->second, fspec->vector_params.dim, fspec->vector_params.data_type,
+                        qvec)) {
+    resp.ok = false;
+    resp.error_msg = "ERR query vector dimension mismatch";
+    return resp;
+  }
+
+  // 1. Vector branch (local top-knn_k)
+  std::vector<KnnResult> vec_hits;
+  if (const auto* vidx = entry.vector_indices.Get(req.vec_field)) {
+    if (!req.vec_filter_query.empty()) {
+      ParsedQuery fpq;
+      std::string ferr;
+      if (!ParseQuery(req.vec_filter_query, fpq, ferr, qopts)) {
+        resp.ok = false;
+        resp.error_msg = std::move(ferr);
+        return resp;
+      }
+      auto cands = EvaluateQuery(fpq.root, entry.spec, entry.doc_store, entry.tag_indices,
+                                 entry.numeric_indices, entry.text_indices, entry.geo_indices,
+                                 ferr, qopts, &entry.geoshape_indices, &params,
+                                 &entry.vector_indices, &entry.synonyms);
+      if (!ferr.empty()) {
+        resp.ok = false;
+        resp.error_msg = std::move(ferr);
+        return resp;
+      }
+      vec_hits = vidx->KnnQueryFiltered(qvec.data(), static_cast<size_t>(req.knn_k), cands,
+                                        static_cast<size_t>(req.ef_runtime),
+                                        static_cast<size_t>(req.oversample));
+    } else {
+      vec_hits = vidx->KnnQueryEf(qvec.data(), static_cast<size_t>(req.knn_k),
+                                  static_cast<size_t>(req.ef_runtime),
+                                  static_cast<size_t>(req.oversample));
+    }
+  }
+
+  // 2. Text branch (local top-text_limit or all)
+  ParsedQuery tpq;
+  std::string terr;
+  if (!ParseQuery(req.text_query, tpq, terr, qopts)) {
+    resp.ok = false;
+    resp.error_msg = std::move(terr);
+    return resp;
+  }
+  auto text_hits = EvaluateQueryScored(
+      tpq.root, entry.spec, entry.doc_store, entry.tag_indices, entry.numeric_indices,
+      entry.text_indices, entry.geo_indices, terr, qopts, &entry.geoshape_indices, &params,
+      &entry.vector_indices, &entry.synonyms);
+  if (!terr.empty()) {
+    resp.ok = false;
+    resp.error_msg = std::move(terr);
+    return resp;
+  }
+  if (req.text_limit > 0 && static_cast<int64_t>(text_hits.size()) > req.text_limit) {
+    std::sort(text_hits.begin(), text_hits.end(),
+              [](const ScoredResult& a, const ScoredResult& b) {
+                if (a.score != b.score) return a.score > b.score;
+                return a.doc_id < b.doc_id;
+              });
+    text_hits.resize(static_cast<size_t>(req.text_limit));
+  }
+
+  resp.ok = true;
+  resp.text_hits.reserve(text_hits.size());
+  for (auto& th : text_hits) resp.text_hits.emplace_back(std::move(th.doc_id), th.score);
+  resp.vec_hits.reserve(vec_hits.size());
+  for (auto& vh : vec_hits) resp.vec_hits.emplace_back(std::move(vh.doc_id), vh.score);
+  return resp;
+}
+
 // Query tree serializer for EXPLAIN
 static std::string ExplainNode(const QueryNode& node, int indent) {
   std::string pad(static_cast<size_t>(indent * 2), ' ');
@@ -2656,6 +2880,36 @@ int FtProfileCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
   clock_gettime(CLOCK_MONOTONIC, &t_parse);
 
+  // Phase 69: Cluster FT.PROFILE <idx> SEARCH path with Coordinator + per-shard breakdown
+  if (is_search && gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    double parse_us = static_cast<double>((t_parse.tv_sec - t_start.tv_sec) * 1000000LL +
+                                          (t_parse.tv_nsec - t_start.tv_nsec) / 1000LL);
+    gemini_search::ClusterProfileSearchPlan pplan;
+    pplan.parse_time_us = parse_us;
+    pplan.timeout_ms = (qopts.deadline_ms > 0)
+                           ? std::max<int64_t>(1, qopts.deadline_ms - NowMs())
+                           : static_cast<int64_t>(GetClusterQueryTimeoutMs());
+    pplan.has_limit = (limit_count >= 0);
+    pplan.limit_offset = static_cast<size_t>(std::max<long long>(0, limit_offset));
+    pplan.limit_count = (limit_count >= 0) ? static_cast<size_t>(limit_count) : 0;
+
+    auto& p1 = pplan.phase1_req;
+    p1.index_name = idx_str;
+    p1.query_str = query_str;
+    p1.remaining_timeout_ms = pplan.timeout_ms;
+    p1.verbatim = !qopts.stem;
+    p1.dialect = qopts.dialect;
+    p1.has_sortby = !sortby_field.empty();
+    p1.sortby_field = sortby_field;
+    p1.sortby_desc = sortby_desc;
+    if (pplan.has_limit) {
+      p1.limit_k = static_cast<uint64_t>(pplan.limit_offset + pplan.limit_count);
+    } else {
+      p1.limit_k = static_cast<uint64_t>(GetMaxSearchResults());
+    }
+    return gemini_search::ExecuteClusterProfileSearch(ctx, std::move(pplan));
+  }
+
   std::string eval_error;
   auto result_ids = EvaluateQuery(
       parsed.root, entry.spec, entry.doc_store,
@@ -2810,6 +3064,21 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   SearchOptions opts;
   std::unordered_map<std::string, std::string> params;
 
+  auto ParseLongArg = [](RedisModuleString* arg, long long& out) -> bool {
+    std::string s(ArgView(arg));
+    if (s.empty()) return false;
+    char* ep = nullptr;
+    out = std::strtoll(s.c_str(), &ep, 10);
+    return ep != s.c_str() && *ep == '\0';
+  };
+  auto ParseDoubleArg = [](RedisModuleString* arg, double& out) -> bool {
+    std::string s(ArgView(arg));
+    if (s.empty()) return false;
+    char* ep = nullptr;
+    out = std::strtod(s.c_str(), &ep);
+    return ep != s.c_str() && *ep == '\0' && std::isfinite(out);
+  };
+
   int i = 2;
   while (i < argc) {
     auto kw = ArgView(argv[i]);
@@ -2850,9 +3119,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
           if (i + 1 >= argc) {
             return RedisModule_ReplyWithError(ctx, "ERR TEXT_LIMIT requires a value");
           }
-          char* ep = nullptr;
-          long long tl = std::strtoll(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10);
-          if (*ep != '\0' || tl <= 0) {
+          long long tl = 0;
+          if (!ParseLongArg(argv[i + 1], tl) || tl <= 0) {
             return RedisModule_ReplyWithError(ctx, "ERR TEXT_LIMIT must be a positive integer");
           }
           text_limit = tl;
@@ -2879,9 +3147,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
         auto sub = ArgView(argv[i]);
         if (MatchArg(sub, "KNN")) {
           if (i + 1 >= argc) return RedisModule_ReplyWithError(ctx, "ERR KNN requires k");
-          char* ep = nullptr;
-          long k = std::strtol(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10);
-          if (*ep != '\0' || k <= 0) {
+          long long k = 0;
+          if (!ParseLongArg(argv[i + 1], k) || k <= 0) {
             return RedisModule_ReplyWithError(ctx, "ERR KNN k must be a positive integer");
           }
           knn_k = static_cast<size_t>(k);
@@ -2890,9 +3157,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
           if (i + 1 >= argc) {
             return RedisModule_ReplyWithError(ctx, "ERR EF_RUNTIME requires a value");
           }
-          char* ep = nullptr;
-          long ef = std::strtol(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10);
-          if (*ep != '\0' || ef <= 0) {
+          long long ef = 0;
+          if (!ParseLongArg(argv[i + 1], ef) || ef <= 0) {
             return RedisModule_ReplyWithError(ctx, "ERR EF_RUNTIME must be a positive integer");
           }
           ef_runtime = static_cast<size_t>(ef);
@@ -2901,9 +3167,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
           if (i + 1 >= argc) {
             return RedisModule_ReplyWithError(ctx, "ERR OVERSAMPLE requires a value");
           }
-          char* ep = nullptr;
-          long os = std::strtol(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10);
-          if (*ep != '\0' || os <= 0 || os > 1024) {
+          long long os = 0;
+          if (!ParseLongArg(argv[i + 1], os) || os <= 0 || os > 1024) {
             return RedisModule_ReplyWithError(
                 ctx, "ERR OVERSAMPLE must be a positive integer (<= 1024)");
           }
@@ -2933,9 +3198,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
             if (i + 1 >= argc) {
               return RedisModule_ReplyWithError(ctx, "ERR CONSTANT requires a value");
             }
-            char* ep = nullptr;
-            double v = std::strtod(std::string(ArgView(argv[i + 1])).c_str(), &ep);
-            if (*ep != '\0' || !std::isfinite(v) || v <= 0.0) {
+            double v = 0.0;
+            if (!ParseDoubleArg(argv[i + 1], v) || v <= 0.0) {
               return RedisModule_ReplyWithError(ctx, "ERR CONSTANT must be a positive number");
             }
             hcfg.rrf_k = v;
@@ -2944,9 +3208,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
             if (i + 1 >= argc) {
               return RedisModule_ReplyWithError(ctx, "ERR TEXT_WEIGHT requires a value");
             }
-            char* ep = nullptr;
-            double v = std::strtod(std::string(ArgView(argv[i + 1])).c_str(), &ep);
-            if (*ep != '\0' || !std::isfinite(v) || v < 0.0) {
+            double v = 0.0;
+            if (!ParseDoubleArg(argv[i + 1], v) || v < 0.0) {
               return RedisModule_ReplyWithError(ctx, "ERR TEXT_WEIGHT must be non-negative");
             }
             hcfg.text_weight = v;
@@ -2955,9 +3218,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
             if (i + 1 >= argc) {
               return RedisModule_ReplyWithError(ctx, "ERR VECTOR_WEIGHT requires a value");
             }
-            char* ep = nullptr;
-            double v = std::strtod(std::string(ArgView(argv[i + 1])).c_str(), &ep);
-            if (*ep != '\0' || !std::isfinite(v) || v < 0.0) {
+            double v = 0.0;
+            if (!ParseDoubleArg(argv[i + 1], v) || v < 0.0) {
               return RedisModule_ReplyWithError(ctx, "ERR VECTOR_WEIGHT must be non-negative");
             }
             hcfg.vector_weight = v;
@@ -2972,9 +3234,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
           if (i + 1 >= argc) {
             return RedisModule_ReplyWithError(ctx, "ERR ALPHA requires a value");
           }
-          char* ep = nullptr;
-          double a = std::strtod(std::string(ArgView(argv[i + 1])).c_str(), &ep);
-          if (*ep != '\0' || !std::isfinite(a) || a < 0.0 || a > 1.0) {
+          double a = 0.0;
+          if (!ParseDoubleArg(argv[i + 1], a) || a < 0.0 || a > 1.0) {
             return RedisModule_ReplyWithError(ctx, "ERR ALPHA must be in [0, 1]");
           }
           hcfg.alpha = a;
@@ -2986,12 +3247,11 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     } else if (MatchArg(kw, "PARAMS")) {
       i++;
       if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR PARAMS requires count");
-      char* ep = nullptr;
-      long pcount = std::strtol(std::string(ArgView(argv[i++])).c_str(), &ep, 10);
-      if (*ep != '\0' || pcount < 0 || pcount % 2 != 0) {
+      long long pcount = 0;
+      if (!ParseLongArg(argv[i++], pcount) || pcount < 0 || pcount % 2 != 0) {
         return RedisModule_ReplyWithError(ctx, "ERR PARAMS count must be a non-negative even integer");
       }
-      for (long p = 0; p < pcount / 2; p++) {
+      for (long long p = 0; p < pcount / 2; p++) {
         if (i + 1 >= argc) {
           return RedisModule_ReplyWithError(ctx, "ERR not enough PARAMS values");
         }
@@ -3003,13 +3263,12 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
     } else if (MatchArg(kw, "RETURN")) {
       i++;
       if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR RETURN requires count");
-      char* ep = nullptr;
-      long rcount = std::strtol(std::string(ArgView(argv[i++])).c_str(), &ep, 10);
-      if (*ep != '\0' || rcount < 0) {
+      long long rcount = 0;
+      if (!ParseLongArg(argv[i++], rcount) || rcount < 0) {
         return RedisModule_ReplyWithError(ctx, "ERR RETURN count must be a non-negative integer");
       }
       opts.has_return = true;
-      for (long r = 0; r < rcount; ) {
+      for (long long r = 0; r < rcount; ) {
         if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough RETURN fields");
         std::string fname(ArgView(argv[i++]));
         r++;
@@ -3024,11 +3283,9 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       if (i + 2 >= argc) {
         return RedisModule_ReplyWithError(ctx, "ERR LIMIT requires offset and count");
       }
-      char* ep1 = nullptr;
-      char* ep2 = nullptr;
-      long long off = std::strtoll(std::string(ArgView(argv[i + 1])).c_str(), &ep1, 10);
-      long long cnt = std::strtoll(std::string(ArgView(argv[i + 2])).c_str(), &ep2, 10);
-      if (*ep1 != '\0' || *ep2 != '\0' || off < 0 || cnt < 0) {
+      long long off = 0;
+      long long cnt = 0;
+      if (!ParseLongArg(argv[i + 1], off) || !ParseLongArg(argv[i + 2], cnt) || off < 0 || cnt < 0) {
         return RedisModule_ReplyWithError(ctx, "ERR LIMIT offset and count must be non-negative integers");
       }
       opts.limit_offset = off;
@@ -3049,9 +3306,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       i++;
     } else if (MatchArg(kw, "TIMEOUT")) {
       if (i + 1 >= argc) return RedisModule_ReplyWithError(ctx, "ERR TIMEOUT requires value");
-      char* ep = nullptr;
-      long long tms = std::strtoll(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10);
-      if (*ep != '\0' || tms < 0) {
+      long long tms = 0;
+      if (!ParseLongArg(argv[i + 1], tms) || tms < 0) {
         return RedisModule_ReplyWithError(ctx, "ERR TIMEOUT must be a non-negative integer");
       }
       opts.timeout_ms = tms;
@@ -3059,8 +3315,9 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       i += 2;
     } else if (MatchArg(kw, "DIALECT")) {
       if (i + 1 >= argc) return RedisModule_ReplyWithError(ctx, "ERR DIALECT requires value");
-      char* ep = nullptr;
-      opts.dialect = static_cast<int>(std::strtol(std::string(ArgView(argv[i + 1])).c_str(), &ep, 10));
+      long long dia = 2;
+      ParseLongArg(argv[i + 1], dia);
+      opts.dialect = static_cast<int>(dia);
       opts.has_dialect = true;
       i += 2;
     } else {
@@ -3116,6 +3373,60 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
   std::string terr;
   if (!ParseQuery(text_query, tpq, terr, qopts)) {
     return RedisModule_ReplyWithError(ctx, terr.c_str());
+  }
+
+  // Phase 69: Cluster Scatter-Gather + Global RRF/LINEAR Fusion for FT.HYBRID
+  if (gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    size_t max_scatter = GetClusterMaxScatterLimit();
+    if (opts.has_limit &&
+        static_cast<size_t>(opts.limit_offset) + static_cast<size_t>(opts.limit_count) >
+            max_scatter) {
+      return RedisModule_ReplyWithError(
+          ctx, "ERR LIMIT offset+count exceeds CLUSTER_MAX_SCATTER_LIMIT");
+    }
+
+    int64_t cluster_timeout_ms =
+        (opts.has_timeout && opts.timeout_ms > 0)
+            ? static_cast<int64_t>(opts.timeout_ms)
+            : static_cast<int64_t>(GetClusterQueryTimeoutMs());
+
+    gemini_search::ClusterHybridPlan hplan;
+    hplan.hcfg = hcfg;
+    hplan.has_limit = opts.has_limit;
+    hplan.limit_offset = static_cast<size_t>(std::max<long long>(0, opts.limit_offset));
+    hplan.limit_count = static_cast<size_t>(std::max<long long>(0, opts.limit_count));
+    hplan.count_only = (opts.has_limit && opts.limit_offset == 0 && opts.limit_count == 0);
+    hplan.withscores = opts.withscores;
+    hplan.explainscore = opts.explainscore;
+    hplan.withpayloads = opts.withpayloads;
+    hplan.nocontent = opts.nocontent;
+    hplan.timeout_ms = cluster_timeout_ms;
+
+    auto& p1 = hplan.phase1_req;
+    p1.index_name = idx_str;
+    p1.text_query = text_query;
+    p1.scorer = static_cast<uint8_t>(opts.scorer);
+    p1.text_limit = static_cast<int64_t>(text_limit);
+    p1.vec_field = vec_field;
+    p1.vec_param = vec_param;
+    p1.knn_k = static_cast<uint64_t>(knn_k);
+    p1.ef_runtime = static_cast<uint64_t>(ef_runtime);
+    p1.oversample = static_cast<uint64_t>(oversample);
+    p1.vec_filter_query = vec_filter_query;
+    p1.params.reserve(params.size());
+    for (const auto& [k, v] : params) p1.params.emplace_back(k, v);
+    p1.dialect = qopts.dialect;
+    p1.remaining_timeout_ms = cluster_timeout_ms;
+
+    auto& ft = hplan.fetch_template;
+    ft.index_name = idx_str;
+    ft.nocontent = opts.nocontent;
+    ft.withpayloads = opts.withpayloads;
+    ft.has_return = opts.has_return;
+    ft.return_fields = opts.return_fields;
+    for (const auto& [k, v] : opts.return_aliases) ft.return_aliases.emplace_back(k, v);
+
+    return gemini_search::ExecuteClusterHybrid(ctx, std::move(hplan));
   }
 
   // Phase 53: Non-blocking async offload for FT.HYBRID
@@ -3427,8 +3738,11 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
             RedisModule_ReplyWithCString(ctx, out_key.c_str());
             if (doc) {
               auto fit = doc->fields.find(k);
-              RedisModule_ReplyWithCString(
-                  ctx, (fit != doc->fields.end()) ? fit->second.c_str() : "");
+              if (fit != doc->fields.end()) {
+                RedisModule_ReplyWithStringBuffer(ctx, fit->second.data(), fit->second.size());
+              } else {
+                RedisModule_ReplyWithCString(ctx, "");
+              }
             } else {
               RedisModule_ReplyWithCString(ctx, "");
             }

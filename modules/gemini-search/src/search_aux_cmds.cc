@@ -15,6 +15,103 @@
 #include <utility>
 #include <vector>
 
+bool ApplyLocalSuggestCommand(const std::string& cmd_name,
+                              const std::vector<std::string>& args,
+                              bool& out_mutated,
+                              gemini_search::RpcSuggestResponse& resp) {
+  out_mutated = false;
+  resp = gemini_search::RpcSuggestResponse{};
+
+  if (MatchArg(cmd_name, "FT.SUGADD")) {
+    if (args.size() < 3) {
+      resp.error_msg = "ERR wrong number of arguments for 'FT.SUGADD' command";
+      return false;
+    }
+    char* ep = nullptr;
+    double score = std::strtod(args[2].c_str(), &ep);
+    if (*ep != '\0') {
+      resp.error_msg = "ERR invalid score";
+      return false;
+    }
+    bool incr = false;
+    std::string payload;
+    for (size_t i = 3; i < args.size(); i++) {
+      if (MatchArg(args[i], "INCR")) {
+        incr = true;
+      } else if (MatchArg(args[i], "PAYLOAD") && i + 1 < args.size()) {
+        i++;
+        payload = args[i];
+      }
+    }
+    std::unique_lock<std::shared_mutex> lk(GetSuggestDictsMutex());
+    auto& dict = GetSuggestDicts()[args[0]];
+    dict.Add(args[1], score, incr, payload);
+    out_mutated = true;
+    resp.ok = true;
+    resp.int_reply = static_cast<int64_t>(dict.Len());
+    return true;
+  }
+
+  if (MatchArg(cmd_name, "FT.SUGDEL")) {
+    if (args.size() != 2) {
+      resp.error_msg = "ERR wrong number of arguments for 'FT.SUGDEL' command";
+      return false;
+    }
+    std::unique_lock<std::shared_mutex> lk(GetSuggestDictsMutex());
+    auto it = GetSuggestDicts().find(args[0]);
+    bool removed = (it != GetSuggestDicts().end()) ? it->second.Del(args[1]) : false;
+    out_mutated = removed;
+    resp.ok = true;
+    resp.int_reply = removed ? 1 : 0;
+    return true;
+  }
+
+  if (MatchArg(cmd_name, "FT.SUGLEN")) {
+    if (args.size() != 1) {
+      resp.error_msg = "ERR wrong number of arguments for 'FT.SUGLEN' command";
+      return false;
+    }
+    std::shared_lock<std::shared_mutex> lk(GetSuggestDictsMutex());
+    auto it = GetSuggestDicts().find(args[0]);
+    resp.ok = true;
+    resp.int_reply = static_cast<int64_t>((it != GetSuggestDicts().end()) ? it->second.Len() : 0);
+    return true;
+  }
+
+  if (MatchArg(cmd_name, "FT.SUGGET")) {
+    if (args.size() < 2) {
+      resp.error_msg = "ERR wrong number of arguments for 'FT.SUGGET' command";
+      return false;
+    }
+    bool fuzzy = false;
+    size_t max_results = 5;
+    for (size_t i = 2; i < args.size(); i++) {
+      if (MatchArg(args[i], "FUZZY")) {
+        fuzzy = true;
+      } else if (MatchArg(args[i], "MAX") && i + 1 < args.size()) {
+        i++;
+        char* ep = nullptr;
+        long v = std::strtol(args[i].c_str(), &ep, 10);
+        if (*ep == '\0' && v > 0) max_results = static_cast<size_t>(v);
+      }
+    }
+    std::shared_lock<std::shared_mutex> lk(GetSuggestDictsMutex());
+    auto it = GetSuggestDicts().find(args[0]);
+    resp.ok = true;
+    if (it != GetSuggestDicts().end()) {
+      auto results = it->second.Get(args[1], fuzzy, max_results);
+      resp.entries.reserve(results.size());
+      for (auto& e : results) {
+        resp.entries.push_back({std::move(e.str), e.score, std::move(e.payload)});
+      }
+    }
+    return true;
+  }
+
+  resp.error_msg = "ERR unsupported suggest command: " + cmd_name;
+  return false;
+}
+
 // FT.SUGADD <dict> <string> <score> [INCR] [PAYLOAD <payload>]
 int FtSugAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                            int argc) {
@@ -22,26 +119,33 @@ int FtSugAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string dict_name(ArgView(argv[1]));
-  std::string str(ArgView(argv[2]));
+  std::string score_str(ArgView(argv[3]));
   char* ep = nullptr;
-  double score = std::strtod(std::string(ArgView(argv[3])).c_str(), &ep);
-  if (*ep != '\0') return RedisModule_ReplyWithError(ctx, "ERR invalid score");
+  (void)std::strtod(score_str.c_str(), &ep);
+  if (score_str.empty() || *ep != '\0') return RedisModule_ReplyWithError(ctx, "ERR invalid score");
 
-  bool incr = false;
-  std::string payload;
-  for (int i = 4; i < argc; i++) {
-    if (MatchArg(ArgView(argv[i]), "INCR")) {
-      incr = true;
-    } else if (MatchArg(ArgView(argv[i]), "PAYLOAD") && i + 1 < argc) {
-      i++;
-      payload = std::string(ArgView(argv[i]));
-    }
+  std::vector<std::string> args;
+  args.reserve(static_cast<size_t>(argc - 1));
+  for (int i = 1; i < argc; i++) args.emplace_back(ArgView(argv[i]));
+
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  if (!is_replicated && gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    gemini_search::ClusterSuggestPlan splan;
+    splan.cmd_name = "FT.SUGADD";
+    splan.args = std::move(args);
+    splan.dict_name = dict_name;
+    splan.is_write = true;
+    return gemini_search::ExecuteClusterSuggest(ctx, std::move(splan));
   }
 
-  GetSuggestDicts()[dict_name].Add(str, score, incr, payload);
-  RedisModule_ReplicateVerbatim(ctx);
-  return RedisModule_ReplyWithLongLong(
-      ctx, static_cast<long long>(GetSuggestDicts()[dict_name].Len()));
+  bool mutated = false;
+  gemini_search::RpcSuggestResponse resp;
+  if (!ApplyLocalSuggestCommand("FT.SUGADD", args, mutated, resp)) {
+    return RedisModule_ReplyWithError(ctx, resp.error_msg.c_str());
+  }
+  if (mutated) RedisModule_ReplicateVerbatim(ctx);
+  return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(resp.int_reply));
 }
 
 // FT.SUGGET <dict> <prefix> [FUZZY] [WITHSCORES] [WITHPAYLOADS] [MAX <n>]
@@ -51,37 +155,37 @@ int FtSugGetCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string dict_name(ArgView(argv[1]));
-  std::string prefix(ArgView(argv[2]));
-
-  bool fuzzy = false;
   bool withscores = false;
   bool withpayloads = false;
-  size_t max_results = 5;
-
   for (int i = 3; i < argc; i++) {
-    if (MatchArg(ArgView(argv[i]), "FUZZY")) fuzzy = true;
-    else if (MatchArg(ArgView(argv[i]), "WITHSCORES")) withscores = true;
+    if (MatchArg(ArgView(argv[i]), "WITHSCORES")) withscores = true;
     else if (MatchArg(ArgView(argv[i]), "WITHPAYLOADS")) withpayloads = true;
-    else if (MatchArg(ArgView(argv[i]), "MAX") && i + 1 < argc) {
-      i++;
-      char* ep = nullptr;
-      long v = std::strtol(std::string(ArgView(argv[i])).c_str(), &ep, 10);
-      if (*ep == '\0' && v > 0) max_results = static_cast<size_t>(v);
-    }
   }
 
-  auto it = GetSuggestDicts().find(dict_name);
-  if (it == GetSuggestDicts().end()) {
-    RedisModule_ReplyWithArray(ctx, 0);
-    return REDISMODULE_OK;
+  std::vector<std::string> args;
+  args.reserve(static_cast<size_t>(argc - 1));
+  for (int i = 1; i < argc; i++) args.emplace_back(ArgView(argv[i]));
+
+  if (gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    gemini_search::ClusterSuggestPlan splan;
+    splan.cmd_name = "FT.SUGGET";
+    splan.args = std::move(args);
+    splan.dict_name = dict_name;
+    splan.is_write = false;
+    splan.sugget_withscores = withscores;
+    splan.sugget_withpayloads = withpayloads;
+    return gemini_search::ExecuteClusterSuggest(ctx, std::move(splan));
   }
 
-  auto results = it->second.Get(prefix, fuzzy, max_results);
-  long multiplier = 1;
-  if (withscores) multiplier++;
-  if (withpayloads) multiplier++;
-  RedisModule_ReplyWithArray(ctx, static_cast<long>(results.size()) * multiplier);
-  for (auto& entry : results) {
+  bool mutated = false;
+  gemini_search::RpcSuggestResponse resp;
+  if (!ApplyLocalSuggestCommand("FT.SUGGET", args, mutated, resp)) {
+    return RedisModule_ReplyWithError(ctx, resp.error_msg.c_str());
+  }
+
+  long multiplier = 1 + (withscores ? 1 : 0) + (withpayloads ? 1 : 0);
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(resp.entries.size()) * multiplier);
+  for (const auto& entry : resp.entries) {
     RedisModule_ReplyWithCString(ctx, entry.str.c_str());
     if (withscores) RedisModule_ReplyWithCString(ctx, std::to_string(entry.score).c_str());
     if (withpayloads) RedisModule_ReplyWithCString(ctx, entry.payload.c_str());
@@ -96,15 +200,26 @@ int FtSugDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string dict_name(ArgView(argv[1]));
-  std::string str(ArgView(argv[2]));
+  std::vector<std::string> args = {dict_name, ArgStr(argv[2])};
 
-  auto it = GetSuggestDicts().find(dict_name);
-  if (it == GetSuggestDicts().end()) {
-    return RedisModule_ReplyWithLongLong(ctx, 0);
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  if (!is_replicated && gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    gemini_search::ClusterSuggestPlan splan;
+    splan.cmd_name = "FT.SUGDEL";
+    splan.args = std::move(args);
+    splan.dict_name = dict_name;
+    splan.is_write = true;
+    return gemini_search::ExecuteClusterSuggest(ctx, std::move(splan));
   }
-  bool removed = it->second.Del(str);
-  if (removed) RedisModule_ReplicateVerbatim(ctx);
-  return RedisModule_ReplyWithLongLong(ctx, removed ? 1 : 0);
+
+  bool mutated = false;
+  gemini_search::RpcSuggestResponse resp;
+  if (!ApplyLocalSuggestCommand("FT.SUGDEL", args, mutated, resp)) {
+    return RedisModule_ReplyWithError(ctx, resp.error_msg.c_str());
+  }
+  if (mutated) RedisModule_ReplicateVerbatim(ctx);
+  return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(resp.int_reply));
 }
 
 // FT.SUGLEN <dict>
@@ -114,9 +229,23 @@ int FtSugLenCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string dict_name(ArgView(argv[1]));
-  auto it = GetSuggestDicts().find(dict_name);
-  size_t len = (it != GetSuggestDicts().end()) ? it->second.Len() : 0;
-  return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(len));
+  std::vector<std::string> args = {dict_name};
+
+  if (gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    gemini_search::ClusterSuggestPlan splan;
+    splan.cmd_name = "FT.SUGLEN";
+    splan.args = std::move(args);
+    splan.dict_name = dict_name;
+    splan.is_write = false;
+    return gemini_search::ExecuteClusterSuggest(ctx, std::move(splan));
+  }
+
+  bool mutated = false;
+  gemini_search::RpcSuggestResponse resp;
+  if (!ApplyLocalSuggestCommand("FT.SUGLEN", args, mutated, resp)) {
+    return RedisModule_ReplyWithError(ctx, resp.error_msg.c_str());
+  }
+  return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(resp.int_reply));
 }
 
 bool ApplyLocalDictAdd(const std::vector<std::string>& args, int64_t& out_added,
@@ -302,6 +431,74 @@ int FtSynDumpCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   return REDISMODULE_OK;
 }
 
+gemini_search::RpcSpellCheckResponse ExecuteLocalSpellCheck(
+    const gemini_search::RpcSpellCheckRequest& req) {
+  gemini_search::RpcSpellCheckResponse resp;
+  auto entry_ptr = GetIndexEntryShared(req.index_name);
+  if (!entry_ptr) {
+    resp.ok = false;
+    resp.error_msg = "ERR index not found";
+    return resp;
+  }
+
+  const auto& entry = *entry_ptr;
+  std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+
+  auto terms = TextIndex::Tokenize(req.query_str);
+  std::unordered_set<std::string> known_local;
+  for (const auto& f : entry.spec.fields) {
+    if (f.type != FieldType::kText) continue;
+    const auto* tidx = entry.text_indices.Get(f.name);
+    if (!tidx) continue;
+    for (const auto& term : terms) {
+      if (!tidx->Lookup(term).empty()) known_local.insert(term);
+    }
+  }
+
+  std::unordered_set<std::string> excluded;
+  if (!req.exclude_dicts.empty()) {
+    std::shared_lock<std::shared_mutex> dlk(GetTermDictsMutex());
+    for (const auto& dname : req.exclude_dicts) {
+      auto dit = GetTermDicts().find(dname);
+      if (dit != GetTermDicts().end()) {
+        for (const auto& term : terms) {
+          if (dit->second.Contains(term)) excluded.insert(term);
+        }
+      }
+    }
+  }
+
+  resp.ok = true;
+  resp.known_terms.assign(known_local.begin(), known_local.end());
+  std::sort(resp.known_terms.begin(), resp.known_terms.end());
+
+  std::unordered_set<std::string> processed_terms;
+  for (const auto& term : terms) {
+    if (known_local.count(term) || excluded.count(term)) continue;
+    if (!processed_terms.insert(term).second) continue;
+
+    std::unordered_map<std::string, double> suggestion_scores;
+    for (const auto& f : entry.spec.fields) {
+      if (f.type != FieldType::kText) continue;
+      const auto* tidx = entry.text_indices.Get(f.name);
+      if (!tidx) continue;
+      auto stem_results = tidx->StemSearch(term);
+      for (const auto& r : stem_results) suggestion_scores[r.doc_id] += r.score;
+      auto fuzzy_results = tidx->FuzzySearch(term, req.max_dist);
+      for (const auto& r : fuzzy_results) suggestion_scores[r.doc_id] += r.score;
+    }
+
+    gemini_search::RpcSpellCheckTermSugs ts;
+    ts.term = term;
+    ts.suggestions.reserve(suggestion_scores.size());
+    for (auto& [sug, sc] : suggestion_scores) {
+      if (!excluded.count(sug)) ts.suggestions.emplace_back(sug, sc);
+    }
+    resp.term_suggestions.push_back(std::move(ts));
+  }
+  return resp;
+}
+
 // FT.SPELLCHECK <index> <query> [DISTANCE <d>] [TERMS INCLUDE|EXCLUDE <dict>]
 int FtSpellCheckCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                                int argc) {
@@ -331,6 +528,16 @@ int FtSpellCheckCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       if (is_include) include_dicts.push_back(dict_name);
       else exclude_dicts.push_back(dict_name);
     }
+  }
+
+  if (gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    gemini_search::RpcSpellCheckRequest req;
+    req.index_name = idx_str;
+    req.query_str = std::move(query_str);
+    req.max_dist = max_dist;
+    req.include_dicts = std::move(include_dicts);
+    req.exclude_dicts = std::move(exclude_dicts);
+    return gemini_search::ExecuteClusterSpellCheck(ctx, std::move(req));
   }
 
   // Tokenize query

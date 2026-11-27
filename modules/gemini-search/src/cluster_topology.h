@@ -17,6 +17,7 @@ extern "C" {
 #include "cluster_codec.h"
 #include "cluster_rpc.h"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -51,6 +52,16 @@ struct ClusterTopology {
   int my_rpc_port = 0;
   std::vector<ShardNodeInfo> nodes;    // All known cluster nodes sorted by node_id
   std::vector<ShardNodeInfo> masters;  // All master nodes sorted by node_id
+  std::array<int16_t, 16384> slot_to_master{};
+
+  ClusterTopology() { slot_to_master.fill(-1); }
+
+  const ShardNodeInfo* FindMasterForSlot(uint16_t slot) const {
+    if (slot >= 16384) return nullptr;
+    int16_t idx = slot_to_master[slot];
+    if (idx < 0 || static_cast<size_t>(idx) >= masters.size()) return nullptr;
+    return &masters[static_cast<size_t>(idx)];
+  }
 };
 
 class ClusterManager {

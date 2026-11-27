@@ -107,6 +107,9 @@ struct RpcFrame {
 uint32_t ComputeCrc32(const uint8_t* data, size_t len);
 uint32_t ComputeCrc32(std::string_view data);
 
+// Standard Redis Cluster CRC16-CCITT hash slot (0..16383) with {hashtag} support
+uint16_t ComputeClusterHashSlot(std::string_view key);
+
 // Little-endian binary writer
 class BinaryWriter {
  public:
@@ -278,6 +281,14 @@ struct RpcSearchNumericFilter {
   bool max_exclusive = false;
 };
 
+// Phase 69: Per-field BM25 term stats for 2-Phase DFS exact global scoring
+struct RpcFieldBm25Stats {
+  std::string field_name;
+  uint64_t live_docs = 0;
+  uint64_t total_doc_len = 0;
+  std::vector<std::pair<std::string, uint64_t>> term_df;
+};
+
 struct RpcSearchPhase1Request {
   std::string index_name;
   std::string query_str;
@@ -307,6 +318,8 @@ struct RpcSearchPhase1Request {
   double geofilter_lat = 0.0;
   double geofilter_radius = 0.0;
   uint8_t geofilter_unit = 0;
+  // Phase 69: Optional global BM25 statistics (non-empty when CLUSTER_BM25_DFS == 1)
+  std::vector<RpcFieldBm25Stats> global_bm25_stats;
 };
 
 struct RpcSearchPhase1Item {
@@ -369,5 +382,151 @@ void EncodeFetchDocsRequest(const RpcFetchDocsRequest& req, std::string& out);
 bool DecodeFetchDocsRequest(std::string_view data, RpcFetchDocsRequest& out);
 void EncodeFetchDocsResponse(const RpcFetchDocsResponse& resp, std::string& out);
 bool DecodeFetchDocsResponse(std::string_view data, RpcFetchDocsResponse& out);
+
+// Phase 69: 2-Phase BM25 DFS term stats payloads
+struct RpcDfsTermStatsRequest {
+  std::string index_name;
+  std::string query_str;
+  bool verbatim = false;
+  bool nostopwords = false;
+  int32_t dialect = 2;
+  bool has_language = false;
+  std::string language;
+  std::vector<std::string> infields;
+};
+
+struct RpcDfsTermStatsResponse {
+  bool ok = false;
+  std::string error_msg;
+  std::vector<RpcFieldBm25Stats> fields;
+};
+
+void EncodeDfsTermStatsRequest(const RpcDfsTermStatsRequest& req, std::string& out);
+bool DecodeDfsTermStatsRequest(std::string_view data, RpcDfsTermStatsRequest& out);
+void EncodeDfsTermStatsResponse(const RpcDfsTermStatsResponse& resp, std::string& out);
+bool DecodeDfsTermStatsResponse(std::string_view data, RpcDfsTermStatsResponse& out);
+
+// Phase 69: FT.HYBRID Phase 1 payloads (raw text leg + raw vector leg)
+struct RpcHybridPhase1Request {
+  std::string index_name;
+  std::string text_query;
+  uint8_t scorer = 0;
+  int64_t text_limit = -1;
+  std::string vec_field;
+  std::string vec_param;
+  uint64_t knn_k = 10;
+  uint64_t ef_runtime = 0;
+  uint64_t oversample = 0;
+  std::string vec_filter_query;
+  std::vector<std::pair<std::string, std::string>> params;
+  int32_t dialect = 2;
+  int64_t remaining_timeout_ms = 5000;
+  std::vector<RpcFieldBm25Stats> global_bm25_stats;
+};
+
+struct RpcHybridPhase1Response {
+  bool ok = false;
+  std::string error_msg;
+  std::vector<std::pair<std::string, double>> text_hits;
+  std::vector<std::pair<std::string, float>> vec_hits;
+};
+
+void EncodeHybridPhase1Request(const RpcHybridPhase1Request& req, std::string& out);
+bool DecodeHybridPhase1Request(std::string_view data, RpcHybridPhase1Request& out);
+void EncodeHybridPhase1Response(const RpcHybridPhase1Response& resp, std::string& out);
+bool DecodeHybridPhase1Response(std::string_view data, RpcHybridPhase1Response& out);
+
+// Phase 69: FT.INFO cluster stats payloads
+struct RpcInfoStatsRequest {
+  std::string index_name;
+};
+
+struct RpcInfoStatsResponse {
+  bool ok = false;
+  std::string error_msg;
+  uint64_t num_docs = 0;
+  uint64_t num_terms = 0;
+  uint64_t inverted_bytes = 0;
+  uint64_t vector_bytes = 0;
+  bool bg_indexing = false;
+  uint64_t bg_scanned_keys = 0;
+  uint64_t bg_total_keys = 0;
+  double percent_indexed = 1.0;
+  uint64_t cursor_idle = 0;
+  uint64_t cursor_total_created = 0;
+  uint64_t cursor_total_expired = 0;
+};
+
+void EncodeInfoStatsRequest(const RpcInfoStatsRequest& req, std::string& out);
+bool DecodeInfoStatsRequest(std::string_view data, RpcInfoStatsRequest& out);
+void EncodeInfoStatsResponse(const RpcInfoStatsResponse& resp, std::string& out);
+bool DecodeInfoStatsResponse(std::string_view data, RpcInfoStatsResponse& out);
+
+// Phase 69: FT.TAGVALS payloads
+struct RpcTagValsRequest {
+  std::string index_name;
+  std::string field_name;
+};
+
+struct RpcTagValsResponse {
+  bool ok = false;
+  std::string error_msg;
+  std::vector<std::string> tags;
+};
+
+void EncodeTagValsRequest(const RpcTagValsRequest& req, std::string& out);
+bool DecodeTagValsRequest(std::string_view data, RpcTagValsRequest& out);
+void EncodeTagValsResponse(const RpcTagValsResponse& resp, std::string& out);
+bool DecodeTagValsResponse(std::string_view data, RpcTagValsResponse& out);
+
+// Phase 69: FT.SPELLCHECK payloads
+struct RpcSpellCheckRequest {
+  std::string index_name;
+  std::string query_str;
+  int32_t max_dist = 1;
+  std::vector<std::string> include_dicts;
+  std::vector<std::string> exclude_dicts;
+};
+
+struct RpcSpellCheckTermSugs {
+  std::string term;
+  std::vector<std::pair<std::string, double>> suggestions;
+};
+
+struct RpcSpellCheckResponse {
+  bool ok = false;
+  std::string error_msg;
+  std::vector<std::string> known_terms;
+  std::vector<RpcSpellCheckTermSugs> term_suggestions;
+};
+
+void EncodeSpellCheckRequest(const RpcSpellCheckRequest& req, std::string& out);
+bool DecodeSpellCheckRequest(std::string_view data, RpcSpellCheckRequest& out);
+void EncodeSpellCheckResponse(const RpcSpellCheckResponse& resp, std::string& out);
+bool DecodeSpellCheckResponse(std::string_view data, RpcSpellCheckResponse& out);
+
+// Phase 69: FT.SUG* routing payloads
+struct RpcSuggestRequest {
+  std::string cmd_name;
+  std::vector<std::string> args;
+};
+
+struct RpcSuggestEntry {
+  std::string str;
+  double score = 0.0;
+  std::string payload;
+};
+
+struct RpcSuggestResponse {
+  bool ok = false;
+  std::string error_msg;
+  int64_t int_reply = 0;
+  std::vector<RpcSuggestEntry> entries;
+};
+
+void EncodeSuggestRequest(const RpcSuggestRequest& req, std::string& out);
+bool DecodeSuggestRequest(std::string_view data, RpcSuggestRequest& out);
+void EncodeSuggestResponse(const RpcSuggestResponse& resp, std::string& out);
+bool DecodeSuggestResponse(std::string_view data, RpcSuggestResponse& out);
 
 }  // namespace gemini_search

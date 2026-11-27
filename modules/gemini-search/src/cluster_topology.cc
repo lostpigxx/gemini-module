@@ -498,6 +498,78 @@ void ClusterManager::RefreshTopology(RedisModuleCtx* ctx) {
   std::sort(topo->nodes.begin(), topo->nodes.end(), by_id);
   std::sort(topo->masters.begin(), topo->masters.end(), by_id);
 
+  // Populate slot_to_master table from CLUSTER SLOTS (used for FT.SUG* single-shard routing)
+  if (RedisModule_Call && !topo->masters.empty()) {
+    std::unordered_map<std::string, int16_t> id_to_midx;
+    id_to_midx.reserve(topo->masters.size());
+    for (size_t mi = 0; mi < topo->masters.size(); mi++) {
+      id_to_midx[topo->masters[mi].node_id] = static_cast<int16_t>(mi);
+    }
+    RedisModuleCallReply* slots_rep = RedisModule_Call(ctx, "CLUSTER", "c", "SLOTS");
+    if (slots_rep) {
+      if (RedisModule_CallReplyType(slots_rep) == REDISMODULE_REPLY_ARRAY) {
+        size_t n_ranges = RedisModule_CallReplyLength(slots_rep);
+        for (size_t ri = 0; ri < n_ranges; ri++) {
+          RedisModuleCallReply* range = RedisModule_CallReplyArrayElement(slots_rep, ri);
+          if (!range || RedisModule_CallReplyType(range) != REDISMODULE_REPLY_ARRAY ||
+              RedisModule_CallReplyLength(range) < 3) {
+            continue;
+          }
+          RedisModuleCallReply* s_rep = RedisModule_CallReplyArrayElement(range, 0);
+          RedisModuleCallReply* e_rep = RedisModule_CallReplyArrayElement(range, 1);
+          RedisModuleCallReply* m_rep = RedisModule_CallReplyArrayElement(range, 2);
+          if (!s_rep || !e_rep || !m_rep ||
+              RedisModule_CallReplyType(s_rep) != REDISMODULE_REPLY_INTEGER ||
+              RedisModule_CallReplyType(e_rep) != REDISMODULE_REPLY_INTEGER ||
+              RedisModule_CallReplyType(m_rep) != REDISMODULE_REPLY_ARRAY ||
+              RedisModule_CallReplyLength(m_rep) < 2) {
+            continue;
+          }
+          long long start_slot = RedisModule_CallReplyInteger(s_rep);
+          long long end_slot = RedisModule_CallReplyInteger(e_rep);
+          if (start_slot < 0 || end_slot >= 16384 || start_slot > end_slot) continue;
+
+          int16_t master_idx = -1;
+          if (RedisModule_CallReplyLength(m_rep) >= 3) {
+            RedisModuleCallReply* nid_rep = RedisModule_CallReplyArrayElement(m_rep, 2);
+            if (nid_rep && RedisModule_CallReplyType(nid_rep) == REDISMODULE_REPLY_STRING) {
+              size_t nlen = 0;
+              const char* nptr = RedisModule_CallReplyStringPtr(nid_rep, &nlen);
+              if (nptr && nlen > 0) {
+                auto mit = id_to_midx.find(std::string(nptr, nlen));
+                if (mit != id_to_midx.end()) master_idx = mit->second;
+              }
+            }
+          }
+          if (master_idx < 0) {
+            RedisModuleCallReply* ip_rep = RedisModule_CallReplyArrayElement(m_rep, 0);
+            RedisModuleCallReply* pt_rep = RedisModule_CallReplyArrayElement(m_rep, 1);
+            if (ip_rep && pt_rep &&
+                RedisModule_CallReplyType(ip_rep) == REDISMODULE_REPLY_STRING &&
+                RedisModule_CallReplyType(pt_rep) == REDISMODULE_REPLY_INTEGER) {
+              size_t ilen = 0;
+              const char* iptr = RedisModule_CallReplyStringPtr(ip_rep, &ilen);
+              int mport = static_cast<int>(RedisModule_CallReplyInteger(pt_rep));
+              std::string mip(iptr ? iptr : "", ilen);
+              for (size_t mi = 0; mi < topo->masters.size(); mi++) {
+                if (topo->masters[mi].redis_port == mport && topo->masters[mi].ip == mip) {
+                  master_idx = static_cast<int16_t>(mi);
+                  break;
+                }
+              }
+            }
+          }
+          if (master_idx >= 0) {
+            for (long long s = start_slot; s <= end_slot; s++) {
+              topo->slot_to_master[static_cast<size_t>(s)] = master_idx;
+            }
+          }
+        }
+      }
+      RedisModule_FreeCallReply(slots_rep);
+    }
+  }
+
   uint64_t new_ver = topology_version_.fetch_add(1, std::memory_order_acq_rel) + 1;
   topo->version = new_ver;
   master_count_.store(topo->masters.size(), std::memory_order_release);

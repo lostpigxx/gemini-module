@@ -50,4 +50,56 @@ struct ClusterSearchPlan {
 //   Phase 2: Targeted Fetch of winning doc_ids only (skipped for LIMIT 0 0 / NOCONTENT)
 int ExecuteClusterSearch(RedisModuleCtx* ctx, ClusterSearchPlan plan);
 
+// Phase 69: Plan for FT.HYBRID global Scatter-Gather + RRF/LINEAR fusion
+struct ClusterHybridPlan {
+  RpcHybridPhase1Request phase1_req;
+  RpcFetchDocsRequest fetch_template;
+  HybridConfig hcfg;
+  bool has_limit = false;
+  size_t limit_offset = 0;
+  size_t limit_count = 0;
+  bool count_only = false;
+  bool withscores = false;
+  bool explainscore = false;
+  bool withpayloads = false;
+  bool nocontent = false;
+  int64_t timeout_ms = 5000;
+};
+
+int ExecuteClusterHybrid(RedisModuleCtx* ctx, ClusterHybridPlan plan);
+
+// Phase 69: Cluster FT.INFO aggregation across all healthy master shards
+int ExecuteClusterInfo(RedisModuleCtx* ctx, const std::string& index_name);
+
+// Phase 69: Cluster FT.TAGVALS global union/dedup across all healthy master shards
+int ExecuteClusterTagVals(RedisModuleCtx* ctx, const std::string& index_name,
+                          const std::string& field_name);
+
+// Phase 69: Cluster FT.SPELLCHECK global known-term union & suggestion score aggregation
+int ExecuteClusterSpellCheck(RedisModuleCtx* ctx, RpcSpellCheckRequest req);
+
+// Phase 69: Cluster FT.SUG* transparent forwarding to slot-owning Master
+struct ClusterSuggestPlan {
+  std::string cmd_name;
+  std::vector<std::string> args;
+  std::string dict_name;
+  bool is_write = false;
+  bool sugget_withscores = false;
+  bool sugget_withpayloads = false;
+};
+
+int ExecuteClusterSuggest(RedisModuleCtx* ctx, ClusterSuggestPlan plan);
+
+// Phase 69: Cluster FT.PROFILE <idx> SEARCH ... with Coordinator + per-shard timing breakdown
+struct ClusterProfileSearchPlan {
+  RpcSearchPhase1Request phase1_req;
+  bool has_limit = false;
+  size_t limit_offset = 0;
+  size_t limit_count = 0;
+  double parse_time_us = 0.0;
+  int64_t timeout_ms = 5000;
+};
+
+int ExecuteClusterProfileSearch(RedisModuleCtx* ctx, ClusterProfileSearchPlan plan);
+
 }  // namespace gemini_search

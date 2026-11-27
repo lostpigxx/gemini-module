@@ -646,30 +646,22 @@ int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
-// FT.INFO <index_name>
-int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
-                         int argc) {
-  if (argc != 2) return RedisModule_WrongArity(ctx);
-  RedisModule_AutoMemory(ctx);
-
-  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
-  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
-  auto it = GetIndices().find(idx_str);
-  if (it == GetIndices().end()) {
-    return RedisModule_ReplyWithError(ctx, "ERR index not found");
-  }
-  auto& entry = *it->second;
-
+// Shared FT.INFO reply formatter (standalone + cluster)
+void ReplyWithIndexInfo(
+    RedisModuleCtx* ctx, const IndexEntry& entry, uint64_t num_docs, uint64_t num_terms,
+    uint64_t inverted_bytes, uint64_t vector_bytes, bool bg_indexing, double percent_indexed,
+    uint64_t cursor_idle, uint64_t cursor_created, uint64_t cursor_expired,
+    const std::vector<std::tuple<std::string, uint64_t, bool, double>>* cluster_shards) {
   long info_len = (entry.spec.HasPrefixes() ? 10 : 8) + 12 +
-                  (!entry.spec.custom_dict.empty() ? 2 : 0);
+                  (!entry.spec.custom_dict.empty() ? 2 : 0) +
+                  (cluster_shards != nullptr ? 2 : 0);
   RedisModule_ReplyWithArray(ctx, info_len);
 
   RedisModule_ReplyWithSimpleString(ctx, "index_name");
   RedisModule_ReplyWithCString(ctx, entry.spec.name.c_str());
 
   RedisModule_ReplyWithSimpleString(ctx, "num_docs");
-  RedisModule_ReplyWithLongLong(
-      ctx, static_cast<long long>(entry.doc_store.Size()));
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(num_docs));
 
   RedisModule_ReplyWithSimpleString(ctx, "language");
   RedisModule_ReplyWithCString(ctx, entry.spec.language.c_str());
@@ -692,8 +684,7 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   RedisModule_ReplyWithSimpleString(ctx, "fields");
-  RedisModule_ReplyWithArray(ctx,
-                             static_cast<long>(entry.spec.fields.size()));
+  RedisModule_ReplyWithArray(ctx, static_cast<long>(entry.spec.fields.size()));
   for (auto& f : entry.spec.fields) {
     if (f.type == FieldType::kVector) {
       long vec_info_len = (f.vector_params.algorithm == VectorAlgorithm::kHnsw) ? 12 : 8;
@@ -702,27 +693,24 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       RedisModule_ReplyWithCString(ctx, f.name.c_str());
       RedisModule_ReplyWithSimpleString(ctx, "VECTOR");
       RedisModule_ReplyWithSimpleString(ctx, "algorithm");
-      RedisModule_ReplyWithSimpleString(
-          ctx, VectorAlgorithmName(f.vector_params.algorithm));
+      RedisModule_ReplyWithSimpleString(ctx, VectorAlgorithmName(f.vector_params.algorithm));
       RedisModule_ReplyWithSimpleString(ctx, "dim");
-      RedisModule_ReplyWithLongLong(
-          ctx, static_cast<long long>(f.vector_params.dim));
+      RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(f.vector_params.dim));
       RedisModule_ReplyWithSimpleString(ctx, "distance_metric");
-      RedisModule_ReplyWithSimpleString(
-          ctx, DistanceMetricName(f.vector_params.metric));
+      RedisModule_ReplyWithSimpleString(ctx, DistanceMetricName(f.vector_params.metric));
       if (f.vector_params.algorithm == VectorAlgorithm::kHnsw) {
         RedisModule_ReplyWithSimpleString(ctx, "m");
         RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(f.vector_params.m));
         RedisModule_ReplyWithSimpleString(ctx, "ef_construction");
-        RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(f.vector_params.ef_construction));
+        RedisModule_ReplyWithLongLong(ctx,
+                                      static_cast<long long>(f.vector_params.ef_construction));
       }
       if (f.vector_params.rerank != VectorRerankType::kNone) {
         RedisModule_ReplyWithSimpleString(ctx, "rerank");
-        RedisModule_ReplyWithSimpleString(
-            ctx, VectorRerankTypeName(f.vector_params.rerank));
+        RedisModule_ReplyWithSimpleString(ctx, VectorRerankTypeName(f.vector_params.rerank));
         RedisModule_ReplyWithSimpleString(ctx, "oversample");
-        RedisModule_ReplyWithLongLong(
-            ctx, static_cast<long long>(f.vector_params.bq_oversample));
+        RedisModule_ReplyWithLongLong(ctx,
+                                      static_cast<long long>(f.vector_params.bq_oversample));
       }
     } else {
       long attr_count = 2;
@@ -752,39 +740,9 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     }
   }
 
-  // Phase 46: Observability metrics
-  size_t num_terms = 0;
-  size_t inverted_bytes = entry.doc_store.MemoryUsage();
-  size_t vector_bytes = 0;
-  for (const auto& f : entry.spec.fields) {
-    if (f.type == FieldType::kText) {
-      if (const auto* tidx = entry.text_indices.Get(f.name)) {
-        num_terms += tidx->NumTerms();
-        inverted_bytes += tidx->NumTerms() * 64 + tidx->NumDocs() * 32;
-      }
-    } else if (f.type == FieldType::kVector) {
-      if (const auto* vidx = entry.vector_indices.Get(f.name)) {
-        if (f.vector_params.quantization == VectorQuantization::kBq) {
-          size_t per_vec = BqWords(vidx->Dim()) * sizeof(uint64_t);
-          if (f.vector_params.rerank == VectorRerankType::kFp16) {
-            per_vec += vidx->Dim() * sizeof(uint16_t);
-          } else if (f.vector_params.rerank == VectorRerankType::kSq8) {
-            per_vec += vidx->Dim() * sizeof(uint8_t) + 2 * sizeof(float);
-          }
-          vector_bytes += vidx->Size() * per_vec;
-        } else {
-          size_t elem_b = (f.vector_params.quantization == VectorQuantization::kSq8)
-                              ? 1
-                              : sizeof(float);
-          vector_bytes += vidx->Size() * vidx->Dim() * elem_b;
-        }
-      }
-    }
-  }
-  auto FormatMb = [](size_t bytes) -> std::string {
+  auto FormatMb = [](uint64_t bytes) -> std::string {
     char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.4f",
-                  static_cast<double>(bytes) / (1024.0 * 1024.0));
+    std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(bytes) / (1024.0 * 1024.0));
     return std::string(buf);
   };
 
@@ -800,22 +758,130 @@ int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_ReplyWithSimpleString(ctx, "cursor_stats");
   RedisModule_ReplyWithArray(ctx, 8);
   RedisModule_ReplyWithSimpleString(ctx, "global_idle");
-  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(GetCursors().size()));
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(cursor_idle));
   RedisModule_ReplyWithSimpleString(ctx, "index_capacity");
   RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(kMaxCursorsPerIndex));
   RedisModule_ReplyWithSimpleString(ctx, "total_created");
-  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(GetTotalCursorsCreated()));
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(cursor_created));
   RedisModule_ReplyWithSimpleString(ctx, "total_expired");
-  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(GetTotalCursorsExpired()));
+  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(cursor_expired));
 
   RedisModule_ReplyWithSimpleString(ctx, "indexing");
-  RedisModule_ReplyWithLongLong(ctx, entry.bg_indexing ? 1 : 0);
+  RedisModule_ReplyWithLongLong(ctx, bg_indexing ? 1 : 0);
 
   char pct_buf[32];
-  std::snprintf(pct_buf, sizeof(pct_buf), "%.2f", entry.percent_indexed);
+  std::snprintf(pct_buf, sizeof(pct_buf), "%.2f", percent_indexed);
   RedisModule_ReplyWithSimpleString(ctx, "percent_indexed");
   RedisModule_ReplyWithCString(ctx, pct_buf);
 
+  if (cluster_shards != nullptr) {
+    RedisModule_ReplyWithSimpleString(ctx, "cluster_shards");
+    RedisModule_ReplyWithArray(ctx, static_cast<long>(cluster_shards->size()));
+    for (const auto& [nid, sdocs, sind, spct] : *cluster_shards) {
+      RedisModule_ReplyWithArray(ctx, 8);
+      RedisModule_ReplyWithSimpleString(ctx, "node_id");
+      RedisModule_ReplyWithCString(ctx, nid.c_str());
+      RedisModule_ReplyWithSimpleString(ctx, "num_docs");
+      RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(sdocs));
+      RedisModule_ReplyWithSimpleString(ctx, "indexing");
+      RedisModule_ReplyWithLongLong(ctx, sind ? 1 : 0);
+      char spbuf[32];
+      std::snprintf(spbuf, sizeof(spbuf), "%.2f", spct);
+      RedisModule_ReplyWithSimpleString(ctx, "percent_indexed");
+      RedisModule_ReplyWithCString(ctx, spbuf);
+    }
+  }
+}
+
+gemini_search::RpcInfoStatsResponse ExecuteLocalInfoStats(
+    const gemini_search::RpcInfoStatsRequest& req) {
+  gemini_search::RpcInfoStatsResponse resp;
+  auto entry_ptr = GetIndexEntryShared(req.index_name);
+  if (!entry_ptr) {
+    resp.ok = false;
+    resp.error_msg = "ERR index not found";
+    return resp;
+  }
+
+  const auto& entry = *entry_ptr;
+  std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+
+  uint64_t num_terms = 0;
+  uint64_t inverted_bytes = static_cast<uint64_t>(entry.doc_store.MemoryUsage());
+  uint64_t vector_bytes = 0;
+  for (const auto& f : entry.spec.fields) {
+    if (f.type == FieldType::kText) {
+      if (const auto* tidx = entry.text_indices.Get(f.name)) {
+        num_terms += static_cast<uint64_t>(tidx->NumTerms());
+        inverted_bytes += static_cast<uint64_t>(tidx->NumTerms() * 64 + tidx->NumDocs() * 32);
+      }
+    } else if (f.type == FieldType::kVector) {
+      if (const auto* vidx = entry.vector_indices.Get(f.name)) {
+        if (f.vector_params.quantization == VectorQuantization::kBq) {
+          size_t per_vec = BqWords(vidx->Dim()) * sizeof(uint64_t);
+          if (f.vector_params.rerank == VectorRerankType::kFp16) {
+            per_vec += vidx->Dim() * sizeof(uint16_t);
+          } else if (f.vector_params.rerank == VectorRerankType::kSq8) {
+            per_vec += vidx->Dim() * sizeof(uint8_t) + 2 * sizeof(float);
+          }
+          vector_bytes += static_cast<uint64_t>(vidx->Size() * per_vec);
+        } else {
+          size_t elem_b =
+              (f.vector_params.quantization == VectorQuantization::kSq8) ? 1 : sizeof(float);
+          vector_bytes += static_cast<uint64_t>(vidx->Size() * vidx->Dim() * elem_b);
+        }
+      }
+    }
+  }
+
+  resp.ok = true;
+  resp.num_docs = static_cast<uint64_t>(entry.doc_store.Size());
+  resp.num_terms = num_terms;
+  resp.inverted_bytes = inverted_bytes;
+  resp.vector_bytes = vector_bytes;
+  resp.bg_indexing = entry.bg_indexing;
+  resp.bg_scanned_keys = static_cast<uint64_t>(entry.bg_scanned_keys);
+  resp.bg_total_keys = static_cast<uint64_t>(entry.bg_total_keys);
+  resp.percent_indexed = entry.percent_indexed;
+  resp.cursor_idle = static_cast<uint64_t>(GetCursors().size());
+  resp.cursor_total_created = GetTotalCursorsCreated();
+  resp.cursor_total_expired = GetTotalCursorsExpired();
+  return resp;
+}
+
+// FT.INFO <index_name>
+int FtInfoCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                         int argc) {
+  if (argc != 2) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
+  {
+    std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+    if (GetIndices().find(idx_str) == GetIndices().end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR index not found");
+    }
+  }
+
+  if (gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    return gemini_search::ExecuteClusterInfo(ctx, idx_str);
+  }
+
+  auto entry_ptr = GetIndexEntryShared(idx_str);
+  if (!entry_ptr) {
+    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
+  gemini_search::RpcInfoStatsRequest req;
+  req.index_name = idx_str;
+  auto stats = ExecuteLocalInfoStats(req);
+  if (!stats.ok) {
+    return RedisModule_ReplyWithError(ctx, stats.error_msg.c_str());
+  }
+
+  std::shared_lock<std::shared_mutex> idx_lk(entry_ptr->Mutex());
+  ReplyWithIndexInfo(ctx, *entry_ptr, stats.num_docs, stats.num_terms, stats.inverted_bytes,
+                     stats.vector_bytes, stats.bg_indexing, stats.percent_indexed,
+                     stats.cursor_idle, stats.cursor_total_created, stats.cursor_total_expired);
   return REDISMODULE_OK;
 }
 
@@ -1281,6 +1347,37 @@ int FtAliasUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
+gemini_search::RpcTagValsResponse ExecuteLocalTagVals(
+    const gemini_search::RpcTagValsRequest& req) {
+  gemini_search::RpcTagValsResponse resp;
+  auto entry_ptr = GetIndexEntryShared(req.index_name);
+  if (!entry_ptr) {
+    resp.ok = false;
+    resp.error_msg = "ERR index not found";
+    return resp;
+  }
+
+  const auto& entry = *entry_ptr;
+  std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+  const auto* fspec = entry.spec.FindField(req.field_name);
+  if (!fspec) {
+    resp.ok = false;
+    resp.error_msg = "ERR field not in schema";
+    return resp;
+  }
+  if (fspec->type != FieldType::kTag) {
+    resp.ok = false;
+    resp.error_msg = "ERR field is not a TAG field";
+    return resp;
+  }
+
+  resp.ok = true;
+  if (const auto* tidx = entry.tag_indices.Get(req.field_name)) {
+    resp.tags = tidx->AllTags();
+  }
+  return resp;
+}
+
 // FT.TAGVALS <index> <field>
 int FtTagvalsCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                             int argc) {
@@ -1288,23 +1385,29 @@ int FtTagvalsCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   RedisModule_AutoMemory(ctx);
 
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
-  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
-  auto it = GetIndices().find(idx_str);
-  if (it == GetIndices().end()) {
+  std::string field_name(ArgView(argv[2]));
+
+  auto entry_ptr = GetIndexEntryShared(idx_str);
+  if (!entry_ptr) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  auto& entry = *it->second;
-
-  std::string field_name(ArgView(argv[2]));
-  const auto* fspec = entry.spec.FindField(field_name);
-  if (!fspec) {
-    return RedisModule_ReplyWithError(ctx, "ERR field not in schema");
+  {
+    std::shared_lock<std::shared_mutex> idx_lk(entry_ptr->Mutex());
+    const auto* fspec = entry_ptr->spec.FindField(field_name);
+    if (!fspec) {
+      return RedisModule_ReplyWithError(ctx, "ERR field not in schema");
+    }
+    if (fspec->type != FieldType::kTag) {
+      return RedisModule_ReplyWithError(ctx, "ERR field is not a TAG field");
+    }
   }
-  if (fspec->type != FieldType::kTag) {
-    return RedisModule_ReplyWithError(ctx, "ERR field is not a TAG field");
+
+  if (gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    return gemini_search::ExecuteClusterTagVals(ctx, idx_str, field_name);
   }
 
-  const auto* tidx = entry.tag_indices.Get(field_name);
+  std::shared_lock<std::shared_mutex> idx_lk(entry_ptr->Mutex());
+  const auto* tidx = entry_ptr->tag_indices.Get(field_name);
   if (!tidx) {
     RedisModule_ReplyWithArray(ctx, 0);
     return REDISMODULE_OK;
