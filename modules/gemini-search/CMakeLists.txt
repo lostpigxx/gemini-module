@@ -27,6 +27,7 @@ set(SEARCH_SOURCES
   src/cluster_codec.cc
   src/cluster_rpc.cc
   src/cluster_topology.cc
+  src/cluster_coordinator.cc
 )
 
 add_library(redis_search SHARED ${SEARCH_SOURCES})
@@ -262,6 +263,7 @@ if(GTest_FOUND)
     src/search_rdb.cc
     src/search_state.cc
     src/search_executor.cc
+    src/cluster_codec.cc
     src/index_spec.cc
     src/document_store.cc
     src/tag_index.cc

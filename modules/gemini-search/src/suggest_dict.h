@@ -69,6 +69,7 @@ class SynonymMap {
 
  public:
   void Update(const std::string& group_id, const std::vector<std::string>& terms);
+  void Clear() { groups_.clear(); }
   std::vector<std::string> Expand(const std::string& term) const;
   std::vector<std::pair<std::string, std::vector<std::string>>> Dump() const;
 };

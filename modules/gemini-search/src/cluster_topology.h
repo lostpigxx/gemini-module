@@ -106,6 +106,11 @@ class ClusterManager {
   const ClusterRpcServer& RpcServer() const { return rpc_server_; }
   const ClusterRpcClient& RpcClient() const { return rpc_client_; }
 
+  // Detached thread-safe context for background RPC handlers that need Redis GIL
+  std::mutex& DetachedCtxMutex() { return detached_ctx_mu_; }
+  RedisModuleCtx* DetachedCtx() const { return detached_ctx_; }
+  bool IsShuttingDown() const { return shutting_down_.load(std::memory_order_acquire); }
+
   // Register custom RPC opcode handler (used by Phase 67-70)
   void RegisterRpcHandler(RpcOpCode opcode, ClusterRpcServer::RequestHandler handler);
 
@@ -131,12 +136,16 @@ class ClusterManager {
   void SendHelloTo(RedisModuleCtx* ctx, const char* target_id, bool request_reply);
 
   std::atomic<bool> initialized_{false};
+  std::atomic<bool> shutting_down_{false};
   std::atomic<bool> cluster_mode_{false};
   std::atomic<bool> cluster_enabled_{true};
   std::atomic<size_t> master_count_{0};
   std::atomic<int> my_rpc_port_{0};
   std::atomic<uint64_t> schema_epoch_{0};
   std::atomic<uint64_t> topology_version_{0};
+
+  std::mutex detached_ctx_mu_;
+  RedisModuleCtx* detached_ctx_ = nullptr;
 
   // Module-arg overrides
   int explicit_rpc_port_ = 0;

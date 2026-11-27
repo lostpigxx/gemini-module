@@ -58,11 +58,41 @@ bool MatchArg(std::string_view arg, const char* target);
 void RemoveDocFromIndices(IndexEntry& entry, const std::string& doc_id);
 void AddDocToIndices(IndexEntry& entry, const std::string& doc_id,
                      const std::unordered_map<std::string, std::string>& fields);
+void AddDocToIndicesSkippingExistingHnsw(
+    IndexEntry& entry, const std::string& doc_id,
+    const std::unordered_map<std::string, std::string>& fields);
 bool PassesIndexFilter(const IndexSpec& spec,
                        const std::unordered_map<std::string, std::string>& fields);
 
+// Local DDL validation & execution helpers (shared by standalone, Coordinator, and Shard RPC)
+bool ParseCreateSpec(const std::vector<std::string>& args, IndexSpec& out_spec,
+                     std::string& err_out);
+bool ApplyLocalCreate(RedisModuleCtx* ctx, const std::vector<std::string>& args,
+                      bool is_cluster_mode, std::string& err_out);
+bool ApplyLocalDropIndex(RedisModuleCtx* ctx, const std::vector<std::string>& args,
+                         bool is_cluster_mode, bool idempotent_missing, std::string& err_out);
+bool ParseAlterFields(const IndexSpec& spec, const std::vector<std::string>& args,
+                      std::vector<FieldSpec>& out_fields, std::string& err_out);
+bool ApplyLocalAlter(RedisModuleCtx* ctx, const std::vector<std::string>& args,
+                     std::string& err_out);
+bool ApplyLocalAliasAdd(const std::vector<std::string>& args, std::string& err_out);
+bool ApplyLocalAliasDel(const std::vector<std::string>& args, bool idempotent_missing,
+                        std::string& err_out);
+bool ApplyLocalAliasUpdate(const std::vector<std::string>& args, std::string& err_out);
+bool ApplyLocalSynUpdate(const std::vector<std::string>& args, std::string& err_out);
+bool ApplyLocalDictAdd(const std::vector<std::string>& args, int64_t& out_added,
+                       std::string& err_out);
+bool ApplyLocalDictDel(const std::vector<std::string>& args, int64_t& out_removed,
+                       std::string& err_out);
+bool ApplyLocalDdlCommand(RedisModuleCtx* ctx, const std::string& cmd_name,
+                          const std::vector<std::string>& args, bool is_cluster_mode,
+                          bool is_rollback, int64_t& out_int_reply, std::string& err_out);
+void ReplicateDdlCommand(RedisModuleCtx* ctx, const std::string& cmd_name,
+                         const std::vector<std::string>& args);
+
 // Keyspace & server event helpers (defined in search_keyspace.cc)
 void ScanExistingKeys(RedisModuleCtx* ctx, IndexEntry& entry);
+void ScanExistingKeysPreservingHnsw(RedisModuleCtx* ctx, IndexEntry& entry);
 void StartOrRunInitialScan(RedisModuleCtx* ctx, IndexEntry& entry);
 void StopBackgroundIndexing(RedisModuleCtx* ctx, const std::string& index_name);
 void StopAllBackgroundIndexing(RedisModuleCtx* ctx);

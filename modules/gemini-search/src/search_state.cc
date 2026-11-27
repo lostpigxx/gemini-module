@@ -24,6 +24,9 @@ static uint64_t g_cursors_expired = 0;
 static std::unordered_map<std::string, SuggestDict> g_suggest_dicts;
 static std::unordered_map<std::string, TermDict> g_term_dicts;
 static uint64_t g_next_index_generation = 1;
+static bool g_cluster_rdb_mode = false;
+static uint64_t g_persisted_schema_epoch = 0;
+static std::vector<std::string> g_pending_cluster_recoveries;
 static std::unordered_map<std::string, std::string> g_config = {
     {"DEFAULT_DIALECT", "2"},
     {"TIMEOUT", "500"},
@@ -254,6 +257,11 @@ std::unordered_map<std::string, std::string>& GetAliases() { return g_aliases; }
 std::unordered_map<std::string, SuggestDict>& GetSuggestDicts() { return g_suggest_dicts; }
 std::unordered_map<std::string, TermDict>& GetTermDicts() { return g_term_dicts; }
 std::unordered_map<std::string, std::string>& GetConfig() { return g_config; }
+bool IsClusterRdbMode() { return g_cluster_rdb_mode; }
+void SetClusterRdbMode(bool enabled) { g_cluster_rdb_mode = enabled; }
+uint64_t GetPersistedSchemaEpoch() { return g_persisted_schema_epoch; }
+void SetPersistedSchemaEpoch(uint64_t epoch) { g_persisted_schema_epoch = epoch; }
+std::vector<std::string>& GetPendingClusterRecoveries() { return g_pending_cluster_recoveries; }
 
 void ClearAllGlobalState() {
   g_indices.clear();
@@ -264,6 +272,9 @@ void ClearAllGlobalState() {
   g_cursors_expired = 0;
   g_suggest_dicts.clear();
   g_term_dicts.clear();
+  g_cluster_rdb_mode = false;
+  g_persisted_schema_epoch = 0;
+  g_pending_cluster_recoveries.clear();
   g_config = {
       {"DEFAULT_DIALECT", "2"},
       {"TIMEOUT", "500"},
@@ -465,6 +476,26 @@ void AddDocToIndices(
     IndexEntry& entry, const std::string& doc_id,
     const std::unordered_map<std::string, std::string>& fields) {
   AddDocToIndicesInternal(entry, doc_id, fields, nullptr);
+}
+
+void AddDocToIndicesSkippingExistingHnsw(
+    IndexEntry& entry, const std::string& doc_id,
+    const std::unordered_map<std::string, std::string>& fields) {
+  std::unordered_set<std::string> skip_fields;
+  for (const auto& f : entry.spec.fields) {
+    if (f.type == FieldType::kVector &&
+        f.vector_params.algorithm == VectorAlgorithm::kHnsw) {
+      if (const auto* vidx = entry.vector_indices.Get(f.name)) {
+        if (const auto* hnsw = dynamic_cast<const HnswIndex*>(vidx)) {
+          if (hnsw->Contains(doc_id)) {
+            skip_fields.insert(f.name);
+          }
+        }
+      }
+    }
+  }
+  AddDocToIndicesInternal(entry, doc_id, fields,
+                          skip_fields.empty() ? nullptr : &skip_fields);
 }
 
 bool PassesIndexFilter(const IndexSpec& spec,

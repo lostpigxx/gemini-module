@@ -18,6 +18,7 @@ Usage:
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -65,7 +66,7 @@ def start_cluster_node(port: int, modules: list[str], node_dir: str) -> subproce
         "--port", str(port),
         "--bind", "127.0.0.1",
         "--dir", node_dir,
-        "--dbfilename", "",
+        "--dbfilename", f"dump-{port}.rdb",
         "--save", "",
         "--cluster-enabled", "yes",
         "--cluster-config-file", f"nodes-{port}.conf",
@@ -388,6 +389,202 @@ def test_search_cluster_phase66(nodes: list[redis.Redis], ports: list[int]) -> N
     print("  PASS: gemini-search Phase 66 FT.CONFIG CLUSTER_* parameters & dynamic toggle")
 
 
+def test_search_cluster_phase67(
+    rc: RedisCluster,
+    nodes: list[redis.Redis],
+    procs: list[subprocess.Popen],
+    ports: list[int],
+    modules: list[str],
+    workdir: str,
+) -> None:
+    """Verify gemini-search Phase 67: DDL broadcast, rollback, aux_save2 restart recovery, and 4th-node sync."""
+    # 1. Pre-populate Hash and JSON docs across all 3 shards BEFORE FT.CREATE
+    t0, _ = find_tag_in_slot_range(nodes[0], 0, 5460)
+    t1, _ = find_tag_in_slot_range(nodes[0], 5461, 10922)
+    t2, _ = find_tag_in_slot_range(nodes[0], 10923, 16383)
+
+    v0 = struct.pack("<4f", 1.0, 0.0, 0.0, 0.0)
+    v1 = struct.pack("<4f", 0.0, 1.0, 0.0, 0.0)
+    v2 = struct.pack("<4f", 0.0, 0.0, 1.0, 0.0)
+
+    nodes_raw = [redis.Redis(host="127.0.0.1", port=p, decode_responses=False) for p in ports]
+    try:
+        nodes_raw[0].hset(f"p67h:{{{t0}}}:1", mapping={"title": "redis cluster", "price": "10", "cat": "db", "vec": v0})
+        nodes_raw[1].hset(f"p67h:{{{t1}}}:2", mapping={"title": "vector hnsw", "price": "20", "cat": "ai", "vec": v1})
+        nodes_raw[2].hset(f"p67h:{{{t2}}}:3", mapping={"title": "search engine", "price": "30", "cat": "db", "vec": v2})
+    finally:
+        for nr in nodes_raw:
+            nr.close()
+
+    rc.execute_command("JSON.SET", f"p67j:{{{t0}}}:1", "$", '{"name":"alpha","score":11}')
+    rc.execute_command("JSON.SET", f"p67j:{{{t1}}}:2", "$", '{"name":"beta","score":22}')
+    rc.execute_command("JSON.SET", f"p67j:{{{t2}}}:3", "$", '{"name":"gamma","score":33}')
+
+    # 2. FT.CREATE from node0 -> immediately visible & auto-indexed on ALL 3 nodes, NO bare DB key!
+    assert nodes[0].execute_command(
+        "FT.CREATE", "p67_hash", "ON", "HASH", "PREFIX", "1", "p67h:",
+        "SCHEMA", "title", "TEXT", "price", "NUMERIC", "cat", "TAG",
+        "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2",
+    ) == "OK"
+
+    assert nodes[1].execute_command(
+        "FT.CREATE", "p67_json", "ON", "JSON", "PREFIX", "1", "p67j:",
+        "SCHEMA", "$.name", "AS", "name", "TEXT", "$.score", "AS", "score", "NUMERIC",
+    ) == "OK"
+
+    total_hash_docs = 0
+    total_json_docs = 0
+    for idx, n in enumerate(nodes):
+        listed = sorted(n.execute_command("FT._LIST"))
+        assert listed == ["p67_hash", "p67_json"], f"Node{idx} FT._LIST mismatch: {listed}"
+        # Obstacle 1 check: no bare GmSearch- DB keys on any shard (KEYS inspects local DB regardless of slot)
+        assert n.execute_command("KEYS", "p67_hash") == []
+        assert n.execute_command("KEYS", "p67_json") == []
+        hinfo = kv_list_to_dict(n.execute_command("FT.INFO", "p67_hash"))
+        jinfo = kv_list_to_dict(n.execute_command("FT.INFO", "p67_json"))
+        assert int(hinfo["num_docs"]) == 1, f"Node{idx} expected 1 hash doc, got {hinfo}"
+        assert int(jinfo["num_docs"]) == 1, f"Node{idx} expected 1 json doc, got {jinfo}"
+        total_hash_docs += int(hinfo["num_docs"])
+        total_json_docs += int(jinfo["num_docs"])
+    assert rc.execute_command("EXISTS", "p67_hash") == 0
+    assert rc.execute_command("EXISTS", "p67_json") == 0
+    assert total_hash_docs == 3 and total_json_docs == 3
+
+    # 3. Broadcast FT.ALTER, FT.ALIAS*, FT.SYNUPDATE, FT.DICTADD across all 3 nodes
+    assert nodes[2].execute_command("FT.ALTER", "p67_hash", "SCHEMA", "ADD", "brand", "TAG") == "OK"
+    assert nodes[0].execute_command("FT.ALIASADD", "p67_alias", "p67_hash") == "OK"
+    assert nodes[1].execute_command("FT.SYNUPDATE", "p67_hash", "g1", "fast", "quick") == "OK"
+    assert nodes[2].execute_command("FT.DICTADD", "p67_dict", "redis", "gemini") == 2
+
+    for idx, n in enumerate(nodes):
+        syn = n.execute_command("FT.SYNDUMP", "p67_alias")
+        assert "g1" in syn and "fast" in syn and "quick" in syn, f"Node{idx} syndump mismatch: {syn}"
+        dd = sorted(n.execute_command("FT.DICTDUMP", "p67_dict"))
+        assert dd == ["gemini", "redis"], f"Node{idx} dictdump mismatch: {dd}"
+
+    # 4. FT.ADD / FT.DEL rejected in multi-shard cluster mode
+    for bad in (
+        ("FT.ADD", "p67_hash", "doc:bad", "FIELDS", "title", "x"),
+        ("FT.DEL", "p67_hash", "doc:bad"),
+    ):
+        try:
+            nodes[0].execute_command(*bad)
+            raise AssertionError(f"Expected ResponseError for {bad} in cluster mode")
+        except ResponseError as e:
+            assert "not supported in cluster mode" in str(e), f"Unexpected error: {e}"
+    print("  PASS: gemini-search Phase 67 DDL broadcast (CREATE/ALTER/ALIAS/SYN/DICT) & no-bare-key isolation")
+
+    # 5. Simulate partial failure on node2 (pre-existing conflict) -> verify rollback on node0 & node1
+    assert nodes[2].execute_command("FT.CONFIG", "SET", "CLUSTER_ENABLED", "0") == "OK"
+    assert nodes[2].execute_command(
+        "FT.CREATE", "p67_conflict", "ON", "HASH", "PREFIX", "1", "cf:", "SCHEMA", "a", "TEXT"
+    ) == "OK"
+    assert nodes[2].execute_command("FT.CONFIG", "SET", "CLUSTER_ENABLED", "1") == "OK"
+
+    try:
+        nodes[0].execute_command(
+            "FT.CREATE", "p67_conflict", "ON", "HASH", "PREFIX", "1", "cf:", "SCHEMA", "a", "TEXT"
+        )
+        raise AssertionError("Expected conflict DDL error from node2")
+    except ResponseError as e:
+        assert "index already exists" in str(e) or "cluster DDL failed" in str(e)
+
+    # Node0 and Node1 MUST have zero dirty p67_conflict index after automatic rollback
+    assert "p67_conflict" not in nodes[0].execute_command("FT._LIST")
+    assert "p67_conflict" not in nodes[1].execute_command("FT._LIST")
+
+    # Clean up simulated local conflict on node2
+    assert nodes[2].execute_command("FT.CONFIG", "SET", "CLUSTER_ENABLED", "0") == "OK"
+    assert nodes[2].execute_command("FT.DROPINDEX", "p67_conflict") == "OK"
+    assert nodes[2].execute_command("FT.CONFIG", "SET", "CLUSTER_ENABLED", "1") == "OK"
+    print("  PASS: gemini-search Phase 67 two-step DDL compensation rollback on shard conflict")
+
+    # 6. Node1 SAVE + restart -> verify aux_save2 (encver 2) restores Schema, HNSW & local docs
+    assert nodes[1].save() is True
+    nodes[1].close()
+    procs[1].terminate()
+    procs[1].wait(timeout=5)
+
+    procs[1] = start_cluster_node(ports[1], modules, os.path.join(workdir, "node1"))
+    nodes[1] = redis.Redis(host="127.0.0.1", port=ports[1], decode_responses=True)
+
+    # Wait briefly for node1 to rejoin cluster_state:ok and rediscover peers
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        info = nodes[1].execute_command("CLUSTER", "INFO")
+        dbg = kv_list_to_dict(nodes[1].execute_command("FT._DEBUG", "CLUSTER"))
+        if "cluster_state:ok" in info and int(dbg.get("master_count", 0)) == 3:
+            nes = [kv_list_to_dict(x) for x in dbg.get("nodes", [])]
+            if len(nes) == 3 and all(int(ne.get("discovered", 0)) == 1 for ne in nes):
+                break
+        time.sleep(0.05)
+
+    assert sorted(nodes[1].execute_command("FT._LIST")) == ["p67_hash", "p67_json"]
+    n1_hinfo = kv_list_to_dict(nodes[1].execute_command("FT.INFO", "p67_hash"))
+    assert int(n1_hinfo["num_docs"]) == 1, f"Restarted node1 lost hash doc: {n1_hinfo}"
+    # ON JSON recovery triggers right after cluster_state:ok (<= 50ms timer)
+    n1_jinfo = {}
+    j_deadline = time.time() + 2.0
+    while time.time() < j_deadline:
+        n1_jinfo = kv_list_to_dict(nodes[1].execute_command("FT.INFO", "p67_json"))
+        if int(n1_jinfo["num_docs"]) == 1:
+            break
+        time.sleep(0.05)
+    assert int(n1_jinfo["num_docs"]) == 1, f"Restarted node1 lost json doc: {n1_jinfo}"
+    assert sorted(nodes[1].execute_command("FT.DICTDUMP", "p67_dict")) == ["gemini", "redis"]
+    assert "fast" in nodes[1].execute_command("FT.SYNDUMP", "p67_alias")
+    # Verify HNSW KNN still works on restarted node1 (deserialized directly from aux_save2)
+    n1_raw = redis.Redis(host="127.0.0.1", port=ports[1], decode_responses=False)
+    try:
+        knn = n1_raw.execute_command(
+            "FT.SEARCH", "p67_hash", "*=>[KNN 1 @vec $qv]", "PARAMS", "2", "qv", v1, "NOCONTENT", "DIALECT", "2"
+        )
+        assert knn[0] == 1 and knn[1] == f"p67h:{{{t1}}}:2".encode(), f"Unexpected KNN after restart: {knn}"
+    finally:
+        n1_raw.close()
+    print("  PASS: gemini-search Phase 67 node1 SAVE + restart aux_save2 (encver 2) + HNSW recovery")
+
+    # 7. Dynamic 4th node join -> automatic kRpcSchemaSyncReq/Resp self-healing
+    port4 = find_free_ports(1)[0]
+    proc4 = start_cluster_node(port4, modules, os.path.join(workdir, "node3"))
+    node4 = redis.Redis(host="127.0.0.1", port=port4, decode_responses=True)
+    try:
+        node4.execute_command("CLUSTER", "MEET", "127.0.0.1", ports[0])
+        deadline = time.time() + 10.0
+        synced = False
+        while time.time() < deadline:
+            try:
+                listed4 = sorted(node4.execute_command("FT._LIST"))
+                if listed4 == ["p67_hash", "p67_json"]:
+                    dd4 = sorted(node4.execute_command("FT.DICTDUMP", "p67_dict"))
+                    syn4 = node4.execute_command("FT.SYNDUMP", "p67_alias")
+                    if dd4 == ["gemini", "redis"] and "fast" in syn4:
+                        synced = True
+                        break
+            except Exception:
+                pass
+            time.sleep(0.1)
+        assert synced, f"4th node failed to auto-sync schema; FT._LIST={node4.execute_command('FT._LIST')}"
+        print("  PASS: gemini-search Phase 67 dynamic 4th-node join automatic SchemaSync self-healing")
+
+        # 8. Broadcast FT.DROPINDEX DD across all masters (including 4th node)
+        assert nodes[0].execute_command("FT.DROPINDEX", "p67_hash", "DD") == "OK"
+        assert nodes[0].execute_command("FT.DROPINDEX", "p67_json") == "OK"
+        for idx, n in enumerate(nodes + [node4]):
+            assert n.execute_command("FT._LIST") == [], f"Node{idx} still has indices after DROPINDEX"
+        assert nodes[0].execute_command("EXISTS", f"p67h:{{{t0}}}:1") == 0
+        assert nodes[1].execute_command("EXISTS", f"p67h:{{{t1}}}:2") == 0
+        assert nodes[2].execute_command("EXISTS", f"p67h:{{{t2}}}:3") == 0
+        print("  PASS: gemini-search Phase 67 FT.DROPINDEX DD broadcast across all shards")
+    finally:
+        node4.close()
+        proc4.terminate()
+        try:
+            proc4.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc4.kill()
+
+
 def main() -> int:
     bloom_so = sys.argv[1] if len(sys.argv) > 1 else "./build/redis_bloom.so"
     json_so = sys.argv[2] if len(sys.argv) > 2 else "./build/redis_json.so"
@@ -418,6 +615,7 @@ def main() -> int:
         test_live_slot_migration(rc, nodes, ports)
         if os.path.exists(search_so):
             test_search_cluster_phase66(nodes, ports)
+            test_search_cluster_phase67(rc, nodes, procs, ports, modules, workdir)
         print("\nAll Redis 7 Cluster integration tests PASSED!")
         return 0
     finally:

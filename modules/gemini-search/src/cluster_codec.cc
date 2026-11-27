@@ -463,4 +463,319 @@ bool DecodeClusterBusHello(const uint8_t* data, size_t len, ClusterBusHello& out
   return true;
 }
 
+namespace {
+
+constexpr size_t kMaxDdlCmdBytes = 64;
+constexpr size_t kMaxDdlArgs = 65536;
+constexpr size_t kMaxSpecPrefixes = 1024;
+constexpr size_t kMaxSpecFields = 4096;
+constexpr size_t kMaxSpecStopwords = 100000;
+constexpr size_t kMaxSpecSynGroups = 100000;
+constexpr size_t kMaxSpecSynTerms = 100000;
+constexpr size_t kMaxSchemaIndices = 65536;
+constexpr size_t kMaxSchemaAliases = 100000;
+constexpr size_t kMaxSchemaDicts = 65536;
+constexpr size_t kMaxSpecVectorDim = 65536;
+
+void WriteSchemaIndexSnapshot(BinaryWriter& w, const SchemaIndexSnapshot& snap) {
+  WriteIndexSpec(w, snap.spec);
+  w.WriteVarUint(static_cast<uint64_t>(snap.synonyms.size()));
+  for (const auto& [gid, terms] : snap.synonyms) {
+    w.WriteString(gid);
+    w.WriteStringVec(terms);
+  }
+}
+
+bool ReadSchemaIndexSnapshot(BinaryReader& r, SchemaIndexSnapshot& out) {
+  if (!ReadIndexSpec(r, out.spec)) return false;
+  uint64_t syn_count = 0;
+  if (!r.ReadVarUint(syn_count) || syn_count > kMaxSpecSynGroups || syn_count > r.Remaining()) {
+    return false;
+  }
+  out.synonyms.clear();
+  out.synonyms.reserve(static_cast<size_t>(syn_count));
+  for (uint64_t i = 0; i < syn_count; i++) {
+    std::string gid;
+    std::vector<std::string> terms;
+    if (!r.ReadString(gid, kMaxErrorMsgBytes) ||
+        !r.ReadStringVec(terms, kMaxSpecSynTerms, kMaxErrorMsgBytes)) {
+      return false;
+    }
+    out.synonyms.emplace_back(std::move(gid), std::move(terms));
+  }
+  return true;
+}
+
+}  // namespace
+
+void EncodeDdlRequest(const RpcDdlRequest& req, std::string& out) {
+  BinaryWriter w(128);
+  w.WriteU64(req.schema_epoch);
+  w.WriteString(req.coordinator_node_id);
+  w.WriteString(req.cmd_name);
+  w.WriteStringVec(req.args);
+  w.WriteU32(req.flags);
+  out = w.TakeBuffer();
+}
+
+bool DecodeDdlRequest(std::string_view data, RpcDdlRequest& out) {
+  BinaryReader r(data);
+  if (!r.ReadU64(out.schema_epoch)) return false;
+  if (!r.ReadString(out.coordinator_node_id, kMaxNodeIdBytes)) return false;
+  if (!r.ReadString(out.cmd_name, kMaxDdlCmdBytes) || out.cmd_name.empty()) return false;
+  if (!r.ReadStringVec(out.args, kMaxDdlArgs, kMaxRpcPayloadBytes)) return false;
+  if (!r.ReadU32(out.flags)) return false;
+  return r.AtEnd();
+}
+
+void EncodeDdlResponse(const RpcDdlResponse& resp, std::string& out) {
+  BinaryWriter w(32 + resp.error_msg.size());
+  w.WriteBool(resp.ok);
+  w.WriteI64(resp.int_reply);
+  w.WriteU64(resp.applied_epoch);
+  w.WriteString(resp.error_msg);
+  out = w.TakeBuffer();
+}
+
+bool DecodeDdlResponse(std::string_view data, RpcDdlResponse& out) {
+  BinaryReader r(data);
+  if (!r.ReadBool(out.ok)) return false;
+  if (!r.ReadI64(out.int_reply)) return false;
+  if (!r.ReadU64(out.applied_epoch)) return false;
+  if (!r.ReadString(out.error_msg, kMaxErrorMsgBytes)) return false;
+  return r.AtEnd();
+}
+
+void WriteIndexSpec(BinaryWriter& w, const IndexSpec& spec) {
+  w.WriteU8(1);  // IndexSpec binary format version 1
+  w.WriteString(spec.name);
+  w.WriteStringVec(spec.prefixes);
+  w.WriteU8(static_cast<uint8_t>(spec.source_type));
+  w.WriteVarUint(static_cast<uint64_t>(spec.fields.size()));
+  for (const auto& f : spec.fields) {
+    w.WriteString(f.name);
+    w.WriteU8(static_cast<uint8_t>(f.type));
+    if (f.type == FieldType::kVector) {
+      w.WriteU8(static_cast<uint8_t>(f.vector_params.algorithm));
+      w.WriteVarUint(static_cast<uint64_t>(f.vector_params.dim));
+      w.WriteU8(static_cast<uint8_t>(f.vector_params.metric));
+      w.WriteVarUint(static_cast<uint64_t>(f.vector_params.m));
+      w.WriteVarUint(static_cast<uint64_t>(f.vector_params.ef_construction));
+      w.WriteU8(static_cast<uint8_t>(f.vector_params.data_type));
+      w.WriteU8(static_cast<uint8_t>(f.vector_params.quantization));
+      w.WriteU8(static_cast<uint8_t>(f.vector_params.rerank));
+      w.WriteVarUint(static_cast<uint64_t>(f.vector_params.bq_oversample));
+    }
+    w.WriteString(f.json_path);
+    w.WriteBool(f.sortable);
+    w.WriteBool(f.noindex);
+    w.WriteDouble(f.weight);
+    w.WriteBool(f.nostem);
+    w.WriteString(f.phonetic);
+    w.WriteU8(static_cast<uint8_t>(static_cast<unsigned char>(f.tag_separator)));
+    w.WriteBool(f.case_sensitive);
+    w.WriteU8(static_cast<uint8_t>(f.geoshape_coord));
+    w.WriteBool(f.index_missing);
+    w.WriteBool(f.index_empty);
+  }
+  w.WriteBool(spec.has_custom_stopwords);
+  if (spec.has_custom_stopwords) {
+    w.WriteStringVec(spec.custom_stopwords);
+  }
+  w.WriteBool(spec.nofreqs);
+  w.WriteBool(spec.nooffsets);
+  w.WriteBool(spec.nohl);
+  w.WriteVarInt(static_cast<int64_t>(spec.temporary_ttl));
+  w.WriteString(spec.language);
+  w.WriteString(spec.filter_expr);
+  w.WriteBool(spec.skip_initial_scan);
+  w.WriteString(spec.language_field);
+  w.WriteString(spec.custom_dict);
+}
+
+bool ReadIndexSpec(BinaryReader& r, IndexSpec& out) {
+  out = IndexSpec{};
+  uint8_t ver = 0;
+  if (!r.ReadU8(ver) || ver != 1) return false;
+  if (!r.ReadString(out.name, kMaxErrorMsgBytes) || out.name.empty()) return false;
+  if (!r.ReadStringVec(out.prefixes, kMaxSpecPrefixes, kMaxErrorMsgBytes)) return false;
+
+  uint8_t raw_src = 0;
+  if (!r.ReadU8(raw_src) || raw_src > static_cast<uint8_t>(IndexSourceType::kJson)) return false;
+  out.source_type = static_cast<IndexSourceType>(raw_src);
+
+  uint64_t field_count = 0;
+  if (!r.ReadVarUint(field_count) || field_count > kMaxSpecFields || field_count > r.Remaining()) {
+    return false;
+  }
+  out.fields.reserve(static_cast<size_t>(field_count));
+  for (uint64_t i = 0; i < field_count; i++) {
+    FieldSpec f;
+    if (!r.ReadString(f.name, kMaxErrorMsgBytes) || f.name.empty()) return false;
+    uint8_t raw_type = 0;
+    if (!r.ReadU8(raw_type) || raw_type > static_cast<uint8_t>(FieldType::kGeoShape)) return false;
+    f.type = static_cast<FieldType>(raw_type);
+
+    if (f.type == FieldType::kVector) {
+      uint8_t raw_algo = 0, raw_metric = 0, raw_dtype = 0, raw_quant = 0, raw_rerank = 0;
+      uint64_t dim = 0, m = 0, ef = 0, os = 0;
+      if (!r.ReadU8(raw_algo) || raw_algo > static_cast<uint8_t>(VectorAlgorithm::kHnsw)) {
+        return false;
+      }
+      if (!r.ReadVarUint(dim) || dim == 0 || dim > kMaxSpecVectorDim) return false;
+      if (!r.ReadU8(raw_metric) || raw_metric > static_cast<uint8_t>(DistanceMetric::kIP)) {
+        return false;
+      }
+      if (!r.ReadVarUint(m) || m == 0 || m > 1024) return false;
+      if (!r.ReadVarUint(ef) || ef == 0 || ef > 100000) return false;
+      if (!r.ReadU8(raw_dtype) || raw_dtype > static_cast<uint8_t>(VectorDataType::kBFloat16)) {
+        return false;
+      }
+      if (!r.ReadU8(raw_quant) || raw_quant > static_cast<uint8_t>(VectorQuantization::kBq)) {
+        return false;
+      }
+      if (!r.ReadU8(raw_rerank) || raw_rerank > static_cast<uint8_t>(VectorRerankType::kSq8)) {
+        return false;
+      }
+      if (!r.ReadVarUint(os) || os == 0 || os > 1024) return false;
+      f.vector_params.algorithm = static_cast<VectorAlgorithm>(raw_algo);
+      f.vector_params.dim = static_cast<size_t>(dim);
+      f.vector_params.metric = static_cast<DistanceMetric>(raw_metric);
+      f.vector_params.m = static_cast<size_t>(m);
+      f.vector_params.ef_construction = static_cast<size_t>(ef);
+      f.vector_params.data_type = static_cast<VectorDataType>(raw_dtype);
+      f.vector_params.quantization = static_cast<VectorQuantization>(raw_quant);
+      f.vector_params.rerank = static_cast<VectorRerankType>(raw_rerank);
+      f.vector_params.bq_oversample = static_cast<size_t>(os);
+    }
+
+    uint8_t sep = 0, coord = 0;
+    if (!r.ReadString(f.json_path, kMaxErrorMsgBytes)) return false;
+    if (!r.ReadBool(f.sortable) || !r.ReadBool(f.noindex)) return false;
+    if (!r.ReadDouble(f.weight) || f.weight < 0.0) return false;
+    if (!r.ReadBool(f.nostem)) return false;
+    if (!r.ReadString(f.phonetic, kMaxErrorMsgBytes)) return false;
+    if (!r.ReadU8(sep)) return false;
+    f.tag_separator = static_cast<char>(sep);
+    if (!r.ReadBool(f.case_sensitive)) return false;
+    if (!r.ReadU8(coord) || coord > static_cast<uint8_t>(GeoShapeCoord::kFlat)) return false;
+    f.geoshape_coord = static_cast<GeoShapeCoord>(coord);
+    if (!r.ReadBool(f.index_missing) || !r.ReadBool(f.index_empty)) return false;
+    out.fields.push_back(std::move(f));
+  }
+
+  if (!r.ReadBool(out.has_custom_stopwords)) return false;
+  if (out.has_custom_stopwords) {
+    if (!r.ReadStringVec(out.custom_stopwords, kMaxSpecStopwords, kMaxErrorMsgBytes)) return false;
+  }
+  if (!r.ReadBool(out.nofreqs) || !r.ReadBool(out.nooffsets) || !r.ReadBool(out.nohl)) {
+    return false;
+  }
+  int64_t ttl = 0;
+  if (!r.ReadVarInt(ttl) || ttl < 0 || ttl > 2147483647LL) return false;
+  out.temporary_ttl = static_cast<int>(ttl);
+  if (!r.ReadString(out.language, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadString(out.filter_expr, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadBool(out.skip_initial_scan)) return false;
+  if (!r.ReadString(out.language_field, kMaxErrorMsgBytes)) return false;
+  if (!r.ReadString(out.custom_dict, kMaxErrorMsgBytes)) return false;
+  return true;
+}
+
+void EncodeSchemaIndexSnapshot(const SchemaIndexSnapshot& snap, std::string& out) {
+  BinaryWriter w(256);
+  WriteSchemaIndexSnapshot(w, snap);
+  out = w.TakeBuffer();
+}
+
+bool DecodeSchemaIndexSnapshot(std::string_view data, SchemaIndexSnapshot& out) {
+  BinaryReader r(data);
+  if (!ReadSchemaIndexSnapshot(r, out)) return false;
+  return r.AtEnd();
+}
+
+void EncodeSchemaSyncRequest(const RpcSchemaSyncRequest& req, std::string& out) {
+  BinaryWriter w(64);
+  w.WriteString(req.requester_node_id);
+  w.WriteU64(req.local_schema_epoch);
+  out = w.TakeBuffer();
+}
+
+bool DecodeSchemaSyncRequest(std::string_view data, RpcSchemaSyncRequest& out) {
+  BinaryReader r(data);
+  if (!r.ReadString(out.requester_node_id, kMaxNodeIdBytes)) return false;
+  if (!r.ReadU64(out.local_schema_epoch)) return false;
+  return r.AtEnd();
+}
+
+void EncodeSchemaSyncResponse(const RpcSchemaSyncResponse& resp, std::string& out) {
+  BinaryWriter w(512);
+  w.WriteU64(resp.schema_epoch);
+
+  w.WriteVarUint(static_cast<uint64_t>(resp.indices.size()));
+  for (const auto& idx : resp.indices) {
+    WriteSchemaIndexSnapshot(w, idx);
+  }
+
+  w.WriteVarUint(static_cast<uint64_t>(resp.aliases.size()));
+  for (const auto& [k, v] : resp.aliases) {
+    w.WriteString(k);
+    w.WriteString(v);
+  }
+
+  w.WriteVarUint(static_cast<uint64_t>(resp.term_dicts.size()));
+  for (const auto& [dname, terms] : resp.term_dicts) {
+    w.WriteString(dname);
+    w.WriteStringVec(terms);
+  }
+  out = w.TakeBuffer();
+}
+
+bool DecodeSchemaSyncResponse(std::string_view data, RpcSchemaSyncResponse& out) {
+  BinaryReader r(data);
+  if (!r.ReadU64(out.schema_epoch)) return false;
+
+  uint64_t idx_count = 0;
+  if (!r.ReadVarUint(idx_count) || idx_count > kMaxSchemaIndices || idx_count > r.Remaining()) {
+    return false;
+  }
+  out.indices.clear();
+  out.indices.reserve(static_cast<size_t>(idx_count));
+  for (uint64_t i = 0; i < idx_count; i++) {
+    SchemaIndexSnapshot snap;
+    if (!ReadSchemaIndexSnapshot(r, snap)) return false;
+    out.indices.push_back(std::move(snap));
+  }
+
+  uint64_t alias_count = 0;
+  if (!r.ReadVarUint(alias_count) || alias_count > kMaxSchemaAliases ||
+      alias_count > r.Remaining()) {
+    return false;
+  }
+  out.aliases.clear();
+  out.aliases.reserve(static_cast<size_t>(alias_count));
+  for (uint64_t i = 0; i < alias_count; i++) {
+    std::string k, v;
+    if (!r.ReadString(k, kMaxErrorMsgBytes) || !r.ReadString(v, kMaxErrorMsgBytes)) return false;
+    out.aliases.emplace_back(std::move(k), std::move(v));
+  }
+
+  uint64_t dict_count = 0;
+  if (!r.ReadVarUint(dict_count) || dict_count > kMaxSchemaDicts || dict_count > r.Remaining()) {
+    return false;
+  }
+  out.term_dicts.clear();
+  out.term_dicts.reserve(static_cast<size_t>(dict_count));
+  for (uint64_t i = 0; i < dict_count; i++) {
+    std::string dname;
+    std::vector<std::string> terms;
+    if (!r.ReadString(dname, kMaxErrorMsgBytes) ||
+        !r.ReadStringVec(terms, kMaxSpecSynTerms, kMaxErrorMsgBytes)) {
+      return false;
+    }
+    out.term_dicts.emplace_back(std::move(dname), std::move(terms));
+  }
+  return r.AtEnd();
+}
+
 }  // namespace gemini_search

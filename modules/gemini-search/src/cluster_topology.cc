@@ -1,3 +1,4 @@
+#include "cluster_coordinator.h"
 #include "cluster_topology.h"
 #include "search_internal.h"
 
@@ -212,6 +213,12 @@ int ClusterManager::Init(RedisModuleCtx* ctx, RedisModuleString** argv, int argc
   }
 
   cluster_mode_.store(true, std::memory_order_release);
+  shutting_down_.store(false, std::memory_order_release);
+  SetClusterRdbMode(true);
+
+  if (RedisModule_GetDetachedThreadSafeContext) {
+    detached_ctx_ = RedisModule_GetDetachedThreadSafeContext(ctx);
+  }
 
   const char* my_id = RedisModule_GetMyClusterID ? RedisModule_GetMyClusterID() : nullptr;
   if (my_id) {
@@ -267,6 +274,7 @@ int ClusterManager::Init(RedisModuleCtx* ctx, RedisModuleString** argv, int argc
     RedisModule_SubscribeToServerEvent(ctx, RedisModuleEvent_Shutdown, OnClusterShutdownEvent);
   }
 
+  RegisterClusterCoordinatorHandlers();
   RefreshTopology(ctx);
   BroadcastHello(ctx, /*request_reply=*/true);
 
@@ -278,9 +286,17 @@ int ClusterManager::Init(RedisModuleCtx* ctx, RedisModuleString** argv, int argc
 
 void ClusterManager::Shutdown() {
   if (!initialized_.exchange(false, std::memory_order_acq_rel)) return;
+  shutting_down_.store(true, std::memory_order_release);
   rpc_client_.Stop();
   rpc_server_.Stop();
   my_rpc_port_.store(0, std::memory_order_release);
+  {
+    std::lock_guard<std::mutex> lk(detached_ctx_mu_);
+    if (detached_ctx_ && RedisModule_FreeThreadSafeContext) {
+      RedisModule_FreeThreadSafeContext(detached_ctx_);
+      detached_ctx_ = nullptr;
+    }
+  }
 }
 
 void ClusterManager::RegisterRpcHandler(RpcOpCode opcode, ClusterRpcServer::RequestHandler handler) {
@@ -372,11 +388,15 @@ void ClusterManager::OnBusHello(RedisModuleCtx* ctx, const char* sender_id,
   if (sid == my_node_id_) return;
 
   bool newly_discovered = false;
+  bool epoch_changed = false;
   {
     std::lock_guard<std::mutex> lk(topo_mu_);
     auto it = peer_hellos_.find(sid);
     if (it == peer_hellos_.end() || it->second.rpc_port != static_cast<int>(hello.rpc_port)) {
       newly_discovered = true;
+    }
+    if (it == peer_hellos_.end() || it->second.schema_epoch != hello.schema_epoch) {
+      epoch_changed = true;
     }
     PeerHelloInfo info;
     info.rpc_port = static_cast<int>(hello.rpc_port);
@@ -391,8 +411,11 @@ void ClusterManager::OnBusHello(RedisModuleCtx* ctx, const char* sender_id,
     SendHelloTo(ctx, sid.c_str(), /*request_reply=*/false);
   }
 
-  if (newly_discovered) {
+  if (newly_discovered || epoch_changed) {
     RefreshTopology(ctx);
+    if (hello.schema_epoch > schema_epoch_.load(std::memory_order_acquire)) {
+      TriggerSchemaSyncIfNeeded(ctx);
+    }
   }
 }
 
@@ -500,6 +523,7 @@ void ClusterManager::RefreshTopology(RedisModuleCtx* ctx) {
 void ClusterManager::OnClusterTick(RedisModuleCtx* ctx) {
   if (!IsClusterMode()) return;
   RefreshTopology(ctx);
+  TriggerSchemaSyncIfNeeded(ctx);
 
   int64_t now = ClusterNowMs();
   bool missing_peers = HasUndiscoveredPeers();

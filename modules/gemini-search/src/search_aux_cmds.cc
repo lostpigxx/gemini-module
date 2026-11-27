@@ -1,3 +1,4 @@
+#include "cluster_coordinator.h"
 #include "cluster_topology.h"
 #include "search_internal.h"
 #include "suggest_dict.h"
@@ -118,17 +119,81 @@ int FtSugLenCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(len));
 }
 
+bool ApplyLocalDictAdd(const std::vector<std::string>& args, int64_t& out_added,
+                       std::string& err_out) {
+  if (args.size() < 2) {
+    err_out = "ERR wrong number of arguments for 'FT.DICTADD' command";
+    return false;
+  }
+  const std::string& dict_name = args[0];
+  std::vector<std::string> terms(args.begin() + 1, args.end());
+  out_added = static_cast<int64_t>(GetTermDicts()[dict_name].Add(terms));
+  return true;
+}
+
+bool ApplyLocalDictDel(const std::vector<std::string>& args, int64_t& out_removed,
+                       std::string& err_out) {
+  if (args.size() < 2) {
+    err_out = "ERR wrong number of arguments for 'FT.DICTDEL' command";
+    return false;
+  }
+  const std::string& dict_name = args[0];
+  auto it = GetTermDicts().find(dict_name);
+  if (it == GetTermDicts().end()) {
+    out_removed = 0;
+    return true;
+  }
+  std::vector<std::string> terms(args.begin() + 1, args.end());
+  out_removed = static_cast<int64_t>(it->second.Del(terms));
+  return true;
+}
+
+bool ApplyLocalSynUpdate(const std::vector<std::string>& args, std::string& err_out) {
+  if (args.size() < 3) {
+    err_out = "ERR wrong number of arguments for 'FT.SYNUPDATE' command";
+    return false;
+  }
+  std::string idx_str = ResolveAlias(args[0]);
+  std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+  auto it = GetIndices().find(idx_str);
+  if (it == GetIndices().end()) {
+    err_out = "ERR index not found";
+    return false;
+  }
+  std::unique_lock<std::shared_mutex> idx_lk(it->second->Mutex());
+  std::vector<std::string> terms(args.begin() + 2, args.end());
+  it->second->synonyms.Update(args[1], terms);
+  return true;
+}
+
 // FT.DICTADD <dict> <term> [term ...]
 int FtDictAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                             int argc) {
   if (argc < 3) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string dict_name(ArgView(argv[1]));
-  std::vector<std::string> terms;
-  for (int i = 2; i < argc; i++) terms.emplace_back(ArgView(argv[i]));
-  size_t added = GetTermDicts()[dict_name].Add(terms);
-  if (added > 0) RedisModule_ReplicateVerbatim(ctx);
+  std::vector<std::string> args;
+  args.reserve(static_cast<size_t>(argc - 1));
+  for (int i = 1; i < argc; i++) args.emplace_back(ArgView(argv[i]));
+
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  if (!is_replicated && gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    return gemini_search::ExecuteClusterDdl(
+        ctx, gemini_search::RpcOpCode::kRpcDdlDict, "FT.DICTADD", args, /*reply_integer=*/true);
+  }
+
+  int64_t added = 0;
+  std::string err;
+  if (!ApplyLocalDictAdd(args, added, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
+  }
+  if (added > 0) {
+    RedisModule_ReplicateVerbatim(ctx);
+    if (gemini_search::ClusterManager::Instance().IsClusterMode()) {
+      SetPersistedSchemaEpoch(gemini_search::ClusterManager::Instance().AdvanceSchemaEpoch());
+    }
+  }
   return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(added));
 }
 
@@ -138,13 +203,28 @@ int FtDictDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc < 3) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string dict_name(ArgView(argv[1]));
-  auto it = GetTermDicts().find(dict_name);
-  if (it == GetTermDicts().end()) return RedisModule_ReplyWithLongLong(ctx, 0);
-  std::vector<std::string> terms;
-  for (int i = 2; i < argc; i++) terms.emplace_back(ArgView(argv[i]));
-  size_t removed = it->second.Del(terms);
-  if (removed > 0) RedisModule_ReplicateVerbatim(ctx);
+  std::vector<std::string> args;
+  args.reserve(static_cast<size_t>(argc - 1));
+  for (int i = 1; i < argc; i++) args.emplace_back(ArgView(argv[i]));
+
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  if (!is_replicated && gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    return gemini_search::ExecuteClusterDdl(
+        ctx, gemini_search::RpcOpCode::kRpcDdlDict, "FT.DICTDEL", args, /*reply_integer=*/true);
+  }
+
+  int64_t removed = 0;
+  std::string err;
+  if (!ApplyLocalDictDel(args, removed, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
+  }
+  if (removed > 0) {
+    RedisModule_ReplicateVerbatim(ctx);
+    if (gemini_search::ClusterManager::Instance().IsClusterMode()) {
+      SetPersistedSchemaEpoch(gemini_search::ClusterManager::Instance().AdvanceSchemaEpoch());
+    }
+  }
   return RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(removed));
 }
 
@@ -172,16 +252,30 @@ int FtSynUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc < 4) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
-  auto it = GetIndices().find(idx_str);
-  if (it == GetIndices().end()) return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  std::vector<std::string> args;
+  args.reserve(static_cast<size_t>(argc - 1));
+  for (int i = 1; i < argc; i++) args.emplace_back(ArgView(argv[i]));
 
-  std::string group_id(ArgView(argv[2]));
-  std::vector<std::string> terms;
-  for (int i = 3; i < argc; i++) terms.emplace_back(ArgView(argv[i]));
+  std::string idx_str = ResolveAlias(args[0]);
+  if (GetIndices().find(idx_str) == GetIndices().end()) {
+    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+  }
 
-  it->second->synonyms.Update(group_id, terms);
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  if (!is_replicated && gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    return gemini_search::ExecuteClusterDdl(
+        ctx, gemini_search::RpcOpCode::kRpcDdlSyn, "FT.SYNUPDATE", args, /*reply_integer=*/false);
+  }
+
+  std::string err;
+  if (!ApplyLocalSynUpdate(args, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
+  }
   RedisModule_ReplicateVerbatim(ctx);
+  if (gemini_search::ClusterManager::Instance().IsClusterMode()) {
+    SetPersistedSchemaEpoch(gemini_search::ClusterManager::Instance().AdvanceSchemaEpoch());
+  }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 

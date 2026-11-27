@@ -1,9 +1,12 @@
 #pragma once
 
+#include "index_spec.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace gemini_search {
@@ -213,5 +216,57 @@ struct ClusterBusHello {
 
 void EncodeClusterBusHello(const ClusterBusHello& msg, std::string& out);
 bool DecodeClusterBusHello(const uint8_t* data, size_t len, ClusterBusHello& out);
+
+// DDL RPC flags
+constexpr uint32_t kDdlFlagNone = 0;
+constexpr uint32_t kDdlFlagRollback = 1u << 0;
+
+struct RpcDdlRequest {
+  uint64_t schema_epoch = 0;
+  std::string coordinator_node_id;
+  std::string cmd_name;
+  std::vector<std::string> args;
+  uint32_t flags = kDdlFlagNone;
+};
+
+struct RpcDdlResponse {
+  bool ok = false;
+  int64_t int_reply = 0;
+  uint64_t applied_epoch = 0;
+  std::string error_msg;
+};
+
+void EncodeDdlRequest(const RpcDdlRequest& req, std::string& out);
+bool DecodeDdlRequest(std::string_view data, RpcDdlRequest& out);
+void EncodeDdlResponse(const RpcDdlResponse& resp, std::string& out);
+bool DecodeDdlResponse(std::string_view data, RpcDdlResponse& out);
+
+// Serializable snapshot of one index's metadata (IndexSpec + synonym groups)
+struct SchemaIndexSnapshot {
+  IndexSpec spec;
+  std::vector<std::pair<std::string, std::vector<std::string>>> synonyms;
+};
+
+void WriteIndexSpec(BinaryWriter& w, const IndexSpec& spec);
+bool ReadIndexSpec(BinaryReader& r, IndexSpec& out);
+void EncodeSchemaIndexSnapshot(const SchemaIndexSnapshot& snap, std::string& out);
+bool DecodeSchemaIndexSnapshot(std::string_view data, SchemaIndexSnapshot& out);
+
+struct RpcSchemaSyncRequest {
+  std::string requester_node_id;
+  uint64_t local_schema_epoch = 0;
+};
+
+struct RpcSchemaSyncResponse {
+  uint64_t schema_epoch = 0;
+  std::vector<SchemaIndexSnapshot> indices;
+  std::vector<std::pair<std::string, std::string>> aliases;
+  std::vector<std::pair<std::string, std::vector<std::string>>> term_dicts;
+};
+
+void EncodeSchemaSyncRequest(const RpcSchemaSyncRequest& req, std::string& out);
+bool DecodeSchemaSyncRequest(std::string_view data, RpcSchemaSyncRequest& out);
+void EncodeSchemaSyncResponse(const RpcSchemaSyncResponse& resp, std::string& out);
+bool DecodeSchemaSyncResponse(std::string_view data, RpcSchemaSyncResponse& out);
 
 }  // namespace gemini_search

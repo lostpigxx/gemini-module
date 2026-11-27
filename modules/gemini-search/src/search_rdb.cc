@@ -1,6 +1,8 @@
 #include "search_rdb.h"
+#include "cluster_codec.h"
 #include "hnsw_index.h"
 #include "search_commands.h"
+#include "search_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -884,6 +886,55 @@ void AuxSaveSearch(RedisModuleIO* rdb, int when) {
     RedisModule_SaveStringBuffer(rdb, k.c_str(), k.size());
     RedisModule_SaveStringBuffer(rdb, v.c_str(), v.size());
   }
+
+  // 5. Cluster-mode metadata & prebuilt HNSW graphs (kSearchAuxEncVer >= 2).
+  // Standalone mode writes epoch=0, count=0 and keeps persisting via per-index GmSearch- keys.
+  if (!IsClusterRdbMode()) {
+    RedisModule_SaveUnsigned(rdb, 0);
+    RedisModule_SaveUnsigned(rdb, 0);
+    return;
+  }
+
+  RedisModule_SaveUnsigned(rdb, GetPersistedSchemaEpoch());
+
+  std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
+  const auto& indices = GetIndices();
+  std::vector<std::string> idx_names;
+  idx_names.reserve(indices.size());
+  for (const auto& [name, ptr] : indices) {
+    if (ptr) idx_names.push_back(name);
+  }
+  std::sort(idx_names.begin(), idx_names.end());
+  RedisModule_SaveUnsigned(rdb, idx_names.size());
+
+  for (const auto& name : idx_names) {
+    const auto& entry = *indices.at(name);
+    std::shared_lock<std::shared_mutex> idx_lk(entry.Mutex());
+    gemini_search::SchemaIndexSnapshot snap;
+    snap.spec = entry.spec;
+    snap.synonyms = entry.synonyms.Dump();
+    std::string spec_blob;
+    gemini_search::EncodeSchemaIndexSnapshot(snap, spec_blob);
+    RedisModule_SaveStringBuffer(rdb, spec_blob.data(), spec_blob.size());
+
+    std::vector<std::pair<std::string, const HnswIndex*>> hnsw_fields;
+    for (const auto& f : entry.spec.fields) {
+      if (f.type == FieldType::kVector &&
+          f.vector_params.algorithm == VectorAlgorithm::kHnsw) {
+        if (const auto* vidx = entry.vector_indices.Get(f.name)) {
+          if (const auto* hnsw = dynamic_cast<const HnswIndex*>(vidx)) {
+            hnsw_fields.emplace_back(f.name, hnsw);
+          }
+        }
+      }
+    }
+    RedisModule_SaveUnsigned(rdb, hnsw_fields.size());
+    for (const auto& [fname, hnsw] : hnsw_fields) {
+      RedisModule_SaveStringBuffer(rdb, fname.c_str(), fname.size());
+      std::string blob = hnsw->SerializeGraph();
+      RedisModule_SaveStringBuffer(rdb, blob.data(), blob.size());
+    }
+  }
 }
 
 int AuxLoadSearch(RedisModuleIO* rdb, int encver, int when) {
@@ -891,7 +942,7 @@ int AuxLoadSearch(RedisModuleIO* rdb, int encver, int when) {
   if (when != REDISMODULE_AUX_AFTER_RDB) return REDISMODULE_OK;
 
   uint64_t aux_ver = 0;
-  if (!SafeLoadUnsigned(rdb, aux_ver) || aux_ver != kSearchAuxEncVer) {
+  if (!SafeLoadUnsigned(rdb, aux_ver) || (aux_ver != 1 && aux_ver != kSearchAuxEncVer)) {
     return REDISMODULE_ERR;
   }
 
@@ -964,11 +1015,72 @@ int AuxLoadSearch(RedisModuleIO* rdb, int encver, int when) {
     loaded_cfg[std::move(k)] = std::move(v);
   }
 
+  uint64_t loaded_schema_epoch = 0;
+  std::vector<std::shared_ptr<IndexEntry>> loaded_cluster_indices;
+  if (aux_ver >= 2) {
+    uint64_t cluster_idx_count = 0;
+    if (!SafeLoadUnsigned(rdb, loaded_schema_epoch) ||
+        !SafeLoadUnsigned(rdb, cluster_idx_count) || cluster_idx_count > kMaxRdbAuxEntries) {
+      return REDISMODULE_ERR;
+    }
+    loaded_cluster_indices.reserve(static_cast<size_t>(cluster_idx_count));
+    for (uint64_t i = 0; i < cluster_idx_count; i++) {
+      std::string spec_blob;
+      if (!SafeLoadString(rdb, spec_blob)) return REDISMODULE_ERR;
+      gemini_search::SchemaIndexSnapshot snap;
+      if (!gemini_search::DecodeSchemaIndexSnapshot(spec_blob, snap)) {
+        return REDISMODULE_ERR;
+      }
+
+      auto entry = std::make_shared<IndexEntry>();
+      entry->spec = std::move(snap.spec);
+      entry->last_access_ms = NowMs();
+      for (const auto& [gid, terms] : snap.synonyms) {
+        entry->synonyms.Update(gid, terms);
+      }
+
+      uint64_t hnsw_count = 0;
+      if (!SafeLoadUnsigned(rdb, hnsw_count) || hnsw_count > kMaxRdbFields) {
+        return REDISMODULE_ERR;
+      }
+      for (uint64_t h = 0; h < hnsw_count; h++) {
+        std::string fname, gblob;
+        if (!SafeLoadString(rdb, fname) || !SafeLoadString(rdb, gblob)) {
+          return REDISMODULE_ERR;
+        }
+        const auto* fspec = entry->spec.FindField(fname);
+        if (!fspec || fspec->type != FieldType::kVector ||
+            fspec->vector_params.algorithm != VectorAlgorithm::kHnsw) {
+          return REDISMODULE_ERR;
+        }
+        auto& vidx = entry->vector_indices.GetOrCreate(fname, fspec->vector_params);
+        auto* hnsw = dynamic_cast<HnswIndex*>(&vidx);
+        if (!hnsw || !hnsw->DeserializeGraph(gblob.data(), gblob.size())) {
+          return REDISMODULE_ERR;
+        }
+      }
+      loaded_cluster_indices.push_back(std::move(entry));
+    }
+  }
+
   GetAliases() = std::move(loaded_aliases);
   GetSuggestDicts() = std::move(loaded_suggest);
   GetTermDicts() = std::move(loaded_terms);
   for (auto& [k, v] : loaded_cfg) {
     GetConfig()[k] = std::move(v);
+  }
+
+  if (aux_ver >= 2) {
+    SetPersistedSchemaEpoch(loaded_schema_epoch);
+    if (!loaded_cluster_indices.empty()) {
+      std::unique_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
+      auto& pending = GetPendingClusterRecoveries();
+      for (auto& entry : loaded_cluster_indices) {
+        std::string name = entry->spec.name;
+        GetIndices()[name] = std::move(entry);
+        pending.push_back(std::move(name));
+      }
+    }
   }
 
   return REDISMODULE_OK;

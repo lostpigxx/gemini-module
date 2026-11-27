@@ -30,6 +30,7 @@ class HnswIndex : public VectorIndexBase {
       size_t oversample = 0) const override;
   std::vector<KnnResult> RangeQuery(const float* query, float radius) const override;
   size_t Size() const override;
+  bool Contains(const std::string& doc_id) const { return id_to_node_.count(doc_id) > 0; }
   size_t Dim() const override;
   DistanceMetric Metric() const override;
   void Clear() override;

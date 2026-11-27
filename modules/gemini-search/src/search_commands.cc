@@ -1,3 +1,4 @@
+#include "cluster_topology.h"
 #include "search_internal.h"
 #include "search_rdb.h"
 
@@ -30,7 +31,7 @@ static void MaintenanceTimerCallback(RedisModuleCtx* ctx, void* /*data*/) {
       if (ait->second == name) ait = aliases.erase(ait);
       else ++ait;
     }
-    if (SearchModuleType) {
+    if (SearchModuleType && !gemini_search::ClusterManager::Instance().IsClusterMode()) {
       RedisModuleString* kstr = RedisModule_CreateString(ctx, name.data(), name.size());
       auto* key = static_cast<RedisModuleKey*>(
           RedisModule_OpenKey(ctx, kstr, REDISMODULE_WRITE));

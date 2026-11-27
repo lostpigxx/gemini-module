@@ -1,8 +1,11 @@
+#include "cluster_coordinator.h"
+#include "cluster_topology.h"
 #include "search_internal.h"
 #include "expr_engine.h"
 #include "search_rdb.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -12,50 +15,57 @@
 #include <utility>
 #include <vector>
 
+bool ParseCreateSpec(const std::vector<std::string>& args, IndexSpec& out_spec,
+                     std::string& err_out) {
+  if (args.size() < 4) {
+    err_out = "ERR wrong number of arguments for 'FT.CREATE' command";
+    return false;
+  }
 
-// FT.CREATE <index_name> [ON HASH|JSON PREFIX <count> <prefix> ...] SCHEMA <field> <type> [params...]
-int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
-                           int argc) {
-  if (argc < 5) return RedisModule_WrongArity(ctx);
-  RedisModule_AutoMemory(ctx);
+  size_t argc = args.size();
+  const std::string& index_name = args[0];
 
-  auto index_name = ArgView(argv[1]);
-
-  int i = 2;
+  size_t i = 1;
   std::vector<std::string> prefixes;
   IndexSourceType source_type = IndexSourceType::kHash;
 
-  if (i < argc && MatchArg(ArgView(argv[i]), "ON")) {
+  if (i < argc && MatchArg(args[i], "ON")) {
     i++;
     if (i >= argc) {
-      return RedisModule_ReplyWithError(ctx, "ERR ON requires HASH or JSON");
+      err_out = "ERR ON requires HASH or JSON";
+      return false;
     }
-    if (MatchArg(ArgView(argv[i]), "HASH")) {
+    if (MatchArg(args[i], "HASH")) {
       source_type = IndexSourceType::kHash;
-    } else if (MatchArg(ArgView(argv[i]), "JSON")) {
+    } else if (MatchArg(args[i], "JSON")) {
       source_type = IndexSourceType::kJson;
     } else {
-      return RedisModule_ReplyWithError(ctx, "ERR ON requires HASH or JSON");
+      err_out = "ERR ON requires HASH or JSON";
+      return false;
     }
     i++;
-    if (i >= argc || !MatchArg(ArgView(argv[i]), "PREFIX")) {
-      return RedisModule_ReplyWithError(ctx, "ERR expected PREFIX after ON HASH/JSON");
+    if (i >= argc || !MatchArg(args[i], "PREFIX")) {
+      err_out = "ERR expected PREFIX after ON HASH/JSON";
+      return false;
     }
     i++;
     if (i >= argc) {
-      return RedisModule_ReplyWithError(ctx, "ERR PREFIX requires a count");
+      err_out = "ERR PREFIX requires a count";
+      return false;
     }
     char* endptr = nullptr;
-    long prefix_count = std::strtol(std::string(ArgView(argv[i])).c_str(), &endptr, 10);
+    long prefix_count = std::strtol(args[i].c_str(), &endptr, 10);
     i++;
     if (*endptr != '\0' || prefix_count <= 0) {
-      return RedisModule_ReplyWithError(ctx, "ERR PREFIX count must be a positive integer");
+      err_out = "ERR PREFIX count must be a positive integer";
+      return false;
     }
     for (long p = 0; p < prefix_count; p++) {
       if (i >= argc) {
-        return RedisModule_ReplyWithError(ctx, "ERR not enough PREFIX values");
+        err_out = "ERR not enough PREFIX values";
+        return false;
       }
-      prefixes.emplace_back(ArgView(argv[i]));
+      prefixes.push_back(args[i]);
       i++;
     }
   }
@@ -72,35 +82,37 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   std::string idx_filter_expr;
   bool idx_skip_initial_scan = false;
 
-  while (i < argc && !MatchArg(ArgView(argv[i]), "SCHEMA")) {
-    auto opt = ArgView(argv[i]);
+  while (i < argc && !MatchArg(args[i], "SCHEMA")) {
+    std::string_view opt = args[i];
     if (MatchArg(opt, "LANGUAGE")) {
       i++;
-      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR LANGUAGE requires a value");
-      index_language = std::string(ArgView(argv[i]));
+      if (i >= argc) { err_out = "ERR LANGUAGE requires a value"; return false; }
+      index_language = args[i];
       i++;
     } else if (MatchArg(opt, "LANGUAGE_FIELD")) {
       i++;
-      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR LANGUAGE_FIELD requires a field name");
-      index_language_field = std::string(ArgView(argv[i]));
+      if (i >= argc) { err_out = "ERR LANGUAGE_FIELD requires a field name"; return false; }
+      index_language_field = args[i];
       i++;
     } else if (MatchArg(opt, "DICT")) {
       i++;
-      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR DICT requires a dictionary name");
-      index_custom_dict = std::string(ArgView(argv[i]));
+      if (i >= argc) { err_out = "ERR DICT requires a dictionary name"; return false; }
+      index_custom_dict = args[i];
       i++;
     } else if (MatchArg(opt, "STOPWORDS")) {
       i++;
-      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR STOPWORDS requires count");
+      if (i >= argc) { err_out = "ERR STOPWORDS requires count"; return false; }
       char* ep = nullptr;
-      long sw_count = std::strtol(std::string(ArgView(argv[i])).c_str(), &ep, 10);
+      long sw_count = std::strtol(args[i].c_str(), &ep, 10);
       i++;
-      if (*ep != '\0' || sw_count < 0)
-        return RedisModule_ReplyWithError(ctx, "ERR STOPWORDS count must be non-negative");
+      if (*ep != '\0' || sw_count < 0) {
+        err_out = "ERR STOPWORDS count must be non-negative";
+        return false;
+      }
       has_custom_stopwords = true;
       for (long sw = 0; sw < sw_count; sw++) {
-        if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR not enough STOPWORDS");
-        custom_stopwords.emplace_back(ArgView(argv[i]));
+        if (i >= argc) { err_out = "ERR not enough STOPWORDS"; return false; }
+        custom_stopwords.push_back(args[i]);
         i++;
       }
     } else if (MatchArg(opt, "NOFREQS")) {
@@ -114,58 +126,63 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       i++;
     } else if (MatchArg(opt, "TEMPORARY")) {
       i++;
-      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR TEMPORARY requires seconds");
+      if (i >= argc) { err_out = "ERR TEMPORARY requires seconds"; return false; }
       char* ep = nullptr;
-      idx_temporary = static_cast<int>(std::strtol(std::string(ArgView(argv[i])).c_str(), &ep, 10));
-      if (*ep != '\0' || idx_temporary < 0)
-        return RedisModule_ReplyWithError(ctx, "ERR TEMPORARY must be non-negative");
+      idx_temporary = static_cast<int>(std::strtol(args[i].c_str(), &ep, 10));
+      if (*ep != '\0' || idx_temporary < 0) {
+        err_out = "ERR TEMPORARY must be non-negative";
+        return false;
+      }
       i++;
     } else if (MatchArg(opt, "SKIPINITIALSCAN")) {
       idx_skip_initial_scan = true;
       i++;
     } else if (MatchArg(opt, "FILTER")) {
       i++;
-      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR FILTER requires an expression");
-      idx_filter_expr = std::string(ArgView(argv[i]));
+      if (i >= argc) { err_out = "ERR FILTER requires an expression"; return false; }
+      idx_filter_expr = args[i];
       ExprNode test_expr;
       std::string expr_err;
       if (!ParseExpr(idx_filter_expr, test_expr, expr_err)) {
-        return RedisModule_ReplyWithError(ctx, expr_err.c_str());
+        err_out = expr_err;
+        return false;
       }
       i++;
     } else if (MatchArg(opt, "MAXTEXTFIELDS") || MatchArg(opt, "NOFIELDS")) {
       i++;
     } else if (MatchArg(opt, "SCORE")) {
       i++;
-      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SCORE requires a value");
+      if (i >= argc) { err_out = "ERR SCORE requires a value"; return false; }
       char* ep = nullptr;
-      double sc = std::strtod(std::string(ArgView(argv[i])).c_str(), &ep);
+      double sc = std::strtod(args[i].c_str(), &ep);
       if (*ep != '\0' || !std::isfinite(sc) || sc < 0.0) {
-        return RedisModule_ReplyWithError(ctx, "ERR SCORE must be a non-negative finite number");
+        err_out = "ERR SCORE must be a non-negative finite number";
+        return false;
       }
       i++;
     } else if (MatchArg(opt, "SCORE_FIELD") || MatchArg(opt, "PAYLOAD_FIELD")) {
       i++;
-      if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR option requires a field name");
+      if (i >= argc) { err_out = "ERR option requires a field name"; return false; }
       i++;
     } else {
       break;
     }
   }
 
-  if (i >= argc || !MatchArg(ArgView(argv[i]), "SCHEMA")) {
-    return RedisModule_ReplyWithError(ctx, "ERR syntax error, expected SCHEMA keyword");
+  if (i >= argc || !MatchArg(args[i], "SCHEMA")) {
+    err_out = "ERR syntax error, expected SCHEMA keyword";
+    return false;
   }
   i++;
 
   std::vector<FieldSpec> fields;
   while (i < argc) {
     if (i + 1 >= argc) {
-      return RedisModule_ReplyWithError(
-          ctx, "ERR syntax error, missing field type");
+      err_out = "ERR syntax error, missing field type";
+      return false;
     }
 
-    auto fname = ArgView(argv[i]);
+    std::string_view fname = args[i];
     i++;
 
     FieldSpec fspec;
@@ -174,18 +191,20 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     // JSON schema: $.path AS alias TYPE
     if (source_type == IndexSourceType::kJson && !fname.empty() && fname[0] == '$') {
       fspec.json_path = std::string(fname);
-      if (i + 2 >= argc || !MatchArg(ArgView(argv[i]), "AS")) {
-        return RedisModule_ReplyWithError(ctx, "ERR JSON field requires AS alias");
+      if (i + 2 >= argc || !MatchArg(args[i], "AS")) {
+        err_out = "ERR JSON field requires AS alias";
+        return false;
       }
       i++;
-      fspec.name = std::string(ArgView(argv[i]));
+      fspec.name = args[i];
       i++;
     }
 
     if (i >= argc) {
-      return RedisModule_ReplyWithError(ctx, "ERR syntax error, missing field type");
+      err_out = "ERR syntax error, missing field type";
+      return false;
     }
-    auto ftype_str = ArgView(argv[i]);
+    std::string_view ftype_str = args[i];
     i++;
 
     if (MatchArg(ftype_str, "TAG")) {
@@ -196,48 +215,44 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       fspec.type = FieldType::kVector;
 
       if (i >= argc) {
-        return RedisModule_ReplyWithError(
-            ctx, "ERR VECTOR field requires algorithm (FLAT)");
+        err_out = "ERR VECTOR field requires algorithm (FLAT)";
+        return false;
       }
-      auto algo_str = ArgView(argv[i]);
+      std::string_view algo_str = args[i];
       i++;
       if (MatchArg(algo_str, "FLAT")) {
         fspec.vector_params.algorithm = VectorAlgorithm::kFlat;
       } else if (MatchArg(algo_str, "HNSW")) {
         fspec.vector_params.algorithm = VectorAlgorithm::kHnsw;
       } else {
-        return RedisModule_ReplyWithError(
-            ctx, "ERR unknown VECTOR algorithm, expected FLAT or HNSW");
+        err_out = "ERR unknown VECTOR algorithm, expected FLAT or HNSW";
+        return false;
       }
 
-      // Optional RediSearch-compatible attribute count right after FLAT/HNSW
-      // (e.g., VECTOR HNSW 6 TYPE FLOAT32 DIM 4 DISTANCE_METRIC COSINE).
-      int param_end = argc;
+      size_t param_end = argc;
       if (i < argc) {
-        auto maybe_cnt = ArgView(argv[i]);
+        std::string_view maybe_cnt = args[i];
         if (!maybe_cnt.empty() &&
             std::isdigit(static_cast<unsigned char>(maybe_cnt[0]))) {
           char* ep = nullptr;
-          long attr_cnt = std::strtol(std::string(maybe_cnt).c_str(), &ep, 10);
+          long attr_cnt = std::strtol(args[i].c_str(), &ep, 10);
           if (*ep == '\0' && attr_cnt >= 0) {
             i++;
-            if (i + attr_cnt > argc) {
-              return RedisModule_ReplyWithError(
-                  ctx, "ERR VECTOR attribute count exceeds arguments");
+            if (i + static_cast<size_t>(attr_cnt) > argc) {
+              err_out = "ERR VECTOR attribute count exceeds arguments";
+              return false;
             }
-            param_end = i + static_cast<int>(attr_cnt);
+            param_end = i + static_cast<size_t>(attr_cnt);
           }
         }
       }
 
       bool has_dim = false, has_metric = false;
       while (i < param_end) {
-        auto param = ArgView(argv[i]);
+        std::string_view param = args[i];
         if (MatchArg(param, "TYPE")) {
-          if (i + 1 >= argc) {
-            return RedisModule_ReplyWithError(ctx, "ERR TYPE requires a value");
-          }
-          auto dtype_str = ArgView(argv[i + 1]);
+          if (i + 1 >= argc) { err_out = "ERR TYPE requires a value"; return false; }
+          std::string_view dtype_str = args[i + 1];
           if (MatchArg(dtype_str, "FLOAT32")) {
             fspec.vector_params.data_type = VectorDataType::kFloat32;
           } else if (MatchArg(dtype_str, "FLOAT64")) {
@@ -247,15 +262,13 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
           } else if (MatchArg(dtype_str, "BFLOAT16")) {
             fspec.vector_params.data_type = VectorDataType::kBFloat16;
           } else {
-            return RedisModule_ReplyWithError(
-                ctx, "ERR unknown VECTOR TYPE, expected FLOAT32, FLOAT64, FLOAT16, or BFLOAT16");
+            err_out = "ERR unknown VECTOR TYPE, expected FLOAT32, FLOAT64, FLOAT16, or BFLOAT16";
+            return false;
           }
           i += 2;
         } else if (MatchArg(param, "QUANTIZATION")) {
-          if (i + 1 >= argc) {
-            return RedisModule_ReplyWithError(ctx, "ERR QUANTIZATION requires a value");
-          }
-          auto qstr = ArgView(argv[i + 1]);
+          if (i + 1 >= argc) { err_out = "ERR QUANTIZATION requires a value"; return false; }
+          std::string_view qstr = args[i + 1];
           if (MatchArg(qstr, "NONE")) {
             fspec.vector_params.quantization = VectorQuantization::kNone;
           } else if (MatchArg(qstr, "SQ8")) {
@@ -263,15 +276,13 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
           } else if (MatchArg(qstr, "BQ")) {
             fspec.vector_params.quantization = VectorQuantization::kBq;
           } else {
-            return RedisModule_ReplyWithError(
-                ctx, "ERR unknown QUANTIZATION, expected NONE, SQ8, or BQ");
+            err_out = "ERR unknown QUANTIZATION, expected NONE, SQ8, or BQ";
+            return false;
           }
           i += 2;
         } else if (MatchArg(param, "RERANK")) {
-          if (i + 1 >= argc) {
-            return RedisModule_ReplyWithError(ctx, "ERR RERANK requires a value");
-          }
-          auto rstr = ArgView(argv[i + 1]);
+          if (i + 1 >= argc) { err_out = "ERR RERANK requires a value"; return false; }
+          std::string_view rstr = args[i + 1];
           if (MatchArg(rstr, "NONE")) {
             fspec.vector_params.rerank = VectorRerankType::kNone;
           } else if (MatchArg(rstr, "FP16")) {
@@ -279,44 +290,34 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
           } else if (MatchArg(rstr, "SQ8")) {
             fspec.vector_params.rerank = VectorRerankType::kSq8;
           } else {
-            return RedisModule_ReplyWithError(
-                ctx, "ERR unknown RERANK, expected NONE, FP16, or SQ8");
+            err_out = "ERR unknown RERANK, expected NONE, FP16, or SQ8";
+            return false;
           }
           i += 2;
         } else if (MatchArg(param, "OVERSAMPLE")) {
-          if (i + 1 >= argc) {
-            return RedisModule_ReplyWithError(ctx, "ERR OVERSAMPLE requires a value");
-          }
-          auto os_str = ArgView(argv[i + 1]);
+          if (i + 1 >= argc) { err_out = "ERR OVERSAMPLE requires a value"; return false; }
           char* endptr = nullptr;
-          long os_val = std::strtol(std::string(os_str).c_str(), &endptr, 10);
+          long os_val = std::strtol(args[i + 1].c_str(), &endptr, 10);
           if (*endptr != '\0' || os_val <= 0 || os_val > 1024) {
-            return RedisModule_ReplyWithError(
-                ctx, "ERR OVERSAMPLE must be a positive integer (<= 1024)");
+            err_out = "ERR OVERSAMPLE must be a positive integer (<= 1024)";
+            return false;
           }
           fspec.vector_params.bq_oversample = static_cast<size_t>(os_val);
           i += 2;
         } else if (MatchArg(param, "DIM")) {
-          if (i + 1 >= argc) {
-            return RedisModule_ReplyWithError(ctx, "ERR DIM requires a value");
-          }
-          auto dim_str = ArgView(argv[i + 1]);
+          if (i + 1 >= argc) { err_out = "ERR DIM requires a value"; return false; }
           char* endptr = nullptr;
-          long dim_val =
-              std::strtol(std::string(dim_str).c_str(), &endptr, 10);
+          long dim_val = std::strtol(args[i + 1].c_str(), &endptr, 10);
           if (*endptr != '\0' || dim_val <= 0 || dim_val > 65536) {
-            return RedisModule_ReplyWithError(
-                ctx, "ERR DIM must be a positive integer (<= 65536)");
+            err_out = "ERR DIM must be a positive integer (<= 65536)";
+            return false;
           }
           fspec.vector_params.dim = static_cast<size_t>(dim_val);
           has_dim = true;
           i += 2;
         } else if (MatchArg(param, "DISTANCE_METRIC")) {
-          if (i + 1 >= argc) {
-            return RedisModule_ReplyWithError(
-                ctx, "ERR DISTANCE_METRIC requires a value");
-          }
-          auto metric_str = ArgView(argv[i + 1]);
+          if (i + 1 >= argc) { err_out = "ERR DISTANCE_METRIC requires a value"; return false; }
+          std::string_view metric_str = args[i + 1];
           if (MatchArg(metric_str, "L2")) {
             fspec.vector_params.metric = DistanceMetric::kL2;
           } else if (MatchArg(metric_str, "COSINE")) {
@@ -324,32 +325,28 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
           } else if (MatchArg(metric_str, "IP")) {
             fspec.vector_params.metric = DistanceMetric::kIP;
           } else {
-            return RedisModule_ReplyWithError(
-                ctx, "ERR unknown DISTANCE_METRIC, expected L2, COSINE, or IP");
+            err_out = "ERR unknown DISTANCE_METRIC, expected L2, COSINE, or IP";
+            return false;
           }
           has_metric = true;
           i += 2;
         } else if (MatchArg(param, "M")) {
-          if (i + 1 >= argc) {
-            return RedisModule_ReplyWithError(ctx, "ERR M requires a value");
-          }
-          auto m_str = ArgView(argv[i + 1]);
+          if (i + 1 >= argc) { err_out = "ERR M requires a value"; return false; }
           char* endptr = nullptr;
-          long m_val = std::strtol(std::string(m_str).c_str(), &endptr, 10);
+          long m_val = std::strtol(args[i + 1].c_str(), &endptr, 10);
           if (*endptr != '\0' || m_val <= 0) {
-            return RedisModule_ReplyWithError(ctx, "ERR M must be a positive integer");
+            err_out = "ERR M must be a positive integer";
+            return false;
           }
           fspec.vector_params.m = static_cast<size_t>(m_val);
           i += 2;
         } else if (MatchArg(param, "EF_CONSTRUCTION")) {
-          if (i + 1 >= argc) {
-            return RedisModule_ReplyWithError(ctx, "ERR EF_CONSTRUCTION requires a value");
-          }
-          auto ef_str = ArgView(argv[i + 1]);
+          if (i + 1 >= argc) { err_out = "ERR EF_CONSTRUCTION requires a value"; return false; }
           char* endptr = nullptr;
-          long ef_val = std::strtol(std::string(ef_str).c_str(), &endptr, 10);
+          long ef_val = std::strtol(args[i + 1].c_str(), &endptr, 10);
           if (*endptr != '\0' || ef_val <= 0) {
-            return RedisModule_ReplyWithError(ctx, "ERR EF_CONSTRUCTION must be a positive integer");
+            err_out = "ERR EF_CONSTRUCTION must be a positive integer";
+            return false;
           }
           fspec.vector_params.ef_construction = static_cast<size_t>(ef_val);
           i += 2;
@@ -359,17 +356,17 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       }
 
       if (!has_dim) {
-        return RedisModule_ReplyWithError(
-            ctx, "ERR VECTOR field requires DIM parameter");
+        err_out = "ERR VECTOR field requires DIM parameter";
+        return false;
       }
       if (!has_metric) {
-        return RedisModule_ReplyWithError(
-            ctx, "ERR VECTOR field requires DISTANCE_METRIC parameter");
+        err_out = "ERR VECTOR field requires DISTANCE_METRIC parameter";
+        return false;
       }
       if (fspec.vector_params.rerank != VectorRerankType::kNone &&
           fspec.vector_params.quantization != VectorQuantization::kBq) {
-        return RedisModule_ReplyWithError(
-            ctx, "ERR RERANK requires QUANTIZATION BQ");
+        err_out = "ERR RERANK requires QUANTIZATION BQ";
+        return false;
       }
     } else if (MatchArg(ftype_str, "TEXT")) {
       fspec.type = FieldType::kText;
@@ -378,7 +375,7 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
     } else if (MatchArg(ftype_str, "GEOSHAPE")) {
       fspec.type = FieldType::kGeoShape;
       if (i < argc) {
-        auto cs = ArgView(argv[i]);
+        std::string_view cs = args[i];
         if (MatchArg(cs, "FLAT")) {
           fspec.geoshape_coord = GeoShapeCoord::kFlat;
           i++;
@@ -388,13 +385,12 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         }
       }
     } else {
-      return RedisModule_ReplyWithError(
-          ctx, "ERR unknown field type, expected TAG, NUMERIC, TEXT, VECTOR, GEO, or GEOSHAPE");
+      err_out = "ERR unknown field type, expected TAG, NUMERIC, TEXT, VECTOR, GEO, or GEOSHAPE";
+      return false;
     }
 
-    // Parse field-level attributes: SORTABLE, NOINDEX, NOSTEM, WEIGHT
     while (i < argc) {
-      auto attr = ArgView(argv[i]);
+      std::string_view attr = args[i];
       if (MatchArg(attr, "SORTABLE")) {
         fspec.sortable = true;
         i++;
@@ -406,23 +402,27 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         i++;
       } else if (MatchArg(attr, "WEIGHT") && fspec.type == FieldType::kText) {
         i++;
-        if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR WEIGHT requires a value");
+        if (i >= argc) { err_out = "ERR WEIGHT requires a value"; return false; }
         char* ep = nullptr;
-        fspec.weight = std::strtod(std::string(ArgView(argv[i])).c_str(), &ep);
-        if (*ep != '\0' || !std::isfinite(fspec.weight) || fspec.weight < 0)
-          return RedisModule_ReplyWithError(ctx, "ERR WEIGHT must be a non-negative finite number");
+        fspec.weight = std::strtod(args[i].c_str(), &ep);
+        if (*ep != '\0' || !std::isfinite(fspec.weight) || fspec.weight < 0) {
+          err_out = "ERR WEIGHT must be a non-negative finite number";
+          return false;
+        }
         i++;
       } else if (MatchArg(attr, "PHONETIC") && fspec.type == FieldType::kText) {
         i++;
-        if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR PHONETIC requires a matcher");
-        fspec.phonetic = std::string(ArgView(argv[i]));
+        if (i >= argc) { err_out = "ERR PHONETIC requires a matcher"; return false; }
+        fspec.phonetic = args[i];
         i++;
       } else if (MatchArg(attr, "SEPARATOR") && fspec.type == FieldType::kTag) {
         i++;
-        if (i >= argc) return RedisModule_ReplyWithError(ctx, "ERR SEPARATOR requires a single character");
-        auto sep = ArgView(argv[i]);
-        if (sep.size() != 1) return RedisModule_ReplyWithError(ctx, "ERR SEPARATOR must be a single character");
-        fspec.tag_separator = sep[0];
+        if (i >= argc) { err_out = "ERR SEPARATOR requires a single character"; return false; }
+        if (args[i].size() != 1) {
+          err_out = "ERR SEPARATOR must be a single character";
+          return false;
+        }
+        fspec.tag_separator = args[i][0];
         i++;
       } else if (MatchArg(attr, "CASESENSITIVE") && fspec.type == FieldType::kTag) {
         fspec.case_sensitive = true;
@@ -443,8 +443,8 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 
     for (auto& existing : fields) {
       if (existing.name == fspec.name) {
-        return RedisModule_ReplyWithError(ctx,
-                                          "ERR duplicate field name in schema");
+        err_out = "ERR duplicate field name in schema";
+        return false;
       }
     }
 
@@ -452,37 +452,156 @@ int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   }
 
   if (fields.empty()) {
-    return RedisModule_ReplyWithError(ctx, "ERR schema requires at least one field");
+    err_out = "ERR schema requires at least one field";
+    return false;
   }
 
-  std::string idx_str(index_name);
-  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
-  auto [it, inserted] = GetIndices().try_emplace(idx_str, std::make_shared<IndexEntry>());
-  if (!inserted) {
-    return RedisModule_ReplyWithError(ctx, "ERR index already exists");
-  }
-  auto& entry = *it->second;
-  entry.spec = IndexSpec{idx_str, std::move(fields), std::move(prefixes),
-                         index_language, source_type,
-                         std::move(custom_stopwords), has_custom_stopwords,
-                         idx_nofreqs, idx_nooffsets, idx_nohl, idx_temporary,
-                         std::move(idx_filter_expr), idx_skip_initial_scan,
-                         std::move(index_language_field),
-                         std::move(index_custom_dict)};
-  TouchIndex(entry);
+  out_spec = IndexSpec{index_name, std::move(fields), std::move(prefixes),
+                       index_language, source_type,
+                       std::move(custom_stopwords), has_custom_stopwords,
+                       idx_nofreqs, idx_nooffsets, idx_nohl, idx_temporary,
+                       std::move(idx_filter_expr), idx_skip_initial_scan,
+                       std::move(index_language_field),
+                       std::move(index_custom_dict)};
+  return true;
+}
 
-  if (SearchModuleType) {
+bool ApplyLocalCreate(RedisModuleCtx* ctx, const std::vector<std::string>& args,
+                      bool is_cluster_mode, std::string& err_out) {
+  IndexSpec spec;
+  if (!ParseCreateSpec(args, spec, err_out)) return false;
+
+  std::string idx_str = spec.name;
+  std::shared_ptr<IndexEntry> entry_ptr;
+  {
+    std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
+    auto [it, inserted] = GetIndices().try_emplace(idx_str, std::make_shared<IndexEntry>());
+    if (!inserted) {
+      err_out = "ERR index already exists";
+      return false;
+    }
+    entry_ptr = it->second;
+    entry_ptr->spec = std::move(spec);
+    TouchIndex(*entry_ptr);
+  }
+
+  // Standalone mode persists per-index anchor key; Cluster mode persists via aux_save2 (encver 2)
+  // to avoid Hash Slot ownership conflicts and accidental MIGRATE relocation.
+  if (SearchModuleType && !is_cluster_mode) {
+    RedisModuleString* key_rms = RedisModule_CreateString(ctx, idx_str.data(), idx_str.size());
     auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
-        ctx, argv[1], REDISMODULE_READ | REDISMODULE_WRITE));
-    RedisModule_ModuleTypeSetValue(key, SearchModuleType,
-                                   new std::string(idx_str));
+        ctx, key_rms, REDISMODULE_READ | REDISMODULE_WRITE));
+    if (key) {
+      RedisModule_ModuleTypeSetValue(key, SearchModuleType, new std::string(idx_str));
+      RedisModule_CloseKey(key);
+    }
+    RedisModule_FreeString(ctx, key_rms);
   }
 
-  if (entry.spec.HasPrefixes() && !entry.spec.skip_initial_scan) {
-    StartOrRunInitialScan(ctx, entry);
+  if (entry_ptr->spec.HasPrefixes() && !entry_ptr->spec.skip_initial_scan) {
+    StartOrRunInitialScan(ctx, *entry_ptr);
+  }
+  return true;
+}
+
+bool ApplyLocalDropIndex(RedisModuleCtx* ctx, const std::vector<std::string>& args,
+                         bool is_cluster_mode, bool idempotent_missing, std::string& err_out) {
+  if (args.empty() || args.size() > 2) {
+    err_out = "ERR wrong number of arguments for 'FT.DROPINDEX' command";
+    return false;
+  }
+  bool delete_docs = false;
+  if (args.size() == 2) {
+    if (!MatchArg(args[1], "DD")) {
+      err_out = "ERR unknown option, expected DD";
+      return false;
+    }
+    delete_docs = true;
   }
 
+  std::string idx_str = ResolveAlias(args[0]);
+  std::vector<std::string> doc_ids;
+  {
+    std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
+    auto it = GetIndices().find(idx_str);
+    if (it == GetIndices().end()) {
+      if (idempotent_missing) return true;
+      err_out = "ERR index not found";
+      return false;
+    }
+    if (delete_docs) {
+      doc_ids = it->second->doc_store.AllIds();
+    }
+    StopBackgroundIndexing(ctx, idx_str);
+    GetIndices().erase(it);
+    for (auto ait = GetAliases().begin(); ait != GetAliases().end(); ) {
+      if (ait->second == idx_str) ait = GetAliases().erase(ait);
+      else ++ait;
+    }
+  }
+
+  if (SearchModuleType && !is_cluster_mode) {
+    RedisModuleString* key_rms = RedisModule_CreateString(ctx, args[0].data(), args[0].size());
+    auto* key = static_cast<RedisModuleKey*>(
+        RedisModule_OpenKey(ctx, key_rms, REDISMODULE_WRITE));
+    if (key) {
+      RedisModule_DeleteKey(key);
+      RedisModule_CloseKey(key);
+    }
+    RedisModule_FreeString(ctx, key_rms);
+  }
+
+  for (const auto& doc_id : doc_ids) {
+    RedisModuleString* dk = RedisModule_CreateString(ctx, doc_id.data(), doc_id.size());
+    auto* dkey = static_cast<RedisModuleKey*>(
+        RedisModule_OpenKey(ctx, dk, REDISMODULE_WRITE));
+    if (dkey) {
+      RedisModule_DeleteKey(dkey);
+      RedisModule_CloseKey(dkey);
+    }
+    RedisModule_FreeString(ctx, dk);
+  }
+  return true;
+}
+
+// FT.CREATE <index_name> [ON HASH|JSON PREFIX <count> <prefix> ...] SCHEMA <field> <type> [params...]
+int FtCreateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                           int argc) {
+  if (argc < 5) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::vector<std::string> args;
+  args.reserve(static_cast<size_t>(argc - 1));
+  for (int i = 1; i < argc; i++) args.emplace_back(ArgView(argv[i]));
+
+  IndexSpec spec_check;
+  std::string err;
+  if (!ParseCreateSpec(args, spec_check, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
+  }
+
+  {
+    std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+    if (GetIndices().find(spec_check.name) != GetIndices().end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR index already exists");
+    }
+  }
+
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  auto& mgr = gemini_search::ClusterManager::Instance();
+  if (!is_replicated && mgr.IsClusterScatterEnabled()) {
+    return gemini_search::ExecuteClusterDdl(
+        ctx, gemini_search::RpcOpCode::kRpcDdlCreate, "FT.CREATE", args, /*reply_integer=*/false);
+  }
+
+  if (!ApplyLocalCreate(ctx, args, mgr.IsClusterMode(), err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
+  }
   RedisModule_ReplicateVerbatim(ctx);
+  if (mgr.IsClusterMode()) {
+    SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
+  }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -492,46 +611,38 @@ int FtDropIndexCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc != 2 && argc != 3) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  bool delete_docs = false;
-  if (argc == 3) {
-    if (!MatchArg(ArgView(argv[2]), "DD")) {
-      return RedisModule_ReplyWithError(ctx, "ERR unknown option, expected DD");
+  std::vector<std::string> args;
+  args.reserve(static_cast<size_t>(argc - 1));
+  for (int i = 1; i < argc; i++) args.emplace_back(ArgView(argv[i]));
+
+  if (args.size() == 2 && !MatchArg(args[1], "DD")) {
+    return RedisModule_ReplyWithError(ctx, "ERR unknown option, expected DD");
+  }
+
+  std::string idx_str = ResolveAlias(args[0]);
+  {
+    std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+    if (GetIndices().find(idx_str) == GetIndices().end()) {
+      return RedisModule_ReplyWithError(ctx, "ERR index not found");
     }
-    delete_docs = true;
   }
 
-  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
-  std::unique_lock<std::shared_mutex> lk(GetIndicesMutex());
-  auto it = GetIndices().find(idx_str);
-  if (it == GetIndices().end()) {
-    return RedisModule_ReplyWithError(ctx, "ERR index not found");
-  }
-  std::vector<std::string> doc_ids;
-  if (delete_docs) {
-    doc_ids = it->second->doc_store.AllIds();
-  }
-  StopBackgroundIndexing(ctx, idx_str);
-  GetIndices().erase(it);
-  // Remove any aliases pointing to this index
-  for (auto ait = GetAliases().begin(); ait != GetAliases().end(); ) {
-    if (ait->second == idx_str) ait = GetAliases().erase(ait);
-    else ++ait;
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  auto& mgr = gemini_search::ClusterManager::Instance();
+  if (!is_replicated && mgr.IsClusterScatterEnabled()) {
+    return gemini_search::ExecuteClusterDdl(
+        ctx, gemini_search::RpcOpCode::kRpcDdlDrop, "FT.DROPINDEX", args, /*reply_integer=*/false);
   }
 
-  if (SearchModuleType) {
-    auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
-        ctx, argv[1], REDISMODULE_WRITE));
-    RedisModule_DeleteKey(key);
+  std::string err;
+  if (!ApplyLocalDropIndex(ctx, args, mgr.IsClusterMode(), /*idempotent_missing=*/false, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
   }
-
-  for (const auto& doc_id : doc_ids) {
-    RedisModuleString* dk = RedisModule_CreateString(ctx, doc_id.data(), doc_id.size());
-    auto* dkey = static_cast<RedisModuleKey*>(
-        RedisModule_OpenKey(ctx, dk, REDISMODULE_WRITE));
-    if (dkey) RedisModule_DeleteKey(dkey);
-  }
-
   RedisModule_ReplicateVerbatim(ctx);
+  if (mgr.IsClusterMode()) {
+    SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
+  }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -735,6 +846,13 @@ int FtAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc < 6) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  if ((ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) == 0 &&
+      gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    return RedisModule_ReplyWithError(
+        ctx, "ERR FT.ADD/FT.DEL not supported in cluster mode, use HSET/JSON.SET");
+  }
+
   std::string idx_str(ArgView(argv[1]));
   auto doc_id = ArgView(argv[2]);
 
@@ -809,6 +927,13 @@ int FtDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc != 3) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  if ((ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) == 0 &&
+      gemini_search::ClusterManager::Instance().IsClusterScatterEnabled()) {
+    return RedisModule_ReplyWithError(
+        ctx, "ERR FT.ADD/FT.DEL not supported in cluster mode, use HSET/JSON.SET");
+  }
+
   std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
   std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
   auto it = GetIndices().find(idx_str);
@@ -831,44 +956,39 @@ int FtDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
 }
 
 
-// FT.ALTER <index> SCHEMA ADD <field> <type> [params...] [<field> <type> ...]
-int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
-                          int argc) {
-  if (argc < 6) return RedisModule_WrongArity(ctx);
-  RedisModule_AutoMemory(ctx);
-
-  std::string idx_str = ResolveAlias(std::string(ArgView(argv[1])));
-  std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
-  auto it = GetIndices().find(idx_str);
-  if (it == GetIndices().end()) {
-    return RedisModule_ReplyWithError(ctx, "ERR index not found");
+bool ParseAlterFields(const IndexSpec& spec, const std::vector<std::string>& args,
+                      std::vector<FieldSpec>& out_fields, std::string& err_out) {
+  if (args.size() < 5) {
+    err_out = "ERR wrong number of arguments for 'FT.ALTER' command";
+    return false;
   }
-  auto& entry = *it->second;
-  std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
-
-  if (!MatchArg(ArgView(argv[2]), "SCHEMA") || !MatchArg(ArgView(argv[3]), "ADD")) {
-    return RedisModule_ReplyWithError(ctx, "ERR syntax error, expected SCHEMA ADD");
+  if (!MatchArg(args[1], "SCHEMA") || !MatchArg(args[2], "ADD")) {
+    err_out = "ERR syntax error, expected SCHEMA ADD";
+    return false;
   }
 
-  int i = 4;
-  std::vector<FieldSpec> new_fields;
-  while (i < argc) {
-    if (i + 1 >= argc) {
-      return RedisModule_ReplyWithError(ctx, "ERR syntax error, missing field type");
+  out_fields.clear();
+  size_t i = 3;
+  while (i < args.size()) {
+    if (i + 1 >= args.size()) {
+      err_out = "ERR syntax error, missing field type";
+      return false;
     }
-    auto fname = ArgView(argv[i]);
-    auto ftype_str = ArgView(argv[i + 1]);
+    std::string_view fname = args[i];
+    std::string_view ftype_str = args[i + 1];
     i += 2;
 
     FieldSpec fspec;
     fspec.name = std::string(fname);
 
-    if (entry.spec.FindField(fspec.name)) {
-      return RedisModule_ReplyWithError(ctx, "ERR field already exists in schema");
+    if (spec.FindField(fspec.name)) {
+      err_out = "ERR field already exists in schema";
+      return false;
     }
-    for (auto& nf : new_fields) {
+    for (auto& nf : out_fields) {
       if (nf.name == fspec.name) {
-        return RedisModule_ReplyWithError(ctx, "ERR duplicate field name");
+        err_out = "ERR duplicate field name";
+        return false;
       }
     }
 
@@ -878,34 +998,192 @@ int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
       fspec.type = FieldType::kNumeric;
     } else if (MatchArg(ftype_str, "TEXT")) {
       fspec.type = FieldType::kText;
-      if (i < argc && MatchArg(ArgView(argv[i]), "NOSTEM")) {
+      if (i < args.size() && MatchArg(args[i], "NOSTEM")) {
         fspec.nostem = true;
         i++;
       }
     } else if (MatchArg(ftype_str, "GEO")) {
       fspec.type = FieldType::kGeo;
     } else {
-      return RedisModule_ReplyWithError(
-          ctx, "ERR unknown field type in ALTER, expected TAG, NUMERIC, TEXT, or GEO");
+      err_out = "ERR unknown field type in ALTER, expected TAG, NUMERIC, TEXT, or GEO";
+      return false;
     }
 
-    new_fields.push_back(std::move(fspec));
+    out_fields.push_back(std::move(fspec));
   }
 
-  if (new_fields.empty()) {
-    return RedisModule_ReplyWithError(ctx, "ERR SCHEMA ADD requires at least one field");
+  if (out_fields.empty()) {
+    err_out = "ERR SCHEMA ADD requires at least one field";
+    return false;
   }
+  return true;
+}
 
-  for (auto& nf : new_fields) {
-    entry.spec.fields.push_back(std::move(nf));
+bool ApplyLocalAlter(RedisModuleCtx* ctx, const std::vector<std::string>& args,
+                     std::string& err_out) {
+  if (args.size() < 5) {
+    err_out = "ERR wrong number of arguments for 'FT.ALTER' command";
+    return false;
   }
-
-  // Re-scan existing docs for new fields if ON HASH
-  if (entry.spec.HasPrefixes()) {
+  std::string idx_str = ResolveAlias(args[0]);
+  std::shared_ptr<IndexEntry> entry_ptr = GetIndexEntryShared(idx_str);
+  if (!entry_ptr) {
+    err_out = "ERR index not found";
+    return false;
+  }
+  auto& entry = *entry_ptr;
+  bool needs_scan = false;
+  {
+    std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
+    std::vector<FieldSpec> new_fields;
+    if (!ParseAlterFields(entry.spec, args, new_fields, err_out)) return false;
+    for (auto& nf : new_fields) {
+      entry.spec.fields.push_back(std::move(nf));
+    }
+    needs_scan = entry.spec.HasPrefixes();
+  }
+  if (needs_scan) {
     ScanExistingKeys(ctx, entry);
   }
+  return true;
+}
 
+bool ApplyLocalAliasAdd(const std::vector<std::string>& args, std::string& err_out) {
+  if (args.size() != 2) {
+    err_out = "ERR wrong number of arguments for 'FT.ALIASADD' command";
+    return false;
+  }
+  const std::string& alias = args[0];
+  const std::string& idx = args[1];
+  std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+  if (GetIndices().find(idx) == GetIndices().end()) {
+    err_out = "ERR index not found";
+    return false;
+  }
+  if (GetAliases().find(alias) != GetAliases().end()) {
+    err_out = "ERR alias already exists";
+    return false;
+  }
+  GetAliases()[alias] = idx;
+  return true;
+}
+
+bool ApplyLocalAliasDel(const std::vector<std::string>& args, bool idempotent_missing,
+                        std::string& err_out) {
+  if (args.size() != 1) {
+    err_out = "ERR wrong number of arguments for 'FT.ALIASDEL' command";
+    return false;
+  }
+  if (GetAliases().erase(args[0]) == 0) {
+    if (idempotent_missing) return true;
+    err_out = "ERR alias not found";
+    return false;
+  }
+  return true;
+}
+
+bool ApplyLocalAliasUpdate(const std::vector<std::string>& args, std::string& err_out) {
+  if (args.size() != 2) {
+    err_out = "ERR wrong number of arguments for 'FT.ALIASUPDATE' command";
+    return false;
+  }
+  const std::string& alias = args[0];
+  const std::string& idx = args[1];
+  std::shared_lock<std::shared_mutex> lk(GetIndicesMutex());
+  if (GetIndices().find(idx) == GetIndices().end()) {
+    err_out = "ERR index not found";
+    return false;
+  }
+  GetAliases()[alias] = idx;
+  return true;
+}
+
+bool ApplyLocalDdlCommand(RedisModuleCtx* ctx, const std::string& cmd_name,
+                          const std::vector<std::string>& args, bool is_cluster_mode,
+                          bool is_rollback, int64_t& out_int_reply, std::string& err_out) {
+  out_int_reply = 0;
+  if (MatchArg(cmd_name, "FT.CREATE")) {
+    return ApplyLocalCreate(ctx, args, is_cluster_mode, err_out);
+  }
+  if (MatchArg(cmd_name, "FT.DROPINDEX")) {
+    return ApplyLocalDropIndex(ctx, args, is_cluster_mode, is_rollback, err_out);
+  }
+  if (MatchArg(cmd_name, "FT.ALTER")) {
+    return ApplyLocalAlter(ctx, args, err_out);
+  }
+  if (MatchArg(cmd_name, "FT.ALIASADD")) {
+    return ApplyLocalAliasAdd(args, err_out);
+  }
+  if (MatchArg(cmd_name, "FT.ALIASDEL")) {
+    return ApplyLocalAliasDel(args, is_rollback, err_out);
+  }
+  if (MatchArg(cmd_name, "FT.ALIASUPDATE")) {
+    return ApplyLocalAliasUpdate(args, err_out);
+  }
+  if (MatchArg(cmd_name, "FT.SYNUPDATE")) {
+    return ApplyLocalSynUpdate(args, err_out);
+  }
+  if (MatchArg(cmd_name, "FT.DICTADD")) {
+    return ApplyLocalDictAdd(args, out_int_reply, err_out);
+  }
+  if (MatchArg(cmd_name, "FT.DICTDEL")) {
+    return ApplyLocalDictDel(args, out_int_reply, err_out);
+  }
+  err_out = "ERR unsupported DDL command: " + cmd_name;
+  return false;
+}
+
+void ReplicateDdlCommand(RedisModuleCtx* ctx, const std::string& cmd_name,
+                         const std::vector<std::string>& args) {
+  if (!ctx || !RedisModule_Replicate) return;
+  std::vector<RedisModuleString*> rms;
+  rms.reserve(args.size());
+  for (const auto& a : args) {
+    rms.push_back(RedisModule_CreateString(ctx, a.data(), a.size()));
+  }
+  RedisModule_Replicate(ctx, cmd_name.c_str(), "v", rms.data(), rms.size());
+  for (auto* s : rms) RedisModule_FreeString(ctx, s);
+}
+
+// FT.ALTER <index> SCHEMA ADD <field> <type> [params...] [<field> <type> ...]
+int FtAlterCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
+                          int argc) {
+  if (argc < 6) return RedisModule_WrongArity(ctx);
+  RedisModule_AutoMemory(ctx);
+
+  std::vector<std::string> args;
+  args.reserve(static_cast<size_t>(argc - 1));
+  for (int i = 1; i < argc; i++) args.emplace_back(ArgView(argv[i]));
+
+  std::string idx_str = ResolveAlias(args[0]);
+  std::string err;
+  {
+    auto entry_ptr = GetIndexEntryShared(idx_str);
+    if (!entry_ptr) {
+      return RedisModule_ReplyWithError(ctx, "ERR index not found");
+    }
+    std::shared_lock<std::shared_mutex> idx_lk(entry_ptr->Mutex());
+    std::vector<FieldSpec> check_fields;
+    if (!ParseAlterFields(entry_ptr->spec, args, check_fields, err)) {
+      return RedisModule_ReplyWithError(ctx, err.c_str());
+    }
+  }
+
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  auto& mgr = gemini_search::ClusterManager::Instance();
+  if (!is_replicated && mgr.IsClusterScatterEnabled()) {
+    return gemini_search::ExecuteClusterDdl(
+        ctx, gemini_search::RpcOpCode::kRpcDdlAlter, "FT.ALTER", args, /*reply_integer=*/false);
+  }
+
+  if (!ApplyLocalAlter(ctx, args, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
+  }
   RedisModule_ReplicateVerbatim(ctx);
+  if (mgr.IsClusterMode()) {
+    SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
+  }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -915,17 +1193,30 @@ int FtAliasAddCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc != 3) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string alias(ArgView(argv[1]));
-  std::string idx(ArgView(argv[2]));
-
-  if (GetIndices().find(idx) == GetIndices().end()) {
+  std::vector<std::string> args = {ArgStr(argv[1]), ArgStr(argv[2])};
+  if (GetIndices().find(args[1]) == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  if (GetAliases().find(alias) != GetAliases().end()) {
+  if (GetAliases().find(args[0]) != GetAliases().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR alias already exists");
   }
-  GetAliases()[alias] = idx;
+
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  auto& mgr = gemini_search::ClusterManager::Instance();
+  if (!is_replicated && mgr.IsClusterScatterEnabled()) {
+    return gemini_search::ExecuteClusterDdl(
+        ctx, gemini_search::RpcOpCode::kRpcDdlAlias, "FT.ALIASADD", args, /*reply_integer=*/false);
+  }
+
+  std::string err;
+  if (!ApplyLocalAliasAdd(args, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
+  }
   RedisModule_ReplicateVerbatim(ctx);
+  if (mgr.IsClusterMode()) {
+    SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
+  }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -935,11 +1226,27 @@ int FtAliasDelCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc != 2) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string alias(ArgView(argv[1]));
-  if (GetAliases().erase(alias) == 0) {
+  std::vector<std::string> args = {ArgStr(argv[1])};
+  if (GetAliases().find(args[0]) == GetAliases().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR alias not found");
   }
+
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  auto& mgr = gemini_search::ClusterManager::Instance();
+  if (!is_replicated && mgr.IsClusterScatterEnabled()) {
+    return gemini_search::ExecuteClusterDdl(
+        ctx, gemini_search::RpcOpCode::kRpcDdlAlias, "FT.ALIASDEL", args, /*reply_integer=*/false);
+  }
+
+  std::string err;
+  if (!ApplyLocalAliasDel(args, /*idempotent_missing=*/false, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
+  }
   RedisModule_ReplicateVerbatim(ctx);
+  if (mgr.IsClusterMode()) {
+    SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
+  }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 
@@ -949,14 +1256,28 @@ int FtAliasUpdateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
   if (argc != 3) return RedisModule_WrongArity(ctx);
   RedisModule_AutoMemory(ctx);
 
-  std::string alias(ArgView(argv[1]));
-  std::string idx(ArgView(argv[2]));
-
-  if (GetIndices().find(idx) == GetIndices().end()) {
+  std::vector<std::string> args = {ArgStr(argv[1]), ArgStr(argv[2])};
+  if (GetIndices().find(args[1]) == GetIndices().end()) {
     return RedisModule_ReplyWithError(ctx, "ERR index not found");
   }
-  GetAliases()[alias] = idx;
+
+  int ctx_flags = RedisModule_GetContextFlags ? RedisModule_GetContextFlags(ctx) : 0;
+  bool is_replicated = (ctx_flags & REDISMODULE_CTX_FLAGS_REPLICATED) != 0;
+  auto& mgr = gemini_search::ClusterManager::Instance();
+  if (!is_replicated && mgr.IsClusterScatterEnabled()) {
+    return gemini_search::ExecuteClusterDdl(
+        ctx, gemini_search::RpcOpCode::kRpcDdlAlias, "FT.ALIASUPDATE", args,
+        /*reply_integer=*/false);
+  }
+
+  std::string err;
+  if (!ApplyLocalAliasUpdate(args, err)) {
+    return RedisModule_ReplyWithError(ctx, err.c_str());
+  }
   RedisModule_ReplicateVerbatim(ctx);
+  if (mgr.IsClusterMode()) {
+    SetPersistedSchemaEpoch(mgr.AdvanceSchemaEpoch());
+  }
   return RedisModule_ReplyWithSimpleString(ctx, "OK");
 }
 

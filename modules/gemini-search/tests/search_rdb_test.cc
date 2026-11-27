@@ -508,6 +508,88 @@ TEST_F(SearchRdbTest, AuxWrongVersionRejected) {
             REDISMODULE_ERR);
 }
 
+TEST_F(SearchRdbTest, AuxV1BackwardCompatibility) {
+  MockRdbStream v1;
+  RedisModule_SaveUnsigned(v1.IO(), 1);  // Legacy kSearchAuxEncVer = 1
+  RedisModule_SaveUnsigned(v1.IO(), 1);  // 1 alias
+  RedisModule_SaveStringBuffer(v1.IO(), "legacy_alias", 12);
+  RedisModule_SaveStringBuffer(v1.IO(), "legacy_idx", 10);
+  RedisModule_SaveUnsigned(v1.IO(), 0);  // 0 suggest dicts
+  RedisModule_SaveUnsigned(v1.IO(), 1);  // 1 term dict
+  RedisModule_SaveStringBuffer(v1.IO(), "d1", 2);
+  RedisModule_SaveUnsigned(v1.IO(), 1);
+  RedisModule_SaveStringBuffer(v1.IO(), "term1", 5);
+  RedisModule_SaveUnsigned(v1.IO(), 1);  // 1 config
+  RedisModule_SaveStringBuffer(v1.IO(), "TIMEOUT", 7);
+  RedisModule_SaveStringBuffer(v1.IO(), "999", 3);
+  v1.Rewind();
+
+  ASSERT_EQ(AuxLoadSearch(v1.IO(), kSearchEncVer, REDISMODULE_AUX_AFTER_RDB), REDISMODULE_OK);
+  EXPECT_EQ(GetAliases()["legacy_alias"], "legacy_idx");
+  EXPECT_TRUE(GetTermDicts()["d1"].Contains("term1"));
+  EXPECT_EQ(GetConfig()["TIMEOUT"], "999");
+}
+
+TEST_F(SearchRdbTest, AuxV2ClusterMetadataAndHnswRoundTrip) {
+  SetClusterRdbMode(true);
+  SetPersistedSchemaEpoch(7777);
+
+  IndexSpec spec;
+  spec.name = "cluster_hnsw_idx";
+  spec.prefixes = {"vec:"};
+  spec.language = "english";
+  VectorFieldParams vp;
+  vp.algorithm = VectorAlgorithm::kHnsw;
+  vp.dim = 4;
+  vp.metric = DistanceMetric::kL2;
+  vp.m = 8;
+  vp.ef_construction = 32;
+  spec.fields = {
+      {"title", FieldType::kText, {}},
+      {"emb", FieldType::kVector, vp},
+  };
+
+  auto MakeVec = [](float a, float b, float c, float d) {
+    float vals[4] = {a, b, c, d};
+    return std::string(reinterpret_cast<const char*>(vals), sizeof(vals));
+  };
+  std::vector<std::pair<std::string, std::unordered_map<std::string, std::string>>> docs = {
+      {"vec:1", {{"title", "alpha"}, {"emb", MakeVec(1.0f, 0.0f, 0.0f, 0.0f)}}},
+      {"vec:2", {{"title", "beta"}, {"emb", MakeVec(0.0f, 1.0f, 0.0f, 0.0f)}}},
+  };
+  ASSERT_TRUE(CreateIndexFromRdb("cluster_hnsw_idx", spec, docs));
+  GetIndexEntry("cluster_hnsw_idx")->synonyms.Update("g1", {"alpha", "first"});
+  GetAliases()["ch_alias"] = "cluster_hnsw_idx";
+
+  MockRdbStream stream;
+  AuxSaveSearch(stream.IO(), REDISMODULE_AUX_AFTER_RDB);
+  stream.Rewind();
+
+  ClearAllGlobalState();
+  EXPECT_EQ(GetIndexEntry("cluster_hnsw_idx"), nullptr);
+  EXPECT_EQ(GetPersistedSchemaEpoch(), 0u);
+
+  ASSERT_EQ(AuxLoadSearch(stream.IO(), kSearchEncVer, REDISMODULE_AUX_AFTER_RDB), REDISMODULE_OK);
+  EXPECT_EQ(GetPersistedSchemaEpoch(), 7777u);
+  EXPECT_EQ(GetAliases()["ch_alias"], "cluster_hnsw_idx");
+  ASSERT_EQ(GetPendingClusterRecoveries().size(), 1u);
+  EXPECT_EQ(GetPendingClusterRecoveries()[0], "cluster_hnsw_idx");
+
+  auto* loaded = GetIndexEntry("cluster_hnsw_idx");
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->spec.prefixes, (std::vector<std::string>{"vec:"}));
+  EXPECT_EQ(loaded->synonyms.Dump().size(), 1u);
+
+  // Prebuilt HNSW graph restored directly from aux_load without rebuilding!
+  const auto* vidx = loaded->vector_indices.Get("emb");
+  ASSERT_NE(vidx, nullptr);
+  EXPECT_EQ(vidx->Size(), 2u);
+  float q[4] = {0.99f, 0.01f, 0.0f, 0.0f};
+  auto knn = vidx->KnnQuery(q, 1);
+  ASSERT_EQ(knn.size(), 1u);
+  EXPECT_EQ(knn[0].doc_id, "vec:1");
+}
+
 // =============================================================
 // AOF rewrite tests (unlimited fields + binary values + synonyms)
 // =============================================================

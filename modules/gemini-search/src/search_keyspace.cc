@@ -1,3 +1,4 @@
+#include "cluster_topology.h"
 #include "search_internal.h"
 
 #include <cstring>
@@ -14,8 +15,8 @@ static void RemoveIndexedKey(IndexEntry& entry, const std::string& key_name) {
   entry.doc_store.Remove(key_name);
 }
 
-void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry,
-                  const std::string& key_name) {
+static void IndexHashKeyInternal(RedisModuleCtx* ctx, IndexEntry& entry,
+                                 const std::string& key_name, bool preserve_existing_hnsw) {
   RedisModuleString* rms_key =
       RedisModule_CreateString(ctx, key_name.c_str(), key_name.size());
   auto* rkey = static_cast<RedisModuleKey*>(
@@ -51,8 +52,17 @@ void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry,
     std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
     RemoveDocFromIndices(entry, key_name);
     entry.doc_store.Add(key_name, doc_fields);
-    AddDocToIndices(entry, key_name, doc_fields);
+    if (preserve_existing_hnsw) {
+      AddDocToIndicesSkippingExistingHnsw(entry, key_name, doc_fields);
+    } else {
+      AddDocToIndices(entry, key_name, doc_fields);
+    }
   }
+}
+
+void IndexHashKey(RedisModuleCtx* ctx, IndexEntry& entry,
+                  const std::string& key_name) {
+  IndexHashKeyInternal(ctx, entry, key_name, /*preserve_existing_hnsw=*/false);
 }
 
 static bool IsJsonWs(char c) {
@@ -157,8 +167,8 @@ static std::string ExtractJsonScalar(const std::string& raw) {
   return vals.empty() ? std::string() : vals.front();
 }
 
-void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry,
-                  const std::string& key_name) {
+static void IndexJsonKeyInternal(RedisModuleCtx* ctx, IndexEntry& entry,
+                                 const std::string& key_name, bool preserve_existing_hnsw) {
   std::unordered_map<std::string, std::string> doc_fields;
 
   for (auto& fspec : entry.spec.fields) {
@@ -234,14 +244,24 @@ void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry,
     std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
     RemoveDocFromIndices(entry, key_name);
     entry.doc_store.Add(key_name, doc_fields);
-    AddDocToIndices(entry, key_name, doc_fields);
+    if (preserve_existing_hnsw) {
+      AddDocToIndicesSkippingExistingHnsw(entry, key_name, doc_fields);
+    } else {
+      AddDocToIndices(entry, key_name, doc_fields);
+    }
   }
+}
+
+void IndexJsonKey(RedisModuleCtx* ctx, IndexEntry& entry,
+                  const std::string& key_name) {
+  IndexJsonKeyInternal(ctx, entry, key_name, /*preserve_existing_hnsw=*/false);
 }
 
 struct ScanPrivdata {
   RedisModuleCtx* ctx;
   IndexEntry* entry;
   size_t keys_seen = 0;
+  bool preserve_existing_hnsw = false;
 };
 
 static void ScanCallback(RedisModuleCtx* /*ctx*/, RedisModuleString* keyname,
@@ -253,15 +273,24 @@ static void ScanCallback(RedisModuleCtx* /*ctx*/, RedisModuleString* keyname,
   std::string key_str(data, len);
   if (pd->entry->spec.MatchesPrefix(key_str)) {
     if (pd->entry->spec.source_type == IndexSourceType::kJson)
-      IndexJsonKey(pd->ctx, *pd->entry, key_str);
+      IndexJsonKeyInternal(pd->ctx, *pd->entry, key_str, pd->preserve_existing_hnsw);
     else
-      IndexHashKey(pd->ctx, *pd->entry, key_str);
+      IndexHashKeyInternal(pd->ctx, *pd->entry, key_str, pd->preserve_existing_hnsw);
   }
 }
 
 void ScanExistingKeys(RedisModuleCtx* ctx, IndexEntry& entry) {
   auto* cursor = RedisModule_ScanCursorCreate();
-  ScanPrivdata pd{ctx, &entry, 0};
+  ScanPrivdata pd{ctx, &entry, 0, false};
+  while (RedisModule_Scan(ctx, cursor, ScanCallback, &pd)) {}
+  RedisModule_ScanCursorDestroy(cursor);
+  entry.bg_indexing = false;
+  entry.percent_indexed = 1.0;
+}
+
+void ScanExistingKeysPreservingHnsw(RedisModuleCtx* ctx, IndexEntry& entry) {
+  auto* cursor = RedisModule_ScanCursorCreate();
+  ScanPrivdata pd{ctx, &entry, 0, true};
   while (RedisModule_Scan(ctx, cursor, ScanCallback, &pd)) {}
   RedisModule_ScanCursorDestroy(cursor);
   entry.bg_indexing = false;
@@ -456,14 +485,86 @@ void OnFlushDbEvent(RedisModuleCtx* ctx, RedisModuleEvent /*eid*/,
   }
 }
 
-void OnLoadingEvent(RedisModuleCtx* /*ctx*/, RedisModuleEvent /*eid*/,
+static std::vector<std::string> g_pending_json_cluster_recoveries;
+
+static bool IsClusterStateOk(RedisModuleCtx* ctx) {
+  if (!ctx || !RedisModule_Call) return true;
+  RedisModuleCallReply* rep = RedisModule_Call(ctx, "CLUSTER", "c", "INFO");
+  if (!rep) return false;
+  bool ok = false;
+  if (RedisModule_CallReplyType(rep) == REDISMODULE_REPLY_STRING) {
+    size_t len = 0;
+    const char* data = RedisModule_CallReplyStringPtr(rep, &len);
+    if (data && std::string_view(data, len).find("cluster_state:ok") != std::string_view::npos) {
+      ok = true;
+    }
+  }
+  RedisModule_FreeCallReply(rep);
+  return ok;
+}
+
+static void ClusterJsonRecoveryTimerCallback(RedisModuleCtx* ctx, void* /*data*/) {
+  if (g_pending_json_cluster_recoveries.empty()) return;
+  if (!IsClusterStateOk(ctx)) {
+    if (RedisModule_CreateTimer) {
+      RedisModule_CreateTimer(ctx, 50, ClusterJsonRecoveryTimerCallback, nullptr);
+    }
+    return;
+  }
+  std::vector<std::string> pending;
+  pending.swap(g_pending_json_cluster_recoveries);
+  RedisModule_SelectDb(ctx, 0);
+  for (const auto& idx_name : pending) {
+    auto entry_ptr = GetIndexEntryShared(idx_name);
+    if (entry_ptr && entry_ptr->spec.HasPrefixes() && !entry_ptr->spec.skip_initial_scan) {
+      ScanExistingKeysPreservingHnsw(ctx, *entry_ptr);
+    }
+  }
+}
+
+void OnLoadingEvent(RedisModuleCtx* ctx, RedisModuleEvent /*eid*/,
                     uint64_t subevent, void* /*data*/) {
   if (subevent == REDISMODULE_SUBEVENT_LOADING_RDB_START ||
       subevent == REDISMODULE_SUBEVENT_LOADING_AOF_START ||
       subevent == REDISMODULE_SUBEVENT_LOADING_REPL_START) {
     g_is_loading = true;
-  } else if (subevent == REDISMODULE_SUBEVENT_LOADING_ENDED ||
-             subevent == REDISMODULE_SUBEVENT_LOADING_FAILED) {
+  } else if (subevent == REDISMODULE_SUBEVENT_LOADING_ENDED) {
     g_is_loading = false;
+    auto& mgr = gemini_search::ClusterManager::Instance();
+    if (mgr.IsClusterMode()) {
+      uint64_t persisted_epoch = GetPersistedSchemaEpoch();
+      if (persisted_epoch > mgr.GetSchemaEpoch()) {
+        mgr.SetSchemaEpoch(persisted_epoch);
+      }
+      std::vector<std::string> pending;
+      pending.swap(GetPendingClusterRecoveries());
+      if (!pending.empty() && ctx) {
+        RedisModule_SelectDb(ctx, 0);
+        bool cluster_ok = IsClusterStateOk(ctx);
+        for (const auto& idx_name : pending) {
+          auto entry_ptr = GetIndexEntryShared(idx_name);
+          if (!entry_ptr || !entry_ptr->spec.HasPrefixes() || entry_ptr->spec.skip_initial_scan) {
+            continue;
+          }
+          // ON JSON uses RM_Call("JSON.GET"), which Redis Cluster rejects with CLUSTERDOWN
+          // until clusterUpdateState() marks cluster_state:ok after startup.
+          if (entry_ptr->spec.source_type == IndexSourceType::kJson && !cluster_ok) {
+            g_pending_json_cluster_recoveries.push_back(idx_name);
+          } else {
+            ScanExistingKeysPreservingHnsw(ctx, *entry_ptr);
+          }
+        }
+        if (!g_pending_json_cluster_recoveries.empty() && RedisModule_CreateTimer) {
+          RedisModule_CreateTimer(ctx, 50, ClusterJsonRecoveryTimerCallback, nullptr);
+        }
+      }
+      if (ctx) {
+        mgr.BroadcastHello(ctx, /*request_reply=*/false);
+      }
+    }
+  } else if (subevent == REDISMODULE_SUBEVENT_LOADING_FAILED) {
+    g_is_loading = false;
+    GetPendingClusterRecoveries().clear();
+    g_pending_json_cluster_recoveries.clear();
   }
 }
