@@ -90,9 +90,12 @@ static void MaintenanceTimerCallback(RedisModuleCtx* ctx, void* /*data*/) {
     if (SearchModuleType && !gemini_search::ClusterManager::Instance().IsClusterMode()) {
       RedisModuleString* kstr = RedisModule_CreateString(ctx, name.data(), name.size());
       auto* key = static_cast<RedisModuleKey*>(
-          RedisModule_OpenKey(ctx, kstr, REDISMODULE_WRITE));
+          RedisModule_OpenKey(ctx, kstr, REDISMODULE_READ | REDISMODULE_WRITE));
       if (key) {
-        RedisModule_DeleteKey(key);
+        if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_MODULE &&
+            RedisModule_ModuleTypeGetType(key) == SearchModuleType) {
+          RedisModule_DeleteKey(key);
+        }
         RedisModule_CloseKey(key);
       }
       RedisModule_FreeString(ctx, kstr);

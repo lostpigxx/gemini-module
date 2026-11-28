@@ -9,3 +9,4 @@ __pycache__/
 dump.rdb
 .clangd
 .codemate
+soak_reports/

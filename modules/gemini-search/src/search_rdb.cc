@@ -92,7 +92,7 @@ void DigestString(RedisModuleDigest* digest, const std::string& s) {
 
 void RdbSaveSearch(RedisModuleIO* rdb, void* value) {
   auto* name_ptr = static_cast<std::string*>(value);
-  auto* entry = GetIndexEntry(*name_ptr);
+  auto entry = GetIndexEntryShared(*name_ptr);
   if (!entry) return;
   std::shared_lock<std::shared_mutex> idx_lk(entry->Mutex(), std::defer_lock);
   if (!IsInForkedChild()) idx_lk.lock();
@@ -469,7 +469,8 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
     return nullptr;
   }
 
-  if (auto* entry = GetIndexEntry(index_name)) {
+  if (auto entry = GetIndexEntryShared(index_name)) {
+    std::unique_lock<std::shared_mutex> idx_lk(entry->Mutex());
     for (auto& [did, pl] : doc_payloads) {
       entry->doc_store.SetPayload(did, std::move(pl));
     }
@@ -483,8 +484,10 @@ void* RdbLoadSearch(RedisModuleIO* rdb, int encver) {
 
 void AofRewriteSearch(RedisModuleIO* aof, RedisModuleString* key, void* value) {
   auto* name_ptr = static_cast<std::string*>(value);
-  auto* entry = GetIndexEntry(*name_ptr);
+  auto entry = GetIndexEntryShared(*name_ptr);
   if (!entry) return;
+  std::shared_lock<std::shared_mutex> idx_lk(entry->Mutex(), std::defer_lock);
+  if (!IsInForkedChild()) idx_lk.lock();
 
   const auto& spec = entry->spec;
 
@@ -572,8 +575,9 @@ void FreeSearch(void* value) {
 
 size_t SearchMemUsage(const void* value) {
   auto* name_ptr = static_cast<const std::string*>(value);
-  auto* entry = GetIndexEntry(*name_ptr);
+  auto entry = GetIndexEntryShared(*name_ptr);
   if (!entry) return 0;
+  std::shared_lock<std::shared_mutex> idx_lk(entry->Mutex());
 
   size_t bytes = sizeof(*entry) + entry->doc_store.MemoryUsage();
 
@@ -652,11 +656,12 @@ size_t SearchMemUsage2(RedisModuleKeyOptCtx* ctx, const void* value, size_t samp
 
 void DigestSearch(RedisModuleDigest* digest, void* value) {
   auto* name_ptr = static_cast<std::string*>(value);
-  auto* entry = GetIndexEntry(*name_ptr);
+  auto entry = GetIndexEntryShared(*name_ptr);
   if (!entry) {
     RedisModule_DigestEndSequence(digest);
     return;
   }
+  std::shared_lock<std::shared_mutex> idx_lk(entry->Mutex());
 
   const auto& spec = entry->spec;
   DigestString(digest, spec.name);
@@ -720,7 +725,7 @@ void DigestSearch(RedisModuleDigest* digest, void* value) {
 
 void* CopySearch2(RedisModuleKeyOptCtx* ctx, const void* value) {
   auto* src_name = static_cast<const std::string*>(value);
-  auto* src_entry = GetIndexEntry(*src_name);
+  auto src_entry = GetIndexEntryShared(*src_name);
   if (!src_entry) return nullptr;
 
   if (!ctx || !RedisModule_GetToKeyNameFromOptCtx || !RedisModule_StringPtrLen) {
@@ -732,25 +737,31 @@ void* CopySearch2(RedisModuleKeyOptCtx* ctx, const void* value) {
   const char* ptr = RedisModule_StringPtrLen(to_key, &len);
   if (!ptr || len == 0) return nullptr;
   std::string dst_name(ptr, len);
-  if (dst_name == *src_name || GetIndexEntry(dst_name) != nullptr) {
+  if (dst_name == *src_name || GetIndexEntryShared(dst_name) != nullptr) {
     return nullptr;
   }
 
-  IndexSpec spec_copy = src_entry->spec;
-  spec_copy.name = dst_name;
-
-  auto all_ids = src_entry->doc_store.AllIds();
+  IndexSpec spec_copy;
   std::vector<std::pair<std::string, std::unordered_map<std::string, std::string>>> docs;
-  docs.reserve(all_ids.size());
-  for (const auto& doc_id : all_ids) {
-    if (const auto* doc = src_entry->doc_store.Get(doc_id)) {
-      docs.emplace_back(doc_id, doc->fields);
+  std::vector<std::pair<std::string, std::vector<std::string>>> syn_dump;
+  {
+    std::shared_lock<std::shared_mutex> src_lk(src_entry->Mutex());
+    spec_copy = src_entry->spec;
+    spec_copy.name = dst_name;
+    auto all_ids = src_entry->doc_store.AllIds();
+    docs.reserve(all_ids.size());
+    for (const auto& doc_id : all_ids) {
+      if (const auto* doc = src_entry->doc_store.Get(doc_id)) {
+        docs.emplace_back(doc_id, doc->fields);
+      }
     }
+    syn_dump = src_entry->synonyms.Dump();
   }
 
   CreateIndexFromRdb(dst_name, std::move(spec_copy), docs);
-  if (auto* dst_entry = GetIndexEntry(dst_name)) {
-    for (const auto& [gid, terms] : src_entry->synonyms.Dump()) {
+  if (auto dst_entry = GetIndexEntryShared(dst_name)) {
+    std::unique_lock<std::shared_mutex> dst_lk(dst_entry->Mutex());
+    for (const auto& [gid, terms] : syn_dump) {
       dst_entry->synonyms.Update(gid, terms);
     }
   }
@@ -761,8 +772,9 @@ void* CopySearch2(RedisModuleKeyOptCtx* ctx, const void* value) {
 size_t FreeEffortSearch2(RedisModuleKeyOptCtx* ctx, const void* value) {
   (void)ctx;
   auto* name_ptr = static_cast<const std::string*>(value);
-  auto* entry = GetIndexEntry(*name_ptr);
+  auto entry = GetIndexEntryShared(*name_ptr);
   if (!entry) return 1;
+  std::shared_lock<std::shared_mutex> idx_lk(entry->Mutex());
   return 1 + entry->doc_store.Size();
 }
 
@@ -856,15 +868,12 @@ void AuxSaveSearch(RedisModuleIO* rdb, int when) {
     }
   }
 
-  // 5. Cluster-mode metadata & prebuilt HNSW graphs (kSearchAuxEncVer >= 2).
-  // Standalone mode writes epoch=0, count=0 and keeps persisting via per-index GmSearch- keys.
-  if (!IsClusterRdbMode()) {
-    RedisModule_SaveUnsigned(rdb, 0);
-    RedisModule_SaveUnsigned(rdb, 0);
-    return;
-  }
-
-  RedisModule_SaveUnsigned(rdb, GetPersistedSchemaEpoch());
+  // 5. Index definitions, synonyms, prebuilt HNSW graphs, and (in standalone mode) inline docs
+  // (kSearchAuxEncVer >= 3). Cluster mode writes has_inline_docs=0 and rebuilds documents from
+  // local shard keys on OnLoadingEvent; standalone mode writes has_inline_docs=1 so FT.ADD docs
+  // and keyspace-backed docs both restore directly without keyspace anchor keys.
+  const bool cluster_mode = IsClusterRdbMode();
+  RedisModule_SaveUnsigned(rdb, cluster_mode ? GetPersistedSchemaEpoch() : 0);
 
   std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex(), std::defer_lock);
   if (!in_child) tbl_lk.lock();
@@ -905,6 +914,33 @@ void AuxSaveSearch(RedisModuleIO* rdb, int when) {
       std::string blob = hnsw->SerializeGraph();
       RedisModule_SaveStringBuffer(rdb, blob.data(), blob.size());
     }
+
+    // kSearchAuxEncVer >= 3: inline docs flag (0 = rebuild from keyspace, 1 = inline docs)
+    const uint64_t has_inline_docs = cluster_mode ? 0 : 1;
+    RedisModule_SaveUnsigned(rdb, has_inline_docs);
+    if (has_inline_docs) {
+      auto all_ids = entry.doc_store.AllIds();
+      std::sort(all_ids.begin(), all_ids.end());
+      RedisModule_SaveUnsigned(rdb, all_ids.size());
+      for (const auto& doc_id : all_ids) {
+        RedisModule_SaveStringBuffer(rdb, doc_id.c_str(), doc_id.size());
+        const auto* doc = entry.doc_store.Get(doc_id);
+        if (doc) {
+          RedisModule_SaveUnsigned(rdb, doc->fields.size());
+          for (const auto& [k, v] : doc->fields) {
+            RedisModule_SaveStringBuffer(rdb, k.c_str(), k.size());
+            RedisModule_SaveStringBuffer(rdb, v.c_str(), v.size());
+          }
+          RedisModule_SaveUnsigned(rdb, doc->has_payload ? 1 : 0);
+          if (doc->has_payload) {
+            RedisModule_SaveStringBuffer(rdb, doc->payload.data(), doc->payload.size());
+          }
+        } else {
+          RedisModule_SaveUnsigned(rdb, 0);
+          RedisModule_SaveUnsigned(rdb, 0);
+        }
+      }
+    }
   }
 }
 
@@ -913,7 +949,7 @@ int AuxLoadSearch(RedisModuleIO* rdb, int encver, int when) {
   if (when != REDISMODULE_AUX_AFTER_RDB) return REDISMODULE_OK;
 
   uint64_t aux_ver = 0;
-  if (!SafeLoadUnsigned(rdb, aux_ver) || (aux_ver != 1 && aux_ver != kSearchAuxEncVer)) {
+  if (!SafeLoadUnsigned(rdb, aux_ver) || aux_ver < 1 || aux_ver > kSearchAuxEncVer) {
     return REDISMODULE_ERR;
   }
 
@@ -987,15 +1023,19 @@ int AuxLoadSearch(RedisModuleIO* rdb, int encver, int when) {
   }
 
   uint64_t loaded_schema_epoch = 0;
-  std::vector<std::shared_ptr<IndexEntry>> loaded_cluster_indices;
+  struct LoadedAuxIndex {
+    std::shared_ptr<IndexEntry> entry;
+    bool needs_keyspace_recovery = false;
+  };
+  std::vector<LoadedAuxIndex> loaded_aux_indices;
   if (aux_ver >= 2) {
-    uint64_t cluster_idx_count = 0;
+    uint64_t aux_idx_count = 0;
     if (!SafeLoadUnsigned(rdb, loaded_schema_epoch) ||
-        !SafeLoadUnsigned(rdb, cluster_idx_count) || cluster_idx_count > kMaxRdbAuxEntries) {
+        !SafeLoadUnsigned(rdb, aux_idx_count) || aux_idx_count > kMaxRdbAuxEntries) {
       return REDISMODULE_ERR;
     }
-    loaded_cluster_indices.reserve(static_cast<size_t>(cluster_idx_count));
-    for (uint64_t i = 0; i < cluster_idx_count; i++) {
+    loaded_aux_indices.reserve(static_cast<size_t>(aux_idx_count));
+    for (uint64_t i = 0; i < aux_idx_count; i++) {
       std::string spec_blob;
       if (!SafeLoadString(rdb, spec_blob)) return REDISMODULE_ERR;
       gemini_search::SchemaIndexSnapshot snap;
@@ -1010,6 +1050,7 @@ int AuxLoadSearch(RedisModuleIO* rdb, int encver, int when) {
         entry->synonyms.Update(gid, terms);
       }
 
+      std::unordered_set<std::string> skip_vector_fields;
       uint64_t hnsw_count = 0;
       if (!SafeLoadUnsigned(rdb, hnsw_count) || hnsw_count > kMaxRdbFields) {
         return REDISMODULE_ERR;
@@ -1029,8 +1070,55 @@ int AuxLoadSearch(RedisModuleIO* rdb, int encver, int when) {
         if (!hnsw || !hnsw->DeserializeGraph(gblob.data(), gblob.size())) {
           return REDISMODULE_ERR;
         }
+        skip_vector_fields.insert(fname);
       }
-      loaded_cluster_indices.push_back(std::move(entry));
+
+      uint64_t has_inline_docs = 0;
+      if (aux_ver >= 3) {
+        if (!SafeLoadUnsigned(rdb, has_inline_docs) || has_inline_docs > 1) {
+          return REDISMODULE_ERR;
+        }
+        if (has_inline_docs == 1) {
+          uint64_t doc_count = 0;
+          if (!SafeLoadUnsigned(rdb, doc_count) || doc_count > kMaxRdbDocs) {
+            return REDISMODULE_ERR;
+          }
+          const auto* skip_ptr =
+              skip_vector_fields.empty() ? nullptr : &skip_vector_fields;
+          for (uint64_t d = 0; d < doc_count; d++) {
+            std::string doc_id;
+            uint64_t nfields = 0;
+            if (!SafeLoadString(rdb, doc_id) || !SafeLoadUnsigned(rdb, nfields) ||
+                nfields > kMaxRdbDocFields) {
+              return REDISMODULE_ERR;
+            }
+            std::unordered_map<std::string, std::string> doc_fields;
+            doc_fields.reserve(static_cast<size_t>(nfields));
+            for (uint64_t j = 0; j < nfields; j++) {
+              std::string k, v;
+              if (!SafeLoadString(rdb, k) || !SafeLoadString(rdb, v)) {
+                return REDISMODULE_ERR;
+              }
+              doc_fields[std::move(k)] = std::move(v);
+            }
+            uint64_t has_pl = 0;
+            if (!SafeLoadUnsigned(rdb, has_pl) || has_pl > 1) {
+              return REDISMODULE_ERR;
+            }
+            std::string pl;
+            if (has_pl == 1) {
+              if (!SafeLoadString(rdb, pl)) return REDISMODULE_ERR;
+            }
+            entry->doc_store.Add(doc_id, doc_fields);
+            if (has_pl == 1) {
+              entry->doc_store.SetPayload(doc_id, std::move(pl));
+            }
+            AddDocToIndicesInternal(*entry, doc_id, doc_fields, skip_ptr);
+          }
+        }
+      }
+      loaded_aux_indices.push_back(
+          LoadedAuxIndex{std::move(entry), has_inline_docs == 0});
     }
   }
 
@@ -1055,20 +1143,25 @@ int AuxLoadSearch(RedisModuleIO* rdb, int encver, int when) {
 
   if (aux_ver >= 2) {
     SetPersistedSchemaEpoch(loaded_schema_epoch);
-    // In cluster mode (including Replica PSYNC), AUX is the authoritative snapshot of all
-    // indices: always replace GetIndices() and pending recoveries even when the snapshot
-    // has 0 indices (e.g., Master dropped all indices before PSYNC).
-    if (IsClusterRdbMode() || !loaded_cluster_indices.empty()) {
+    // For aux_ver >= 3 (both standalone and cluster) or aux_ver == 2 in cluster mode,
+    // AUX is the authoritative snapshot of all indices: always replace GetIndices()
+    // even when the snapshot has 0 indices (e.g., Master dropped all indices before PSYNC
+    // or DEBUG RELOAD). Legacy aux_ver == 2 standalone RDBs had 0 indices here because
+    // indices were loaded earlier via per-index GmSearch- keys.
+    const bool authoritative = (aux_ver >= 3) || IsClusterRdbMode();
+    if (authoritative || !loaded_aux_indices.empty()) {
       std::unique_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
-      if (IsClusterRdbMode()) {
+      if (authoritative) {
         GetIndices().clear();
       }
       auto& pending = GetPendingClusterRecoveries();
       pending.clear();
-      for (auto& entry : loaded_cluster_indices) {
-        std::string name = entry->spec.name;
-        GetIndices()[name] = std::move(entry);
-        pending.push_back(std::move(name));
+      for (auto& item : loaded_aux_indices) {
+        std::string name = item.entry->spec.name;
+        GetIndices()[name] = std::move(item.entry);
+        if (item.needs_keyspace_recovery) {
+          pending.push_back(std::move(name));
+        }
       }
     }
   }

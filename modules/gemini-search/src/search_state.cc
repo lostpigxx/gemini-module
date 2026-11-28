@@ -452,11 +452,7 @@ std::vector<std::string> BuildFtCreateArgs(const IndexSpec& spec) {
   return args;
 }
 
-// Forward declaration of internal helper defined below
-static void AddDocToIndicesInternal(
-    IndexEntry& entry, const std::string& doc_id,
-    const std::unordered_map<std::string, std::string>& fields,
-    const std::unordered_set<std::string>* skip_vector_fields);
+// Internal helper declared in search_commands.h, defined below
 
 bool CreateIndexFromRdb(
     const std::string& name, IndexSpec spec,
@@ -567,7 +563,7 @@ void RemoveDocFromIndices(IndexEntry& entry,
   }
 }
 
-static void AddDocToIndicesInternal(
+void AddDocToIndicesInternal(
     IndexEntry& entry, const std::string& doc_id,
     const std::unordered_map<std::string, std::string>& fields,
     const std::unordered_set<std::string>* skip_vector_fields) {

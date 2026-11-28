@@ -150,6 +150,7 @@ proc start_redis {module_path port} {
       --logfile /tmp/search_tcl_test.log \
       --dbfilename search_tcl_test.rdb \
       --dir /tmp \
+      --enable-debug-command local \
       --loadmodule $module_path
   }
   for {set i 0} {$i < 50} {incr i} {
@@ -2744,35 +2745,47 @@ r FT.DROPINDEX p16idx
 # ============================================================
 puts "\n=== Phase 27: Persistence & ModuleType ==="
 
-test_assert "MEMORY USAGE grows after adding docs" {
+test_assert "Index is not a keyspace key and FT.INFO inverted_sz_mb grows after adding docs" {
   r FT.CREATE p27mem SCHEMA body TEXT
-  set m0 [r MEMORY USAGE p27mem]
+  if {[r EXISTS p27mem] != 0} { error "Index must not create a keyspace anchor key" }
   set big [string repeat "a" 4096]
   r FT.ADD p27mem d1 FIELDS body $big
   r FT.ADD p27mem d2 FIELDS body $big
-  set m1 [r MEMORY USAGE p27mem]
-  if {$m1 <= $m0} { error "Expected MEMORY USAGE to grow: before=$m0 after=$m1" }
+  set info [r FT.INFO p27mem]
+  set sz_idx [lsearch -exact $info "inverted_sz_mb"]
+  if {$sz_idx < 0} { error "Missing inverted_sz_mb in FT.INFO" }
+  set sz [lindex $info [expr {$sz_idx + 1}]]
+  if {$sz <= 0.0} { error "Expected inverted_sz_mb > 0 after adding docs, got $sz" }
   r FT.DROPINDEX p27mem
 }
 
-# Detect Redis major version for Redis 7+ callbacks (copy2, aux_save2)
+test_assert "Index is isolated from DEL, SET, EXPIRE, and allkeys-lru eviction" {
+  r FT.CREATE p27iso SCHEMA tag TAG
+  r FT.ADD p27iso d1 FIELDS tag alpha
+  # DEL on index name must not destroy the index
+  if {[r DEL p27iso] != 0} { error "DEL on index name should return 0" }
+  # User key with the same name must coexist independently
+  r SET p27iso "user_value"
+  r EXPIRE p27iso 100
+  if {[r GET p27iso] ne "user_value"} { error "Expected user key p27iso to work" }
+  set res [r FT.SEARCH p27iso {@tag:{alpha}}]
+  if {[lindex $res 0] != 1} { error "Expected index intact after SET/EXPIRE same-name key, got $res" }
+  # DEL user key must not destroy the index
+  r DEL p27iso
+  set res2 [r FT.SEARCH p27iso {@tag:{alpha}}]
+  if {[lindex $res2 0] != 1} { error "Expected index intact after DEL same-name user key, got $res2" }
+  # FT.DROPINDEX must not delete a same-name user key
+  r SET p27iso "keep_me"
+  r FT.DROPINDEX p27iso
+  if {[r GET p27iso] ne "keep_me"} { error "FT.DROPINDEX must not delete same-name user key" }
+  r DEL p27iso
+}
+
+# Detect Redis major version for Redis 7+ callbacks (aux_save2)
 set info_srv [r INFO server]
 set redis_major 0
 if {[regexp {redis_version:([0-9]+)\.} $info_srv -> rmaj]} {
   set redis_major $rmaj
-}
-
-if {$redis_major >= 7} {
-  test_assert "COPY clones search index independently (Redis 7+)" {
-    r FT.CREATE p27src SCHEMA tag TAG num NUMERIC
-    r FT.ADD p27src d1 FIELDS tag alpha num 42
-    set ok [r COPY p27src p27dst]
-    if {$ok != 1} { error "Expected COPY to return 1, got $ok" }
-    r FT.DROPINDEX p27src
-    set res [r FT.SEARCH p27dst {@tag:{alpha}}]
-    if {[lindex $res 0] != 1} { error "Expected 1 match in copied index, got $res" }
-    r FT.DROPINDEX p27dst
-  }
 }
 
 test_assert "NOSTEM, LANGUAGE, and synonyms survive BGSAVE + restart" {
@@ -4576,6 +4589,151 @@ test_assert "Phase 66: Standalone FT._DEBUG CLUSTER reports standalone with no R
   r FT.CONFIG SET CLUSTER_BM25_DFS 1
   if {[lindex [r FT.CONFIG GET CLUSTER_BM25_DFS] 1] ne "1"} { error "Failed to set CLUSTER_BM25_DFS" }
   r FT.CONFIG SET CLUSTER_BM25_DFS 0
+}
+
+puts "\n=== Phase 67: Strict Logical Expiration Filtering (Master & Replica) ==="
+
+test_assert "Logically expired keys (active expire disabled) filtered in FT.SEARCH, KNN, and FT.AGGREGATE" {
+  r FT.CREATE exp_idx ON HASH PREFIX 1 expdoc: SCHEMA tag TAG title TEXT emb VECTOR HNSW DIM 2 DISTANCE_METRIC L2
+  set v1 [binary format f2 {1.0 0.0}]
+  set v2 [binary format f2 {0.9 0.1}]
+  set v3 [binary format f2 {0.0 1.0}]
+
+  # Disable active expiration so expired keys stay in keyspace until lazy access
+  r DEBUG SET-ACTIVE-EXPIRE 0
+  set err_caught [catch {
+    r HSET expdoc:1 tag live title "hello world" emb $v1
+    r HSET expdoc:2 tag live title "hello world" emb $v2
+    r HSET expdoc:3 tag live title "hello world" emb $v3
+    r PEXPIRE expdoc:2 150
+    r PEXPIRE expdoc:3 150
+    # PERSIST expdoc:3 so it must survive
+    r PERSIST expdoc:3
+
+    after 300
+
+    # FT.SEARCH * (MatchAll) must only see expdoc:1 and expdoc:3 (NOT expdoc:2)
+    set res_all [r FT.SEARCH exp_idx "*" NOCONTENT]
+    if {[lindex $res_all 0] != 2} {
+      error "Expected 2 live docs in FT.SEARCH *, got $res_all"
+    }
+    if {[lsearch -exact $res_all "expdoc:2"] >= 0} {
+      error "Expired expdoc:2 returned in FT.SEARCH *: $res_all"
+    }
+
+    # FT.SEARCH TAG + WITHSCORES must filter expdoc:2
+    set res_tag [r FT.SEARCH exp_idx "@tag:{live}" WITHSCORES NOCONTENT]
+    if {[lindex $res_tag 0] != 2} {
+      error "Expected 2 live docs in TAG query, got $res_tag"
+    }
+
+    # FT.SEARCH TEXT WITHSCORES (exercising WAND fallback) must filter expdoc:2
+    set res_txt [r FT.SEARCH exp_idx "hello" WITHSCORES LIMIT 0 10 NOCONTENT]
+    if {[lindex $res_txt 0] != 2} {
+      error "Expected 2 live docs in TEXT WITHSCORES query, got $res_txt"
+    }
+
+    # Unfiltered KNN must skip expired expdoc:2 and return expdoc:1 + expdoc:3
+    set qv [binary format f2 {0.95 0.05}]
+    set res_knn [r FT.SEARCH exp_idx "*=>\[KNN 2 @emb \$q\]" PARAMS 2 q $qv NOCONTENT]
+    if {[lindex $res_knn 0] != 2} {
+      error "Expected 2 live docs in KNN, got $res_knn"
+    }
+    if {[lsearch -exact $res_knn "expdoc:2"] >= 0} {
+      error "Expired expdoc:2 returned in KNN: $res_knn"
+    }
+
+    # FT.AGGREGATE must only aggregate live docs
+    set res_agg [r FT.AGGREGATE exp_idx "*" GROUPBY 1 @tag REDUCE COUNT 0 AS cnt]
+    set row0 [lindex $res_agg 0]
+    set cnt_idx [lsearch -exact $row0 "cnt"]
+    set cnt_val [lindex $row0 [expr {$cnt_idx + 1}]]
+    if {$cnt_val != 2} {
+      error "Expected AGGREGATE count=2, got $res_agg"
+    }
+  } err_msg]
+  r DEBUG SET-ACTIVE-EXPIRE 1
+  catch { r FT.DROPINDEX exp_idx DD }
+  if {$err_caught} { error $err_msg }
+}
+
+test_assert "Replica filters logically expired docs before Master DEL propagates" {
+  global port module_path
+  set rep_port [find_free_port]
+  set rep_log "/tmp/search_exp_rep_${rep_port}.log"
+  set rep_rdb "search_exp_rep_${rep_port}.rdb"
+  catch {
+    exec redis-server \
+      --port $rep_port \
+      --daemonize yes \
+      --loglevel warning \
+      --logfile $rep_log \
+      --dbfilename $rep_rdb \
+      --dir /tmp \
+      --replicaof 127.0.0.1 $port \
+      --loadmodule $module_path
+  }
+  set rep_fd ""
+  for {set i 0} {$i < 50} {incr i} {
+    if {![catch {set rep_fd [redis_connect localhost $rep_port]}]} {
+      break
+    }
+    after 100
+  }
+  if {$rep_fd eq ""} { error "Failed to start replica for expiration test" }
+
+  # Wait for replication link up
+  for {set i 0} {$i < 50} {incr i} {
+    set rinfo [redis_command $rep_fd INFO replication]
+    if {[string match "*master_link_status:up*" $rinfo]} { break }
+    after 100
+  }
+
+  r DEBUG SET-ACTIVE-EXPIRE 0
+  set err_caught [catch {
+    r FT.CREATE rexp_idx ON HASH PREFIX 1 rexp: SCHEMA tag TAG
+    r HSET rexp:keep tag yes
+    r HSET rexp:gone tag yes
+    r PEXPIRE rexp:gone 200
+
+    # Wait for replica to receive both keys and the PEXPIREAT
+    set synced 0
+    for {set i 0} {$i < 30} {incr i} {
+      set rres [catch {redis_command $rep_fd FT.SEARCH rexp_idx "*" NOCONTENT} rval]
+      if {!$rres && [lindex $rval 0] == 2} {
+        set synced 1
+        break
+      }
+      after 20
+    }
+    if {!$synced} { error "Replica did not sync initial 2 docs in time" }
+
+    # Wait past TTL while master active expire is still OFF (master has NOT sent DEL)
+    after 300
+
+    set rep_search [redis_command $rep_fd FT.SEARCH rexp_idx "*" NOCONTENT]
+    if {[lindex $rep_search 0] != 1} {
+      error "Replica returned logically expired doc in FT.SEARCH: $rep_search"
+    }
+    if {[lsearch -exact $rep_search "rexp:gone"] >= 0} {
+      error "Replica returned rexp:gone in FT.SEARCH: $rep_search"
+    }
+
+    set rep_agg [redis_command $rep_fd FT.AGGREGATE rexp_idx "*" GROUPBY 1 @tag REDUCE COUNT 0 AS cnt]
+    set rrow0 [lindex $rep_agg 0]
+    set cidx [lsearch -exact $rrow0 "cnt"]
+    if {[lindex $rrow0 [expr {$cidx + 1}]] != 1} {
+      error "Replica returned logically expired doc in FT.AGGREGATE: $rep_agg"
+    }
+  } err_msg]
+
+  r DEBUG SET-ACTIVE-EXPIRE 1
+  catch { r FT.DROPINDEX rexp_idx DD }
+  catch { redis_command $rep_fd SHUTDOWN NOSAVE }
+  catch { close $rep_fd }
+  after 100
+  file delete -force $rep_log "/tmp/$rep_rdb"
+  if {$err_caught} { error $err_msg }
 }
 
 # ============================================================

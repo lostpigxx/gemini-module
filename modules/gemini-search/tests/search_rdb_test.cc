@@ -590,6 +590,89 @@ TEST_F(SearchRdbTest, AuxV2ClusterMetadataAndHnswRoundTrip) {
   EXPECT_EQ(knn[0].doc_id, "vec:1");
 }
 
+TEST_F(SearchRdbTest, AuxV3StandaloneInlineDocsAndHnswRoundTrip) {
+  SetClusterRdbMode(false);
+
+  IndexSpec spec;
+  spec.name = "standalone_aux_idx";
+  spec.language = "english";
+  VectorFieldParams vp;
+  vp.algorithm = VectorAlgorithm::kHnsw;
+  vp.dim = 4;
+  vp.metric = DistanceMetric::kL2;
+  vp.m = 8;
+  vp.ef_construction = 32;
+  spec.fields = {
+      {"tag", FieldType::kTag, {}},
+      {"title", FieldType::kText, {}},
+      {"emb", FieldType::kVector, vp},
+  };
+
+  auto MakeVec = [](float a, float b, float c, float d) {
+    float vals[4] = {a, b, c, d};
+    return std::string(reinterpret_cast<const char*>(vals), sizeof(vals));
+  };
+  std::vector<std::pair<std::string, std::unordered_map<std::string, std::string>>> docs = {
+      {"d1", {{"tag", "red"}, {"title", "fast engine"}, {"emb", MakeVec(1.0f, 0.0f, 0.0f, 0.0f)}}},
+      {"d2", {{"tag", "blue"}, {"title", "vector search"}, {"emb", MakeVec(0.0f, 1.0f, 0.0f, 0.0f)}}},
+  };
+  ASSERT_TRUE(CreateIndexFromRdb("standalone_aux_idx", spec, docs));
+  GetIndexEntry("standalone_aux_idx")->doc_store.SetPayload("d1", "pl_one");
+  GetIndexEntry("standalone_aux_idx")->synonyms.Update("g1", {"fast", "quick"});
+
+  MockRdbStream stream;
+  AuxSaveSearch(stream.IO(), REDISMODULE_AUX_AFTER_RDB);
+  stream.Rewind();
+
+  // Add a stale index that should be replaced by authoritative aux_ver 3 load.
+  IndexSpec stale_spec;
+  stale_spec.name = "stale_idx";
+  stale_spec.fields = {{"t", FieldType::kTag, {}}};
+  ASSERT_TRUE(CreateIndexFromRdb("stale_idx", stale_spec, {}));
+
+  ASSERT_EQ(AuxLoadSearch(stream.IO(), kSearchEncVer, REDISMODULE_AUX_AFTER_RDB), REDISMODULE_OK);
+  EXPECT_EQ(GetIndexEntry("stale_idx"), nullptr);
+  EXPECT_TRUE(GetPendingClusterRecoveries().empty());
+
+  auto* loaded = GetIndexEntry("standalone_aux_idx");
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->doc_store.Size(), 2u);
+  ASSERT_NE(loaded->doc_store.Get("d1"), nullptr);
+  EXPECT_TRUE(loaded->doc_store.Get("d1")->has_payload);
+  EXPECT_EQ(loaded->doc_store.Get("d1")->payload, "pl_one");
+  EXPECT_EQ(loaded->synonyms.Dump().size(), 1u);
+
+  // Secondary indices (tag + text + prebuilt HNSW) all restored directly.
+  const auto* tidx = loaded->tag_indices.Get("tag");
+  ASSERT_NE(tidx, nullptr);
+  EXPECT_EQ(tidx->Lookup("red").size(), 1u);
+
+  const auto* vidx = loaded->vector_indices.Get("emb");
+  ASSERT_NE(vidx, nullptr);
+  EXPECT_EQ(vidx->Size(), 2u);
+  float q[4] = {0.99f, 0.01f, 0.0f, 0.0f};
+  auto knn = vidx->KnnQuery(q, 1);
+  ASSERT_EQ(knn.size(), 1u);
+  EXPECT_EQ(knn[0].doc_id, "d1");
+}
+
+TEST_F(SearchRdbTest, AuxV3StandaloneEmptySnapshotClearsStaleIndices) {
+  SetClusterRdbMode(false);
+  MockRdbStream empty_stream;
+  AuxSaveSearch(empty_stream.IO(), REDISMODULE_AUX_AFTER_RDB);
+  empty_stream.Rewind();
+
+  IndexSpec spec;
+  spec.name = "to_be_cleared";
+  spec.fields = {{"t", FieldType::kTag, {}}};
+  ASSERT_TRUE(CreateIndexFromRdb("to_be_cleared", spec, {}));
+  ASSERT_NE(GetIndexEntry("to_be_cleared"), nullptr);
+
+  ASSERT_EQ(AuxLoadSearch(empty_stream.IO(), kSearchEncVer, REDISMODULE_AUX_AFTER_RDB),
+            REDISMODULE_OK);
+  EXPECT_EQ(GetIndexEntry("to_be_cleared"), nullptr);
+}
+
 // =============================================================
 // AOF rewrite tests (unlimited fields + binary values + synonyms)
 // =============================================================
@@ -1120,11 +1203,20 @@ TEST_F(SearchRdbTest, ClusterAuxLoadClearsStaleIndicesEvenWhenEmpty) {
             REDISMODULE_OK);
   EXPECT_EQ(GetIndexEntry("stale_idx"), nullptr);
 
-  // 3. In standalone mode, AuxLoadSearch (0 cluster indices) MUST preserve per-key loaded indices
+  // 3. In standalone mode, a legacy aux_ver == 2 snapshot (0 cluster indices) MUST preserve
+  //    indices loaded earlier via legacy per-index GmSearch- keys.
   SetClusterRdbMode(false);
   ASSERT_TRUE(CreateIndexFromRdb("standalone_idx", stale_spec, {{"d1", {{"t", "v1"}}}}));
-  empty_cluster_aux.Rewind();
-  ASSERT_EQ(AuxLoadSearch(empty_cluster_aux.IO(), kSearchAuxEncVer, REDISMODULE_AUX_AFTER_RDB),
+  MockRdbStream legacy_v2_aux;
+  RedisModule_SaveUnsigned(legacy_v2_aux.IO(), 2);  // legacy aux_ver == 2
+  RedisModule_SaveUnsigned(legacy_v2_aux.IO(), 0);  // aliases
+  RedisModule_SaveUnsigned(legacy_v2_aux.IO(), 0);  // suggest dicts
+  RedisModule_SaveUnsigned(legacy_v2_aux.IO(), 0);  // term dicts
+  RedisModule_SaveUnsigned(legacy_v2_aux.IO(), 0);  // config
+  RedisModule_SaveUnsigned(legacy_v2_aux.IO(), 0);  // schema_epoch
+  RedisModule_SaveUnsigned(legacy_v2_aux.IO(), 0);  // 0 cluster indices
+  legacy_v2_aux.Rewind();
+  ASSERT_EQ(AuxLoadSearch(legacy_v2_aux.IO(), kSearchEncVer, REDISMODULE_AUX_AFTER_RDB),
             REDISMODULE_OK);
   EXPECT_NE(GetIndexEntry("standalone_idx"), nullptr);
 }

@@ -8,6 +8,41 @@
 
 static bool g_is_loading = false;
 
+static int64_t GetOpenKeyAbsExpireMs(RedisModuleKey* rkey) {
+  if (!rkey) return 0;
+  if (RedisModule_GetAbsExpire) {
+    mstime_t abs_ms = RedisModule_GetAbsExpire(rkey);
+    return (abs_ms > 0) ? static_cast<int64_t>(abs_ms) : 0;
+  }
+  if (RedisModule_GetExpire) {
+    mstime_t ttl_ms = RedisModule_GetExpire(rkey);
+    if (ttl_ms > 0) {
+      return DocumentStore::CurrentEpochMs() + static_cast<int64_t>(ttl_ms);
+    }
+  }
+  return 0;
+}
+
+static int64_t GetKeyAbsExpireMs(RedisModuleCtx* ctx, const std::string& key_name,
+                                 bool* exists_out = nullptr) {
+  if (exists_out) *exists_out = false;
+  if (!ctx || !RedisModule_OpenKey) return 0;
+  RedisModuleString* rms_key =
+      RedisModule_CreateString(ctx, key_name.c_str(), key_name.size());
+  auto* rkey = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
+      ctx, rms_key, REDISMODULE_READ | REDISMODULE_OPEN_KEY_NOEFFECTS));
+  int64_t abs_ms = 0;
+  if (rkey) {
+    if (RedisModule_KeyType(rkey) != REDISMODULE_KEYTYPE_EMPTY) {
+      if (exists_out) *exists_out = true;
+      abs_ms = GetOpenKeyAbsExpireMs(rkey);
+    }
+    RedisModule_CloseKey(rkey);
+  }
+  RedisModule_FreeString(ctx, rms_key);
+  return abs_ms;
+}
+
 static void RemoveIndexedKey(IndexEntry& entry, const std::string& key_name) {
   std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
   if (!entry.doc_store.Contains(key_name)) return;
@@ -27,6 +62,8 @@ static void IndexHashKeyInternal(RedisModuleCtx* ctx, IndexEntry& entry,
     RemoveIndexedKey(entry, key_name);
     return;
   }
+
+  int64_t expire_at_ms = GetOpenKeyAbsExpireMs(rkey);
 
   std::unordered_map<std::string, std::string> doc_fields;
   for (auto& fspec : entry.spec.fields) {
@@ -51,7 +88,7 @@ static void IndexHashKeyInternal(RedisModuleCtx* ctx, IndexEntry& entry,
   {
     std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
     RemoveDocFromIndices(entry, key_name);
-    entry.doc_store.Add(key_name, doc_fields);
+    entry.doc_store.Add(key_name, doc_fields, {}, false, expire_at_ms);
     if (preserve_existing_hnsw) {
       AddDocToIndicesSkippingExistingHnsw(entry, key_name, doc_fields);
     } else {
@@ -240,10 +277,12 @@ static void IndexJsonKeyInternal(RedisModuleCtx* ctx, IndexEntry& entry,
     return;
   }
 
+  int64_t expire_at_ms = GetKeyAbsExpireMs(ctx, key_name);
+
   {
     std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
     RemoveDocFromIndices(entry, key_name);
-    entry.doc_store.Add(key_name, doc_fields);
+    entry.doc_store.Add(key_name, doc_fields, {}, false, expire_at_ms);
     if (preserve_existing_hnsw) {
       AddDocToIndicesSkippingExistingHnsw(entry, key_name, doc_fields);
     } else {
@@ -441,6 +480,8 @@ int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event,
   bool is_del = (strcmp(event, "del") == 0 || strcmp(event, "unlink") == 0 ||
                  strcmp(event, "expired") == 0 || strcmp(event, "evicted") == 0 ||
                  strcmp(event, "rename_from") == 0);
+  bool is_expire_set = (strcmp(event, "expire") == 0);
+  bool is_persist = (strcmp(event, "persist") == 0);
   bool is_generic_reindex = (strcmp(event, "rename_to") == 0 ||
                              strcmp(event, "restore") == 0 ||
                              strcmp(event, "copy_to") == 0);
@@ -461,6 +502,9 @@ int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event,
                         strcmp(event, "json.nummultby") == 0 ||
                         strcmp(event, "json.strappend") == 0);
 
+  bool fetched_expire = false;
+  int64_t key_abs_expire_ms = 0;
+
   for (auto& [idx_name, entry_ptr] : GetIndices()) {
     if (!entry_ptr) continue;
     auto& entry = *entry_ptr;
@@ -469,6 +513,13 @@ int OnKeyspaceEvent(RedisModuleCtx* ctx, int type, const char* event,
 
     if (is_del) {
       RemoveIndexedKey(entry, key_str);
+    } else if (is_expire_set || is_persist) {
+      if (!fetched_expire) {
+        key_abs_expire_ms = is_persist ? 0 : GetKeyAbsExpireMs(ctx, key_str);
+        fetched_expire = true;
+      }
+      std::unique_lock<std::shared_mutex> idx_lk(entry.Mutex());
+      entry.doc_store.SetExpireAtMs(key_str, key_abs_expire_ms);
     } else if (entry.spec.source_type == IndexSourceType::kJson) {
       if (is_json_write || is_generic_reindex) {
         IndexJsonKey(ctx, entry, key_str);
@@ -503,10 +554,13 @@ void OnFlushDbEvent(RedisModuleCtx* ctx, RedisModuleEvent /*eid*/,
       std::unique_lock<std::shared_mutex> lk(GetTermDictsMutex());
       GetTermDicts().clear();
     }
-    // In cluster mode (where indices are not Redis module keys), FLUSHDB deletes all underlying
-    // Hash/JSON keys without deleting index definitions. Clear all indexed documents so no stale
-    // phantom documents remain in memory.
-    {
+    if (!gemini_search::ClusterManager::Instance().IsClusterMode()) {
+      // Standalone mode: FLUSHDB drops all index definitions (matching RediSearch 2.x).
+      std::unique_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
+      GetIndices().clear();
+    } else {
+      // Cluster mode: FLUSHDB deletes all underlying Hash/JSON keys without deleting index
+      // definitions. Clear all indexed documents so no stale phantom documents remain in memory.
       std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
       for (auto& [name, entry_ptr] : GetIndices()) {
         if (!entry_ptr) continue;
@@ -616,6 +670,50 @@ void OnLoadingEvent(RedisModuleCtx* ctx, RedisModuleEvent /*eid*/,
       }
       if (ctx) {
         mgr.BroadcastHello(ctx, /*request_reply=*/false);
+      }
+    } else if (ctx) {
+      // Standalone mode: refresh document TTLs from keyspace after RDB/AOF/REPL load,
+      // and prune prefix-backed docs whose underlying keys expired during loading.
+      RedisModule_SelectDb(ctx, 0);
+      std::vector<std::shared_ptr<IndexEntry>> snapshot;
+      {
+        std::shared_lock<std::shared_mutex> tbl_lk(GetIndicesMutex());
+        for (const auto& [name, entry_ptr] : GetIndices()) {
+          if (entry_ptr && entry_ptr->spec.HasPrefixes()) {
+            snapshot.push_back(entry_ptr);
+          }
+        }
+      }
+      for (const auto& entry_ptr : snapshot) {
+        std::vector<std::string> ids;
+        {
+          std::shared_lock<std::shared_mutex> idx_lk(entry_ptr->Mutex());
+          ids = entry_ptr->doc_store.AllIds();
+        }
+        std::vector<std::pair<std::string, int64_t>> ttls;
+        std::vector<std::string> missing;
+        for (const auto& id : ids) {
+          if (!entry_ptr->spec.MatchesPrefix(id)) continue;
+          bool exists = false;
+          int64_t abs_ms = GetKeyAbsExpireMs(ctx, id, &exists);
+          if (!exists) {
+            missing.push_back(id);
+          } else if (abs_ms > 0) {
+            ttls.emplace_back(id, abs_ms);
+          }
+        }
+        if (!missing.empty() || !ttls.empty()) {
+          std::unique_lock<std::shared_mutex> idx_lk(entry_ptr->Mutex());
+          for (const auto& id : missing) {
+            if (entry_ptr->doc_store.Contains(id)) {
+              RemoveDocFromIndices(*entry_ptr, id);
+              entry_ptr->doc_store.Remove(id);
+            }
+          }
+          for (const auto& [id, abs_ms] : ttls) {
+            entry_ptr->doc_store.SetExpireAtMs(id, abs_ms);
+          }
+        }
       }
     }
   } else if (subevent == REDISMODULE_SUBEVENT_LOADING_FAILED) {

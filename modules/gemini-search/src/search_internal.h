@@ -85,6 +85,20 @@ inline int64_t SaturatingAddMs(int64_t base_ms, int64_t delta_ms) {
   return base_ms + delta_ms;
 }
 
+// Unfiltered KNN that excludes logically expired docs when the index has expiring docs.
+inline std::vector<KnnResult> KnnQueryUnfilteredLive(
+    const VectorIndexBase& vidx, const DocumentStore& doc_store,
+    const float* query, size_t k, size_t ef_runtime, size_t oversample) {
+  if (doc_store.HasExpiringDocs()) {
+    int64_t now_ms = DocumentStore::CurrentEpochMs();
+    if (doc_store.HasAnyExpired(now_ms)) {
+      auto live = doc_store.NonExpiredIds(now_ms);
+      return vidx.KnnQueryFiltered(query, k, live, ef_runtime, oversample);
+    }
+  }
+  return vidx.KnnQueryEf(query, k, ef_runtime, oversample);
+}
+
 // Reconstructs FT.CREATE / FT.ALTER field arguments from IndexSpec/FieldSpec (for SchemaSync & AOF).
 void AppendFieldSpecArgs(const FieldSpec& f, std::vector<std::string>& out);
 std::vector<std::string> BuildFtCreateArgs(const IndexSpec& spec);

@@ -201,11 +201,11 @@ def main():
                     raise AssertionError("Expected non-empty HNSW KNN result")
                 checks += 1
             else:
-                # FT.PROFILE + MEMORY USAGE
+                # FT.PROFILE + FT.INFO
                 r.execute_command("FT.PROFILE", "soak_hash", "SEARCH", "QUERY", "*", "LIMIT", "0", "5")
-                mu = r.execute_command("MEMORY", "USAGE", "soak_hash")
-                if mu is None or int(mu) <= 0:
-                    raise AssertionError(f"Invalid MEMORY USAGE: {mu}")
+                info = r.execute_command("FT.INFO", "soak_hash")
+                if not info:
+                    raise AssertionError(f"Invalid FT.INFO: {info}")
                 checks += 1
 
             ops += 1

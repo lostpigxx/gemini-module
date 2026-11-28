@@ -307,8 +307,8 @@ gemini_search::RpcAggMapResponse ExecuteLocalAggMap(
         knn_hits = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands, parsed.knn_ef_runtime,
                                           parsed.knn_oversample);
       } else {
-        knn_hits = vidx->KnnQueryEf(qvec.data(), parsed.knn_k, parsed.knn_ef_runtime,
-                                    parsed.knn_oversample);
+        knn_hits = KnnQueryUnfilteredLive(*vidx, entry.doc_store, qvec.data(), parsed.knn_k,
+                                          parsed.knn_ef_runtime, parsed.knn_oversample);
       }
       result_ids.reserve(knn_hits.size());
       for (const auto& h : knn_hits) {
@@ -967,8 +967,8 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                                                       parsed.knn_ef_runtime, parsed.knn_oversample);
                     }
                   } else {
-                    knn_hits = vi->KnnQueryEf(qvec.data(), parsed.knn_k,
-                                              parsed.knn_ef_runtime, parsed.knn_oversample);
+                    knn_hits = KnnQueryUnfilteredLive(*vi, e.doc_store, qvec.data(), parsed.knn_k,
+                                                      parsed.knn_ef_runtime, parsed.knn_oversample);
                   }
                   if (err.empty()) {
                     result_ids.reserve(knn_hits.size());
@@ -1035,8 +1035,8 @@ int FtAggregateCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         knn_hits = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands,
                                           parsed.knn_ef_runtime, parsed.knn_oversample);
       } else {
-        knn_hits = vidx->KnnQueryEf(qvec.data(), parsed.knn_k,
-                                    parsed.knn_ef_runtime, parsed.knn_oversample);
+        knn_hits = KnnQueryUnfilteredLive(*vidx, entry.doc_store, qvec.data(), parsed.knn_k,
+                                          parsed.knn_ef_runtime, parsed.knn_oversample);
       }
       result_ids.reserve(knn_hits.size());
       for (const auto& h : knn_hits) {

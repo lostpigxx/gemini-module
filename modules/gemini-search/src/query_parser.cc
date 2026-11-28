@@ -50,7 +50,7 @@ std::vector<std::string> SetDifference(const std::vector<std::string>& a,
 // Query evaluation
 // =============================================================
 
-std::vector<std::string> EvaluateQuery(
+static std::vector<std::string> EvaluateQueryImpl(
     const QueryNode& node, const IndexSpec& spec,
     const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
     const NumericFieldIndices& numeric_indices,
@@ -328,6 +328,32 @@ std::vector<std::string> EvaluateQuery(
   return {};
 }
 
+std::vector<std::string> EvaluateQuery(
+    const QueryNode& node, const IndexSpec& spec,
+    const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
+    const NumericFieldIndices& numeric_indices,
+    const TextFieldIndices& text_indices,
+    const GeoFieldIndices& geo_indices, std::string& error_msg,
+    const QueryOptions& qopts,
+    const GeoShapeFieldIndices* geoshape_indices,
+    const std::unordered_map<std::string, std::string>* params,
+    const VectorFieldIndices* vector_indices,
+    const SynonymMap* synonyms) {
+  auto res = EvaluateQueryImpl(node, spec, doc_store, tag_indices,
+                               numeric_indices, text_indices, geo_indices,
+                               error_msg, qopts, geoshape_indices, params,
+                               vector_indices, synonyms);
+  if (error_msg.empty() && !res.empty() && doc_store.HasExpiringDocs()) {
+    int64_t now_ms = DocumentStore::CurrentEpochMs();
+    res.erase(std::remove_if(res.begin(), res.end(),
+                             [&](const std::string& id) {
+                               return doc_store.IsExpired(id, now_ms);
+                             }),
+              res.end());
+  }
+  return res;
+}
+
 // =============================================================
 // Score-aware query evaluation (for WITHSCORES)
 // =============================================================
@@ -376,7 +402,7 @@ static std::vector<ScoredResult> ScoredDifference(
   return out;
 }
 
-std::vector<ScoredResult> EvaluateQueryScored(
+static std::vector<ScoredResult> EvaluateQueryScoredImpl(
     const QueryNode& node, const IndexSpec& spec,
     const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
     const NumericFieldIndices& numeric_indices,
@@ -676,6 +702,32 @@ std::vector<ScoredResult> EvaluateQueryScored(
   }
   error_msg = "ERR internal: unknown query node type";
   return {};
+}
+
+std::vector<ScoredResult> EvaluateQueryScored(
+    const QueryNode& node, const IndexSpec& spec,
+    const DocumentStore& doc_store, const TagFieldIndices& tag_indices,
+    const NumericFieldIndices& numeric_indices,
+    const TextFieldIndices& text_indices,
+    const GeoFieldIndices& geo_indices, std::string& error_msg,
+    const QueryOptions& qopts,
+    const GeoShapeFieldIndices* geoshape_indices,
+    const std::unordered_map<std::string, std::string>* params,
+    const VectorFieldIndices* vector_indices,
+    const SynonymMap* synonyms) {
+  auto res = EvaluateQueryScoredImpl(node, spec, doc_store, tag_indices,
+                                     numeric_indices, text_indices, geo_indices,
+                                     error_msg, qopts, geoshape_indices, params,
+                                     vector_indices, synonyms);
+  if (error_msg.empty() && !res.empty() && doc_store.HasExpiringDocs()) {
+    int64_t now_ms = DocumentStore::CurrentEpochMs();
+    res.erase(std::remove_if(res.begin(), res.end(),
+                             [&](const ScoredResult& sr) {
+                               return doc_store.IsExpired(sr.doc_id, now_ms);
+                             }),
+              res.end());
+  }
+  return res;
 }
 
 std::vector<LocalFieldBm25Stats> CollectQueryTermStats(

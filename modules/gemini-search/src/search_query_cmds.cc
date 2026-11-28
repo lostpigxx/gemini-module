@@ -180,6 +180,7 @@ static bool ExtractWandTerms(const QueryNode& node, std::string& field_name,
 static bool TryEvaluateWandTopK(const QueryNode& root, const IndexEntry& entry,
                                 const SearchOptions& opts, const QueryOptions& qopts,
                                 std::vector<ScoredResult>& out) {
+  if (entry.doc_store.HasExpiringDocs()) return false;
   if (!opts.withscores || opts.has_sortby || opts.has_inkeys ||
       !opts.numeric_filters.empty() || opts.has_geofilter ||
       qopts.scorer != ScorerType::kBm25 || !opts.has_limit ||
@@ -1172,8 +1173,8 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
                                                      parsed.knn_ef_runtime, parsed.knn_oversample);
                     }
                   } else {
-                    knn_res = vi->KnnQueryEf(qvec.data(), parsed.knn_k,
-                                             parsed.knn_ef_runtime, parsed.knn_oversample);
+                    knn_res = KnnQueryUnfilteredLive(*vi, e.doc_store, qvec.data(), parsed.knn_k,
+                                                     parsed.knn_ef_runtime, parsed.knn_oversample);
                   }
                 }
                 if (kctx->error.empty() && qopts.deadline_ms > 0 && NowMs() > qopts.deadline_ms) {
@@ -1255,8 +1256,8 @@ int FtSearchCommand(RedisModuleCtx* ctx, RedisModuleString** argv,
         knn_results = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, candidates,
                                              parsed.knn_ef_runtime, parsed.knn_oversample);
       } else {
-        knn_results = vidx->KnnQueryEf(qvec.data(), parsed.knn_k,
-                                       parsed.knn_ef_runtime, parsed.knn_oversample);
+        knn_results = KnnQueryUnfilteredLive(*vidx, entry.doc_store, qvec.data(), parsed.knn_k,
+                                             parsed.knn_ef_runtime, parsed.knn_oversample);
       }
     }
 
@@ -2195,8 +2196,8 @@ gemini_search::RpcSearchPhase1Response ExecuteLocalSearchPhase1(
         knn_res = vidx->KnnQueryFiltered(qvec.data(), parsed.knn_k, cands, parsed.knn_ef_runtime,
                                          parsed.knn_oversample);
       } else {
-        knn_res = vidx->KnnQueryEf(qvec.data(), parsed.knn_k, parsed.knn_ef_runtime,
-                                   parsed.knn_oversample);
+        knn_res = KnnQueryUnfilteredLive(*vidx, entry.doc_store, qvec.data(), parsed.knn_k,
+                                         parsed.knn_ef_runtime, parsed.knn_oversample);
       }
     }
 
@@ -2731,9 +2732,10 @@ gemini_search::RpcHybridPhase1Response ExecuteLocalHybridPhase1(
                                         static_cast<size_t>(req.ef_runtime),
                                         static_cast<size_t>(req.oversample));
     } else {
-      vec_hits = vidx->KnnQueryEf(qvec.data(), static_cast<size_t>(req.knn_k),
-                                  static_cast<size_t>(req.ef_runtime),
-                                  static_cast<size_t>(req.oversample));
+      vec_hits = KnnQueryUnfilteredLive(*vidx, entry.doc_store, qvec.data(),
+                                        static_cast<size_t>(req.knn_k),
+                                        static_cast<size_t>(req.ef_runtime),
+                                        static_cast<size_t>(req.oversample));
     }
   }
 
@@ -3972,7 +3974,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
                                                     ef_runtime, oversample);
                   }
                 } else {
-                  vec_hits = vi->KnnQueryEf(qvec.data(), knn_k, ef_runtime, oversample);
+                  vec_hits = KnnQueryUnfilteredLive(*vi, e.doc_store, qvec.data(), knn_k,
+                                                    ef_runtime, oversample);
                 }
               }
               std::vector<ScoredResult> text_hits;
@@ -4071,7 +4074,8 @@ int FtHybridCommand(RedisModuleCtx* ctx, RedisModuleString** argv, int argc) {
       vec_hits = vidx->KnnQueryFiltered(qvec.data(), knn_k, candidates,
                                         ef_runtime, oversample);
     } else {
-      vec_hits = vidx->KnnQueryEf(qvec.data(), knn_k, ef_runtime, oversample);
+      vec_hits = KnnQueryUnfilteredLive(*vidx, entry.doc_store, qvec.data(), knn_k,
+                                        ef_runtime, oversample);
     }
   }
 

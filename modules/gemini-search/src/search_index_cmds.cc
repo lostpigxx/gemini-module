@@ -468,6 +468,7 @@ bool ParseCreateSpec(const std::vector<std::string>& args, IndexSpec& out_spec,
 
 bool ApplyLocalCreate(RedisModuleCtx* ctx, const std::vector<std::string>& args,
                       bool is_cluster_mode, std::string& err_out) {
+  (void)is_cluster_mode;
   IndexSpec spec;
   if (!ParseCreateSpec(args, spec, err_out)) return false;
 
@@ -485,18 +486,8 @@ bool ApplyLocalCreate(RedisModuleCtx* ctx, const std::vector<std::string>& args,
     TouchIndex(*entry_ptr);
   }
 
-  // Standalone mode persists per-index anchor key; Cluster mode persists via aux_save2 (encver 2)
-  // to avoid Hash Slot ownership conflicts and accidental MIGRATE relocation.
-  if (SearchModuleType && !is_cluster_mode) {
-    RedisModuleString* key_rms = RedisModule_CreateString(ctx, idx_str.data(), idx_str.size());
-    auto* key = static_cast<RedisModuleKey*>(RedisModule_OpenKey(
-        ctx, key_rms, REDISMODULE_READ | REDISMODULE_WRITE));
-    if (key) {
-      RedisModule_ModuleTypeSetValue(key, SearchModuleType, new std::string(idx_str));
-      RedisModule_CloseKey(key);
-    }
-    RedisModule_FreeString(ctx, key_rms);
-  }
+  // Indices are persisted via RDB aux_save2 (both standalone and cluster) rather than
+  // keyspace anchor keys, so allkeys-* eviction, DEL, EXPIRE, or RENAME cannot corrupt them.
 
   if (entry_ptr->spec.HasPrefixes() && !entry_ptr->spec.skip_initial_scan) {
     StartOrRunInitialScan(ctx, *entry_ptr);
@@ -543,12 +534,16 @@ bool ApplyLocalDropIndex(RedisModuleCtx* ctx, const std::vector<std::string>& ar
     }
   }
 
+  // Clean up any legacy GmSearch- anchor key loaded from an older RDB without touching user keys.
   if (SearchModuleType && !is_cluster_mode) {
     RedisModuleString* key_rms = RedisModule_CreateString(ctx, idx_str.data(), idx_str.size());
     auto* key = static_cast<RedisModuleKey*>(
-        RedisModule_OpenKey(ctx, key_rms, REDISMODULE_WRITE));
+        RedisModule_OpenKey(ctx, key_rms, REDISMODULE_READ | REDISMODULE_WRITE));
     if (key) {
-      RedisModule_DeleteKey(key);
+      if (RedisModule_KeyType(key) == REDISMODULE_KEYTYPE_MODULE &&
+          RedisModule_ModuleTypeGetType(key) == SearchModuleType) {
+        RedisModule_DeleteKey(key);
+      }
       RedisModule_CloseKey(key);
     }
     RedisModule_FreeString(ctx, key_rms);

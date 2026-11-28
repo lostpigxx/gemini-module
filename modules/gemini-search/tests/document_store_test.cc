@@ -129,3 +129,39 @@ TEST(DocumentStoreTest, ManyFields) {
   EXPECT_EQ(doc->fields.size(), 100u);
   EXPECT_EQ(doc->fields.at("field_50"), "val_50");
 }
+
+TEST(DocumentStoreTest, ExpirationTrackingAndFiltering) {
+  DocumentStore store;
+  EXPECT_FALSE(store.HasExpiringDocs());
+
+  store.Add("d1", {{"k", "v"}}, {}, false, 0);
+  store.Add("d2", {{"k", "v"}}, {}, false, 1000);
+  store.Add("d3", {{"k", "v"}}, {}, false, 2000);
+  EXPECT_TRUE(store.HasExpiringDocs());
+  EXPECT_FALSE(store.IsExpired("d1", 5000));
+  EXPECT_FALSE(store.IsExpired("d2", 999));
+  EXPECT_TRUE(store.IsExpired("d2", 1000));
+  EXPECT_FALSE(store.IsExpired("d3", 1500));
+  EXPECT_TRUE(store.HasAnyExpired(1500));
+  EXPECT_FALSE(store.HasAnyExpired(500));
+
+  auto live = store.NonExpiredIds(1500);
+  ASSERT_EQ(live.size(), 2u);
+  EXPECT_EQ(live[0], "d1");
+  EXPECT_EQ(live[1], "d3");
+
+  // PERSIST d2 (set expire_at_ms = 0)
+  store.SetExpireAtMs("d2", 0);
+  EXPECT_FALSE(store.IsExpired("d2", 5000));
+  EXPECT_TRUE(store.HasExpiringDocs());
+
+  // Remove d3 -> no more expiring docs
+  store.Remove("d3");
+  EXPECT_FALSE(store.HasExpiringDocs());
+
+  // Add expiring then Clear
+  store.SetExpireAtMs("d1", 100);
+  EXPECT_TRUE(store.HasExpiringDocs());
+  store.Clear();
+  EXPECT_FALSE(store.HasExpiringDocs());
+}

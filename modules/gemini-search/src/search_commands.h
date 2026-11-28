@@ -75,6 +75,10 @@ bool CreateIndexFromRdb(
         std::pair<std::string, std::unordered_map<std::string, std::string>>>&
         docs,
     const std::unordered_map<std::string, std::string>* prebuilt_hnsw = nullptr);
+void AddDocToIndicesInternal(
+    IndexEntry& entry, const std::string& doc_id,
+    const std::unordered_map<std::string, std::string>& fields,
+    const std::unordered_set<std::string>* skip_vector_fields = nullptr);
 
 std::unordered_map<std::string, std::string>& GetAliases();
 std::unordered_map<std::string, SuggestDict>& GetSuggestDicts();
